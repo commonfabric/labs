@@ -143,28 +143,52 @@ The trigger and the transfer are separate.
   server asks the source for the registered instances whose rows changed
   since the position it holds, applies them, and moves its position. The
   source brings its own marks up to its head before it returns, so what a
-  pull returns is complete as of that request. A lost trigger, a restarted
-  owner or a space nobody has opened in a month all recover the same way.
-- **The trigger is a push to each reader space whose rows changed.** It
-  carries no data. The reader's memory server pulls when it arrives, marks
-  its slices, and runs nothing.
+  pull returns is complete as of that request. A pull also arms the reader:
+  in the step that reads the rows, the source notes that this reader is to
+  be told of the next change. A lost trigger, a restarted owner or a space
+  nobody has opened in a month all recover the same way.
+- **The trigger is one bit, sent once.** When a row that an armed reader
+  registered changes, the source tells that reader's memory server that
+  something moved, and disarms it. That reader hears nothing more from the
+  source until its next pull. The trigger carries no position and no data,
+  so nothing in it has to be trusted, and a late or repeated one changes
+  nothing.
 
-Marking in the reading space then goes on as it does for a local change:
-each slice that became marked marks the clean slices that read what it
-writes, and if any of those writes is registered by a third space, that
-space is triggered in turn. Propagation stops at a slice that is already
-marked, across spaces as within one.
+What a reader does with a trigger depends on what is waiting on it:
+
+- It notes that the source moved.
+- Where a loop holds a root unstarted on a slice that read that source, it
+  pulls at once, marks its slices, and the root is loaded.
+- Where an armed reader of its own registered an instance that a slice
+  reading that source computes, it triggers that reader in turn, without
+  pulling: something upstream of that instance may have moved.
+- Otherwise it does nothing more, and pulls at its next judgment.
+
+So a source that changes often tells each dormant reader once and then
+stays silent toward it, and a dormant space in the middle of a chain passes
+one bit on and marks nothing. A reader that is live pulls on each trigger,
+and what changed while it was pulling arrives in one further trigger.
+
+Marking after a pull goes on as it does for a local change: each slice that
+became marked marks the clean slices that read what it writes. Propagation
+stops at a slice that is already marked, and a trigger stops at a reader
+that was already told.
 
 One thing changes where a commit is admitted. Today only a serving loop
-advances the cursor. A commit into a space with a registered reader queues
-an advance on the memory server when none is queued, in a transaction of
-its own after the commit has landed. This is the second half of the first
+advances the cursor. A commit into a space with an armed reader queues an
+advance on the memory server when none is queued, in a transaction of its
+own after the commit has landed, since the advance is what finds whether a
+registered instance changed. A space whose readers have all been told pays
+one cached check for each commit. This is the second half of the first
 plan's stage 6, needed here for a space no loop serves.
 
 ### What a judgment does
 
 Before it judges a root whose demand rows are resolved under a slice with a
-read in another space, the memory server pulls from each such source. A
+read in another space, the memory server pulls from each such source that
+moved since its last pull, and from each it cannot tell about, as after a
+restart. A source it is armed with and has heard nothing from needs no
+request, so a profile that has not changed costs a judgment nothing. A
 source it cannot reach refuses the root. The judgment then reads the slices
 as it does today, so a viewer whose slice read their own home space is
 judged on that source alone, and another viewer's home space is never
@@ -181,19 +205,24 @@ about it, with the piece running or not.
 Piece A in space S writes `a`. Piece B in space T reads `a` and writes `b`.
 Piece C in space U reads `b`. None is running.
 
-Dirtying is eager and runs nothing:
+Dirtying is one bit along each edge, and runs nothing:
 
 1. A commit changes an input of A. S's advance marks A's slice. `a` is
    registered by T, so its row moves to "stale upstream" and S triggers T.
-2. T's memory server pulls, marks `1` the slice of B that read `a`, finds
-   `b` registered by U, moves its row and triggers U.
-3. U's memory server pulls and marks `1` the slice of C that read `b`. A
-   root of C that a loop holds unstarted is loaded.
+2. T notes that S moved. B's slice read S and computes `b`, which U
+   registered, so T triggers U. T pulls nothing and marks nothing.
+3. U notes that T moved, and stops there unless a loop holds a root of C
+   unstarted. If one does, U pulls from T. T pulls from S before it
+   returns, marks `1` the slice of B that read `a` and moves the row of
+   `b` to "stale upstream". U marks `1` the slice of C that read `b`, and
+   the root is loaded.
+
+A further change in S reaches nobody until T pulls again.
 
 Updating is lazy and starts at the demanded end:
 
-1. A session demands C. The judgment refuses its root, and U's loop starts
-   C.
+1. A session demands C. The judgment pulls from T, which pulls from S, as
+   in step 3 above, then refuses the root, and U's loop starts C.
 2. C's slice is stale through `b`, which T computes. U's loop registers
    demand for `b` in T, for the actors demanding C.
 3. T's loop starts B. B's slice is stale through `a`, so T's loop registers
@@ -287,11 +316,15 @@ time comes. The start runs the wish, which holds the timer from then on.
   The running system has the same exposure today.
 - **A reader space that is deleted or abandoned** leaves its rows in every
   source it registered with.
-- **The cost of a trigger's fan-out.** A change to a profile triggers every
-  space that registered it, and each opens its store to mark. Correctness
-  never rests on the trigger, since a judgment pulls first, so which
-  readers are triggered at once and which are left to their next judgment
-  can be chosen from a measurement.
+- **How long an armed reader trusts silence.** In one process a trigger
+  cannot be lost. Between hosts it can, so the promise an armed reader
+  rests on needs a bound: a connection known to be live, or a lease the
+  reader renews.
+- **The first change after many readers armed.** A reader that was told is
+  not told again until it pulls, so a space that changes often pays for
+  each dormant reader once. A profile edited after its owner visited many
+  spaces still triggers each of them, once, and what that costs is to be
+  measured.
 
 ## Steps
 
@@ -307,10 +340,10 @@ time comes. The start runs the wish, which holds the timer from then on.
    session whose root was left unstarted.
 3. **Computations that name no piece**, as above. Independent of step 2,
    and small.
-4. **The trigger.** The position counter, the push, marking from a pull,
-   the load of a root a loop holds, and the advance a commit queues in a
-   space with a registered reader. From here `skip` acts on a slice that
-   read another space.
+4. **The trigger.** The position counter, arming on a pull, the one-bit
+   push and what a reader does with it, marking from a pull, the load of a
+   root a loop holds, and the advance a commit queues in a space with an
+   armed reader. From here `skip` acts on a slice that read another space.
 5. **Demand across spaces**, with its ruling, built together with the first
    plan's stage 5, which is the same mechanism within one space.
 6. **The interval clock's expiry.**
@@ -335,29 +368,34 @@ For the index, in `runtime/memory/test/`, with two stores:
    instances its piece writes to stale upstream, and a clean record of it
    moves them back; the reader's slice goes to `1` and back to `0` with no
    record of its own stored.
-5. With three stores in a chain, a commit to the first marks the reading
-   slice in the third, and a walk that reaches a marked slice triggers
-   nobody.
+5. With three stores in a chain, a commit to the first triggers the second
+   and the third once each and marks nothing in them, and a pull by the
+   third marks the reading slice in it.
 6. A registration the source refuses, and one whose grant is revoked later,
    leave the reader's slice marked `2`.
+7. A second change before a reader pulls sends it no second trigger, and a
+   change after its pull sends one.
+8. A judgment of a root on a slice whose source is armed and has sent no
+   trigger makes no request of that source, and one after a trigger pulls
+   before it judges.
 
 For the serving loop, in `runtime/runner/test/executor/`:
 
-7. A piece whose wish reads the viewer's home space is recorded with the
+9. A piece whose wish reads the viewer's home space is recorded with the
    read in that viewer's slice, and under `skip` is not started when the
    viewer returns and their home space has not changed.
-8. A change to that viewer's home space while the piece is unstarted and
-   their session is live starts the piece, and a change to another viewer's
-   home space does not.
-9. The chain above, with all three recorded and none running: a demand for
-   C alone starts B and A, and C's session reads the value derived from the
-   new input.
-10. In that chain, when A's recomputation leaves `a` equal, B's mark clears
+10. A change to that viewer's home space while the piece is unstarted and
+    their session is live starts the piece, and a change to another viewer's
+    home space does not.
+11. The chain above, with all three recorded and none running: a demand for
+    C alone starts B and A, and C's session reads the value derived from the
+    new input.
+12. In that chain, when A's recomputation leaves `a` equal, B's mark clears
     and B is not started again.
-11. A piece that reads `#now/N` is served from the store within the
+13. A piece that reads `#now/N` is served from the store within the
     interval and started after it, and a root a loop holds unstarted is
     loaded when the interval passes.
-12. Two pieces whose wishes share a hashtag resolver are each recorded
+14. Two pieces whose wishes share a hashtag resolver are each recorded
     clean, and a change to what the resolver read marks both.
 
 ## Related
