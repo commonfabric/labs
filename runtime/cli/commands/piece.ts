@@ -147,11 +147,19 @@ import {
   type UnreportedRunDeps,
 } from "../lib/unreported-run.ts";
 import { absPath } from "../lib/utils.ts";
+import { loadIdentity } from "../lib/identity.ts";
 import {
   PatternIndexStore,
   patternIndexStoreDir,
 } from "@commonfabric/pattern-index/store";
-import { DEFAULT_PATTERN_INDEX_URL } from "@commonfabric/pattern-index/access";
+import {
+  DEFAULT_PATTERN_INDEX_URL,
+  openPatternIndexClient,
+} from "@commonfabric/pattern-index/access";
+import {
+  type PatternIndexClient,
+  PatternIndexError,
+} from "@commonfabric/pattern-index/client";
 import { noteWroteTo } from "../lib/write-receipt.ts";
 import type {
   DeployedSource,
@@ -2534,6 +2542,10 @@ export const piece = targetOptions(
     ),
     `Create a piece from a published pattern, deployed the way run_pattern deploys one.`,
   )
+  .example(
+    cliText(`cf piece new ${EX_ID} ${EX_COMP} --from-link a-k3x9@beta`),
+    `Create a piece from what a shared link names now, here its beta.`,
+  )
   .arguments("[main:string]")
   .option(
     "--from-index <patternId:string>",
@@ -2549,14 +2561,29 @@ export const piece = targetOptions(
       ],
     },
   )
+  .option(
+    "--from-link <link:string>",
+    "Create the piece from the shared version a link names now (a-k3x9, a-k3x9@beta, a-k3x9@3), as --from-index would.",
+    {
+      conflicts: [
+        "from-index",
+        "version-entry",
+        "main-export",
+        "root",
+        "repository",
+        "test",
+        "datafile",
+      ],
+    },
+  )
   .env(
     "CF_PATTERN_INDEX_URL=<url:string>",
-    "Base URL of the pattern index --from-index reads.",
+    "Base URL of the pattern index --from-index and --from-link read.",
     { prefix: "CF_" },
   )
   .option(
     "--pattern-index-url <url:string>",
-    "Base URL of the pattern index --from-index reads; the deployment's by default.",
+    "Base URL of the pattern index --from-index and --from-link read; the deployment's by default.",
   )
   .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option("--version-entry <path:string>", VERSION_ENTRY_HELP)
@@ -2606,7 +2633,7 @@ export const piece = targetOptions(
   )
   .option(
     "--json",
-    'Output {"pieceId", "name"} as JSON; name only for --from-index, when the index has one.',
+    'Output {"pieceId", "name"} as JSON; name only from the index, when it has one.',
   )
   .action(newPieceFromCommand)
   /* piece set-slug */
@@ -5475,6 +5502,13 @@ export interface NewPieceCommandDependencies {
   /** Where the version's line goes, stderr unless the caller says otherwise. */
   note?: (message: string) => void;
 
+  /** The pattern id a `--from-link` link names now; asked of the index by default. */
+  resolveLink?: (
+    patternIndexUrl: string,
+    identity: string,
+    link: string,
+  ) => Promise<string>;
+
   /** Records which published pattern a piece came from; the local store by default. */
   recordIndexedPiece?: (
     patternIndexUrl: string,
@@ -5517,8 +5551,46 @@ export const recordIndexedPiece = async (
  * address it points a reader at is the slug when there is one.
  */
 /**
+ * The pattern id of the shared version `link` names now, as the index answers
+ * `getPattern {ref}`: a bare link is the pattern's stable version, `@beta` its
+ * beta, `@<n>` exactly shared version n. The answer is one immutable version,
+ * so the deploy that follows reads exactly what was resolved, and the piece
+ * records it as `--from-index` would, for remix credit.
+ */
+export async function patternIdForLink(
+  client: Pick<PatternIndexClient, "getPattern">,
+  link: string,
+): Promise<string> {
+  try {
+    return (await client.getPattern({ ref: link })).patternId;
+  } catch (error) {
+    if (error instanceof PatternIndexError && error.status === 404) {
+      throw new ValidationError(
+        `No shared pattern answers to the link ${link}: it may be mistyped, withdrawn, or not shared on that channel yet.`,
+        { exitCode: 1 },
+      );
+    }
+    throw error;
+  }
+}
+
+const resolveLink = async (
+  patternIndexUrl: string,
+  identity: string,
+  link: string,
+): Promise<string> =>
+  await patternIdForLink(
+    await openPatternIndexClient({
+      baseUrl: patternIndexUrl,
+      signer: await loadIdentity(identity),
+    }),
+    link,
+  );
+
+/**
  * Where `cf piece new`'s program comes from: the `main` file, or the
- * published pattern `--from-index` names, never both and never neither. A
+ * published pattern `--from-index` (or the link `--from-link`) names, never
+ * both and never neither. A
  * published pattern is read from the index the flag or `CF_PATTERN_INDEX_URL`
  * names, else the deployment's, and a malformed URL is refused here rather
  * than when the deploy reaches the network.
@@ -5526,6 +5598,7 @@ export const recordIndexedPiece = async (
 function newPieceEntry(
   options: {
     fromIndex?: string;
+    fromLink?: string;
     patternIndexUrl?: string;
     mainExport?: string;
     repository?: string;
@@ -5535,22 +5608,34 @@ function newPieceEntry(
   },
   main: string | undefined,
 ): PieceEntry {
-  if (options.fromIndex === undefined) {
+  if (options.fromIndex !== undefined && options.fromLink !== undefined) {
+    throw new ValidationError("Pass --from-index or --from-link, not both.");
+  }
+  const [flag, given] = options.fromLink === undefined
+    ? ["--from-index", options.fromIndex]
+    : ["--from-link", options.fromLink];
+  if (given === undefined) {
     if (main === undefined) {
       throw new ValidationError(
-        "Missing a pattern: pass a source file, or --from-index <patternId>.",
+        "Missing a pattern: pass a source file, --from-index <patternId>, or --from-link <link>.",
       );
     }
     return localPatternEntry(main, options);
   }
   if (main !== undefined) {
     throw new ValidationError(
-      `--from-index creates the piece from a published pattern; drop the source file "${main}", or drop --from-index.`,
+      `${flag} creates the piece from a published pattern; drop the source file "${main}", or drop ${flag}.`,
     );
   }
-  const patternId = options.fromIndex.trim();
+  // Under --from-link this is the link; the action resolves it to the
+  // pattern id it names once the index URL is known good.
+  const patternId = given.trim();
   if (patternId === "") {
-    throw new ValidationError("--from-index requires a non-blank pattern id.");
+    throw new ValidationError(
+      flag === "--from-index"
+        ? "--from-index requires a non-blank pattern id."
+        : "--from-link requires a non-blank link.",
+    );
   }
   // The same index every cf pattern command uses: the flag, else
   // CF_PATTERN_INDEX_URL, else the deployment's.
@@ -5582,8 +5667,18 @@ export async function newPieceFromCommand(
   deps: NewPieceCommandDependencies = {},
 ): Promise<void> {
   setQuietMode(!!options.quiet);
-  const entry = newPieceEntry(options, main);
+  const named = newPieceEntry(options, main);
   const spaceConfig = parseSpaceOptions(options);
+  const entry = options.fromLink !== undefined && "patternId" in named
+    ? {
+      ...named,
+      patternId: await (deps.resolveLink ?? resolveLink)(
+        named.patternIndexUrl,
+        spaceConfig.identity,
+        named.patternId,
+      ),
+    }
+    : named;
   const input = options.inputFile === undefined
     ? undefined
     : JSON.parse(await Deno.readTextFile(options.inputFile));
@@ -5596,7 +5691,7 @@ export async function newPieceFromCommand(
   const facts = versionFactsOf(options);
   if (main === undefined && Object.keys(facts).length > 0) {
     throw new ValidationError(
-      "--version-origin, --version-description and --built-from describe the version a deploy of a file keeps; --from-index keeps none.",
+      "--version-origin, --version-description and --built-from describe the version a deploy of a file keeps; a piece from the index keeps none.",
       { exitCode: 1 },
     );
   }

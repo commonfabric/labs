@@ -7,9 +7,15 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { FIRST_PARTY_HTTP_AUTH_HEADERS } from "@commonfabric/runner/toolshed-http-auth";
 import {
   newPieceFromCommand,
+  patternIdForLink,
   piece,
   recordIndexedPiece,
 } from "../commands/piece.ts";
+import {
+  PatternIndexError,
+  type PatternIndexGetRequest,
+  type PatternIndexPattern,
+} from "@commonfabric/pattern-index/client";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import { DEFAULT_PATTERN_INDEX_URL } from "@commonfabric/pattern-index/access";
 import { newPiece, newPieceWithReceipt } from "../lib/piece.ts";
@@ -187,6 +193,181 @@ describe("piece new --from-index", () => {
         expect(created).toBe(false);
       });
     }
+  });
+
+  describe("--from-link", () => {
+    /** Runs the action with a resolver that answers `answer` for a link. */
+    const run = async (
+      options: Record<string, unknown>,
+      main: string | undefined = undefined,
+      answer: (link: string) => Promise<string> = (link) =>
+        Promise.resolve(`pat-for-${link}`),
+    ) => {
+      let entry: unknown;
+      const asked: string[][] = [];
+      const recorded: string[][] = [];
+      const error = await captureStderr(() =>
+        newPieceFromCommand({ ...CONFIG, ...options }, main, {
+          newPiece: (_config, received) => {
+            entry = received;
+            return Promise.resolve({ pieceId: "fid1:created" });
+          },
+          resolveLink: (url, identity, link) => {
+            asked.push([url, identity, link]);
+            return answer(link);
+          },
+          recordIndexedPiece: (url, pieceId, patternId) => {
+            recorded.push([url, pieceId, patternId]);
+            return Promise.resolve();
+          },
+        })
+      ).then(() => undefined, (e) => e);
+      return { entry, asked, recorded, error };
+    };
+
+    it("deploys and records the pattern id the link names, asked as the space's identity", async () => {
+      const { entry, asked, recorded, error } = await run({
+        fromLink: " a-k3x9AbCdEf@beta ",
+        patternIndexUrl: INDEX_URL,
+      });
+
+      expect(error).toBeUndefined();
+      expect(asked).toEqual([[
+        INDEX_URL,
+        CONFIG.identity,
+        "a-k3x9AbCdEf@beta",
+      ]]);
+      expect(entry).toEqual({
+        patternId: "pat-for-a-k3x9AbCdEf@beta",
+        patternIndexUrl: INDEX_URL,
+      });
+      expect(recorded).toEqual([
+        [INDEX_URL, "fid1:created", "pat-for-a-k3x9AbCdEf@beta"],
+      ]);
+    });
+
+    it("never asks the index under --from-index", async () => {
+      const { asked, entry } = await run({
+        fromIndex: "pat-1",
+        patternIndexUrl: INDEX_URL,
+      });
+
+      expect(asked).toEqual([]);
+      expect(entry).toEqual({ patternId: "pat-1", patternIndexUrl: INDEX_URL });
+    });
+
+    it("creates nothing when the link resolves to nothing", async () => {
+      const { entry, recorded, error } = await run(
+        { fromLink: "a-gone", patternIndexUrl: INDEX_URL },
+        undefined,
+        () => Promise.reject(new ValidationError("No shared pattern")),
+      );
+
+      expect(error).toBeInstanceOf(ValidationError);
+      expect(entry).toBeUndefined();
+      expect(recorded).toEqual([]);
+    });
+
+    for (
+      const [name, options, main, message] of [
+        [
+          "a blank link",
+          { fromLink: "  ", patternIndexUrl: INDEX_URL },
+          undefined,
+          "--from-link requires a non-blank link",
+        ],
+        [
+          "a source file as well",
+          { fromLink: "a-k3x9", patternIndexUrl: INDEX_URL },
+          "/repo/main.tsx",
+          "drop --from-link",
+        ],
+        [
+          "--from-index as well",
+          { fromLink: "a-k3x9", fromIndex: "pat-1" },
+          undefined,
+          "Pass --from-index or --from-link, not both",
+        ],
+        [
+          "an index URL that does not parse",
+          { fromLink: "a-k3x9", patternIndexUrl: "not a url" },
+          undefined,
+          "--pattern-index-url must be an http(s) URL",
+        ],
+      ] as const
+    ) {
+      it(`throws a ValidationError for ${name}, before asking the index`, async () => {
+        const { asked, entry, error } = await run(options, main);
+
+        expect(error).toBeInstanceOf(ValidationError);
+        expect(error.message).toContain(message);
+        expect(asked).toEqual([]);
+        expect(entry).toBeUndefined();
+      });
+    }
+
+    it("declares --from-link as conflicting with --from-index and the local-source options", () => {
+      expect(piece.getCommand("new")?.getOption("from-link")?.conflicts)
+        .toEqual([
+          "from-index",
+          "version-entry",
+          "main-export",
+          "root",
+          "repository",
+          "test",
+          "datafile",
+        ]);
+    });
+
+    describe("patternIdForLink()", () => {
+      const client = (
+        answer: (request: PatternIndexGetRequest) => Promise<
+          PatternIndexPattern
+        >,
+      ) => ({ getPattern: answer });
+
+      it("asks the index by ref and answers the pattern id it names", async () => {
+        const asked: PatternIndexGetRequest[] = [];
+        const id = await patternIdForLink(
+          client((request) => {
+            asked.push(request);
+            return Promise.resolve({
+              patternId: "pat-3",
+              createdAt: "2026-11-20T00:00:00Z",
+              description: "",
+              hashtags: [],
+              dependencies: [],
+            });
+          }),
+          "a-k3x9@3",
+        );
+
+        expect(id).toBe("pat-3");
+        expect(asked).toEqual([{ ref: "a-k3x9@3" }]);
+      });
+
+      it("refuses, naming the link, when the index has nothing under it", async () => {
+        const error = await patternIdForLink(
+          client(() =>
+            Promise.reject(new PatternIndexError("getPattern", 404))
+          ),
+          "a-k3x9@beta",
+        ).catch((e) => e);
+
+        expect(error).toBeInstanceOf(ValidationError);
+        expect(error.message).toContain("a-k3x9@beta");
+      });
+
+      it("passes on any other failure as it came", async () => {
+        const failure = new PatternIndexError("getPattern", 503);
+        const error = await patternIdForLink(
+          client(() => Promise.reject(failure)),
+          "a-k3x9",
+        ).catch((e) => e);
+
+        expect(error).toBe(failure);
+      });
+    });
   });
 
   it("declares --from-index as conflicting with the local-source options", () => {
