@@ -161,6 +161,80 @@ describe("list-coordinator-plan", () => {
     });
   }
 
+  describe("over a list an element of which reaches its own place through another document", () => {
+    /** `["a", <alias of the list's middle place>, "c"]`, and the alias. */
+    async function aliasCycle(name: string) {
+      const tx = runtime.edit();
+      const alias = runtime.getCell<FabricValue>(
+        space,
+        `${name} alias`,
+        undefined,
+        tx,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const made = await listWith(name, () => alias.getAsLink());
+      const aliasTx = runtime.edit();
+      alias.withTx(aliasTx).setRaw(made.list.key(1).getAsLink());
+      expect((await aliasTx.commit().settled).error).toBeUndefined();
+      return { ...made, alias };
+    }
+
+    it("names that element's slot by the link it holds, and each inline slot by its place", async () => {
+      const { list, inputs, alias } = await aliasCycle("alias cycle slots");
+      const base = list.getAsNormalizedFullLink();
+
+      for (const key of ["list", "elements"]) {
+        const tx = runtime.edit();
+        const { slots } = listSlotLinks(tx, inputs, key);
+        tx.abort();
+
+        expect(slots.map(({ id, path }) => ({ id, path }))).toEqual([
+          { id: base.id, path: ["0"] },
+          { id: alias.getAsNormalizedFullLink().id, path: [] },
+          { id: base.id, path: ["2"] },
+        ]);
+      }
+    });
+
+    it("maps the list", async () => {
+      const { list } = await aliasCycle("alias cycle map");
+
+      const result = await runOver(
+        `
+        import { pattern } from "commonfabric";
+        export default pattern<{ list: string[] }>(({ list }) => ({
+          out: list.map((_, index) => index * 10),
+        }));
+      `,
+        list,
+      );
+
+      expect(result.key("out").get()).toEqual([0, 10, 20]);
+      expect(errors).toEqual([]);
+    });
+  });
+
+  it("maps a list two elements of which link to each other", async () => {
+    const { list } = await listOf("pair cycle map", (list) => [
+      list.key(1).getAsLink(),
+      list.key(0).getAsLink(),
+      "c",
+    ]);
+
+    const result = await runOver(
+      `
+      import { pattern } from "commonfabric";
+      export default pattern<{ list: string[] }>(({ list }) => ({
+        out: list.map((_, index) => index * 10),
+      }));
+    `,
+      list,
+    );
+
+    expect(result.key("out").get()).toEqual([0, 10, 20]);
+    expect(errors).toEqual([]);
+  });
+
   describe("over a list whose slots link to one document by different chains", () => {
     it("names each slot by the link it holds, following none", async () => {
       const tx = runtime.edit();

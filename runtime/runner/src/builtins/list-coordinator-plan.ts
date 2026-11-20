@@ -1,3 +1,5 @@
+import { isPrefixPath } from "@commonfabric/memory/v2/path";
+
 import type { JSONSchema, Pattern } from "../builder/types.ts";
 import type { Cell } from "../cell.ts";
 import { resolveLink } from "../link-resolution.ts";
@@ -71,9 +73,9 @@ export type ListCoordinatorPlan = {
  * array would instead journal a content read of every element doc the
  * coordinator never consumes, and under flow labels join every element's
  * whole-doc label into the coordinator's per-transaction join, smearing
- * member content onto the result container's structure label. The slot
- * resolutions are link-resolution probes, which flow derivation treats
- * as resolution machinery rather than observations.
+ * member content onto the result container's structure label. Each slot's
+ * link is taken from that same read (`listSlotLinks`), so nothing behind a
+ * slot is read here.
  *
  * `map` reads the list-doc with its membership declared onward onto its
  * container: the list's membership label lands there, and a child it sets up
@@ -226,8 +228,11 @@ export function listMembershipRead(
  * later moves keeps its element, which reads through the link to wherever
  * it leads. So an element's key depends on the list document alone, warm or
  * cold. A slot holding a value names its place in the list, and so does a
- * slot whose link leads back into its own place, which can name no value.
- * `slots` is empty when the list is not an array. The list itself is read by
+ * slot whose link leads straight back into its own place, which can name no
+ * value. A link that reaches the slot's place only through another document,
+ * an alias of it, names that link like any other; telling it apart reads
+ * nothing, and what reads through it meets the cycle there. `slots` is empty
+ * when the list is not an array. The list itself is read by
  * `listMembershipRead`, `onto` included.
  */
 export function listSlotLinks(
@@ -247,9 +252,9 @@ export function listSlotLinks(
     onto,
   );
   const listBase = listCell.getAsNormalizedFullLink();
-  // A link back into the slot's own place, at it or into a subpath of it,
-  // names no value, so its slot is its place in the list rather than a
-  // failure of the whole list.
+  // A link straight back into the slot's own place, at it or into a subpath
+  // of it, names no value, so its slot is its place in the list rather than
+  // a failure of the whole list.
   const slots = Array.isArray(rawList)
     ? rawList.map((slot, i) => {
       const place = listSlotPlace(listBase, i);
@@ -267,7 +272,7 @@ function isWithin(
 ): boolean {
   return link.space === place.space && link.id === place.id &&
     (link.scope ?? "space") === (place.scope ?? "space") &&
-    place.path.every((part, i) => String(link.path[i]) === String(part));
+    isPrefixPath(place.path, link.path);
 }
 
 /**
