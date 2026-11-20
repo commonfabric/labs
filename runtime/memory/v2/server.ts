@@ -8933,9 +8933,8 @@ export class Server {
           // A branch other than the default is computed by the client that
           // opened it, so its documents and their labels are that client's
           // word, which a restore would write onto the default branch. Only
-          // the default branch's own history is restored from until the
-          // specification rules on what a restore may admit.
-          // SPEC-PENDING https://github.com/commonfabric/specs/pull/105
+          // the default branch's own history is restored from; what a
+          // restore may admit is ruled in commonfabric/specs pull request 105.
           if (
             message.source !== undefined && message.source !== DEFAULT_BRANCH
           ) {
