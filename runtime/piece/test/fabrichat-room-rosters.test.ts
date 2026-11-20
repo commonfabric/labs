@@ -239,11 +239,53 @@ describe("fabrichat-room-rosters", () => {
     }
   });
 
+  it("lists a person's profiles newest room first", async () => {
+    // The readers run over the rooms oldest first; the people are drawn in
+    // the order the rooms are listed, newest first, all the same.
+
+    await send(
+      members.runtime,
+      members.home,
+      ["createProfile"],
+      trusted(
+        { target: { value: "Rosters member, again" } },
+        "ProfileCreateSurface",
+        "CreateProfile",
+      ),
+    );
+    await members.storage.synced();
+    const second = owners.runtime.getCellFromLink(
+      members.home.key("profiles").key(1).resolveAsCell()
+        .getAsNormalizedFullLink(),
+    );
+    const requestId = "g-second-profile";
+    await send(
+      owners.runtime,
+      owners.home,
+      ["chatManager", "createGroup"],
+      trusted(
+        { requestId, title: requestId, members: [], profiles: [second] },
+        "ChatStartSurface",
+        "ChatStart",
+      ),
+    );
+    await owners.runtime.idle();
+
+    const people = await owners.home.key("chatManager").key("people")
+      .asSchema(peopleSchema).pull() as Record<string, Cell<unknown>[]>;
+    const ids = (people[member.did()] ?? []).map((each) =>
+      each.getAsNormalizedFullLink().id
+    );
+    expect(ids).toEqual([
+      second.getAsNormalizedFullLink().id,
+      profile.getAsNormalizedFullLink().id,
+    ]);
+  });
+
   it("lists the member among the people, drawn from every listed room", async () => {
     const people = await owners.home.key("chatManager").key("people")
       .asSchema(peopleSchema).pull() as Record<string, unknown[]>;
 
     expect(Object.keys(people)).toEqual([member.did()]);
-    expect(people[member.did()]).toHaveLength(1);
   });
 });
