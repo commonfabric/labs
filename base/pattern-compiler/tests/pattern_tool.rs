@@ -518,3 +518,100 @@ fn the_report_counts_a_rewritten_call_as_a_call_of_pattern_tool() {
     )]));
     assert_eq!(analysis.modules[0].counts.get("form:patternTool"), Some(&1));
 }
+
+const FIXTURE: &str = "compare/fixtures/pattern-tool";
+
+fn fixture(extension: &str) -> String {
+    let path = format!("{}/{FIXTURE}.{extension}", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"))
+}
+
+/// The plan of the default pattern of the fixture, as the crate emits it.
+fn fixture_plan() -> (Value, Vec<String>) {
+    let analysis = analyze(&[SourceFile {
+        path: format!("{FIXTURE}.tsx"),
+        text: fixture("tsx"),
+    }]);
+    let module = &analysis.modules[0];
+    assert!(module.accepted(), "{:#?}", summary(&module.diagnostics));
+    let found = module
+        .plans
+        .iter()
+        .find(|plan| plan.name.as_deref() == Some("default"))
+        .expect("the default pattern");
+    let unsupported = found
+        .unsupported
+        .iter()
+        .map(|(kind, _)| kind.clone())
+        .collect();
+    (found.plan.clone(), unsupported)
+}
+
+#[test]
+fn the_fixture_is_accepted_with_the_warning_and_its_files_hold_the_plan() {
+    let (plan, _) = fixture_plan();
+    for extension in ["plan.json", "emit.json"] {
+        let emitted: Value = serde_json::from_str(&fixture(extension)).expect("JSON");
+        let stored = emitted[0]["patterns"]
+            .as_array()
+            .expect("patterns")
+            .iter()
+            .find(|pattern| pattern["name"] == json!("default"))
+            .expect("the default pattern");
+        assert_eq!(stored["plan"], plan, "{FIXTURE}.{extension} is out of date");
+    }
+    let found = diagnostics(&[("pattern-tool.tsx", fixture("tsx"))]);
+    assert_eq!(
+        summary(&found)
+            .into_iter()
+            .map(|(id, ..)| id)
+            .collect::<Vec<_>>(),
+        [ACCEPTED]
+    );
+}
+
+/// What the plan holds for a pattern closure that a language-model
+/// built-in is given as a tool (`plan-and-label-templates.md` §3.15, "A
+/// pattern closure given to a language model as a tool"). The request is an
+/// effect operation, and the tool is a path of the request with a write
+/// edge. The crate does not translate a pattern closure used as a value:
+/// the edge has no template, `Plan.closures` is empty, the inline pattern
+/// has no plan with slots of root `params`, and the plan lists the closure
+/// as a construct it does not support. This test states that, and fails
+/// when the translation is built.
+#[test]
+fn the_plan_of_the_fixture_has_the_request_and_no_record_of_the_closure() {
+    let (plan, unsupported) = fixture_plan();
+    assert_eq!(
+        plan["operations"],
+        json!([{
+            "implementation": { "builtin": "generateText" },
+            "kind": "effect",
+            "name": "reply",
+            "within": [],
+        }])
+    );
+    let writes: Vec<&Value> = plan["cones"]
+        .as_array()
+        .expect("cones")
+        .iter()
+        .flat_map(|cone| cone["writes"].as_array().expect("writes"))
+        .collect();
+    let at = |path: Value| {
+        *writes
+            .iter()
+            .find(|write| write["target"]["path"] == path)
+            .unwrap_or_else(|| panic!("no write edge at {path}"))
+    };
+    let prompt = at(json!(["prompt"]));
+    assert_eq!(prompt["target"]["kind"], json!("request"));
+    assert!(prompt.get("template").is_some());
+    let tool = at(json!(["tools", "search"]));
+    assert_eq!(
+        tool["target"],
+        json!({ "kind": "request", "of": { "operation": 0 }, "path": ["tools", "search"] })
+    );
+    assert!(tool.get("template").is_none());
+    assert_eq!(plan["closures"], json!([]));
+    assert_eq!(unsupported, ["the built-in `pattern` in the reactive tier"]);
+}
