@@ -7662,6 +7662,31 @@ export class Instance {
     return undefined;
   }
 
+  /**
+   * What a slot of the argument or of a state cell is bound to where no
+   * evaluation bound it, as the condition of `a?.b ?? c` that the value
+   * code reads only through the read of `b`: the position the slot names,
+   * through the links on the way to it. The runtime observes the label
+   * stored there at commit.
+   */
+  #positionBinding(
+    slot: number,
+    keys: readonly [number, string][],
+  ): SlotBinding | undefined {
+    const { root, path, observes } = this.plan.slots[slot];
+    let doc: string | undefined;
+    if (root.kind === "argument") doc = this.argument;
+    else if (root.kind === "state") {
+      const wanted = canonical(keys.map(([, key]) => key));
+      for (const [id, { cell, keys: held }] of this.#cells) {
+        if (cell === (root.cell ?? 0) && canonical(held) === wanted) doc = id;
+      }
+    }
+    if (doc === undefined) return undefined;
+    const chain = this.#addressesOf([new Ref(doc, path)]);
+    return chain.length === 0 ? undefined : { chain, observes };
+  }
+
   /** The other slots with the root and the path of `slot`, by its index. */
   #slotsAtPosition(slot: number): number[] {
     if (this.#atPosition === undefined) {
@@ -7896,7 +7921,8 @@ export class Instance {
             into[slot] = this.#bindingOf(slot, bound, outputs, depth);
             continue;
           }
-          const source = this.#sourceBinding(slot, byCollection);
+          const source = this.#sourceBinding(slot, byCollection) ??
+            this.#positionBinding(slot, keys);
           if (source !== undefined) into[slot] = source;
         }
         return into;

@@ -703,3 +703,31 @@ describe("a label that changes while the value stays", () => {
     expect(large.updates).toBe(1);
   });
 });
+
+describe("a slot no evaluation bound", () => {
+  it("binds a slot of the argument that no value code read to its position in the argument", async () => {
+    // `state.result?.picks ?? []` reads the shape of `state.result` only
+    // through the read of `picks`: no cone binds that slot, and the label
+    // of its position is what the runtime observes at commit.
+    for (
+      const argument of [{ state: {} }, { state: { result: { picks: ["a"] } } }]
+    ) {
+      const recorder = new Recorder();
+      const instance = new Instance(
+        await artifactOf("optional-chain"),
+        argument,
+        { transactions: recorder },
+      );
+      const writes = recorder.changed.filter(({ doc }) => doc === instance.id)
+        .flatMap(({ writes }) => writes ?? [])
+        .filter(({ record }) => "output" in record);
+      expect(writes.length).toBeGreaterThan(0);
+      for (const write of writes) {
+        expect(write.slots[0]).toEqual({
+          chain: [{ doc: instance.argument, path: ["state", "result"] }],
+          observes: "shape",
+        });
+      }
+    }
+  });
+});
