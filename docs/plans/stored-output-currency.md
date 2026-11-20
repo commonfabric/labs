@@ -117,17 +117,21 @@ of its runs at the snapshot:
 - a live computation is not clean, which covers one a throttle, a debounce
   or a convergence backoff is holding;
 - one read a document in another space at an instance narrower than the
-  space, or at a seq its replica cannot name. Any other read in another
-  space is registered with that space's index
-  ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)),
-  and the slice is stored against what it reports. What such a slice writes
-  is no current input of another slice;
+  space, at a seq its replica cannot name, or in a space whose store
+  another memory server holds;
 - one read a document whose writer in this runtime names no piece and
   cannot be answered for. A writer that is live, clean and runs once is
   answered for by the slice, which takes over what it read;
 - one read a document a clock writes, which is the interval cell of a wish
   for `#now/N`: no commit marks the slice when the interval passes while no
   runtime holds the clock.
+
+Any other read in another space is registered with that space's index when
+the record is stored
+([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)),
+and the slice is stored against what that index reports. What a clean slice
+that read another space writes is no current input of another slice, which
+is stored marked `1`.
 
 No slice of a piece is vouched for when its root is not space-scoped, when a
 computation of it declares a write in another space, or when it records a

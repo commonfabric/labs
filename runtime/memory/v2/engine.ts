@@ -584,8 +584,10 @@ CREATE TABLE IF NOT EXISTS currency_slice_source (
 );
 -- What another space last said of an instance of its store that a slice
 -- here read: the instance's head seq there, and whether what it holds is
--- stale upstream (stale = 1), which is a value a piece of that space
--- computes and does not answer for at present.
+-- stale upstream (stale = 1). That is a derived document no recorded piece
+-- of that space writes, or an instance a recorded piece there computes
+-- while a slice that decides it is marked, none vouches for it, or a clean
+-- slice that decides it read a third space.
 CREATE TABLE IF NOT EXISTS currency_import (
   branch    TEXT    NOT NULL,
   source    TEXT    NOT NULL,

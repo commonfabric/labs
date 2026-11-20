@@ -38,9 +38,14 @@ export { ANY_INSTANCE };
 
 /**
  * What the index holds about a slice's stored outputs: `0` clean, `1` one of
- * its inputs is stale, which is a computed instance whose writer is marked,
- * is unrecorded, or no longer vouches for it, `2` one of its own rows is
- * behind its document or the slice was not vouched for.
+ * its inputs is stale, `2` one of its own rows is behind or the slice was
+ * not vouched for.
+ *
+ * An input is stale where it is a computed instance whose writer is marked,
+ * is unrecorded, no longer vouches for it, or read another space, and where
+ * it is an instance of another space that its source reported stale
+ * upstream. A row is behind where its document's head is above it, in this
+ * store or, for a read in another space, in what its source last reported.
  */
 export type CurrencyMark = 0 | 1 | 2;
 
@@ -219,6 +224,13 @@ export type CurrencyStored = {
    * is not marked for it.
    */
   behind: string[];
+
+  /**
+   * The other spaces a slice of the batch read before this record and reads
+   * no longer. Each may hold a registration nothing here reads behind any
+   * more, which a pull from it drops.
+   */
+  unread: string[];
 };
 
 /** One slice's row, for a caller that inspects the index. */
@@ -462,6 +474,10 @@ LIMIT 1
   selectSourcesOfSlice: engine.prepare(`
 SELECT DISTINCT source FROM currency_slice_source
 WHERE branch = :branch AND slice = :slice
+`),
+  selectSourcesOfPieceSlice: engine.prepare(`
+SELECT source FROM currency_slice_source
+WHERE branch = :branch AND slice = :slice AND piece = :piece
 `),
   selectImport: engine.prepare(`
 SELECT head, stale FROM currency_import
@@ -957,12 +973,21 @@ export const advanceCurrencyCursor = (
  * released and kept, so that is still known when the piece vouches for the
  * instance again.
  *
+ * A read row for an instance of another space takes the seq its record
+ * names. The slice is marked `2` where that seq is below the head the
+ * instance's source last reported, where the record names no seq, and where
+ * the source has reported nothing of the instance, which `registerCurrencyReads()`
+ * and `applyCurrencyImports()` see to before a record is stored.
+ *
  * A slice with every row current is `1` while an input of it is stale and
- * `0` otherwise. An input is stale while a marked slice decides it, and
- * while a recorded piece computes it and none vouches for it: a slice that
- * read an instance the batch stopped vouching for is marked `1`. A slice
- * that became clean clears the slices marked `1` downstream of it that are
- * left with no stale input.
+ * `0` otherwise. An input is stale while a marked slice decides it, while a
+ * recorded piece computes it and none vouches for it, while a clean slice
+ * that read another space decides it, and while it is an instance of
+ * another space that its source reported stale upstream: a slice that read
+ * an instance the batch stopped vouching for is marked `1`, and so is one
+ * that reads what a slice of the batch that read another space writes. A
+ * slice that became clean clears the slices marked `1` downstream of it that
+ * are left with no stale input.
  */
 export const storeCurrencyRecords = (
   engine: Engine,
@@ -977,6 +1002,7 @@ export const storeCurrencyRecords = (
     blocked: [],
     blockedBy: [],
     behind: [],
+    unread: [],
   };
 
   /** Each head `headOf()` has read, by instance. */
@@ -1153,6 +1179,7 @@ export const storeCurrencyRecords = (
 
     const refs: SliceRef[] = [];
     const behind = new Set<string>();
+    const unread = new Set<string>();
     /** The instances a slice of the batch vouched for and no longer does. */
     const dropped: CurrencyInstance[] = [];
     for (const { record, slices } of stored) {
@@ -1189,6 +1216,16 @@ export const storeCurrencyRecords = (
           }
         }
         statements.deleteReads.run({ branch, slice: slice.key, piece });
+        const before = statements.selectSourcesOfPieceSlice.all({
+          branch,
+          slice: slice.key,
+          piece,
+        }) as Array<{ source: string }>;
+        for (const { source } of before) {
+          if (!slice.reads.some((read) => read.space === source)) {
+            unread.add(source);
+          }
+        }
         statements.deleteSliceSources.run({ branch, slice: slice.key, piece });
         statements.releaseVouches.run({ branch, slice: slice.key, piece });
         let unseen = false;
@@ -1295,6 +1332,7 @@ export const storeCurrencyRecords = (
       }
     }
     result.behind = [...behind];
+    result.unread = [...unread];
 
     // A slice of the batch can read what another piece of it writes, and so
     // can a slice an earlier batch of the same point stored, so the `1`
@@ -1416,11 +1454,16 @@ const refreshExport = (
 ): void => {
   const { branch, statements } = context;
   const head = headOfInstance(context, id, scopeKey);
-  const found = staleInstance(context, {
-    id,
-    scopeKey,
-    derived: id.startsWith(COMPUTED_ID_PREFIX),
-  });
+  // A document's id says it is derived only under the id form that names
+  // one, so a derivation having written the instance says so too.
+  const derived = id.startsWith(COMPUTED_ID_PREFIX) ||
+    (scopeKey !== ANY_INSTANCE &&
+      statements.selectDerivationOfInstance.get({
+          branch,
+          id,
+          scope_key: scopeKey,
+        }) !== undefined);
+  const found = staleInstance(context, { id, scopeKey, derived });
   const stale = found.unrecorded || found.unvouched || found.across ||
       found.producers.length > 0
     ? 1

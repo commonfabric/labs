@@ -377,7 +377,10 @@ export function snapshotPieceCurrency(
       for (const read of slice.reads.values()) {
         if (read.space !== space) {
           // What says whether the instance moved since is its own space's
-          // index, which is asked with the seq it was read at.
+          // index, which is asked with the seq it was read at. The replica
+          // holds that seq now: it tells the scheduler of a frame in the turn
+          // it applies one, so a run that is clean with the scheduler idle
+          // read, at the paths it read, the version the replica holds.
           const seq = read.scopeKey === "space"
             ? state.sourceSeqOf(read)
             : undefined;

@@ -12435,7 +12435,7 @@ export class Server {
   /**
    * The engine of `source`, a space whose store a slice of another space
    * read, or `undefined` where this server cannot ask it: another owner
-   * holds the space, or it is deleted.
+   * holds the space, it has no store, or it is deleted.
    */
   async #currencySourceEngine(
     source: string,
@@ -12443,6 +12443,9 @@ export class Server {
     if (
       this.options.ownsSpace !== undefined && !this.options.ownsSpace(source)
     ) return undefined;
+    // A record names the space, and opening a store that is not there
+    // would make one.
+    if (!(await this.#spaceStoreExists(source))) return undefined;
     const engine = await this.#openEngine(source);
     return this.#deletedRefusal(engine, source) === null ? engine : undefined;
   }
@@ -12515,7 +12518,13 @@ export class Server {
         }),
       });
     }
-    return storeCurrencyRecords(engine, { ...batch, space });
+    const stored = storeCurrencyRecords(engine, { ...batch, space });
+    // A space no slice of the batch reads any longer may hold registrations
+    // nothing here reads behind, which a pull from it drops.
+    for (const source of stored.unread) {
+      await this.#followCurrencySource(engine, space, source);
+    }
+    return stored;
   }
 
   /**

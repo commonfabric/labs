@@ -115,6 +115,30 @@ describe("v2-server-currency", () => {
 
         expect(await markOf()).toBe(2);
       });
+
+      it("drops the registration of an instance of another space once no slice reads it any longer", async () => {
+        server = newServer();
+        await store(reading(await write(SOURCE, "of:far")));
+
+        await store({
+          ...reading(0),
+          slices: [{ key: "space", vouched: true, reads: [], vouches: [] }],
+        });
+
+        const source = await server.engineForSpace(SOURCE);
+        expect(
+          source.database.prepare(`SELECT COUNT(*) AS n FROM currency_reader`)
+            .get(),
+        ).toEqual({ n: 0 });
+      });
+
+      it("stores marked `2` a slice that read a space this server holds no store of", async () => {
+        server = newServer();
+
+        await store(reading(0));
+
+        expect(await markOf()).toBe(2);
+      });
     });
 
     describe("judgeCurrencyRoots()", () => {

@@ -98,8 +98,10 @@ route otherwise.
 - **A read row for an instance in another space** holds the source's
   sequence number of the version the run read. The serving replica keeps the
   confirmed sequence number of each document it holds
-  (`runtime/runner/src/storage/v2.ts`); the snapshot does not reach it
-  today, and carrying it into the record is the first thing step 2 builds.
+  (`runtime/runner/src/storage/v2.ts`), and the snapshot takes it from
+  there. The replica tells the scheduler of a frame in the turn it applies
+  one, so a run that is clean with the scheduler idle read, at the paths it
+  read, the version the replica holds.
 - **What the source last said of an instance** some slice here reads: its
   head sequence number there, and whether it is current, stale upstream, or
   refused. One row per `(source space, id, scope key)`, whichever slices
