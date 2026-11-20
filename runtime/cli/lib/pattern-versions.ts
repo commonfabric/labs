@@ -196,6 +196,30 @@ export interface DeployedSource {
    * only an explicit `cf pattern share` hands it to anyone.
    */
   keepPrivate?: boolean;
+
+  /**
+   * Who wrote the deployed source: absent for the person, `agent` for an
+   * agent deploying on their behalf (a service building a pattern for one of
+   * their pieces). An agent's version is recorded with the index's `agent`
+   * origin, so the person's sharing setting treats it as agent work, and its
+   * history follows the piece it was deployed to, as an agent run's does,
+   * rather than the entry file, which for such a deploy is a staged copy.
+   */
+  versionOrigin?: "agent";
+
+  /**
+   * What the version says the pattern does, in place of the entry's doc
+   * comment: a deploy that knows better than its source's header says so.
+   */
+  description?: string;
+
+  /**
+   * The pattern the deployed source was built from, as `cf piece getsrc`
+   * notes for a file it writes: credited as a remix when it is someone
+   * else's, and the version skipped when the source is that pattern
+   * unchanged. Without it, the note `getsrc` left for the entry is used.
+   */
+  builtFrom?: string;
 }
 
 /** What recording a deploy as a version came to. */
@@ -239,7 +263,8 @@ export interface VersionDeps {
 
 /**
  * Records `deployed` as a private version of the person's lineage for its
- * entry file. Never throws: every way it can fail is an outcome.
+ * entry file, or for its piece when an agent made it. Never throws: every
+ * way it can fail is an outcome.
  */
 export async function recordDeployedVersion(
   deployed: DeployedSource,
@@ -276,10 +301,17 @@ export async function recordDeployedVersion(
       pathKey: () => deps.store.slotKey(),
       ...(deps.checkoutOf === undefined ? {} : { checkoutOf: deps.checkoutOf }),
     };
-    const slot = await entrySlot(entry, sources);
+    const deployedTo = deployedPieceRef(
+      deployed.piece.space,
+      deployed.piece.id,
+    );
+    const slot = deployed.versionOrigin === "agent"
+      ? deployedTo
+      : await entrySlot(entry, sources);
     // Source fetched from someone else's pattern and deployed unchanged is
     // still theirs; once edited it is the person's own remix.
-    const fetchedFrom = await deps.store.sourceOf(entry);
+    const fetchedFrom = deployed.builtFrom ??
+      await deps.store.sourceOf(entry);
     let remixedFrom: string | undefined;
     if (fetchedFrom !== undefined) {
       const source = await client.getPattern({ patternId: fetchedFrom })
@@ -299,7 +331,20 @@ export async function recordDeployedVersion(
         if (!started) remixedFrom = fetchedFrom;
       }
     }
-    const doc = patternDocMetadata(await deps.readTextFile(entry));
+    // An agent's entry is a staged copy, which a deploy that does not wait on
+    // its version (the share sidecar) may already have removed: its doc
+    // comment is read from the program the deploy committed.
+    const source = deployed.versionOrigin === "agent"
+      ? deployed.program.files.find((file) =>
+        file.name === deployed.program.main
+      )?.contents ?? ""
+      : await deps.readTextFile(entry);
+    const doc = {
+      ...patternDocMetadata(source),
+      ...(deployed.description === undefined
+        ? {}
+        : { description: deployed.description }),
+    };
     const response = await client.publishPattern({
       ...publishRequestFor({
         patternId,
@@ -312,11 +357,8 @@ export async function recordDeployedVersion(
         ...(remixedFrom === undefined ? {} : { remixedFrom }),
       }),
       slot,
-      origin: "self",
-      deployedTo: deployedPieceRef(
-        deployed.piece.space,
-        deployed.piece.id,
-      ),
+      origin: deployed.versionOrigin ?? "self",
+      deployedTo,
       ...(deployed.keepPrivate === true ? { keepPrivate: true } : {}),
     });
     return { status: "recorded", created: response.created, response };

@@ -1628,15 +1628,15 @@ snapshots deleted only at or below a boundary; every document reconstructed on
 both files through the inspector's replay — a second implementation of the
 engine's rule — and compared, with the ACL document's `value` unchanged and a
 valid ACL and `compaction` the only member that differs, or its tombstone
-untouched; every table outside the history — `op_*`, `scheduler_basis`,
-`execution_outbox`, `blob_store`, the tables patterns created — identical in
-schema and contents; the content fingerprint; exactly the payloads the runs'
-windows reach hollowed, every marker's hash and length matching the backup's
-bytes, every commit row and every other commit column surviving; the single
-run's counts against its plan; and commit 1's payload byte-identical.
-`--verify-sample <n>` reconstructs every n-th document and checks every n-th
-marker, and skips the fingerprint: a quick pass during rehearsal, and a weaker
-claim.
+untouched; every table outside the history — `op_*`, `scheduler_basis`, the
+`currency_*` tables, `execution_outbox`, `blob_store`, the tables patterns
+created — identical in schema and contents; the content fingerprint; exactly the
+payloads the runs' windows reach hollowed, every marker's hash and length
+matching the backup's bytes, every commit row and every other commit column
+surviving; the single run's counts against its plan; and commit 1's payload
+byte-identical. `--verify-sample <n>` reconstructs every n-th document and
+checks every n-th marker, and skips the fingerprint: a quick pass during
+rehearsal, and a weaker claim.
 
 The dry-run report counts the instances matched and truncated, the boundaries
 that become a `set`, the revision and snapshot rows and bytes that would go, the
@@ -3485,6 +3485,22 @@ either way.
 the lineage of `<path>` rather than of the file deployed, for a deploy of a copy
 of it (a snapshot in a temporary directory), so the copy continues the
 original's history.
+
+An agent deploying a pattern it wrote for the person (a service building one for
+their piece) says so with `--version-origin agent` on `piece new <file>` or
+`piece setsrc`: the version is kept as agent work, so the person's sharing
+setting treats it as one, in the history of the piece it is deployed to rather
+than of the file, which for such a deploy is a staged copy. Its description and
+hashtags come from the doc comment of the program the deploy committed, not from
+the staged entry, which may be gone by the time the version is recorded.
+`--version-description <text>` says what the version does, in place of that doc
+comment's description (its hashtags stay). `--built-from <patternId>` names the
+index pattern the source was built from, as `piece getsrc` notes it for a file
+it writes: someone else's is credited as the remix's origin on the history's
+first version, and that pattern deployed unchanged keeps no version. None of
+them goes with `--no-index-version`, `setsrc --origin` or `new --from-index`
+(none of which keeps a version), and `--version-origin` does not go with
+`--version-entry`.
 
 `cf pattern checkpoint <entry> --cell <piece>` keeps what a piece runs now as a
 private version of the entry's lineage, without deploying: the pattern the piece

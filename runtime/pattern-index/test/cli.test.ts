@@ -170,6 +170,86 @@ describe("cli", () => {
     });
   }
 
+  it("answers each pattern's source in the order asked, and the index's refusal of one beside the others", async () => {
+    const program = {
+      main: "main.tsx",
+      files: [{ name: "main.tsx", contents: "export default 1;" }],
+    };
+    reply = (call) =>
+      call.body.patternId === "gone"
+        ? Response.json({ error: "not found" }, { status: 404 })
+        : Response.json({
+          ...pattern(String(call.body.patternId)),
+          name: "Lunch",
+          mine: false,
+          program,
+        });
+
+    const output = await callHelper(directory, baseUrl, {
+      op: "source",
+      patternIds: ["lunch", "gone"],
+    });
+
+    expect(output.code).toBe(0);
+    expect(JSON.parse(output.stdout)).toEqual({
+      ok: true,
+      value: {
+        patterns: [
+          {
+            patternId: "lunch",
+            name: "Lunch",
+            description: "lunch",
+            mine: false,
+            program,
+          },
+          { patternId: "gone", status: 404 },
+        ],
+      },
+    });
+    expect(calls.map((call) => [call.fn, call.body])).toEqual([
+      ["getPattern", { patternId: "lunch", includeSource: true }],
+      ["getPattern", { patternId: "gone", includeSource: true }],
+    ]);
+  });
+
+  it("answers a source request the index refuses as a whole with the index's status, and a withheld program as 403", async () => {
+    reply = () => Response.json({ error: "not allowlisted" }, { status: 403 });
+    const refused = await callHelper(directory, baseUrl, {
+      op: "source",
+      patternIds: ["lunch"],
+    });
+    expect(JSON.parse(refused.stdout)).toMatchObject({
+      ok: false,
+      status: 403,
+    });
+
+    reply = (call) => Response.json(pattern(String(call.body.patternId)));
+    const withheld = await callHelper(directory, baseUrl, {
+      op: "source",
+      patternIds: ["lunch"],
+    });
+    expect(JSON.parse(withheld.stdout)).toEqual({
+      ok: true,
+      value: { patterns: [{ patternId: "lunch", status: 403 }] },
+    });
+  });
+
+  it("refuses a source request naming no patterns, too many, or one that is not a string, calling nothing", async () => {
+    for (
+      const patternIds of [[], ["a", "b", "c", "d", "e", "f"], ["a", 1], "a"]
+    ) {
+      const output = await callHelper(directory, baseUrl, {
+        op: "source",
+        patternIds,
+      });
+      expect(JSON.parse(output.stdout)).toMatchObject({
+        ok: false,
+        status: 400,
+      });
+    }
+    expect(calls).toEqual([]);
+  });
+
   it("returns 400 for malformed and unsupported requests without calling the index", async () => {
     for (
       const [request, error] of [
@@ -180,11 +260,11 @@ describe("cli", () => {
         [{ op: "feedback", verdict: "up" }, "patternId is required"],
         [
           { op: "getPattern", includeSource: true },
-          "op must be search, feedback, whoami, admit, join, view, getSharing or setSharing",
+          "op must be search, feedback, source, whoami, admit, join, view, getSharing or setSharing",
         ],
         [
           null,
-          "op must be search, feedback, whoami, admit, join, view, getSharing or setSharing",
+          "op must be search, feedback, source, whoami, admit, join, view, getSharing or setSharing",
         ],
         ["{", "request body is not JSON"],
       ]

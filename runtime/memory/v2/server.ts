@@ -8,6 +8,7 @@ import {
   valueEqual,
   valueEqualByWalk,
 } from "@commonfabric/data-model";
+import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/logger";
@@ -162,6 +163,17 @@ import {
   SessionReportLog,
   type SessionReportsReport,
 } from "./session-reports.ts";
+import {
+  advanceCurrencyCursor,
+  type CurrencyBatch,
+  type CurrencyInstance,
+  type CurrencyMarked,
+  type CurrencyRefusal,
+  type CurrencyStored,
+  judgeCurrencyRoots,
+  selectCurrencyPiece,
+  storeCurrencyRecords,
+} from "./currency-index.ts";
 import * as Engine from "./engine.ts";
 import {
   executeInvite,
@@ -376,6 +388,13 @@ const echoBreakerReportCount = operationMeter.createCounter(
 const timing = getLogger("memory", { enabled: false });
 
 const SUBSCRIPTION_REFRESH_DELAY_MS = 5;
+
+/**
+ * How many `result` back-links the currency judgment follows from a root to
+ * the piece it belongs to: as many as a start follows
+ * (`MAX_RESULT_LINK_DEPTH` in the runner's `ensure-piece-running.ts`).
+ */
+const CURRENCY_ROOT_HOPS_MAX = 10;
 const MIN_REFRESH_QUEUE_DRAIN_WAIT_MS = 500;
 /**
  * The duration, in milliseconds, past which an operation is recorded for
@@ -12243,6 +12262,118 @@ export class Server {
       demand.push(share);
     }
     return demand;
+  }
+
+  /**
+   * Brings the marks of `space`'s currency index up to its store's head
+   * (serving-loop.md §3b), and returns the pieces the advance marked.
+   * Server-internal machinery and tests only, as `engineForSpace()` is.
+   */
+  async advanceCurrency(space: string): Promise<CurrencyMarked[]> {
+    const engine = await this.#openEngine(space);
+    return advanceCurrencyCursor(engine, { space });
+  }
+
+  /**
+   * Stores the records a serving loop took of `space`'s pieces at a quiescent
+   * point in its currency index (serving-loop.md §3b). Server-internal
+   * machinery and tests only.
+   */
+  async storeCurrencyRecords(
+    space: string,
+    batch: Omit<CurrencyBatch, "space">,
+  ): Promise<CurrencyStored> {
+    const engine = await this.#openEngine(space);
+    return storeCurrencyRecords(engine, { ...batch, space });
+  }
+
+  /**
+   * Judges which of `roots`, ids of space-scoped documents awaiting a
+   * structure load, the store can serve with no piece started
+   * (serving-loop.md §1), against the demand rows of `space`'s client
+   * sessions as `demandForSpace()` reads them, after bringing the currency
+   * index's marks up to the store's head. A root that is no result document
+   * is judged as the piece its `result` back-links lead to, which is the
+   * piece a structure load of it starts.
+   *
+   * @returns The roots that pass, each with the piece it was judged as, how
+   * many roots each reason refused, and the pieces the advance marked.
+   */
+  async judgeCurrencyRoots(
+    space: string,
+    roots: readonly string[],
+    options: { excludePrincipal?: string; epoch: string },
+  ): Promise<{
+    servable: Array<{ root: string; piece: string }>;
+    refused: Partial<Record<CurrencyRefusal, number>>;
+    marked: CurrencyMarked[];
+  }> {
+    const engine = await this.#openEngine(space);
+    const marked = advanceCurrencyCursor(engine, { space });
+    const refused: Partial<Record<CurrencyRefusal, number>> = {};
+    if (roots.length === 0) return { servable: [], refused, marked };
+
+    /** The recorded piece `root` leads to, if its back-links reach one. */
+    const pieceOf = (root: string): string | undefined => {
+      let id = root;
+      for (let hops = 0; hops <= CURRENCY_ROOT_HOPS_MAX; hops++) {
+        if (selectCurrencyPiece(engine, { piece: id }) !== undefined) {
+          return id;
+        }
+        const document = Engine.read(engine, {
+          id,
+          scopeKey: "space",
+        });
+        const link = document === null
+          ? undefined
+          : (document as Record<string, unknown>).result;
+        if (!isLinkRef(link)) return undefined;
+        const target = linkRefPayload(link).id;
+        if (typeof target !== "string") return undefined;
+        id = target;
+      }
+      return undefined;
+    };
+    const pieces = new Map<string, string>();
+    for (const root of roots) {
+      const piece = pieceOf(root);
+      if (piece !== undefined) pieces.set(root, piece);
+      else refused["no-record"] = (refused["no-record"] ?? 0) + 1;
+    }
+    if (pieces.size === 0) return { servable: [], refused, marked };
+    const demand = this.demandForSpace(
+      space,
+      options.excludePrincipal === undefined
+        ? {}
+        : { excludePrincipal: options.excludePrincipal },
+    );
+    const rows = function* (): Generator<CurrencyInstance> {
+      for (const share of demand) {
+        for (const row of share.rows.values()) {
+          yield { id: row.id, scopeKey: row.scopeKey };
+        }
+      }
+    };
+    const judgment = judgeCurrencyRoots(engine, {
+      space,
+      roots: [...new Set(pieces.values())],
+      rows: rows(),
+      epoch: options.epoch,
+    });
+    const passing = new Set(judgment.servable);
+    const reasons = new Map(
+      judgment.refused.map(({ root, reason }) => [root, reason]),
+    );
+    const servable: Array<{ root: string; piece: string }> = [];
+    for (const [root, piece] of pieces) {
+      if (passing.has(piece)) {
+        servable.push({ root, piece });
+        continue;
+      }
+      const reason = reasons.get(piece);
+      if (reason !== undefined) refused[reason] = (refused[reason] ?? 0) + 1;
+    }
+    return { servable, refused, marked };
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a

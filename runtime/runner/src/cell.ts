@@ -42,6 +42,7 @@ import {
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { isCfLinkColumn } from "@commonfabric/memory/sqlite/columns";
 import {
+  isSqliteDbRef,
   type ScopeKeyIdentity,
   type SqliteDbRef,
   type SqliteParamsWire,
@@ -97,6 +98,21 @@ import {
 } from "./builder/types.ts";
 import type { AggregateOperation } from "./builtins/aggregate.ts";
 import { listResultSchema } from "./builtins/list-result-schema.ts";
+import {
+  type IndexedCollectionDescriptor,
+  indexedCollectionDescriptorOf,
+  indexedKindOf,
+} from "./builtins/indexed-collection/definition.ts";
+import {
+  addMemberRows,
+  deleteMemberRows,
+  type IndexedCollectionWriter,
+  maintenanceRevisionCell,
+  memberKeysOf,
+  type MemberRows,
+  nextMaintenanceRevision,
+  projectMember,
+} from "./builtins/indexed-collection/maintenance.ts";
 import { encodeCellToSigilString } from "./builtins/sqlite/cf-link-codec.ts";
 import { sqliteQueryNodeFactory } from "./builtins/sqlite/query-node.ts";
 import { checkSqliteRowLabelWrite } from "./builtins/sqlite/row-label-write.ts";
@@ -143,7 +159,11 @@ import {
   portableSnapshotLinks,
   resolveImmutableValueLinks,
 } from "./data-uri.ts";
-import { actingForEmission, waveRunContextOf } from "./executor/wave.ts";
+import {
+  actingForEmission,
+  waveRunContextOf,
+  waveSettlementOf,
+} from "./executor/wave.ts";
 import { immutableCellsFor, pinImmutableCell } from "./immutable-cell.ts";
 import { areLinksSame } from "./link-equality.ts";
 import {
@@ -1404,6 +1424,26 @@ export function createCell<T>(
 }
 
 /**
+ * Returns the write half of the database handle cell at `link`, bound to
+ * `tx`: its `exec()` records a SQLite write onto that transaction.
+ */
+export function createSqliteWriter(
+  runtime: Runtime,
+  link: NormalizedFullLink,
+  tx: IExtendedStorageTransaction,
+): IndexedCollectionWriter {
+  const writer = new CellImpl(runtime, tx, link, false, undefined, "sqlite");
+  maintenanceWriters.add(writer);
+  return writer;
+}
+
+/**
+ * The handles `createSqliteWriter()` made. Their writes are maintenance's,
+ * marked in the collection's maintenance revision rather than on its handle.
+ */
+const maintenanceWriters = new WeakSet<object>();
+
+/**
  * Mark a cell handle as covered by a document-level sync barrier owned by the
  * caller. Separate handles for the same document otherwise each try to load it.
  */
@@ -2367,10 +2407,104 @@ export class CellImpl<T extends FabricValue>
     // object-in-array and would split the handle's inline rule term lists
     // back into per-element linked docs — the split sqliteDatabase stores the
     // handle raw specifically to avoid (a second runtime can't load those).
+    if (maintenanceWriters.has(this)) {
+      // Maintenance writes beside the handlers that add to the collection,
+      // and every one of those reads this handle. Its writes are marked in
+      // a document of their own, so that none of them costs a handler its
+      // commit.
+      maintenanceRevisionCell(this.#runtime, this.space, handle.id, this.#tx)
+        .set(nextMaintenanceRevision());
+      return;
+    }
     const rev = ((handle as { rev?: unknown }).rev as number | undefined) ?? 0;
     (this.withTx(this.#tx) as unknown as Cell<{ rev: number }>).key("rev").set(
       rev + 1,
     );
+  }
+
+  /**
+   * Adds a member to this indexed collection: mirrors its declared fields
+   * into the tables of `kind`, in this cell's transaction. Adding a member
+   * the collection already holds refreshes its rows. Throws outside a
+   * transaction, on a receiver that is not an indexed collection, on a kind
+   * it does not declare, and on a member that is not a cell of the
+   * collection's own space.
+   */
+  add(kind: string, member: unknown): void {
+    const collection = this.#indexedCollectionDescriptor();
+    if (collection === undefined || !this.#tx) {
+      throw new TypeError(
+        "`.add()` is only available on an indexed collection, within a " +
+          "transaction (e.g. inside a handler)",
+      );
+    }
+    const { descriptor } = indexedKindOf(collection, String(kind));
+    const cell = asBoundCell(member);
+    if (cell === undefined) {
+      throw new TypeError("an indexed collection holds cells only");
+    }
+    // The collection hears of writes in its own space, so a member elsewhere
+    // would be mirrored once and never followed.
+    if (cell.getAsNormalizedFullLink().space !== this.space) {
+      throw new TypeError(
+        "an indexed collection holds cells of its own space only",
+      );
+    }
+    const rows = projectMember(this.#tx, kind, descriptor, cell);
+    addMemberRows(this, descriptor, rows);
+    // A piece the calling handler has just made is set up only if something
+    // the handler writes refers to it, and a row is not such a write. The
+    // handle is written by every `exec()` already, so it carries the
+    // reference, of the member added last.
+    (this.withTx(this.#tx) as unknown as Cell<{ latest: unknown }>).key(
+      "latest",
+    ).set(cell);
+    const bound = cell.withTx(this.#tx);
+    this.#registerIndexedCollection([
+      bound.getAsNormalizedFullLink().id,
+      bound.resolveAsCell().getAsNormalizedFullLink().id,
+    ], rows);
+  }
+
+  /**
+   * Helper for the indexed-collection methods, which returns this cell's
+   * collection descriptor, or `undefined` when its value is not the handle
+   * of one.
+   */
+  #indexedCollectionDescriptor(): IndexedCollectionDescriptor | undefined {
+    return indexedCollectionDescriptorOf(this.getRaw({ lastNode: "value" }));
+  }
+
+  /**
+   * Helper for the indexed-collection methods, which makes the collection
+   * known to the runtime's maintainer once this transaction's writes are
+   * durable, and has it re-read the members whose own documents are
+   * `members`. A member added in the transaction that creates it can hold
+   * fields this transaction has not written yet, and the commit carrying them
+   * can reach the maintainer before the member's rows exist to be found.
+   */
+  #registerIndexedCollection(
+    members: readonly string[] = [],
+    added?: MemberRows,
+  ): void {
+    const handle = this.resolveAsCell().getAsNormalizedFullLink();
+    const value: unknown = this.getRaw({ lastNode: "value" });
+    if (!isSqliteDbRef(value)) return;
+    const id = value.id;
+    const maintainer = this.#runtime.indexedCollections;
+    const durable = () => {
+      maintainer.register(handle, id);
+      if (added !== undefined) maintainer.noteAdded(handle.space, id, added);
+      maintainer.noteWrites(handle.space, members);
+    };
+    this.#tx!.addCommitCallback((settledTx, result) => {
+      if (result.error) return;
+      const settlement = waveSettlementOf(settledTx);
+      if (settlement === undefined) return durable();
+      void settlement.then((verdict) => {
+        if (!verdict.error) durable();
+      });
+    });
   }
 
   set(newValue: AnyCellWrapping<T> | T): Cell<T> {
@@ -3794,10 +3928,25 @@ export class CellImpl<T extends FabricValue>
 
   remove(
     ref: T extends (infer U)[] ? (U | AnyCell<U>) : never,
+    memberOfKind?: unknown,
   ): void {
     type ElemT = T extends (infer U)[] ? U : never;
     const got = this.get();
     if (!Array.isArray(got)) {
+      // On an indexed collection, `remove()` takes a member out of it, named
+      // as `add()` names one: `ref` is the kind, and `memberOfKind` the
+      // member. The signature a pattern compiles against, which requires
+      // both, is `IndexedCollections.remove()`.
+      const collection = this.#indexedCollectionDescriptor();
+      const member = asBoundCell(memberOfKind);
+      if (collection !== undefined && member !== undefined && this.#tx) {
+        const { kind, descriptor } = indexedKindOf(collection, String(ref));
+        for (const key of memberKeysOf(member.withTx(this.#tx))) {
+          deleteMemberRows(this, kind, descriptor, key);
+        }
+        this.#registerIndexedCollection();
+        return;
+      }
       throw new Error("Can't remove from non-array value");
     }
     const array = got as ElemT[];
