@@ -814,15 +814,19 @@ export class RuntimeTransactions implements TransactionHooks {
 }
 
 /**
- * The runtime's observation class of a plan's. A read of `identity` is the
- * runtime's `followRef`. The executor's read of an array it enumerates is
- * journaled as a read of the array's value, which is what an `enumeration`
- * slot is bound to.
+ * The runtime's read shape of a plan's observation class (PL §2.2). A read
+ * of `identity` is the runtime's `followRef`. An `enumeration` slot
+ * observes which children its container has and resolves as a `shape`
+ * read at the container's path, which consumes the `shape` and `enumerate`
+ * entries there and no entry below it. The executor reads the array it
+ * enumerates as a value, a wider read than the slot's, so the journal
+ * holds no read in the slot's class and the runtime observes the label
+ * stored at the path at commit.
  */
 const observesOf = (observes: string): "value" | "shape" | "followRef" =>
   observes === "identity"
     ? "followRef"
-    : observes === "shape"
+    : observes === "shape" || observes === "enumeration"
     ? "shape"
     : "value";
 

@@ -740,6 +740,21 @@ describe("write records the runtime instantiates with the option on", () => {
     );
   });
 
+  it("resolves an `enumeration` slot as a read of the container's shape, without the clause a member of an element declares", async () => {
+    // `items.length` observes which elements the list has (PL §2.2: an
+    // `enumeration` slot resolves as a `shape` read at the container's
+    // path). The clause `note` of an element declares is at `items/*/note`.
+    const { refused, label } = await commitWithOptionOn(
+      "length-of-labeled",
+      { items: [{ note: "a", amount: 1 }, { note: "b", amount: 2 }] },
+      ["count"],
+    );
+    expect(refused).toEqual([]);
+    const clauses = JSON.stringify(label?.confidentiality ?? []);
+    expect(clauses).toContain('"input:items"');
+    expect(clauses).not.toContain("item-note");
+  });
+
   it("binds the slot of a handler's write edge that read the position the edge writes to what it read, and commits", async () => {
     // The edge writes the input's own cell, which the result document does
     // not hold: what is asserted is that the commit is not refused.
