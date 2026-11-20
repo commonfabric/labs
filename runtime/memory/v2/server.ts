@@ -148,6 +148,7 @@ import {
   type WireMemoryProtocolFlags,
 } from "../v2.ts";
 import { AdmissionWaiters } from "./admission-waiters.ts";
+import { retireBareDidLabels } from "./cfc-bare-did-migration.ts";
 import {
   type CommitRatesReport,
   CommitRateTracker,
@@ -3927,6 +3928,13 @@ export class Server {
        * that does not, and `false` is how a deployment turns them off.
        */
       syncCidReferences?: boolean;
+
+      /**
+       * Whether each store this server opens has its bare-DID confidentiality
+       * labels respelled as `User{subject}` before it is served, once per
+       * store (`cfc-bare-did-migration.ts`). Off unless `true`.
+       */
+      retireBareDidLabels?: boolean;
 
       /**
        * Whether this server's posture names instances (INV-16): the
@@ -13383,6 +13391,38 @@ export class Server {
   }
 
   /**
+   * Helper for `#openEngineInner()`, which respells `space`'s bare-DID labels
+   * before its engine is served (`cfc-bare-did-migration.ts`). A failure is
+   * reported and serves the store as it stands, so it never makes the space
+   * unservable.
+   */
+  async #retireBareDidLabels(
+    engine: Engine.Engine,
+    space: string,
+  ): Promise<void> {
+    try {
+      const report = await retireBareDidLabels(engine, { space });
+      if (report.rewritten > 0) {
+        console.info(
+          `memory v2: respelled the bare-DID labels of ${report.rewritten} ` +
+            `document instance(s) in ${space}`,
+        );
+      }
+      for (const { id, scopeKey, reason } of report.skipped) {
+        console.error(
+          `memory v2: could not respell the bare-DID labels of ${id} ` +
+            `(${scopeKey}) in ${space}: ${reason}`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `memory v2: respelling the bare-DID labels of ${space} failed`,
+        error,
+      );
+    }
+  }
+
+  /**
    * The co-hosted direct-engine access of server-execution v2
    * (serving-loop.md §1): the wave commit step's sink runs its store
    * transaction (per-doc re-verification + derived-class apply + basis rows)
@@ -13680,7 +13720,7 @@ export class Server {
       if (url.protocol === "file:") {
         await FS.ensureDir(Path.toFileUrl(Path.dirname(Path.fromFileUrl(url))));
       }
-      return await Engine.open({
+      const engine = await Engine.open({
         url,
         operationCodecs: this.#operationCodecs,
         operationCheckpointInterval: this.options.operationCheckpointInterval,
@@ -13695,6 +13735,10 @@ export class Server {
         commitObserver: (decision) =>
           this.#observeCommit({ ...decision, space }),
       });
+      if (this.options.retireBareDidLabels === true) {
+        await this.#retireBareDidLabels(engine, space);
+      }
+      return engine;
     })();
     // The SYNC engine view, which the read paths that must not add a
     // microtask boundary consult.

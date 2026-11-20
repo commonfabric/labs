@@ -8,6 +8,10 @@
 
 import { valueEqual } from "@commonfabric/data-model";
 import { aclDocId } from "../acl.ts";
+import {
+  isRespelled,
+  respellBareDidEnvelope,
+} from "./cfc-bare-did-migration.ts";
 import * as Engine from "./engine.ts";
 import {
   type BranchName,
@@ -316,17 +320,36 @@ export const restoreBranch = (
     );
     const operations: Operation[] = [];
     const scopeKeys = new Map<number, string>();
+    const respells = isRespelled(engine);
     for (const { id, scopeKey } of instances) {
       const scope = scopeOfScopeKey(scopeKey);
       if (scope === "session" || !isRestored(id, options.space)) continue;
       const held = Engine.readState(engine, { id, scopeKey, branch: target })
         ?.document ?? null;
-      const wanted = Engine.readState(engine, {
+      let wanted = Engine.readState(engine, {
         id,
         scopeKey,
         branch: source,
         seq: sourceSeq,
       })?.document ?? null;
+      // A respelled store writes a recorded label back respelled too, so a
+      // restore does not bring back what `cfc-bare-did-migration.ts`
+      // retired.
+      const respelled = wanted !== null && respells
+        ? respellBareDidEnvelope(
+          (wanted as { cfc?: unknown }).cfc,
+          (ref) =>
+            Engine.readState(engine, {
+              id: ref,
+              branch: source,
+              seq: sourceSeq,
+            })
+              ?.document?.value,
+        )
+        : undefined;
+      if (respelled !== undefined) {
+        wanted = { ...wanted, cfc: respelled } as typeof wanted;
+      }
       if (held === null ? wanted === null : valueEqual(held, wanted)) continue;
       if (scope !== "space") scopeKeys.set(operations.length, scopeKey);
       operations.push(
