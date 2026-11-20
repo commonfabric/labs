@@ -360,25 +360,28 @@ wrong.
 
 For the index, in `runtime/memory/test/`:
 
-1. A revision above a read row marks the piece `2`; one at or below it marks
-   nothing.
-2. A revision on an id a piece writes, above its write row, marks the piece.
-3. A marked piece marks `1` each clean piece that reads an id it writes,
-   through any number of pieces, and a walk that reaches a marked piece goes
-   no further.
+1. A revision of an instance above a slice's read row for it marks the slice
+   `2`; one at or below it marks nothing.
+2. A revision of an instance a piece vouches for, above its vouch row, marks
+   the slice at the instance's key; a revision of a document the piece
+   writes and does not vouch for marks nothing.
+3. A marked slice marks `1` each clean slice that reads an instance it
+   writes, through any number of pieces, and a walk that reaches a marked
+   slice goes no further.
 4. A record stored after a commit that landed above its `as_of`, and that it
    does not name as seen, is stored marked `2`.
-5. Storing a clean record for a marked piece clears each reader marked `1`
-   that has no other marked producer; a reader marked `2` stays marked.
-6. A piece that reads an id another recorded piece writes is `1` while that
-   piece is marked, and a record that is not vouched for is stored `2`.
+5. Storing a clean record of a marked slice clears each reader marked `1`
+   that is left with no stale input; a reader marked `2` stays marked.
+6. A slice that reads an instance another recorded piece writes is `1` while
+   a slice that decides it is marked, and while no piece vouches for it; a
+   record that is not vouched for is stored `2`.
 7. The cursor advances to the head, and a second advance with no commit reads
    nothing.
-8. A root is judged servable only when its piece and every owner of a demand
-   row beneath it is clean and vouches for the row's instance; an absent
-   instance of an owned cell, a written id with no vouch row, a marked nested
-   piece that owns a demanded row, and a record from another epoch each fail
-   it.
+8. A root is judged servable only when its piece's `space` slice is clean,
+   and every slice a demand row beneath it is resolved under is clean and
+   the row's instance is vouched for; an absent instance of an owned cell, a
+   written id with no vouch row, a marked nested piece that owns a demanded
+   row, and a record from another epoch each fail it.
 
 For the serving loop, in `runtime/runner/test/executor/`, with real client
 runtimes over `EmulatedStorageManager`. Tests 9 to 15 exist in
@@ -423,6 +426,11 @@ of which exist:
     another viewer's slice is marked, and refused for that other viewer.
 22. A piece recorded for one viewer, then started and recorded for a second,
     is not started when the first returns.
+23. A viewer's slice that read what the `space` slice computed is marked `1`
+    once a record of the `space` slice no longer vouches for it, and cleared
+    once one vouches for it again with the instance unchanged.
+24. An output that was overwritten, that one record stops vouching for and a
+    later one vouches for again, is stored marked.
 
 ## Related
 
