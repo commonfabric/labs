@@ -557,6 +557,26 @@ The catalog stores no invitation bearer, identity key, profile inbox pointer, or
 delivery endpoint. Adopting an inbox or changing its ACL is a separate
 operation.
 
+## Notice marks
+
+The catalog's `notices` records, for each notice that a space changed which
+the person's host has acted on, the `sharedAt` of the last one acted on. It is
+keyed as receipts are, by the pair of the notice's sender DID and its `id`,
+and each value is a nonnegative integer; the catalog holds no `notices` until
+one is marked. A notice is a row of the person's private inbox, and
+[the private inbox](private-inbox.md#a-notice-that-a-room-changed) says which
+the host acts on and how.
+
+FabriChat's manager writes the mark, through `markSharedSpaceNoticeIn()`, in
+the transaction of the `joinRoom` the host sends for a notice, as that join
+brings the title the catalog lists the room under up to the room's own. It
+writes only the one key, and only where the mark it holds differs. The host
+reads the mark before acting on a notice, and acts on one whose `sharedAt` is
+another than the marked one, so the mark is what keeps a host from reading a
+room again for a notice already acted on. A mark names no entry, and an entry's
+archiving, restoring, or removal leaves the marks as they are. Marks are
+retained as receipts are, at most one per sender and `id`.
+
 ## Repair and retention
 
 Host, kind, and admission provenance describe the first accepted registration.
