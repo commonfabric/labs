@@ -20,6 +20,7 @@ import { main, type ReportsDeps, sendAction } from "./reports.ts";
 const REPORTS = "of:fid1:reports-board";
 const ADA = "did:key:z6MkAda";
 const EVE = "did:key:z6MkEve";
+const TRI = "did:key:z6MkTriager";
 
 /** Words no Topic may carry. */
 const SECRET = "Lunch with Pat about the merger";
@@ -92,9 +93,16 @@ describe("feedback-reports command", () => {
   /** The ids of the reports on the board. */
   let ids: string[];
   let topicOf: Record<string, string>;
-  /** Who the fake `cf` writes reports as. */
+  /** Who wrote each link in `topicOf`, by report id. */
+  let linkAuthors: Record<string, string>;
+  /** Who the fake `cf` writes reports and links as. */
   let sender: string;
+  let linker: string;
   let topicInput: FabricPlainObject;
+  /** What each invocation settled with, so naming one again writes nothing. */
+  let settled: Map<string, unknown>;
+  /** How many `linkTopic` calls fail before one is made. */
+  let failingLinks: number;
 
   beforeEach(async () => {
     board = await boardServer();
@@ -106,7 +114,11 @@ describe("feedback-reports command", () => {
     reportIds = [];
     ids = [];
     topicOf = {};
+    linkAuthors = {};
     sender = ADA;
+    linker = TRI;
+    settled = new Map();
+    failingLinks = 0;
     topicInput = { ...INPUT_1 };
     await board.write({
       [REPORTS]: { value: {}, argument: link("of:fid1:reports-input") },
@@ -120,12 +132,32 @@ describe("feedback-reports command", () => {
     await Deno.remove(dir, { recursive: true });
   });
 
+  /** Writes the board's input, each link labeled `authored-by` its writer. */
   function writeReportsInput() {
     return board.write({
       "of:fid1:reports-input": {
         value: { reports: reportIds.map((id) => link(id)), topicOf },
+        cfc: {
+          version: 2,
+          schemaHash: taggedHashStringOf(true),
+          labelMap: {
+            version: 1,
+            entries: Object.entries(linkAuthors).map(([id, subject]) => ({
+              path: ["topicOf", id],
+              origin: "declared",
+              label: { integrity: [{ kind: "authored-by", subject }] },
+            })),
+          },
+        },
       },
     });
+  }
+
+  /** Links report `id` to `topic` as `by` would. */
+  async function linkReport(id: string, topic: string, by: string) {
+    topicOf = { ...topicOf, [id]: topic };
+    linkAuthors = { ...linkAuthors, [id]: by };
+    await writeReportsInput();
   }
 
   /** Puts a report on the board as `author` wrote it. */
@@ -165,7 +197,46 @@ describe("feedback-reports command", () => {
     const id = args[args.indexOf("--invocation") + 1];
     const verb = args[args.indexOf("--invocation") + 2];
     const payload = JSON.parse(input);
+    if (settled.has(id)) {
+      return {
+        code: 0,
+        stdout: JSON.stringify({
+          status: "settled",
+          result: settled.get(id),
+          deduplicated: true,
+        }),
+        stderr: "",
+      };
+    }
     verbs.push(verb);
+    if (verb === "linkTopic" && failingLinks > 0) {
+      failingLinks--;
+      return {
+        code: 1,
+        stdout: "",
+        stderr: `connection lost\ninvocation: ${id} phase: initial_sync\n`,
+      };
+    }
+    const answer = await perform(verb, payload);
+    if (answer.code === 0) {
+      settled.set(id, JSON.parse(answer.stdout).result);
+    }
+    return answer;
+  }
+
+  /** Performs `verb` as the reports and Topics patterns store its effects. */
+  async function perform(
+    verb: string,
+    payload: Record<string, string>,
+  ): Promise<ProgramRun> {
+    const ok = (result?: unknown) => ({
+      code: 0,
+      stdout: JSON.stringify({
+        status: "settled",
+        ...(result === undefined ? {} : { result }),
+      }),
+      stderr: "",
+    });
     if (verb === "addReport") {
       if (ids.includes(payload.id)) {
         return {
@@ -173,15 +244,14 @@ describe("feedback-reports command", () => {
           stdout: "",
           stderr: `Error: addReport rejected: duplicate-id: a report with ` +
             `id ${payload.id} is already on the board\n` +
-            `invocation: ${id} phase: dispatched\n`,
+            "invocation: x phase: dispatched\n",
         };
       }
       await addReport(payload, sender);
       return ok({ id: payload.id, name: payload.name });
     }
     if (verb === "linkTopic") {
-      topicOf = { ...topicOf, [payload.id]: payload.topic };
-      await writeReportsInput();
+      await linkReport(payload.id, payload.topic, linker);
       return ok();
     }
     if (verb === "addTopic") {
@@ -344,17 +414,27 @@ describe("feedback-reports command", () => {
   });
 
   describe("triage", () => {
+    /** Runs `triage` trusting Ada's reports and TRI's links. */
+    async function triage(...extra: string[]): Promise<number> {
+      const triagers = join(dir, "triagers.txt");
+      await Deno.writeTextFile(triagers, TRI);
+      return await main([
+        "triage",
+        "--trusted",
+        await trustedFile(ADA),
+        "--triagers",
+        triagers,
+        "--agent-name",
+        "Triage",
+        ...extra,
+      ], deps);
+    }
+
     it("files a templated Topic for a trusted sender's report and links the report to it", async () => {
       await addReport(request("quiet-heron-41"));
       await addReport(request("calm-otter-7"));
 
-      await main([
-        "triage",
-        "--trusted",
-        await trustedFile(ADA),
-        "--agent-name",
-        "Triage",
-      ], deps);
+      await triage();
 
       expect(verbs).toEqual(["addTopic", "linkTopic", "linkTopic"]);
       expect(topicOf).toEqual({
@@ -365,28 +445,72 @@ describe("feedback-reports command", () => {
       expect(output.at(-1)).toContain("Filed 1 Topics and updated 0");
     });
 
-    it("updates the body of the Topic a new report's problem is filed under, commenting only on a new release", async () => {
+    it("settles the Topic an interrupted run filed rather than filing it again", async () => {
       await addReport(request("quiet-heron-41"));
-      topicOf = { [idOf("quiet-heron-41")]: "of:fid1:topic-alias-1" };
-      await writeReportsInput();
       await addReport(request("calm-otter-7"));
-      const trusted = await trustedFile(ADA);
-      const run = () =>
-        main(["triage", "--trusted", trusted, "--agent-name", "Triage"], deps);
+      failingLinks = 1;
 
-      await run();
+      await expect(triage()).rejects.toThrow("connection lost");
+      expect(verbs).toEqual(["addTopic", "linkTopic"]);
+      expect(topicOf).toEqual({});
+
+      verbs = [];
+      await triage();
+
+      // The second run names the first run's invocation, which settles on the
+      // Topic already filed: no second `addTopic` is dispatched.
+      expect(verbs).toEqual(["linkTopic", "linkTopic"]);
+      expect(Object.values(topicOf)).toEqual([
+        "of:fid1:topic-piece-3",
+        "of:fid1:topic-piece-3",
+      ]);
+    });
+
+    it("replaces only its own section of a filed Topic's body, commenting only on a new release", async () => {
+      await addReport(request("quiet-heron-41"));
+      await linkReport(idOf("quiet-heron-41"), "of:fid1:topic-alias-1", TRI);
+      await addReport(request("calm-otter-7"));
+
+      await triage();
 
       expect(verbs).toEqual(["setBody", "linkTopic"]);
+      // The engineers' text the Topic held is kept, and the section added.
+      expect(topicInput.body).toContain(String(INPUT_1.body));
       expect(topicInput.body).toContain("- Count: 2");
       expect(topicOf[idOf("calm-otter-7")]).toBe("of:fid1:topic-alias-1");
 
+      topicInput = {
+        ...topicInput,
+        body: `${String(topicInput.body)}\n\nOwner: Bo. Next step: bisect.`,
+      };
+      await board.write({ "of:fid1:input-1": { value: topicInput } });
       verbs = [];
       await addReport(request("brave-lynx-3", "2026.12.01"));
-      await run();
+      await triage();
 
       expect(verbs).toEqual(["addComment", "setBody", "linkTopic"]);
       expect(JSON.stringify(topicInput.comments)).toContain(
         "New CFS releases: 2026.12.01.",
+      );
+      const body = String(topicInput.body);
+      expect(body.startsWith(String(INPUT_1.body))).toBe(true);
+      expect(body.endsWith("Owner: Bo. Next step: bisect.")).toBe(true);
+      expect(body).toContain("- Count: 3");
+      expect(body).not.toContain("- Count: 2");
+    });
+
+    it("ignores a link someone not on the triagers list wrote, and files the report anew", async () => {
+      await addReport(request("quiet-heron-41"));
+      // Eve may write the board, so she can link Ada's report to a Topic.
+      await linkReport(idOf("quiet-heron-41"), "of:fid1:topic-alias-1", EVE);
+
+      await triage();
+
+      expect(verbs).toEqual(["addTopic", "linkTopic"]);
+      expect(topicOf[idOf("quiet-heron-41")]).toBe("of:fid1:topic-piece-3");
+      expect(topicInput.body).toBe(INPUT_1.body);
+      expect(output.at(-1)).toContain(
+        "1 links to a Topic were not written by a triager",
       );
     });
 
@@ -394,13 +518,7 @@ describe("feedback-reports command", () => {
       await addReport(request("quiet-heron-41"), EVE);
       await addReport(request("calm-otter-7"), null);
 
-      await main([
-        "triage",
-        "--trusted",
-        await trustedFile(ADA),
-        "--agent-name",
-        "Triage",
-      ], deps);
+      await triage();
 
       expect(verbs).toEqual([]);
       expect(topicOf).toEqual({});
@@ -411,23 +529,36 @@ describe("feedback-reports command", () => {
       expect(output.join("\n")).not.toContain("heron");
     });
 
-    it("writes nothing on a dry run, and keeps the reporter's words out of what it would file", async () => {
+    it("writes nothing on a dry run, and prints only values that pass their checks", async () => {
       await addReport(request("quiet-heron-41"));
+      await addReport({
+        ...request("calm-otter-7"),
+        id: "not an id",
+        structured: {
+          source: "report",
+          want: { cause: "[x](javascript:alert(1))" },
+        },
+      });
+      await addReport({
+        ...request("brave-lynx-3"),
+        structured: {
+          source: "report",
+          want: { cause: "auth-expired", stop: "gmail-sync" },
+          cfs: { release: "see www.example.com" },
+        },
+      });
 
-      await main([
-        "triage",
-        "--trusted",
-        await trustedFile(ADA),
-        "--agent-name",
-        "Triage",
-        "--dry-run",
-      ], deps);
+      await triage("--dry-run");
 
       expect(verbs).toEqual([]);
       expect(output[0]).toContain(
-        "[feedback] Weaver: auth expired, stops at gmail sync",
+        "[feedback] Weaver: auth-expired at gmail-sync",
       );
-      expect(output[0]).not.toContain("Pat");
+      expect(output[0]).toContain("- CFS releases: 2026.11.18");
+      expect(output[0]).toContain("- Fields that failed their checks: 1");
+      for (const text of ["Pat", "javascript", "example", "not an id"]) {
+        expect(output[0]).not.toContain(text);
+      }
     });
   });
 });

@@ -105,6 +105,8 @@ describe("the reports pattern's storage, read through the copy", () => {
         },
         createdAt: reports[0]?.createdAt,
         topic: "of:fid1:topic",
+        // Who linked the report, from the link's own label.
+        topicAuthors: [space],
         authors: [space],
       }]);
       expect(reports[0].createdAt).toBeGreaterThan(0);

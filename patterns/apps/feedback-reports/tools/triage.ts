@@ -1,18 +1,42 @@
 /**
  * What triage does with a board's reports, decided without writing anything:
  * which reports may be filed (those whose sender is on the trusted list),
- * which problem each belongs to, and the Topic text for each problem. The
- * text is a template over the reports' structured fields alone. No model
+ * which links to a Topic count (those someone on the triagers list wrote),
+ * which problem each report belongs to, and the Topic text for each problem.
+ *
+ * The text is a template over the reports' structured fields alone. No model
  * writes it, and a report's `words` never reach it: the Topic names each
- * report, and the words stay on the reports board.
+ * report, and the words stay on the reports board. Every value the template
+ * uses must match the strict shape `../fields.ts` gives it, an identifier or
+ * a version, and one that does not is shown as `invalid` and counted, so
+ * nothing a sender writes can put Markdown, a link or prose in a Topic.
  */
 
 import { maxOf } from "@commonfabric/collections/math";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
+import {
+  checked,
+  FIELD,
+  RELEASE,
+  REPORT_ID,
+  REPORT_NAME,
+  TOPIC_ADDRESS,
+} from "../fields.ts";
 import type { Report } from "./read.ts";
 
-/** What triage reads out of one report's structured fields. */
+/** What a value that fails its shape is shown as. */
+export const INVALID = "invalid";
+
+/** The most entries a list in a Topic shows before saying how many more. */
+export const MAX_LISTED = 20;
+
+/** The lines that mark the part of a Topic's body triage writes. */
+export const SECTION_START = "<!-- feedback-triage: start; edits inside " +
+  "are replaced, write notes outside -->";
+export const SECTION_END = "<!-- feedback-triage: end -->";
+
+/** What triage reads out of one report's structured fields, each checked. */
 export interface Signals {
   kind: string;
   cause?: string;
@@ -22,6 +46,9 @@ export interface Signals {
 
   /** Each failing probe, as `connector/probe`. */
   probes: string[];
+
+  /** How many fields were present but failed their shape. */
+  invalid: number;
 }
 
 /** One problem: the reports in it, the Topic it is filed under if any. */
@@ -39,17 +66,17 @@ export interface Problem {
   keys: Set<string>;
 }
 
-/** What a run of triage does. */
+/** What a run of triage does. Report lists hold report ids. */
 export interface Plan {
   /** A new Topic for each problem nothing on the board matches. */
-  /** Each lists the ids of the reports it files. */
   file: { title: string; body: string; reports: string[] }[];
 
-  /** For each problem already filed, its new body, and a comment when the
-   * new reports bring a release or a stop it did not have. */
+  /** For each problem already filed, the section of its body triage writes,
+   * and a comment when the new reports bring a release or a stop it did not
+   * have. */
   update: {
     topic: string;
-    body: string;
+    section: string;
     comment?: string;
     reports: string[];
   }[];
@@ -59,6 +86,21 @@ export interface Plan {
 
   /** New reports whose sender could not be read. */
   unreadable: number;
+
+  /** Links to a Topic that no one on the triagers list wrote, or that name no
+   * Topic address; their reports count as new. */
+  untrustedLinks: number;
+
+  /** Fields of the reports this run files that failed their shape. */
+  invalid: number;
+}
+
+/** Whether every principal in `authors` is in `trusted`, and one is named. */
+function allIn(
+  authors: readonly string[],
+  trusted: ReadonlySet<string>,
+): boolean {
+  return authors.length > 0 && authors.every((author) => trusted.has(author));
 }
 
 /** Whether every principal `report`'s label names is in `trusted`. */
@@ -66,11 +108,25 @@ export function isTrusted(
   report: Report,
   trusted: ReadonlySet<string>,
 ): boolean {
-  return report.unreadable !== true && report.authors.length > 0 &&
-    report.authors.every((author) => trusted.has(author));
+  return report.unreadable !== true && allIn(report.authors, trusted);
 }
 
-/** The trusted DIDs a list names, one per line; `#` starts a comment. */
+/**
+ * The Topic `report` is linked to, when the link names a Topic address and
+ * everyone its label says wrote it is in `triagers`; else `undefined`.
+ */
+export function trustedTopic(
+  report: Report,
+  triagers: ReadonlySet<string>,
+): string | undefined {
+  const topic = checked(report.topic, TOPIC_ADDRESS);
+  return topic !== undefined && report.topicUnreadable !== true &&
+      allIn(report.topicAuthors ?? [], triagers)
+    ? topic
+    : undefined;
+}
+
+/** The DIDs a list names, one per line; `#` starts a comment. */
 export function parseTrusted(text: string): Set<string> {
   return new Set(
     text.split("\n").map((line) => line.replace(/#.*/, "").trim()).filter((
@@ -79,33 +135,45 @@ export function parseTrusted(text: string): Set<string> {
   );
 }
 
-/** The fields triage reads out of `report`'s structured part. */
+/** The fields triage reads out of `report`'s structured part, checked. */
 export function signalsOf(report: Report): Signals {
   const { want, cfs, failingProbes } = report.structured;
-  const text = (value: unknown) =>
-    typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+  let invalid = 0;
+  const field = (value: unknown, shape: RegExp) => {
+    if (value === undefined) return undefined;
+    const ok = checked(value, shape);
+    if (ok === undefined) invalid++;
+    return ok;
+  };
   const wanted = isObjectNotArray(want) ? want : {};
   const retries = wanted.retries;
-  const cause = text(wanted.cause);
-  const stop = text(wanted.stop);
-  const release = isObjectNotArray(cfs) ? text(cfs.release) : undefined;
+  const cause = field(wanted.cause, FIELD);
+  const stop = field(wanted.stop, FIELD);
+  const release = isObjectNotArray(cfs)
+    ? field(cfs.release, RELEASE)
+    : undefined;
   const probes = Array.isArray(failingProbes)
     ? failingProbes.flatMap((probe) => {
-      if (!isObjectNotArray(probe)) return [];
-      const connector = text(probe.connector);
-      const name = text(probe.probe);
+      if (!isObjectNotArray(probe)) {
+        invalid++;
+        return [];
+      }
+      const connector = field(probe.connector, FIELD);
+      const name = field(probe.probe, FIELD);
       return connector && name ? [`${connector}/${name}`] : [];
     })
     : [];
   return {
-    kind: report.kind,
+    kind: report.kind === "wish" ? "wish" : "broke",
     ...(cause ? { cause } : {}),
     ...(stop ? { stop } : {}),
-    ...(typeof retries === "number" && Number.isFinite(retries)
+    ...(typeof retries === "number" && Number.isSafeInteger(retries) &&
+        retries >= 0
       ? { retries }
       : {}),
     ...(release ? { release } : {}),
     probes,
+    invalid,
   };
 }
 
@@ -123,24 +191,33 @@ export function keysOf(signals: Signals): string[] {
 }
 
 /**
- * The plan for `reports` given the senders in `trusted`: the new trusted
- * reports grouped with the problem already filed that shares a key with
- * them, else with each other, else each a problem of its own.
+ * The plan for `reports`: the new reports from senders in `trusted` grouped
+ * with the problem already filed that shares a key with them, else with each
+ * other, else each a problem of its own. A link counts only when someone in
+ * `triagers` wrote it; a report linked by anyone else counts as new.
  */
 export function planTriage(
   reports: readonly Report[],
   trusted: ReadonlySet<string>,
+  triagers: ReadonlySet<string>,
 ): Plan {
   const problems: Problem[] = [];
   const byTopic = new Map<string, Problem>();
-  // Only reports a trusted sender wrote say what a filed problem is, since
-  // anyone who may write the board may also link a report to a Topic.
+  let untrustedLinks = 0;
+  const fresh: Report[] = [];
   for (const report of reports) {
-    if (report.topic === undefined || !isTrusted(report, trusted)) continue;
-    let problem = byTopic.get(report.topic);
+    const topic = trustedTopic(report, triagers);
+    if (report.topic !== undefined && topic === undefined) untrustedLinks++;
+    if (topic === undefined) {
+      fresh.push(report);
+      continue;
+    }
+    // Only reports a trusted sender wrote say what a filed problem is.
+    if (!isTrusted(report, trusted)) continue;
+    let problem = byTopic.get(topic);
     if (problem === undefined) {
-      problem = { topic: report.topic, filed: [], added: [], keys: new Set() };
-      byTopic.set(report.topic, problem);
+      problem = { topic, filed: [], added: [], keys: new Set() };
+      byTopic.set(topic, problem);
       problems.push(problem);
     }
     problem.filed.push(report);
@@ -148,14 +225,14 @@ export function planTriage(
   }
   let untrusted = 0;
   let unreadable = 0;
-  const fresh = reports.filter((report) => report.topic === undefined)
-    .toSorted((a, b) => a.createdAt - b.createdAt);
-  for (const report of fresh) {
+  for (const report of fresh.toSorted((a, b) => a.createdAt - b.createdAt)) {
     if (report.unreadable) {
       unreadable++;
       continue;
     }
-    if (!isTrusted(report, trusted)) {
+    if (
+      !isTrusted(report, trusted) || checked(report.id, REPORT_ID) === undefined
+    ) {
       untrusted++;
       continue;
     }
@@ -170,41 +247,56 @@ export function planTriage(
     problem.added.push(report);
     for (const key of keys) problem.keys.add(key);
   }
-  const plan: Plan = { file: [], update: [], untrusted, unreadable };
+  const plan: Plan = {
+    file: [],
+    update: [],
+    untrusted,
+    unreadable,
+    untrustedLinks,
+    invalid: 0,
+  };
   for (const problem of problems) {
     if (problem.added.length === 0) continue;
-    const reports = problem.added.map((report) => report.id);
+    const ids = problem.added.map((report) => report.id);
     const all = [...problem.filed, ...problem.added];
+    plan.invalid += problem.added.reduce(
+      (sum, report) => sum + invalidIn(report),
+      0,
+    );
     if (problem.topic === undefined) {
-      plan.file.push({ title: titleOf(all), body: bodyOf(all), reports });
+      plan.file.push({
+        title: titleOf(all),
+        body: sectionOf(all),
+        reports: ids,
+      });
       continue;
     }
     const comment = commentOf(problem.filed, problem.added);
     plan.update.push({
       topic: problem.topic,
-      body: bodyOf(all),
+      section: sectionOf(all),
       ...(comment === undefined ? {} : { comment }),
-      reports,
+      reports: ids,
     });
   }
   return plan;
 }
 
-/**
- * An identifier from a report as plain words: separators as spaces, and
- * nothing but letters, digits and a little punctuation, so that a value can
- * carry no Markdown, link or line break into a Topic.
- */
-export function plainWords(value: string): string {
-  const words = value.replace(/[-_]+/g, " ").replace(/[^\p{L}\p{N} .:/]/gu, "")
-    .replace(/\s+/g, " ").trim();
-  return words.length > 80 ? `${words.slice(0, 79)}…` : words;
+/** How many of `report`'s templated fields fail their shape. */
+function invalidIn(report: Report): number {
+  return signalsOf(report).invalid +
+    (checked(report.name, REPORT_NAME) === undefined ? 1 : 0);
+}
+
+/** `report`'s name, or {@link INVALID}. */
+function nameOf(report: Report): string {
+  return checked(report.name, REPORT_NAME) ?? INVALID;
 }
 
 /** The part of the product a problem shows in. */
 function surfaceOf(signals: Signals): string {
   if (signals.cause === undefined && signals.probes.length > 0) {
-    return plainWords(signals.probes[0].split("/")[0]);
+    return signals.probes[0].split("/")[0];
   }
   return "Weaver";
 }
@@ -213,16 +305,11 @@ function surfaceOf(signals: Signals): string {
 export function titleOf(reports: readonly Report[]): string {
   const signals = signalsOf(reports[0]);
   const what = signals.cause !== undefined
-    ? [
-      plainWords(signals.cause),
-      ...(signals.stop === undefined
-        ? []
-        : [`stops at ${plainWords(signals.stop)}`]),
-    ].join(", ")
+    ? signals.stop === undefined
+      ? signals.cause
+      : `${signals.cause} at ${signals.stop}`
     : signals.probes.length > 0
-    ? `probe ${
-      plainWords(signals.probes[0].split("/").slice(1).join("/"))
-    } fails`
+    ? `probe ${signals.probes[0].split("/")[1]} fails`
     : signals.kind === "wish"
     ? "a wish"
     : "a problem";
@@ -251,21 +338,30 @@ function distinct(
   ];
 }
 
-/** A list of values as plain words, or `unknown`. */
-function listed(values: readonly string[]): string {
-  return values.length === 0 ? "unknown" : values.map(plainWords).join(", ");
+/** `values` as a list of at most {@link MAX_LISTED}, or `unknown`. */
+export function listed(values: readonly string[]): string {
+  if (values.length === 0) return "unknown";
+  const shown = values.slice(0, MAX_LISTED).join(", ");
+  return values.length > MAX_LISTED
+    ? `${shown}, +${values.length - MAX_LISTED} more`
+    : shown;
 }
 
-/** The body of the Topic for the problem `reports` make up. */
-export function bodyOf(reports: readonly Report[]): string {
+/**
+ * The section of the Topic's body triage writes for the problem `reports`
+ * make up, between its marker lines.
+ */
+export function sectionOf(reports: readonly Report[]): string {
   const retries = reports.flatMap((report) => {
     const { retries } = signalsOf(report);
     return retries === undefined ? [] : [retries];
   });
+  const invalid = reports.reduce((sum, report) => sum + invalidIn(report), 0);
   return [
+    SECTION_START,
     `What is asked: ${askOf(reports)}`,
     "",
-    `- Reports: ${reports.map((report) => plainWords(report.name)).join(", ")}`,
+    `- Reports: ${listed(reports.map(nameOf))}`,
     `- Kind: ${listed(distinct(reports, (s) => [s.kind]))}`,
     `- Cause: ${listed(distinct(reports, (s) => [s.cause]))}`,
     `- Stop: ${listed(distinct(reports, (s) => [s.stop]))}`,
@@ -273,11 +369,27 @@ export function bodyOf(reports: readonly Report[]): string {
     `- Failing probes: ${listed(distinct(reports, (s) => s.probes))}`,
     `- CFS releases: ${listed(distinct(reports, (s) => [s.release]))}`,
     `- Count: ${reports.length}`,
+    ...(invalid === 0 ? [] : [`- Fields that failed their checks: ${invalid}`]),
     "",
     "Filed by triage from the reports' structured fields. Each report is on " +
-    "the feedback reports board; what the reporters wrote " +
-    "stays there.",
+    "the feedback reports board; what the reporters wrote stays there.",
+    SECTION_END,
   ].join("\n");
+}
+
+/**
+ * `body` with the section triage writes replaced by `section`, and every
+ * line outside it as it was. A body with no whole section gets `section`
+ * after what it holds.
+ */
+export function withSection(body: string, section: string): string {
+  const start = body.indexOf(SECTION_START);
+  const end = start < 0 ? -1 : body.indexOf(SECTION_END, start);
+  if (start < 0 || end < 0) {
+    return body.trim() === "" ? section : `${body.trimEnd()}\n\n${section}`;
+  }
+  return body.slice(0, start) + section +
+    body.slice(end + SECTION_END.length);
 }
 
 /**
@@ -299,9 +411,7 @@ export function commentOf(
   );
   if (releases.length === 0 && stops.length === 0) return undefined;
   return [
-    `New reports: ${
-      added.map((report) => plainWords(report.name)).join(", ")
-    }.`,
+    `New reports: ${listed(added.map(nameOf))}.`,
     ...(releases.length === 0
       ? []
       : [`New CFS releases: ${listed(releases)}.`]),

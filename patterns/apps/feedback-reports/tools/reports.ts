@@ -26,6 +26,7 @@ import {
   commentAction,
   invoke,
   newAction,
+  readTopic,
   runProgram,
   stdinText,
   type TopicsDeps,
@@ -41,7 +42,15 @@ import {
   saveMirror,
 } from "../../topics/tools/sync.ts";
 import { readReports, type Report } from "./read.ts";
-import { parseTrusted, type Plan, planTriage } from "./triage.ts";
+import { checked, REPORT_ID, TOPIC_ADDRESS } from "../fields.ts";
+import {
+  INVALID,
+  listed,
+  parseTrusted,
+  type Plan,
+  planTriage,
+  withSection,
+} from "./triage.ts";
 
 /** The checkout's `cf` launcher, which writes run. */
 const LAUNCHER = fromFileUrl(
@@ -56,6 +65,9 @@ export interface ReportsOptions {
 
   /** The file listing trusted senders, for `triage`. */
   trusted?: string;
+
+  /** The file listing who may link a report to a Topic, for `triage`. */
+  triagers?: string;
   dryRun?: boolean;
 }
 
@@ -233,6 +245,31 @@ function refusal(error: unknown, invocation: string): SendAnswer {
   };
 }
 
+/**
+ * The invocation id for a triage write of `kind` over `parts`: the same for
+ * the same parts, so a run that stopped part way and is run again settles
+ * the write it made rather than making it twice.
+ */
+export async function triageInvocation(
+  kind: string,
+  parts: readonly string[],
+): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode([kind, ...parts].join("\n")),
+  );
+  const hex = [...new Uint8Array(digest).slice(0, 16)]
+    .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `feedback-triage-${kind}-${hex}`;
+}
+
+/** The DIDs the file at `path` lists, read from where the command was typed. */
+async function didsIn(deps: ReportsDeps, path: string): Promise<Set<string>> {
+  return parseTrusted(
+    await Deno.readTextFile(resolve(deps.env("INIT_CWD") ?? Deno.cwd(), path)),
+  );
+}
+
 /** Runs the `triage` command. */
 export async function triageAction(
   options: ReportsOptions,
@@ -241,6 +278,11 @@ export async function triageAction(
   if (options.trusted === undefined) {
     throw new Error("Name the trusted senders with `--trusted <file>`.");
   }
+  if (options.triagers === undefined) {
+    throw new Error(
+      "Name who may link reports to Topics with `--triagers <file>`.",
+    );
+  }
   const agentName = (options.agentName ?? deps.env("CF_AGENT_NAME"))?.trim();
   if (!agentName) {
     throw new Error(
@@ -248,13 +290,10 @@ export async function triageAction(
         "`CF_AGENT_NAME`.",
     );
   }
-  const trusted = parseTrusted(
-    await Deno.readTextFile(
-      resolve(deps.env("INIT_CWD") ?? Deno.cwd(), options.trusted),
-    ),
-  );
+  const trusted = await didsIn(deps, options.trusted);
+  const triagers = await didsIn(deps, options.triagers);
   const board = boardFrom(deps, options);
-  const plan = planTriage(await readBoard(deps, board), trusted);
+  const plan = planTriage(await readBoard(deps, board), trusted, triagers);
   if (options.dryRun) {
     deps.write(describePlan(plan));
     return;
@@ -279,26 +318,50 @@ export async function triageAction(
     linked.set(id, topic);
   };
   // Each problem's reports are linked as soon as its Topic is written, so a
-  // run that stops part way leaves what it filed linked.
+  // run that stops part way leaves what it filed linked; and each Topic is
+  // filed as an invocation named by the reports it files, so a run that
+  // stopped before linking them settles the Topic it filed when run again.
   for (const filing of plan.file) {
     const topic = await newAction(
-      topicOptions,
+      {
+        ...topicOptions,
+        invocation: await triageInvocation("file", filing.reports.toSorted()),
+      },
       filing.title,
       filing.body,
       deps.topics,
     );
-    for (const id of filing.reports) await link(id, topic.address);
+    const address = checked(topic.address, TOPIC_ADDRESS);
+    if (address === undefined) {
+      throw new UnconfirmedWrite(
+        "The Topics board answered with a Topic address of another shape.",
+      );
+    }
+    for (const id of filing.reports) await link(id, address);
   }
   for (const update of plan.update) {
     if (update.comment !== undefined) {
       await commentAction(
-        topicOptions,
+        {
+          ...topicOptions,
+          invocation: await triageInvocation("comment", [
+            update.topic,
+            ...update.reports.toSorted(),
+          ]),
+        },
         update.topic,
         update.comment,
         deps.topics,
       );
     }
-    await bodyAction(topicOptions, update.topic, update.body, deps.topics);
+    // Only the marked section is triage's; what people wrote around it stays.
+    const { body } = await readTopic(topicOptions, update.topic, deps.topics);
+    await bodyAction(
+      topicOptions,
+      update.topic,
+      withSection(body, update.section),
+      deps.topics,
+    );
     for (const id of update.reports) await link(id, update.topic);
   }
   const after = await readBoard(deps, board);
@@ -321,22 +384,37 @@ export async function triageAction(
 function leftOut(plan: Plan): string {
   return `${plan.untrusted} new reports from senders not on the trusted ` +
     `list and ${plan.unreadable} whose sender could not be read were left ` +
-    "for a person.";
+    `for a person. ${plan.untrustedLinks} links to a Topic were not written ` +
+    `by a triager and were ignored. ${plan.invalid} fields failed their ` +
+    "checks and show as invalid.";
 }
 
-/** What a run of `plan` would do, for `--dry-run`. */
+/** `value` when it has `shape`, else {@link INVALID}: what output shows. */
+function shown(value: string, shape: RegExp): string {
+  return checked(value, shape) ?? INVALID;
+}
+
+/** Report ids as output shows them. */
+function ids(reports: readonly string[]): string {
+  return listed(reports.map((id) => shown(id, REPORT_ID)));
+}
+
+/** What a run of `plan` would do, for `--dry-run`. The titles and bodies
+ * hold only values that passed their shapes. */
 export function describePlan(plan: Plan): string {
   return [
     ...plan.file.map((filing) =>
-      `Would file a Topic for ${filing.reports.join(", ")}:\n` +
+      `Would file a Topic for ${ids(filing.reports)}:\n` +
       `${filing.title}\n\n${filing.body}\n`
     ),
     ...plan.update.map((update) =>
-      `Would update ${update.topic} for ${update.reports.join(", ")}` +
+      `Would update ${shown(update.topic, TOPIC_ADDRESS)} for ` +
+      ids(update.reports) +
       (update.comment === undefined
-        ? ", replacing its body with:\n"
-        : `, commenting:\n${update.comment}\n\nand replacing its body with:\n`) +
-      `${update.body}\n`
+        ? ", replacing its triage section with:\n"
+        : `, commenting:\n${update.comment}\n\nand replacing its triage ` +
+          "section with:\n") +
+      `${update.section}\n`
     ),
     leftOut(plan),
   ].join("\n");
@@ -348,11 +426,12 @@ Commands:
   send < request.json   Write the addReport request on stdin; answer on
                         stdout with {"ok":true,"id":...,"name":...} or
                         {"ok":false,"code":...,"message":...}.
-  triage --trusted <file> --agent-name <name> [--dry-run]
+  triage --trusted <file> --triagers <file> --agent-name <name> [--dry-run]
                         File or update a Topic for each new report from a
-                        sender the file lists, one DID per line, and link
+                        sender --trusted lists, one DID per line, and link
                         the report to it. Reports from anyone else are only
-                        counted.
+                        counted, and only links someone --triagers lists
+                        wrote count.
 
 Options:
   --identity <path>     The identity key to write as (else CF_IDENTITY).
@@ -368,7 +447,7 @@ export async function main(
   deps: ReportsDeps = defaultDeps,
 ): Promise<number> {
   const flags = parseArgs([...args], {
-    string: ["identity", "agent-name", "invocation", "trusted"],
+    string: ["identity", "agent-name", "invocation", "trusted", "triagers"],
     boolean: ["dry-run", "help"],
     alias: { h: "help" },
     unknown: (arg) => {
@@ -384,6 +463,7 @@ export async function main(
     agentName: flags["agent-name"],
     invocation: flags.invocation,
     trusted: flags.trusted,
+    triagers: flags.triagers,
     dryRun: flags["dry-run"],
   };
   if (flags.help || command === undefined) {

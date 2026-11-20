@@ -46,6 +46,13 @@ export interface Report {
   /** The Topic the report was filed under, absent for a new report. */
   topic?: string;
 
+  /** The principals the link's `authored-by` label names: who linked the
+   * report. Present with `topic`. */
+  topicAuthors?: string[];
+
+  /** Set when the link's labels could not be read. */
+  topicUnreadable?: true;
+
   /**
    * The principals the report's `authored-by` label names: its sender. Empty
    * when nothing attests who wrote it.
@@ -107,13 +114,16 @@ export function assembleReports(
   boardInput: string,
 ): Report[] {
   const root = reader.root(boardInput);
-  const topicOf = objectOf(reader, reader.child(root, "topicOf"));
+  const linksAt = reader.child(root, "topicOf");
+  const topicOf = objectOf(reader, linksAt);
   return reader.items(reader.child(root, "reports")).map((at) => {
     const id = reader.text(at, "id");
     const words = reader.follow(reader.child(at, "words")).value;
     const structured = objectOf(reader, reader.child(at, "structured"));
     const topic = topicOf?.[id];
     const labels = reader.labels(at, ATTESTED_FIELDS);
+    const linked = typeof topic === "string" && topic !== "";
+    const linkLabels = linked ? reader.labels(linksAt, [id]) : undefined;
     return {
       id,
       name: reader.text(at, "name"),
@@ -121,7 +131,13 @@ export function assembleReports(
       ...(typeof words === "string" ? { words } : {}),
       structured: structured ?? {},
       createdAt: reader.number(at, "createdAt") ?? 0,
-      ...(typeof topic === "string" && topic !== "" ? { topic } : {}),
+      ...(linked
+        ? {
+          topic,
+          topicAuthors: linkLabels?.authors ?? [],
+          ...(linkLabels?.unreadable ? { topicUnreadable: true } : {}),
+        }
+        : {}),
       authors: labels?.authors ?? [],
       ...(labels?.unreadable ? { unreadable: true } : {}),
     };

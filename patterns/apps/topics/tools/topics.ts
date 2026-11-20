@@ -890,6 +890,18 @@ async function writeTopic(
   );
 }
 
+/**
+ * The Topic `reference` names, as it stands on the board, from the copy
+ * brought up to date first; for a caller that writes what it read.
+ */
+export async function readTopic(
+  options: TopicsOptions,
+  reference: string,
+  deps: TopicsDeps = defaultDeps,
+): Promise<Topic> {
+  return findTopic(await readTopics(deps, boardFrom(deps, options)), reference);
+}
+
 /** Runs the `search` command. */
 export async function searchAction(
   options: TopicsOptions & SearchScope & { limit?: number; json?: boolean },
