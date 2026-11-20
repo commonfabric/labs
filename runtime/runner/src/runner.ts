@@ -3112,12 +3112,14 @@ export class Runner {
 
   /**
    * For each action, the documents whose load, asked for by a run of it kept
-   * in transit (`#keepsResultInTransit()`), has settled: failed, or ended
-   * without the document reaching this replica, as a load from a space that
-   * refuses this replica ends (the store's ledger records no failure for
-   * one: the document is absent for its reader). Such a document is no
+   * in transit (`#keepsResultInTransit()`), failed, or settled with the
+   * document still in transit (`#transitAbsences()`), as a load from a space
+   * that refuses this replica settles (the store's ledger records no failure
+   * for one: the document is absent for its reader). Such a document is no
    * longer on its way, so a later run refused for it clears its result rather
-   * than keeping it and asking for the load again.
+   * than keeping it and asking for the load again. A load that delivered its
+   * document is not recorded, so a later transit of it, as a replaced
+   * replica's, keeps the result again.
    */
   readonly #settledTransitLoads = new WeakMap<Action, Set<string>>();
 
@@ -14744,10 +14746,10 @@ export class Runner {
    * writes, already holds a value. When it does, `action` runs again once the
    * loads of those documents have settled, whatever they find, since a
    * document that arrives absent changes no value the run's reads could see.
-   * A document whose load has settled, failed or not, is no longer in
-   * transit (`#settledTransitLoads`), so a run after that which still finds
-   * it unexamined, as one in a space that refuses this replica stays, clears
-   * the result instead of asking for the load again.
+   * A document whose load failed, or settled without delivering it, as one
+   * in a space that refuses this replica does, is no longer in transit
+   * (`#settledTransitLoads`), so the run after that clears the result
+   * instead of asking for the load again.
    */
   #keepsResultInTransit(
     action: Action,
@@ -14782,7 +14784,12 @@ export class Runner {
           scope: absence.scope,
         }),
         identity,
-      ).then(() => settle(absence), () => settle(absence))
+      ).then(
+        () => {
+          if (this.#stillInTransit(absence, identity)) settle(absence);
+        },
+        () => settle(absence),
+      )
     );
     // Not a task the scheduler waits on to be idle: the run has finished, and
     // what follows is a new run, as a change arriving on the change channel
@@ -14793,6 +14800,27 @@ export class Runner {
       this.#runtime.scheduler.invalidateAction(action)
     );
     return true;
+  }
+
+  /**
+   * Whether `absence`, a document {@link #transitAbsences} found, is still in
+   * transit by the same test, now that its load has settled: still with no
+   * record in this replica, the space's replica since then if it was
+   * replaced, and not reported absent by the store. A document in a space
+   * that refuses this replica stays in transit by that test however often
+   * its load settles; a delivered one does not.
+   */
+  #stillInTransit(
+    absence: UnexaminedAbsence,
+    identity: ScopeKeyIdentity | undefined,
+  ): boolean {
+    const provider = this.#runtime.storageManager.open(absence.space);
+    const unexamined = provider.stillUnexamined?.([absence]) ?? [absence];
+    return unexamined.length > 0 &&
+      provider.storeReportedAbsent?.(
+          { id: absence.id, scope: absence.scope },
+          identity,
+        ) !== true;
   }
 
   /**

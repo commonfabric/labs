@@ -53,6 +53,21 @@ const LIFT_PATTERN = [
   "});",
 ].join("\n");
 
+/**
+ * The first piece, its computation reading a number in the piece's own space
+ * too, so that a change made there runs it while its input is in transit.
+ */
+const TICKED_PATTERN = [
+  "import { computed, pattern, Writable } from 'commonfabric';",
+  "type Ref = Writable<{ name: string }>;",
+  "export default pattern<{ ref: Ref; tick: Writable<number> }, { out: string }>(",
+  "  ({ ref, tick }) => {",
+  "    const out = computed(() => 'out:' + ref.get().name + ':' + tick.get());",
+  "    return { out };",
+  "  },",
+  ");",
+].join("\n");
+
 /** How a case's runtimes read and what the piece is. */
 interface Shape {
   pattern: string;
@@ -453,6 +468,75 @@ describe("refused-run-keeps-result", () => {
     expect(after.slice(0, before.length)).toEqual(before);
     expect(after.at(-1)).toContain("Undefined");
     cancelCleared();
+    cancel();
+  });
+
+  it("keeps a result through a later transit of an input whose kept load delivered it", async () => {
+    // The cold runtime keeps the stored result through its input's transit,
+    // and the load it asks for delivers the input. Its input replica is then
+    // replaced, and a change in the piece's own space runs the computation
+    // while the replacement's load is held open, so the input is in transit
+    // again. A load that delivered its document is not one that settled
+    // without it, so the run keeps the result again, and the store receives
+    // no clearing revision while the replacement loads.
+
+    shape = { pattern: TICKED_PATTERN };
+    const warm = open();
+    const compiled = await warm.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: shape.pattern }],
+    }, { space });
+    const ref = warm.getCell<{ name: string }>(inputSpace, "input");
+    const tick = warm.getCell<number>(space, "tick");
+    // A transaction writes one space, so the input and the number are set
+    // apart.
+    for (const write of [() => ref, () => tick]) {
+      const tx = warm.edit();
+      const cell = write();
+      if (cell === ref) ref.withTx(tx).set({ name: "abc" });
+      else tick.withTx(tx).set(0);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    const result = warm.getCell<Record<string, unknown>>(
+      space,
+      "result",
+      compiled.resultSchema,
+    );
+    {
+      const tx = warm.edit();
+      warm.run(tx, compiled, { ref, tick }, result);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    expect(await result.key("out").pull()).toBe("out:abc:0");
+    await warm.idle();
+    await warm.storageManager.synced();
+    const outId = result.key("out").resolveAsCell().getAsNormalizedFullLink()
+      .id;
+    warm.runner.stop(result);
+    await rename(warm, ref, "def");
+
+    const { cold, coldResult, cancel } = await startCold(compiled);
+    expect(coldResult.key("out").get()).toBe("out:abc:0");
+    await releaseInput(cold);
+    expect(coldResult.key("out").get()).toBe("out:def:0");
+    const before = await storedValues(outId);
+
+    inputSpaceHeld = Promise.withResolvers<void>();
+    const provider = opened.at(-1)!.storage.open(inputSpace) as unknown as {
+      replaceProvisionalReplica(): Promise<void>;
+    };
+    const replaced = provider.replaceProvisionalReplica();
+    {
+      const tx = cold.edit();
+      cold.getCell<number>(space, "tick").withTx(tx).set(1);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    await cold.idle();
+    expect(coldResult.key("out").get()).toBe("out:def:0");
+    expect(await storedValues(outId)).toEqual(before);
+
+    inputSpaceHeld.resolve();
+    await replaced;
     cancel();
   });
 
