@@ -399,7 +399,11 @@ export class RuntimeTransactions implements TransactionHooks {
   }
 
   /** @inheritDoc */
-  labelOf(doc: string, path: readonly string[]): string | undefined {
+  labelOf(
+    doc: string,
+    path: readonly string[],
+    observes = "value",
+  ): string | undefined {
     if (this.#compiledPattern === undefined) return undefined;
     // The label of a position the transaction wrote, at its path, above it
     // or below it, is the staged one, which the storage does not hold.
@@ -425,13 +429,17 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     const metadata = this.#metadata.get(doc);
     if (metadata === undefined) return table.empty.id;
+    // The class the runtime observes the position in (`observesOf`), read
+    // as its observation of a label alone is: below the position too for a
+    // read of the value, and at the position for the other classes.
+    const consumes = observesOf(observes);
     const label = labelForConsumedEntries(
       consumedEntriesForRead(metadata, path, {
-        nonRecursive: false,
-        consumes: "value",
+        nonRecursive: consumes !== "value",
+        consumes,
       }),
       path,
-      false,
+      consumes !== "value",
     );
     return table.intern({
       confidentiality: [...label?.confidentiality ?? []],

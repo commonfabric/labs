@@ -1843,9 +1843,16 @@ export type TransactionHooks = {
    * executor groups the elements of a `fold` by it, and the positions a
    * slot's read reached through links; without it, every position is a
    * group of its own. A position the transaction in progress wrote has no
-   * identifier: its label is the one the write stages.
+   * identifier: its label is the one the write stages. `observes` is the
+   * class the position is observed in, `value` where it is absent: the
+   * label of a link observed as a reference (`identity`) is not part of
+   * the label of a read of the value at the link's position.
    */
-  labelOf?(doc: string, path: readonly string[]): string | undefined;
+  labelOf?(
+    doc: string,
+    path: readonly string[],
+    observes?: string,
+  ): string | undefined;
 
   /**
    * Registers what the store calls when the labels of documents changed
@@ -7606,9 +7613,9 @@ export class Instance {
       }
       const addresses = this.#addressesOf(bound.at);
       for (const at of addresses) positions.push(at);
-      const labels = addresses.map(({ doc, path }) =>
-        this.root.options.transactions?.labelOf?.(doc, path) ??
-          JSON.stringify([doc, path])
+      const labels = addresses.map((address) =>
+        this.#labelKey(address, bound.observes) ??
+          JSON.stringify([address.doc, address.path])
       );
       parts.push(`${slot}:${bound.observes}:${[...new Set(labels)].join(",")}`);
     }
@@ -8064,7 +8071,7 @@ export class Instance {
       }
     }
     const [chain = [], ...rest] = chains;
-    const below = this.#distinctByLabel(rest);
+    const below = this.#distinctByLabel(rest, observes);
     return { chain, observes, ...(below.length === 0 ? {} : { below }) };
   }
 
@@ -8074,20 +8081,43 @@ export class Instance {
    * its chains, to which chains of equal labels add nothing, so a read of an
    * array of references whose labels are equal reports one chain, however
    * many elements it has. A chain with a position whose label the store
-   * names no identifier for is kept.
+   * names no identifier for is kept. The labels compared are those of the
+   * observations the runtime makes of the positions of a chain
+   * (`#labelKey`), for a slot of the class `observes`.
    */
-  #distinctByLabel(chains: Address[][]): Address[][] {
+  #distinctByLabel(chains: Address[][], observes: string): Address[][] {
     const hooks = this.root.options.transactions;
     if (chains.length < 2 || hooks?.labelOf === undefined) return chains;
     const seen = new Set<string>();
     return chains.filter((chain) => {
-      const labels = chain.map(({ doc, path }) => hooks.labelOf?.(doc, path));
+      const labels = chain.map((address) => this.#labelKey(address, observes));
       if (labels.includes(undefined)) return true;
       const key = JSON.stringify(labels);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
+  }
+
+  /**
+   * The identifiers of the labels the runtime observes at a position a
+   * slot of the class `observes` is bound to, as one text, or nothing where
+   * the store names no identifier. The runtime observes a link a read
+   * crossed as a reference, and the label of that observation is not part
+   * of the label of a read of the value there: two links written under
+   * different labels have one identifier for a read of their values. A
+   * position that holds a link is one a read crossed or one it ended at,
+   * so its text holds the identifier of both observations.
+   */
+  #labelKey({ doc, path }: Address, observes: string): string | undefined {
+    const hooks = this.root.options.transactions;
+    const own = hooks?.labelOf?.(doc, path, observes);
+    if (own === undefined) return undefined;
+    if (observes === "identity" || !isLink(this.store.peek(doc, path))) {
+      return own;
+    }
+    const crossed = hooks?.labelOf?.(doc, path, "identity");
+    return crossed === undefined ? undefined : `${own}|${crossed}`;
   }
 
   /** The other slots with the root and the path of `slot`, by its index. */

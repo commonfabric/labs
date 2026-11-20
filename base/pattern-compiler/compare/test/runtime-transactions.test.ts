@@ -546,6 +546,96 @@ describe("RuntimeTransactions with labels from templates", () => {
     }
   });
 
+  it("gives two links written under different labels one identifier for a read of their values, and two for a read of them as references", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      artifact: await artifactOf("briefing"),
+    });
+    try {
+      const seed = runtime.edit();
+      const list = runtime.getCell<{ items: unknown[] }>(
+        space,
+        { probe: "list" },
+        undefined,
+        seed,
+      );
+      list.set({ items: [] });
+      for (const name of ["a", "b"]) {
+        const schema = {
+          type: "string",
+          ifc: { confidentiality: [inputClause(name)] },
+        } as JSONSchema;
+        const source = runtime.getCell<string>(
+          space,
+          { probe: `source ${name}` },
+          schema,
+          seed,
+        );
+        recordRelevantSchemaWritePolicyInput(
+          seed,
+          source.getAsNormalizedFullLink(),
+          schema,
+        );
+        source.set(name);
+        runtime.getCell<string>(
+          space,
+          { probe: `target ${name}` },
+          undefined,
+          seed,
+        )
+          .set("public");
+      }
+      expect((await seed.commit().settled).error).toBeUndefined();
+      // Each link is written by a transaction that read another source.
+      for (const [index, name] of ["a", "b"].entries()) {
+        const tx = runtime.edit();
+        runtime.getCell<string>(
+          space,
+          { probe: `source ${name}` },
+          undefined,
+          tx,
+        )
+          .get();
+        runtime.getCell<{ items: unknown[] }>(
+          space,
+          { probe: "list" },
+          undefined,
+          tx,
+        ).key("items").key(index).set(
+          runtime.getCell<string>(
+            space,
+            { probe: `target ${name}` },
+            undefined,
+            tx,
+          ),
+        );
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      const id = list.getAsNormalizedFullLink().id;
+      hooks.external(id);
+
+      expect(hooks.labelOf(id, ["items", "0"])).toBe(
+        hooks.labelOf(id, ["items", "1"]),
+      );
+      expect(hooks.labelOf(id, ["items", "0"], "identity")).not.toBe(
+        hooks.labelOf(id, ["items", "1"], "identity"),
+      );
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("stores the transaction's join at each output with the option off", async () => {
     const { climate, text } = await briefing(false);
     expect(climate.clauses).toContain("demo-secret");

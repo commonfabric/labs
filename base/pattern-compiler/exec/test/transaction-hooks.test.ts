@@ -56,10 +56,20 @@ class Recorder implements TransactionHooks {
    * Constructs an instance. `label` gives the identifier of the label at a
    * position, where the test names one.
    */
-  constructor(readonly label?: (doc: string, path: string[]) => string) {}
+  constructor(
+    readonly label?: (
+      doc: string,
+      path: string[],
+      observes: string,
+    ) => string,
+  ) {}
 
-  labelOf(doc: string, path: readonly string[]): string | undefined {
-    return this.label?.(doc, [...path]);
+  labelOf(
+    doc: string,
+    path: readonly string[],
+    observes = "value",
+  ): string | undefined {
+    return this.label?.(doc, [...path], observes);
   }
 
   /** What the executor registered to hear of changed labels. */
@@ -814,9 +824,9 @@ describe("the positions a slot's read reached through links", () => {
   /** The chains below the slot of `total`, for `count` items. */
   const chainsBelow = async (
     count: number,
-    label: (doc: string) => string,
+    label: (doc: string, path: string[], observes: string) => string,
   ): Promise<number> => {
-    const recorder = new Recorder((doc) => label(doc));
+    const recorder = new Recorder(label);
     const documents = Array.from({ length: count }, (_, index) => ({
       id: `item-${index}`,
       kind: "input",
@@ -1013,5 +1023,61 @@ describe("TransactionHooks for a write that leaves the value as it was", () => {
     expect(changed.map(({ path, value }) => ({ path, value }))).toEqual([
       { path: ["level"], value: 4 },
     ]);
+  });
+});
+
+// `fixtures/list-records.tsx`: each record `add` pushes is a document of its
+// own, which the list holds a link to. A read of the list's value goes
+// through each link to its record, and each such pair of positions is a
+// further chain of the slot's binding.
+describe("the chains of a read of a value that holds links", () => {
+  /**
+   * The most further chains a slot binding has, after `count` additions
+   * and a write of the whole list.
+   */
+  const chainsThroughLinks = async (
+    count: number,
+    label: (doc: string, path: string[], observes: string) => string,
+  ): Promise<number> => {
+    const recorder = new Recorder(label);
+    const instance = new Instance(
+      await artifactOf("list-records"),
+      { note: "n" },
+      { transactions: recorder },
+    );
+    for (let index = 0; index < count; index++) {
+      instance.send(bindingOf(instance, "add"), { title: `t${index}` });
+    }
+    // `append` reads the whole list and writes it with one record more.
+    instance.send(bindingOf(instance, "append"), { title: "last" });
+    let most = 0;
+    for (const { writes } of recorder.changed) {
+      for (const write of writes ?? []) {
+        for (const binding of Object.values(write.slots)) {
+          if ("chain" in binding) {
+            most = Math.max(most, binding.below?.length ?? 0);
+          }
+        }
+      }
+    }
+    return most;
+  };
+
+  it("reports one chain for the links whose labels are equal, as values and as references, for 4 records and for 8", async () => {
+    const few = await chainsThroughLinks(4, () => "one label");
+
+    expect(await chainsThroughLinks(8, () => "one label")).toBe(few);
+  });
+
+  // The runtime observes a link a read crossed as a reference, and the
+  // label of that observation is not part of the label of a read of the
+  // value at the link's position.
+  it("reports a chain for each link whose label as a reference is another, where the labels of the values are equal", async () => {
+    const byReference = (doc: string, path: string[], observes: string) =>
+      observes === "identity" ? `${doc}/${path.join("/")}` : "one label";
+    const few = await chainsThroughLinks(4, byReference);
+
+    expect(few).toBeGreaterThanOrEqual(3);
+    expect(await chainsThroughLinks(8, byReference)).toBe(few + 4);
   });
 });
