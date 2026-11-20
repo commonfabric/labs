@@ -210,8 +210,9 @@ profile. Snapshotting the `#profileName` value and the profile's face instead
 is the self-containment fallback (renders with remote profile spaces offline).
 `profileFace(profile)`, from `patterns/system/profile-face/profile-face.ts`,
 reads the face to copy: the picture, or else the avatar text, only as the
-profile's owner set it. Anyone can
-write a profile's picture, so a picture copied another way may be a visitor's.
+profile's owner set it. A stored picture may not be its owner's: earlier
+releases let anyone set one through `setPicture`, and bytes can be stored
+without a label, so a picture copied another way may be someone else's.
 The copy itself carries no claim: only a live `<cf-profile-badge>` checks the
 face it draws.
 See

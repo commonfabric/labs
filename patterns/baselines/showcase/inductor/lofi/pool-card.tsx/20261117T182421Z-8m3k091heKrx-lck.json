@@ -1,0 +1,214 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "CanonicalRule": {
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "key": {
+            "description": "A hash of field, label, and canonical pattern: equal keys, equal rules.",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "The canonical pattern, run with the `i` flag.",
+            "type": "string"
+          },
+          "predicts": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "pattern",
+          "predicts",
+          "key"
+        ],
+        "type": "object"
+      },
+      "Judgement": {
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "currentF1": {
+            "type": "number"
+          },
+          "heldOut": {
+            "type": "number"
+          },
+          "proposedF1": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "refusals": {
+            "description": "Why each refused rule was refused.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rules": {
+            "description": "The proposed rules that passed the grammar and the safety check.",
+            "items": {
+              "$ref": "#/$defs/CanonicalRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "accepted",
+          "reason",
+          "rules",
+          "refusals",
+          "currentF1",
+          "proposedF1",
+          "heldOut"
+        ],
+        "type": "object"
+      },
+      "PoolOffer": {
+        "properties": {
+          "judgement": {
+            "$ref": "#/$defs/Judgement"
+          },
+          "key": {
+            "description": "Which set this is: a hash of its rules' keys.",
+            "type": "string"
+          },
+          "unexercised": {
+            "description": "Released rules left out of the offer because none of this person's\nheld-out items exercises them: no score could say what they do.",
+            "items": {
+              "$ref": "#/$defs/CanonicalRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "judgement",
+          "unexercised"
+        ],
+        "type": "object"
+      },
+      "Published": {
+        "properties": {
+          "adopted": {
+            "description": "How many rules were held back as adopted from the pool (`adoptedAfter`).",
+            "type": "number"
+          },
+          "goal": {
+            "type": "string"
+          },
+          "pooled": {
+            "description": "Whether the rules were sent to a pool for this goal.",
+            "type": "boolean"
+          },
+          "publishedAt": {
+            "type": "number"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/$defs/CanonicalRule"
+            },
+            "type": "array"
+          },
+          "withheld": {
+            "description": "How many rules were held back as looking personal (`looksPersonal`).",
+            "type": "number"
+          }
+        },
+        "required": [
+          "goal",
+          "rules",
+          "publishedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "connected": {
+        "default": false,
+        "description": "Whether a pool for the inductor's goal is connected.",
+        "type": "boolean"
+      },
+      "offer": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PoolOffer"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "publish": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "published": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Published"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "rules": {
+        "items": {
+          "$ref": "#/$defs/CanonicalRule"
+        },
+        "type": "array"
+      },
+      "sendable": {
+        "default": 0,
+        "description": "How many of the rules a publish would send (`shareable`).",
+        "type": "number"
+      },
+      "settlePoolOffer": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "unpublish": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      }
+    },
+    "required": [
+      "offer",
+      "published",
+      "rules",
+      "settlePoolOffer",
+      "publish",
+      "unpublish"
+    ],
+    "type": "object"
+  },
+  "pattern": "showcase/inductor/lofi/pool-card.tsx",
+  "resultSchema": {
+    "description": "The pool's offer to the inductor, and what the inductor published.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

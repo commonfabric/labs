@@ -1039,23 +1039,33 @@ the right instrument for a deployed server rather than a local investigation.
 
 ### Take a heap profile of a running toolshed
 
-Every isolate of a toolshed, the main thread and each serving worker, runs V8's
-sampling heap profiler from its start, where the process has sys access to
-`inspector` (the release binary, and `-A`). An isolate without it serves
-unsampled: a worker's entry in the manifest carries the error that kept
-sampling from starting, and on the main thread the round fails with that
-error in the log. V8 records the stack of about one
-allocation in every 512 KiB and keeps the record while the object lives, so a
-profile attributes what the heap holds now to the functions that allocated it.
-At that interval the sampling costs nothing measurable. SIGUSR2 writes the
-profiles:
+Each serving worker of a toolshed runs V8's sampling heap profiler from its
+start, and so does the main thread where `HEAP_PROFILE_MAIN_THREAD=true`, where
+the process has sys access to `inspector` (the release binary, and `-A`). An
+isolate without it serves unsampled: a worker's entry in the manifest carries
+the error that kept sampling from starting, and on the main thread the round
+fails with that error in the log. V8 records the stack of about one allocation
+in every 512 KiB and keeps the record while the object lives, so a profile
+attributes what the heap holds now to the functions that allocated it. At that
+interval the sampling costs the sampled thread nothing measurable.
+
+The main thread's sampling is off by default because of what it costs the
+workers. The sampler holds an inspector session open on its thread, and Deno
+holds every worker started from a thread with an open session for a debugger:
+500 ms before the worker loads its module, and 500 ms more when its first
+message arrives. The main thread starts the serving and compile workers, so
+with its sampling on, each serving worker's `worker.init` takes about 500 ms
+in place of a few, and a space placed on a worker that is still starting waits
+for it. Turn it on while looking for what fills the main thread's heap.
+
+SIGUSR2 writes the profiles:
 
 ```bash
 kill -USR2 <toolshed pid>
 ```
 
-It writes the main thread's profile and each serving worker's into
-`HEAP_PROFILE_DIR` (default `toolshed-heap-profiles` under `TMPDIR`, else under
+It writes each serving worker's profile, and the main thread's where it
+samples, into `HEAP_PROFILE_DIR` (default `toolshed-heap-profiles` under `TMPDIR`, else under
 `/tmp`), and beside them a manifest, `heap-<pid>-<time>.json`, naming each file
 and the spaces placed on its worker. The log says when the round starts and
 where its manifest is. A second signal during a round is ignored. The directory

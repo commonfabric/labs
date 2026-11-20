@@ -26,6 +26,7 @@ import {
   RuntimeInternals,
   type RuntimeTelemetrySink,
   type RuntimeTrustSnapshot,
+  SpaceFork,
 } from "@commonfabric/lib-shell";
 import {
   type CellHandle,
@@ -1548,6 +1549,33 @@ describe("RuntimeInternals", () => {
     ).toBeUndefined();
   });
 
+  it("declares server execution off for a runtime that opens a space on a branch", async () => {
+    const identity = await Identity.generate({ implementation: "noble" });
+    const session = createSession({ identity, spaceDid: identity.did() });
+    const branches = { [identity.did()]: "fork" };
+
+    const onBranch = createRuntimeClientOptions({
+      session,
+      apiUrl: new URL("http://shell.test/"),
+      experimental: { serverExecution: true, modernCellRep: true },
+      branches,
+    });
+    const onNone = createRuntimeClientOptions({
+      session,
+      apiUrl: new URL("http://shell.test/"),
+      experimental: { serverExecution: true },
+      branches: {},
+    });
+
+    expect(onBranch.branches).toEqual(branches);
+    expect(onBranch.experimental).toEqual({
+      serverExecution: false,
+      modernCellRep: true,
+    });
+    expect(onNone.branches).toBeUndefined();
+    expect(onNone.experimental).toEqual({ serverExecution: true });
+  });
+
   describe("create() forwards host flags to the worker", () => {
     // create() builds the client options and sends the Initialize request; this
     // covers that path end to end and asserts the host flags reach the worker.
@@ -1986,6 +2014,47 @@ describe("RuntimeInternals", () => {
       }
     }
 
+    describe("space history", () => {
+      /** A runtime attached over `transport`, as an embedder's page is. */
+      const attached = async (transport: StubTransport) =>
+        await RuntimeInternals.create({
+          identity: await Identity.generate({ implementation: "noble" }),
+          apiUrl: new URL("http://shell.test/"),
+          transport: transport as unknown as RuntimeTransport,
+          attach: true,
+        });
+
+      it("asks the worker for a space's history and for a restore", async () => {
+        const transport = new StubTransport();
+        const runtime = await attached(transport);
+        const space = "did:key:z6Mk-history" as DID;
+        try {
+          await runtime.spaceHistory(space, 7).catch(() => {});
+          await runtime.restoreSpace(space, 3).catch(() => {});
+
+          expect(transport.sent.slice(1)).toEqual([
+            { type: "space:history:list", space, before: 7 },
+            { type: "space:restore", space, seq: 3 },
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("rejects a fork, having no worker of its own to run one in", async () => {
+        const transport = new StubTransport();
+        const runtime = await attached(transport);
+        try {
+          await expect(
+            runtime.forkSpace("did:key:z6Mk-history" as DID, 3),
+          ).rejects.toThrow("cannot fork a space");
+          expect(transport.sent).toHaveLength(1);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    });
+
     it("attaches over the supplied transport, spawning no worker", async () => {
       const identity = await Identity.generate({ implementation: "noble" });
       const transport = new StubTransport();
@@ -2092,6 +2161,408 @@ describe("RuntimeInternals", () => {
       } finally {
         await runtime.dispose();
       }
+    });
+  });
+
+  describe("forkSpace()", () => {
+    // Every stand-in appends what it was asked to one log, so a case reads
+    // the order across the client that took the fork and the fork's runtime.
+
+    const space = "did:key:z6Mk-lib-shell-fork" as DID;
+
+    /**
+     * The client of the runtime that takes the fork, appending each branch
+     * and restore request to `log`. Requests named in `failing` reject.
+     */
+    function originClient(log: string[], failing: Set<string> = new Set()) {
+      const branches: string[] = [];
+      const asked = (name: string): Promise<void> => {
+        log.push(name);
+        return failing.has(name)
+          ? Promise.reject(new Error(`${name} failed`))
+          : Promise.resolve();
+      };
+      return Object.assign(new MockRuntimeClient(), {
+        branches,
+        failing,
+        createSpaceBranch(
+          options: { space: DID; name: string; forkSeq: number },
+        ) {
+          branches.push(options.name);
+          return asked(`create at ${options.forkSeq}`);
+        },
+        deleteSpaceBranch(options: { space: DID; name: string }) {
+          return asked(`delete ${branches.indexOf(options.name)}`);
+        },
+        async restoreSpace(
+          options: { space: DID; branch?: string; seq?: number },
+        ) {
+          await asked(`restore ${branches.indexOf(options.branch ?? "")}`);
+          return 42;
+        },
+      });
+    }
+
+    /** The client of the fork's own runtime, appending to `log`. */
+    function forkClient(log: string[], failing: Set<string> = new Set()) {
+      const asked = (name: string): Promise<void> => {
+        log.push(name);
+        return failing.has(name)
+          ? Promise.reject(new Error(`${name} failed`))
+          : Promise.resolve();
+      };
+      return Object.assign(new MockRuntimeClient(), {
+        idle: () => asked("fork idle"),
+        synced: () => asked("fork synced"),
+        dispose: () => asked("fork dispose"),
+      });
+    }
+
+    /**
+     * A runtime over `origin` that stands each fork up over `fork`, and the
+     * branches it was asked to open one on.
+     */
+    function forking(
+      origin: ReturnType<typeof originClient>,
+      fork: ReturnType<typeof forkClient>,
+    ) {
+      const spawned: Record<DID, string>[] = [];
+      const runtime = new RuntimeInternals(
+        asRuntimeClient(origin),
+        {},
+        undefined,
+        (branches) => {
+          spawned.push(branches);
+          return Promise.resolve(new RuntimeInternals(asRuntimeClient(fork)));
+        },
+      );
+      return { runtime, spawned };
+    }
+
+    it("creates a `history:` branch at the seq and returns a fork whose runtime opens the space on it", async () => {
+      const log: string[] = [];
+      const origin = originClient(log);
+      const { runtime, spawned } = forking(origin, forkClient(log));
+      try {
+        const fork = await runtime.forkSpace(space, 7);
+
+        expect(fork.branch).toMatch(/^history:[0-9a-f-]{36}$/);
+        expect(origin.branches).toEqual([fork.branch]);
+        expect(spawned).toEqual([{ [space]: fork.branch }]);
+        expect(fork.space).toBe(space);
+        expect(fork.seq).toBe(7);
+        expect(log).toEqual(["create at 7"]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("rejects with the branch's refusal and spawns nothing when the branch cannot be created", async () => {
+      const log: string[] = [];
+      const origin = originClient(log, new Set(["create at 7"]));
+      const { runtime, spawned } = forking(origin, forkClient(log));
+      try {
+        await expect(runtime.forkSpace(space, 7)).rejects.toThrow(
+          "create at 7 failed",
+        );
+        expect(spawned).toEqual([]);
+        expect(log).toEqual(["create at 7"]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    describe("from a runtime that spawned its own worker", () => {
+      // `create()` with no `transport` is what hands a runtime the means to
+      // stand a fork up, so these cases go through it, over a worker that
+      // acks every request.
+
+      type InitializeRequest = {
+        type: string;
+        data: {
+          apiUrl?: string;
+          memoryUrl?: string;
+          branches?: Record<DID, string>;
+          forwardWorkerConsole?: boolean;
+        };
+      };
+
+      /**
+       * A worker that reports ready and acks every request, and the
+       * Initialize request each instance of it was sent, in spawn order.
+       */
+      function ackingWorker() {
+        const initialized: InitializeRequest[] = [];
+        class StubWorker extends EventTarget {
+          constructor(_url: URL | string) {
+            super();
+            this.#post({ type: TransportNotificationType.WorkerReady });
+          }
+          #post(message: Record<string, unknown>): void {
+            queueMicrotask(() =>
+              this.dispatchEvent(
+                new MessageEvent("message", {
+                  data: realmFromFabricValue(message as never),
+                }),
+              )
+            );
+          }
+          postMessage(encoded: unknown): void {
+            const message = fabricFromRealmValue(encoded as never) as {
+              msgId?: number;
+              data?: InitializeRequest;
+            };
+            if (typeof message?.msgId !== "number") return;
+            if (message.data?.type === "initialize") {
+              initialized.push(message.data);
+            }
+            this.#post({ msgId: message.msgId });
+          }
+          terminate(): void {}
+        }
+        return { StubWorker, initialized };
+      }
+
+      it("initializes a second worker with the host's options and the space on the fork's branch", async () => {
+        const { StubWorker, initialized } = ackingWorker();
+        const OriginalWorker = (globalThis as { Worker: unknown }).Worker;
+        (globalThis as { Worker: unknown }).Worker = StubWorker;
+        try {
+          const runtime = await RuntimeInternals.create({
+            identity: await Identity.generate({ implementation: "noble" }),
+            apiUrl: new URL("http://shell.test/"),
+            memoryUrl: new URL("http://router.shell.test/"),
+            workerUrl: new URL("http://shell.test/scripts/worker-runtime.js"),
+            getBuildHash: () => Promise.resolve(undefined),
+            forwardWorkerConsole: true,
+          });
+          try {
+            const fork = await runtime.forkSpace(space, 7);
+            try {
+              expect(initialized).toHaveLength(2);
+              expect(initialized[0].data.branches).toBeUndefined();
+              expect(initialized[1].data.branches).toEqual({
+                [space]: fork.branch,
+              });
+              expect(initialized[1].data.apiUrl).toBe("http://shell.test/");
+              expect(initialized[1].data.memoryUrl).toBe(
+                "http://router.shell.test/",
+              );
+              expect(initialized[1].data.forwardWorkerConsole).toBe(true);
+              expect(fork.runtime).not.toBe(runtime);
+            } finally {
+              await fork.runtime.dispose();
+            }
+          } finally {
+            await runtime.dispose();
+          }
+        } finally {
+          (globalThis as { Worker: unknown }).Worker = OriginalWorker;
+        }
+      });
+    });
+
+    describe("when the fork's runtime fails to start", () => {
+      const failingToStart = (origin: ReturnType<typeof originClient>) =>
+        new RuntimeInternals(
+          asRuntimeClient(origin),
+          {},
+          undefined,
+          () => Promise.reject(new Error("the worker did not start")),
+        );
+
+      it("deletes the branch and rejects with the start failure", async () => {
+        const log: string[] = [];
+        const runtime = failingToStart(originClient(log));
+        try {
+          await expect(runtime.forkSpace(space, 7)).rejects.toThrow(
+            "the worker did not start",
+          );
+          expect(log).toEqual(["create at 7", "delete 0"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("rejects with the start failure when the deletion fails as well, and logs the deletion's", async () => {
+        const log: string[] = [];
+        const runtime = failingToStart(
+          originClient(log, new Set(["delete 0"])),
+        );
+        using error = stub(console, "error");
+        try {
+          await expect(runtime.forkSpace(space, 7)).rejects.toThrow(
+            "the worker did not start",
+          );
+          expect(log).toEqual(["create at 7", "delete 0"]);
+          expect(error.calls).toHaveLength(1);
+          expect(String(error.calls[0].args[1])).toContain("delete 0 failed");
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    });
+  });
+
+  describe("SpaceFork", () => {
+    const space = "did:key:z6Mk-lib-shell-space-fork" as DID;
+
+    /**
+     * A fork on the branch `fork-branch`, taken at seq 7, whose collaborators append what
+     * they are asked to `log`, and reject the requests named in `failing`.
+     */
+    function forked(failing: Set<string> = new Set()) {
+      const log: string[] = [];
+      const asked = <T>(name: string, answer: T): Promise<T> => {
+        log.push(name);
+        return failing.has(name)
+          ? Promise.reject(new Error(`${name} failed`))
+          : Promise.resolve(answer);
+      };
+      const origin = Object.assign(new MockRuntimeClient(), {
+        deleteSpaceBranch: (options: { space: DID; name: string }) =>
+          asked(`delete ${options.name} of ${options.space}`, undefined),
+        restoreSpace: (
+          options: { space: DID; seq?: number },
+        ) => {
+          // The whole request is logged, so that a member beyond `space` and
+          // `seq` shows in the comparison.
+          return asked(`restore ${JSON.stringify(options)}`, 42);
+        },
+      });
+      const runtime = new RuntimeInternals(asRuntimeClient(
+        Object.assign(new MockRuntimeClient(), {
+          idle: () => asked("fork idle", undefined),
+          synced: (synced?: DID) => asked(`fork synced ${synced}`, undefined),
+          dispose: () => asked("fork dispose", undefined),
+        }),
+      ));
+      const fork = new SpaceFork(
+        space,
+        "fork-branch",
+        7,
+        runtime,
+        asRuntimeClient(origin),
+      );
+      return { fork, runtime, log, failing };
+    }
+
+    const deletion = `delete fork-branch of ${space}`;
+    const restoration = `restore ${JSON.stringify({ space, seq: 7 })}`;
+
+    describe("instance members", () => {
+      describe("runtime", () => {
+        it("is the runtime the fork was constructed over", () => {
+          const { fork, runtime } = forked();
+
+          expect(fork.runtime).toBe(runtime);
+        });
+      });
+
+      describe("discard()", () => {
+        it("sends the branch's deletion before it disposes of the fork's runtime", async () => {
+          const { fork, log } = forked();
+
+          await fork.discard();
+
+          expect(log).toEqual([deletion, "fork dispose"]);
+        });
+
+        it("sends the deletion before the call returns, with nothing awaited", () => {
+          const { fork, log } = forked();
+
+          const discarding = fork.discard();
+
+          expect(log[0]).toBe(deletion);
+          return discarding;
+        });
+
+        it("sends one deletion and disposes once over two calls that both succeed", async () => {
+          const { fork, log } = forked();
+
+          await fork.discard();
+          await fork.discard();
+
+          expect(log).toEqual([deletion, "fork dispose"]);
+        });
+
+        it("rejects with the deletion's failure, having disposed of the runtime", async () => {
+          const { fork, log } = forked(new Set([deletion]));
+
+          await expect(fork.discard()).rejects.toThrow(`${deletion} failed`);
+
+          expect(log).toEqual([deletion, "fork dispose"]);
+        });
+
+        it("sends the deletion again on a call after one whose deletion failed, and disposes no second time", async () => {
+          const { fork, log, failing } = forked(new Set([deletion]));
+          await expect(fork.discard()).rejects.toThrow(`${deletion} failed`);
+          failing.clear();
+
+          await fork.discard();
+
+          expect(log).toEqual([deletion, "fork dispose", deletion]);
+        });
+
+        it("rejects with the disposal's failure, having sent the deletion", async () => {
+          const { fork, log } = forked(new Set(["fork dispose"]));
+
+          await expect(fork.discard()).rejects.toThrow("fork dispose failed");
+
+          expect(log).toEqual([deletion, "fork dispose"]);
+        });
+      });
+
+      describe("restore()", () => {
+        it("restores the space to the seq the fork was taken at, naming no branch, then ends the fork", async () => {
+          const { fork, log } = forked();
+
+          expect(await fork.restore()).toBe(42);
+
+          expect(log).toEqual([restoration, deletion, "fork dispose"]);
+        });
+
+        it("sends the restore before the call returns, with the fork's runtime neither idled nor synced", async () => {
+          const { fork, log } = forked();
+
+          const restoring = fork.restore();
+
+          expect(log).toEqual([restoration]);
+          await restoring;
+        });
+
+        it("rejects with the restore's refusal and leaves the fork's branch and runtime", async () => {
+          const { fork, log, runtime } = forked(new Set([restoration]));
+          try {
+            await expect(fork.restore()).rejects.toThrow(
+              `${restoration} failed`,
+            );
+
+            expect(log).toEqual([restoration]);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        it("returns the restoring step's seq when ending the fork fails, and logs that failure", async () => {
+          const { fork, log } = forked(new Set([deletion]));
+          using error = stub(console, "error");
+
+          expect(await fork.restore()).toBe(42);
+
+          expect(log.slice(-2)).toEqual([deletion, "fork dispose"]);
+          expect(error.calls).toHaveLength(1);
+        });
+
+        it("rejects after the fork was discarded, restoring nothing", async () => {
+          const { fork, log } = forked();
+          await fork.discard();
+
+          await expect(fork.restore()).rejects.toThrow("the fork has ended");
+
+          expect(log).toEqual([deletion, "fork dispose"]);
+        });
+      });
     });
   });
 

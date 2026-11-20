@@ -1959,9 +1959,13 @@ the per-epic implementation notes).
 >   chapter's section 4.2.3), and a server splits a sync for such a client on
 >   a connection whose transport bounds its messages: the routed host splits a
 >   sync past the routed frame cap or the bytes a message may take (16 MiB
->   expanded when compressed, 8 MiB as text), in parts of 1 MiB. A direct server advertises it and
->   sends every sync whole. A peer that omits it parses as `false`, and is
->   sent every sync whole. It is permanent.
+>   expanded when compressed, 8 MiB as text), in parts of 1 MiB. The
+>   toolshed's direct memory socket splits a sync larger than the largest
+>   message it still sends compressed (256 MiB), or one too long for the
+>   JavaScript engine to encode whole. Such a sync goes in parts of at most
+>   32 MiB, and an entry larger than 32 MiB goes alone, in a part of its own
+>   (`MEMORY_SOCKET_SYNC_PARTS`). A peer that omits it parses as `false` and
+>   is sent every sync whole. It is permanent.
 > - **`watchSetPartsV1`** is a build-inherent capability, hardwired to
 >   `true`. It advertises that the server applies a `session.watch.set` staged
 >   in parts as one set (the memory protocol chapter's section 4.3.5). Only
@@ -1998,6 +2002,13 @@ the per-epic implementation notes).
 >   since such a server would neither validate nor seal it, and
 >   `Runtime.spaceKind()` throws there rather than report a kind as absent. It
 >   is permanent.
+> - **`branches`** is a build-inherent capability, hardwired to `true`. It
+>   advertises that the server opens a session on a branch and serves the
+>   branch and history commands
+>   ([`space-history.md`](../features/space-history.md)). Only the server's
+>   advertisement matters: a client reads it from `hello.ok` and never offers
+>   it, and opens no session on a branch against a server that omits it. It is
+>   permanent.
 > - **`instanceNameMark`** is a build-inherent capability, hardwired to
 >   `true`. It advertises that the server records a space's instance-naming
 >   mark and admits sessions and commits by it (INV-16 in

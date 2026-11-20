@@ -5,7 +5,7 @@ import { Database } from "@db/sqlite";
 import { Identity } from "@commonfabric/identity";
 
 import type { MemorySpace } from "../interface.ts";
-import type { Operation, ServerMessage } from "../v2.ts";
+import type { HelloOkMessage, Operation, ServerMessage } from "../v2.ts";
 import { encodeMemoryBoundary, getMemoryProtocolFlags } from "../v2.ts";
 import * as Engine from "../v2/engine.ts";
 import { Server } from "../v2/server.ts";
@@ -24,9 +24,10 @@ const hello = {
 
 /** A Mode A server on a file store that owns every DID. */
 function modeA(
-  { createsSpace, serviceDids }: {
+  { createsSpace, serviceDids, delegatingDids }: {
     createsSpace?: (space: string) => boolean;
     serviceDids?: string[];
+    delegatingDids?: string[];
   } = {},
 ) {
   const root = Deno.makeTempDirSync();
@@ -34,13 +35,17 @@ function modeA(
   const server = new Server({
     store,
     subscriptionRefreshDelayMs: "manual",
-    authorizeSessionOpen: () => undefined,
+    // Test-only: a direct connection's open is signed by `invocation.iss`.
+    authorizeSessionOpen: (message) => {
+      const issuer = message.invocation?.iss;
+      return typeof issuer === "string" ? issuer : undefined;
+    },
     authorizeConnection: () => undefined,
     sessionOpenAuth: { audience },
     ownsSpace: () => true,
     requireExplicitAcl: true,
     createsSpace,
-    acl: { mode: "enforce", serviceDids },
+    acl: { mode: "enforce", serviceDids, delegatingDids },
   });
   return {
     server,
@@ -86,6 +91,33 @@ async function connect(server: Server, principal: string) {
     principal,
     Math.floor(Date.now() / 1000) + 600,
   );
+  return client(connection, out, { principal });
+}
+
+/**
+ * A direct connection, as a serving runtime of another toolshed opens to a
+ * space's owner, whose one session open is signed by `principal`.
+ */
+async function connectDirect(server: Server, principal: string) {
+  const out: ServerMessage[] = [];
+  const connection = server.connect((m) => out.push(m));
+  await connection.receive(encodeMemoryBoundary(hello));
+  const { sessionOpen } = out.shift() as HelloOkMessage;
+  return client(connection, out, {
+    invocation: {
+      iss: principal,
+      aud: sessionOpen!.audience,
+      challenge: sessionOpen!.challenge.value,
+    },
+  });
+}
+
+/** Requests on `connection`, whose opens carry `opener`. */
+function client(
+  connection: ReturnType<Server["connect"]>,
+  out: ServerMessage[],
+  opener: Record<string, unknown>,
+) {
   let next = 0;
   const request = async (body: Record<string, unknown>) => {
     const requestId = `r${next++}`;
@@ -99,19 +131,47 @@ async function connect(server: Server, principal: string) {
     return response;
   };
   return {
+    connection,
+    out,
     request,
-    open: (space: string) =>
-      request({ type: "session.open", space, principal, session: {} }),
-    write: (space: string, sessionId: string, id: string, value: unknown) =>
+    open: (space: string, session: Record<string, unknown> = {}) =>
+      request({ type: "session.open", space, ...opener, session }),
+    write: (
+      space: string,
+      sessionId: string,
+      id: string,
+      value: unknown,
+      localSeq = 1,
+    ) =>
       request({
         type: "transact",
         space,
         sessionId,
         commit: {
-          localSeq: 1,
+          localSeq,
           reads: { confirmed: [], pending: [] },
           operations: [{ op: "set", id, value: { value } }],
         },
+      }),
+    /** Watches document `id` in `space` over `sessionId`. */
+    watch: (space: string, sessionId: string, id: string) =>
+      request({
+        type: "session.watch.set",
+        space,
+        sessionId,
+        watches: [{
+          id: "doc",
+          kind: "graph",
+          query: { roots: [{ id, selector: { path: [], schema: false } }] },
+        }],
+      }),
+    /** Reads document `id` in `space` over `sessionId`. */
+    query: (space: string, sessionId: string, id: string) =>
+      request({
+        type: "graph.query",
+        space,
+        sessionId,
+        query: { roots: [{ id, selector: { path: [], schema: false } }] },
       }),
   };
 }
@@ -401,6 +461,139 @@ describe("Mode A space creation", () => {
     } finally {
       await mode.close();
     }
+  });
+
+  describe("for a delegating principal acting as the space's owner", () => {
+    const actingAsOwner = { actingAs: "space-owner" };
+
+    it("admits its open of a DID with no store, and creates the store", async () => {
+      const peer = await did(60);
+      const mode = modeA({ delegatingDids: [peer] });
+      try {
+        const space = await did(61);
+        const opened = await (await connectDirect(mode.server, peer)).open(
+          space,
+          actingAsOwner,
+        );
+        expect(opened.error).toBeUndefined();
+        expect(mode.storeExists(space)).toBe(true);
+      } finally {
+        await mode.close();
+      }
+    });
+
+    it("refuses its open of a DID with no store where `createsSpace` refuses, and creates none", async () => {
+      const peer = await did(62);
+      const listed = await did(63);
+      const mode = modeA({
+        delegatingDids: [peer],
+        createsSpace: (space) => space !== listed,
+      });
+      try {
+        const refused = await (await connectDirect(mode.server, peer)).open(
+          listed,
+          actingAsOwner,
+        );
+        expect(refused.error?.name).toBe("AuthorizationError");
+        expect(mode.storeExists(listed)).toBe(false);
+      } finally {
+        await mode.close();
+      }
+    });
+
+    it("refuses its open of a DID with no store without the owner binding, and creates none", async () => {
+      const peer = await did(64);
+      const mode = modeA({ delegatingDids: [peer] });
+      try {
+        const space = await did(65);
+        const refused = await (await connectDirect(mode.server, peer)).open(
+          space,
+        );
+        expect(refused.error?.name).toBe("AuthorizationError");
+        expect(mode.storeExists(space)).toBe(false);
+      } finally {
+        await mode.close();
+      }
+    });
+
+    it("refuses its open without the owner binding of a space whose store its owner-bound open created", async () => {
+      const peer = await did(70);
+      const mode = modeA({ delegatingDids: [peer] });
+      try {
+        const space = await did(71);
+        const bound = await (await connectDirect(mode.server, peer)).open(
+          space,
+          actingAsOwner,
+        );
+        expect(bound.error).toBeUndefined();
+        const plain = await (await connectDirect(mode.server, peer)).open(
+          space,
+        );
+        expect(plain.error?.name).toBe("AuthorizationError");
+      } finally {
+        await mode.close();
+      }
+    });
+
+    it("admits its open of a space whose store exists before the genesis ACL lands", async () => {
+      const peer = await did(66);
+      const mode = modeA({ delegatingDids: [peer] });
+      try {
+        const space = await did(67);
+        expect((await (await connect(mode.server, space)).open(space)).error)
+          .toBeUndefined();
+        const opened = await (await connectDirect(mode.server, peer)).open(
+          space,
+          actingAsOwner,
+        );
+        expect(opened.error).toBeUndefined();
+      } finally {
+        await mode.close();
+      }
+    });
+
+    it("delivers the space to its watch, read as the owner, once the space's own DID creates it", async () => {
+      const peer = await did(68);
+      const mode = modeA({ delegatingDids: [peer] });
+      try {
+        const space = await did(69);
+        const serving = await connectDirect(mode.server, peer);
+        const opened = await serving.open(space, actingAsOwner);
+        expect(opened.error).toBeUndefined();
+        const sessionId = sessionOf(opened);
+        expect((await serving.watch(space, sessionId, "of:profile")).error)
+          .toBeUndefined();
+
+        const creator = await connect(mode.server, space);
+        const created = await creator.open(space);
+        const genesis = await creator.write(
+          space,
+          sessionOf(created),
+          `of:${space}`,
+          { [space]: "OWNER" },
+        );
+        expect(genesis.error).toBeUndefined();
+        const profile = await creator.write(
+          space,
+          sessionOf(created),
+          "of:profile",
+          { name: "voter" },
+          2,
+        );
+        expect(profile.error).toBeUndefined();
+        serving.out.length = 0;
+        await serving.connection.refreshDirty(space);
+
+        expect(serving.out.map((message) => message.type)).toEqual([
+          "session/effect",
+        ]);
+        const read = await serving.query(space, sessionId, "of:profile");
+        expect(read.error).toBeUndefined();
+        expect(JSON.stringify(read.ok)).toContain("voter");
+      } finally {
+        await mode.close();
+      }
+    });
   });
 
   it("refuses a populated space without an ACL, even to its own DID", async () => {

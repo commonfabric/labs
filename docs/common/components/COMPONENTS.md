@@ -43,13 +43,13 @@ name: `allowCustom`, `defaultSize`, `className`, `htmlFor`. Three kinds of name
 are not properties and keep their hyphens: `data-*` and `aria-*`, which are set
 as attributes, and an event prop, which starts with `on` and is spelled with the
 event's own name (`onClick`, `oncf-change`). Any other hyphenated prop sets
-nothing, since no property has that name, and the compiler warns of it, naming
+nothing, since no property has that name, and the compiler refuses it, naming
 the property to write. Because the property name is the only spelling, TypeScript checks every
 prop against the component's declared props.
 
 ```tsx
 // Shown for illustration only.
-<cf-autocomplete allow-custom={true} />  // warning: write `allowCustom`
+<cf-autocomplete allow-custom={true} />  // error: write `allowCustom`
 <cf-autocomplete allowCustom={true} />
 ```
 

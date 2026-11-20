@@ -185,7 +185,7 @@ const FabriChatAttachment = pattern<AttachmentInput, { [UI]: VNode }>(
             <div hidden style={{ display: imageDisplay }}>
               <cf-image
                 blob={blob}
-                media-type={mediaType}
+                mediaType={mediaType}
                 alt={name}
                 style="max-width: 16rem; max-height: 16rem;"
               />

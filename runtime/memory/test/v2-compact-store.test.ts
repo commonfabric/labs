@@ -21,6 +21,7 @@ import {
 import { encodeMemoryBoundary, ProtocolError } from "../v2.ts";
 import { readStoredValueText } from "../v2/value-store.ts";
 import { readCommitOriginalText, resolutionText } from "../v2/commit-record.ts";
+import { encodeStoredCommit } from "../v2/stored-commit.ts";
 import {
   assertReadOnly,
   assertWriteSafe,
@@ -88,8 +89,10 @@ describe("the compact store", () => {
     await Deno.remove(dir, { recursive: true });
   });
 
-  const openStore = async (): Promise<Engine> => {
-    const engine = await open({ url: toFileUrl(path) });
+  const openStore = async (
+    options: { storeReadsDigest?: boolean } = {},
+  ): Promise<Engine> => {
+    const engine = await open({ url: toFileUrl(path), ...options });
     opened.push(engine);
     return engine;
   };
@@ -118,7 +121,8 @@ describe("the compact store", () => {
   };
 
   it("stores a large value as a vid and a commit as compact blobs", async () => {
-    const engine = await openStore();
+    // The third commit's reads are chunked only where the log keeps them.
+    const engine = await openStore({ storeReadsDigest: false });
     const third = writeThree(engine);
     const database = engine.database;
 
@@ -163,21 +167,36 @@ describe("the compact store", () => {
     expect(read(engine, { id: "of:other" })).toEqual(largeDocument(3));
   });
 
-  it("answers a replay of a compact commit as a replay and refuses a changed one", async () => {
+  it("stores a commit whose reads the log holds as a digest with no `reads` cell", async () => {
     const engine = await openStore();
     const third = writeThree(engine);
-    expect(commitRow(engine, 3).original).toBeInstanceOf(Uint8Array);
 
-    const replay = applyCommit(engine, { sessionId: SESSION, commit: third });
-    expect(replay.replayed).toBe(true);
-    expect(replay.seq).toBe(3);
+    const row = commitRow(engine, 3);
 
-    const changed = setCommit(3, "of:other", largeDocument(4), [
-      { id: "of:large", path: ["value"], seq: 2 },
-    ]);
-    expect(() => applyCommit(engine, { sessionId: SESSION, commit: changed }))
-      .toThrow(ProtocolError);
+    expect(row.original).toBeInstanceOf(Uint8Array);
+    expect(row.reads).toBeNull();
+    expect(readCommitOriginalText(engine.database, engine.values, row)).toBe(
+      encodeStoredCommit(third, false),
+    );
   });
+
+  for (const storeReadsDigest of [true, false]) {
+    it(`answers a replay of a compact commit as a replay and refuses a changed one, with \`storeReadsDigest: ${storeReadsDigest}\``, async () => {
+      const engine = await openStore({ storeReadsDigest });
+      const third = writeThree(engine);
+      expect(commitRow(engine, 3).original).toBeInstanceOf(Uint8Array);
+
+      const replay = applyCommit(engine, { sessionId: SESSION, commit: third });
+      expect(replay.replayed).toBe(true);
+      expect(replay.seq).toBe(3);
+
+      const changed = setCommit(3, "of:other", largeDocument(4), [
+        { id: "of:large", path: ["value"], seq: 2 },
+      ]);
+      expect(() => applyCommit(engine, { sessionId: SESSION, commit: changed }))
+        .toThrow(ProtocolError);
+    });
+  }
 
   it("marks a new store as format 1 with every migration phase done", async () => {
     const engine = await openStore();
