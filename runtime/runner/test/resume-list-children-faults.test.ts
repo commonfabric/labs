@@ -6,10 +6,7 @@ import { getLogger } from "@commonfabric/logger";
 import type { Pattern } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import {
-  getDerivedInternalCellLink,
-  parseLink,
-} from "../src/link-utils.ts";
+import { getDerivedInternalCellLink, parseLink } from "../src/link-utils.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { trustExecutable } from "./support/trusted-builder.ts";
