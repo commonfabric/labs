@@ -8814,9 +8814,23 @@ export class Instance {
           const bound = first((inputs) => inputs.slots.get(slot));
           if (bound !== undefined) {
             slots[slot] = this.#bindingOf(slot, bound, outputs, depth, keys);
-          } else if (source !== undefined) {
-            const found = this.#sourceBinding(slot, byCollection, [source]);
-            if (found !== undefined) slots[slot] = found;
+          } else {
+            // A source whose assembly found no stored array, as that of a
+            // `flatMap` before its first element, is read at the position
+            // the slot names.
+            const found = (source === undefined
+              ? undefined
+              : this.#sourceBinding(slot, byCollection, [source])) ??
+              this.#positionBinding(
+                slot,
+                this.#outerOf(folded).map((step): [number, string] => [
+                  step,
+                  byCollection.get(step) ?? "?",
+                ]),
+              );
+            if (found !== undefined) {
+              slots[slot] = found;
+            }
           }
         }
       }
@@ -9355,7 +9369,16 @@ export class Instance {
       );
       const key = unit?.keys[Number(path[star])];
       if (unit === undefined || key === undefined) break;
-      keys.push([unit.collection, key]);
+      // The body of a `flatMap` runs once for a source element, and each
+      // member of the segment it gave has that element's key in its own.
+      const { source } = recordOfKey(key);
+      keys.push([
+        unit.collection,
+        this.plan.collections[unit.collection].construct === "flatMap" &&
+          source !== undefined
+          ? textOf(source)
+          : key,
+      ]);
       inside = unit.inside.get(key);
       base = star + 1;
     }
