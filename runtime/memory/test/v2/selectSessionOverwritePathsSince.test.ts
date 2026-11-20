@@ -6,6 +6,7 @@ import { type Operation, type PatchOp, toDocumentPath } from "../../v2.ts";
 import {
   applyCommit,
   close,
+  createBranch,
   type Engine,
   open,
   selectDocHead,
@@ -333,6 +334,51 @@ describe("selectSessionOverwritePathsSince()", () => {
       expect(overwritten(filled)).toEqual([
         { array: ["value", "tags"], fromIndex: 0, toIndex: 3 },
       ]);
+    });
+
+    it("reads a fork's first write of the document against the document the fork inherited, as the per-index form does", () => {
+      // The same head insertion on two forks of the filled list, marked on
+      // one and index by index on the other.
+      const onFork = (branch: string, patches: PatchOp[]) => {
+        createBranch(engine, branch);
+        applyCommit(engine, {
+          sessionId: session,
+          principal,
+          space,
+          commit: {
+            localSeq: ++localSeq,
+            branch,
+            reads: {
+              confirmed: [{ id, path: toDocumentPath(["value"]), seq: filled }],
+              pending: [],
+            },
+            operations: [{ op: "patch", id, patches }],
+          },
+        });
+        return selectSessionOverwritePathsSince(engine, {
+          branch,
+          id,
+          scopeKey: "space",
+          sinceSeq: filled,
+          principal,
+          sessionId: session,
+        });
+      };
+      expect(onFork("marked", [{
+        op: "splice",
+        pinned: true,
+        path: "/value/tags",
+        index: 0,
+        remove: 0,
+        add: ["x"],
+      }])).toEqual([{ array: ["value", "tags"], fromIndex: 0, toIndex: 4 }]);
+      expect(onFork("positional", [
+        { op: "replace", path: "/value/tags/0", value: "x" },
+        { op: "replace", path: "/value/tags/1", value: "a" },
+        { op: "replace", path: "/value/tags/2", value: "b" },
+        { op: "replace", path: "/value/tags/3", value: "c" },
+        { op: "splice", path: "/value/tags", index: 4, remove: 0, add: ["d"] },
+      ])).toEqual([0, 1, 2, 3].map((index) => ["value", "tags", `${index}`]));
     });
   });
 

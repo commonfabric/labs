@@ -5039,7 +5039,9 @@ const arrayAtPath = (
 
 /**
  * The document as it stood before the revision row of `revision`: as the
- * document's previous row left it, or `null` where the row is its first.
+ * document's previous row on the branch left it, or, where the row is the
+ * branch's first of the document, as the branch inherited it at its fork
+ * point; `null` where there was none.
  */
 const previousRevisionDocument = (
   engine: Engine,
@@ -5064,12 +5066,22 @@ LIMIT 1
       seq: revision.seq,
       op_index: revision.opIndex,
     }) as { seq: number; op_index: number } | undefined;
-  return previous === undefined ? null : readRevision(engine, {
-    branch: revision.branch,
+  if (previous !== undefined) {
+    return readRevision(engine, {
+      branch: revision.branch,
+      id: revision.id,
+      scopeKey: revision.scopeKey,
+      seq: previous.seq,
+      opIndex: previous.op_index,
+    });
+  }
+  // The branch's first row of the document: a read of the branch just
+  // before it resolves the document the branch inherited at its fork point.
+  return read(engine, {
     id: revision.id,
+    branch: revision.branch,
     scopeKey: revision.scopeKey,
-    seq: previous.seq,
-    opIndex: previous.op_index,
+    seq: revision.seq - 1,
   });
 };
 
