@@ -167,10 +167,11 @@ const storeCounts = () => ({
   sessionDocuments: scalar(
     `SELECT COUNT(*) AS n FROM head WHERE scope_key LIKE 'session:%'`,
   ),
-  pieces: scalar(`SELECT COUNT(*) AS n FROM currency_piece`),
-  clean: scalar(`SELECT COUNT(*) AS n FROM currency_piece WHERE mark = 0`),
-  upstream: scalar(`SELECT COUNT(*) AS n FROM currency_piece WHERE mark = 1`),
-  stale: scalar(`SELECT COUNT(*) AS n FROM currency_piece WHERE mark = 2`),
+  pieces: scalar(`SELECT COUNT(DISTINCT piece) AS n FROM currency_slice`),
+  slices: scalar(`SELECT COUNT(*) AS n FROM currency_slice`),
+  clean: scalar(`SELECT COUNT(*) AS n FROM currency_slice WHERE mark = 0`),
+  upstream: scalar(`SELECT COUNT(*) AS n FROM currency_slice WHERE mark = 1`),
+  stale: scalar(`SELECT COUNT(*) AS n FROM currency_slice WHERE mark = 2`),
   reads: scalar(`SELECT COUNT(*) AS n FROM currency_read`),
   writes: scalar(`SELECT COUNT(*) AS n FROM currency_write`),
   vouches: scalar(`SELECT COUNT(*) AS n FROM currency_vouch`),
@@ -340,6 +341,7 @@ const view = async (
       sessionDocumentsWritten: after.sessionDocuments - before.sessionDocuments,
       index: {
         pieces: after.pieces,
+        slices: after.slices,
         clean: after.clean,
         upstream: after.upstream,
         stale: after.stale,

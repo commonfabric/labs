@@ -32,6 +32,9 @@ const setupSigner = await Identity.fromPassphrase(
 const aliceSigner = await Identity.fromPassphrase(
   "space-server currency alice",
 );
+const bobSigner = await Identity.fromPassphrase(
+  "space-server currency bob",
+);
 
 // A piece with one derived output, `out`, three times its `value`.
 const TRIPLER_PROGRAM: RuntimeProgram = {
@@ -72,13 +75,15 @@ const DRAFT_PROGRAM: RuntimeProgram = {
 /**
  * One demanded document: a watch root, or a document a selector reaches, at
  * the space's instance unless `scopeKey` names another, demanded by the
- * session `viewer` of alice unless `session` names another of hers.
+ * session `viewer` of alice unless `session` names another session or
+ * `principal` another viewer.
  */
 type Demanded = {
   link: NormalizedFullLink;
   root: boolean;
   scopeKey?: ScopeKey;
   session?: string;
+  principal?: string;
 };
 
 /** The epoch the hosts of these tests record under. */
@@ -120,13 +125,13 @@ describe("SpaceServer", () => {
     // demands them.
     (server as { demandForSpace: unknown }).demandForSpace = () =>
       sessionDemandOf(
-        demanded.map(({ link, root, scopeKey, session }) => ({
+        demanded.map(({ link, root, scopeKey, session, principal }) => ({
           id: link.id,
           scope: link.scope ?? "space",
           scopeKey: scopeKey ?? "space",
           root,
           identity: {
-            principal: aliceSigner.did(),
+            principal: principal ?? aliceSigner.did(),
             sessionId: session ?? "viewer",
           },
         })),
@@ -621,6 +626,104 @@ describe("SpaceServer", () => {
         );
         expect(serves(root)).toBe(true);
         expect(host.stats().currency.rearmed).toBe(1);
+      });
+
+      it("leaves a piece unstarted for a returning viewer whose record another viewer's visit left in place, under `skip`", async () => {
+        host = newHost("skip");
+        const setup = openRuntime(setupSigner);
+        const compiled = await setup.patternManager.compilePattern(
+          DRAFT_PROGRAM,
+          { space },
+        );
+        const argument = setup.getCell<{ n?: number }>(
+          space,
+          "currency viewers argument",
+          compiled.argumentSchema,
+        );
+        const result = setup.getCell<{ echo: string }>(
+          space,
+          "currency viewers result",
+          compiled.resultSchema,
+        );
+        const tx = setup.edit();
+        argument.withTx(tx).set({ n: 1 });
+        setup.run(tx, compiled, argument, result);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await result.pull();
+        const root = result.getAsNormalizedFullLink();
+        const documentOf = (key: string) =>
+          ({
+            ...result.key(key as never).resolveAsCell()
+              .getAsNormalizedFullLink(),
+            path: [],
+          }) as NormalizedFullLink;
+        const draft = documentOf("draft");
+        const echo = documentOf("echo");
+        setup.runner.stop(result);
+        await setup.idle();
+        await setup.storageManager.synced();
+        await closeLastRuntime();
+
+        /** What one session of `principal` demands of the piece. */
+        const viewOf = (principal: string): Demanded[] => {
+          const identity = { principal, sessionId: "viewer" };
+          const session = resolveScopeKey("session", identity);
+          return [
+            { link: root, root: true, principal },
+            { link: draft, root: false, scopeKey: session, principal },
+            // The derived document is declared in the space and computed
+            // for each session, so a session demands its shared slot, its
+            // user's and its own.
+            { link: { ...echo, scope: "space" }, root: false, principal },
+            {
+              link: { ...echo, scope: "user" },
+              root: false,
+              scopeKey: resolveScopeKey("user", identity),
+              principal,
+            },
+            {
+              link: { ...echo, scope: "session" },
+              root: false,
+              scopeKey: session,
+              principal,
+            },
+          ];
+        };
+        /** The mark of the piece's slice for the session of `principal`. */
+        const sessionMarkOf = async (principal: string) =>
+          selectCurrencyPiece(await server.engineForSpace(space), {
+            piece: root.id,
+            slice: resolveScopeKey("session", {
+              principal,
+              sessionId: "viewer",
+            }),
+          })?.mark;
+
+        await demand(...viewOf(aliceSigner.did()));
+        await awaitEach(cycles, () => serves(root));
+        await settled();
+        expect(await sessionMarkOf(aliceSigner.did())).toBe(0);
+        await host.spaceServer(space)!.park("test-park");
+
+        // Bob holds no instance of the piece, so his visit starts it.
+        demanded = viewOf(bobSigner.did());
+        await touchSpace();
+        await awaitEach(cycles, () => serves(root));
+        await settled();
+        expect(await sessionMarkOf(bobSigner.did())).toBe(0);
+        expect(await sessionMarkOf(aliceSigner.did())).toBe(0);
+        await host.spaceServer(space)!.park("test-park");
+        const served = host.stats().currency.servedFromStore;
+
+        demanded = viewOf(aliceSigner.did());
+        await touchSpace();
+
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore > served,
+        );
+        await settled();
+        expect(serves(root)).toBe(false);
       });
 
       it("starts a recorded piece when a session demands an output it never vouched for, under `skip`", async () => {

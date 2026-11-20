@@ -2524,19 +2524,22 @@ the per-epic implementation notes).
   reaches one of its documents, and a fresh serving runtime runs every
   demanded computation of it again, although the store holds what they
   wrote. With a mode set, the loop records at each quiescent point, per
-  piece, what its computations read, what they write, and which stored
-  document instances they vouch for
+  piece, what its computations write, and per slice of it (the runs every
+  viewer shares, and each demanding user's and session's own) what those
+  runs read and which stored document instances they vouch for
   ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §3b).
-  A commit above one of those rows marks the piece, and a marked piece
-  marks each piece that reads a document it writes. `record` stores the
+  A commit above one of a slice's rows marks that slice, and a marked slice
+  marks each slice of another piece that reads an instance it writes, so one
+  viewer's change marks nothing of another viewer's. `record` stores the
   records, judges each eligible cold root, and loads every root regardless:
   `currency.servable` counts the roots the store could have served, and
   `currency.falseClean` counts the pieces that were held clean and then
   wrote a vouched output again with no input changed, each one a judgment
   that would have served a stale value. `skip` acts on the judgment: a root
-  whose piece is clean and vouches for every demanded instance of it is
-  neither loaded nor started, until an input marks the piece or a session's
-  demand reaches an instance it does not vouch for
+  whose piece vouches for every demanded instance of it, in slices that are
+  clean, is neither loaded nor started, until an input marks a slice a
+  demanded instance is resolved under or a session's demand reaches an
+  instance the piece does not vouch for
   ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §1).
   [The plan](../plans/stored-output-currency.md) carries the design, its
   limits and the stages after this one.
