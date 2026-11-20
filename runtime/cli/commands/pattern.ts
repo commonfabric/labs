@@ -250,6 +250,9 @@ export async function share(
           : { keywords: listFlag(options.keywords) }),
         allowDirty: !!options.allowDirty,
         slot: await entrySlot(absPath(entry), slotSources(store)),
+        // A plain share goes to beta, by link only, until cf pattern stable;
+        // publishing under a name is meant to be found, so it is stable.
+        channel: naming === undefined ? "beta" : "stable",
         skipLocalCheck: !!options.skipLocalCheck,
         ...(options.remixedFrom === undefined
           ? {}
@@ -692,9 +695,11 @@ export const pattern = new Command()
     targetOptions(
       shareOptions(new Command())
         .description(
-          "Share a pattern anonymously: others who share see it under a " +
-            "pseudonym of this pattern alone, never linked to your other " +
-            "patterns or your name. Join first with cf index join. It " +
+          "Share a pattern anonymously on beta: anyone with its link " +
+            "(cf pattern link) can open it, under a pseudonym of this " +
+            "pattern alone, never linked to your other patterns or your " +
+            "name; cf pattern stable makes it findable. Join first with " +
+            "cf index join. It " +
             "checks the pattern for personal details with the index's own " +
             "privacy question, and when it finds some, rewrites it into a " +
             "general version (specific values lifted into arguments). The " +

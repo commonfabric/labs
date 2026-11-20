@@ -22,6 +22,7 @@ import { common, dirname, join, relative, resolve } from "@std/path";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import {
+  type PatternIndexChannel,
   type PatternIndexClient,
   PatternIndexError,
   type PatternIndexFinding,
@@ -85,6 +86,13 @@ export interface PublishOptions {
    * `cf pattern rollback` restores.
    */
   slot?: string;
+
+  /**
+   * The channel to share on: `beta` opens by link only, `stable` is
+   * findable once checked. Needs a version (a slot) to name; without one,
+   * or without this, the share asks for a listing, which is stable.
+   */
+  channel?: PatternIndexChannel;
 }
 
 /** What publishing reaches the world through, so a test can stand in for it. */
@@ -111,6 +119,7 @@ export interface PublishDeps {
     | "getGardenerPrompt"
     | "publishPattern"
     | "requestListing"
+    | "shareVersion"
     | "getPattern"
     | "whoami"
     | "listLineages"
@@ -170,7 +179,13 @@ export type LocalCheckReport =
 
 /** How the listing request went. */
 export type ListingReport =
-  | { status: "requested"; listing: PatternIndexListing }
+  | {
+    status: "requested";
+    listing: PatternIndexListing;
+
+    /** The channel it was shared on, when one was asked for. */
+    channel?: PatternIndexChannel;
+  }
   | { status: "capped"; resetsAt?: string }
   | { status: "failed"; reason: string };
 
@@ -415,7 +430,25 @@ export async function publishPatternFromDisk(
     await deps.store.recordPublished(entry, response.patternId);
   }
   if (!response.created) priorPatternId = undefined;
-  const listing = await requestListing(deps, response.patternId);
+  const versionId = response.versionId;
+  const listing = options.channel !== undefined && versionId !== undefined
+    ? await requestShare(async () => {
+      const answer = await deps.client.shareVersion({
+        versionId,
+        channel: options.channel,
+      });
+      return {
+        status: "requested",
+        listing: answer.listing ?? "pending",
+        channel: options.channel,
+      };
+    })
+    : await requestShare(async () => ({
+      status: "requested",
+      listing: (await deps.client.requestListing({
+        patternId: response.patternId,
+      })).listing,
+    }));
   const handle = stored?.author?.pseudonym ?? stored?.handle;
   return {
     outcome: "shared",
@@ -669,14 +702,12 @@ async function checkLocally(
   };
 }
 
-/** Asks for the listing, reading the daily cap as what it is. */
-async function requestListing(
-  deps: PublishDeps,
-  patternId: string,
+/** Asks the index to share, reading the daily cap as what it is. */
+async function requestShare(
+  ask: () => Promise<ListingReport>,
 ): Promise<ListingReport> {
   try {
-    const answer = await deps.client.requestListing({ patternId });
-    return { status: "requested", listing: answer.listing };
+    return await ask();
   } catch (error) {
     if (error instanceof PatternIndexError && error.status === 429) {
       return {
@@ -687,6 +718,20 @@ async function requestListing(
     return { status: "failed", reason: describeFailure(error) };
   }
 }
+
+/** What a share to beta stands at, to the author, in a clause. */
+const betaMeaning = (listing: PatternIndexListing): string => {
+  switch (listing) {
+    case "passed":
+      return "anyone with its link (cf pattern link) can open it; nobody finds it until cf pattern stable";
+    case "held":
+      return "held: the index found something identifying; see cf pattern mine";
+    case "error":
+      return "error: the check failed to run and waits for an admin re-run";
+    default:
+      return "once the index's privacy check passes, anyone with its link (cf pattern link) can open it; nobody finds it until cf pattern stable";
+  }
+};
 
 /** What a listing state means to the author, in a clause. */
 const listingMeaning = (listing: PatternIndexListing): string => {
@@ -770,7 +815,11 @@ export const publishReportLines = (report: PublishReport): string[] => {
   const listing = report.listing;
   switch (listing.status) {
     case "requested":
-      lines.push(`Listing: ${listingMeaning(listing.listing)}.`);
+      lines.push(
+        listing.channel === "beta"
+          ? `Beta: ${betaMeaning(listing.listing)}.`
+          : `Listing: ${listingMeaning(listing.listing)}.`,
+      );
       break;
     case "capped":
       lines.push(

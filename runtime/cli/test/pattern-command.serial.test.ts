@@ -322,6 +322,25 @@ describe("pattern", () => {
       expect(disposed).toBe(1);
     });
 
+    it("shares the version it kept on beta, by link only, and asks for no listing", async () => {
+      await share(options({ skipLocalCheck: true }), entry, deps());
+
+      const published = index.calls.find((call) =>
+        call.fn === "publishPattern"
+      );
+      expect(index.calls.find((call) => call.fn === "shareVersion")?.body)
+        .toEqual({ versionId: expect.any(String), channel: "beta" });
+      expect(index.calls.some((call) => call.fn === "requestListing")).toBe(
+        false,
+      );
+      expect(
+        index.publications.get(String(published?.body.patternId))?.channel,
+      ).toBe("beta");
+      expect(String(rendered[0].value)).toContain(
+        "Beta: once the index's privacy check passes, anyone with its link (cf pattern link) can open it; nobody finds it until cf pattern stable.",
+      );
+    });
+
     it("records what it published from the entry file in the store for the index, under the state directory", async () => {
       const saved = Deno.env.get("CF_PATTERN_INDEX_HOME");
       Deno.env.set("CF_PATTERN_INDEX_HOME", join(dir, "home"));
@@ -461,6 +480,8 @@ describe("pattern", () => {
         });
       expect(rendered.map((r) => r.json)).toEqual([undefined, undefined]);
       expect(String(rendered[0].value)).toContain("as p-me (v1).");
+      expect(index.calls.find((call) => call.fn === "shareVersion")?.body)
+        .toEqual({ versionId: expect.any(String), channel: "stable" });
       expect(rendered[1].value).toBe(
         `Published under "Sam Lee"; cf pattern unpublish ${entry} stops showing it.`,
       );

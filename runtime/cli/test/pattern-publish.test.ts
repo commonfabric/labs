@@ -306,6 +306,7 @@ describe("pattern-publish", () => {
             getGardenerPrompt: (r) => client.getGardenerPrompt(r),
             publishPattern: (r) => client.publishPattern(r),
             requestListing: (r) => client.requestListing(r),
+            shareVersion: (r) => client.shareVersion(r),
             getPattern: (r) => client.getPattern(r),
             whoami: () => client.whoami(),
             listLineages: () =>
