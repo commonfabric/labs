@@ -321,7 +321,8 @@ async function shareOn(
 }
 
 /**
- * `cf pattern publish`: shares `entry` as `share` does, then names the
+ * `cf pattern publish`: shares `entry` as `share` does but on stable, so it
+ * is findable once checked, then names the
  * person as its author under one of their profiles. It names nothing unless
  * `--as` repeats the profile's name, so whoever runs it has had to read the
  * name it shows, and an agent has to have asked the person. Everything that
@@ -754,7 +755,7 @@ export const pattern = new Command()
       shareOptions(new Command())
         .description(
           "Share a pattern anonymously on beta: anyone with its link " +
-            "(cf pattern link) can open it, under a pseudonym of this " +
+            "(cf pattern link) can reach it, under a pseudonym of this " +
             "pattern alone, never linked to your other patterns or your " +
             "name; cf pattern stable makes it findable. Join first with " +
             "cf index join. It " +
@@ -780,7 +781,7 @@ export const pattern = new Command()
       shareOptions(new Command())
         .description(
           "Publish a pattern under your name: shares it as cf pattern share " +
-            "does, then shows one of your profiles as its author to every " +
+            "does but on stable, findable once checked, then shows one of your profiles as its author to every " +
             "member. Only this pattern is named; your other patterns stay " +
             "anonymous and unlinked. Says what it reveals, and names nothing " +
             "unless --as repeats the name it shows.",

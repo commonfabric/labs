@@ -92,7 +92,7 @@ step checks before it changes anything.
   when there are edits no version keeps; ask before forcing it, since forcing
   loses them.
 - **share** ("it's good, share it"): `cf pattern share <entry>`, anonymous, on
-  **beta**: once the privacy check passes, anyone with its link can open it, and
+  **beta**: once the privacy check passes, it is reachable by its link, and
   nobody finds it. The privacy check may rewrite the files into a general
   version; tell them what changed, then save, so their Weaver runs what was
   shared. `cf pattern unshare <entry>` stops sharing, though a version already
@@ -106,7 +106,8 @@ step checks before it changes anything.
   stable; numbers only move forward.
 - **link** ("a link for Ana"): `cf pattern link <entry>` gives stable, or beta
   when nothing is stable yet; `--beta` when they ask for beta. It names the
-  pattern, never them. Opening a link in Weaver is not built yet; say so.
+  pattern, not them, unless they published it under their name. Opening a link
+  in Weaver is not built yet; say so.
 - **open**: getting a pattern into a folder, with commands that already exist.
   `cf` reads paths from the folder the session started in, `my-patterns/`, so a
   pattern's folder is `<name>/`.

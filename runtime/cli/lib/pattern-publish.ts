@@ -1,9 +1,10 @@
 /**
  * `cf pattern share`: compile a pattern on disk, ask the index's privacy
  * question about it locally, rewrite it into a generalized version when the
- * answer is no, record it in the index, and ask for it to be shared
- * anonymously (listed under its lineage's pseudonym). `cf pattern publish`
- * runs the same steps before naming its author.
+ * answer is no, record it in the index, and share it anonymously under its
+ * lineage's pseudonym: on beta, reachable by its link only, until
+ * `cf pattern stable` makes it findable. `cf pattern publish` runs the same
+ * steps on stable, findable once checked, before naming its author.
  *
  * The person rarely reads this output; their agent does. So every step says
  * what it did in a line, the `--json` report carries the same, and nothing
@@ -88,9 +89,10 @@ export interface PublishOptions {
   slot?: string;
 
   /**
-   * The channel to share on: `beta` opens by link only, `stable` is
-   * findable once checked. Needs a version (a slot) to name; without one,
-   * or without this, the share asks for a listing, which is stable.
+   * The channel to share on: `beta` is reachable by link only, `stable` is
+   * findable once checked. Needs a version (a slot) to name. Without one,
+   * `beta` shares nothing and says so; `stable`, or no channel, asks for a
+   * listing, which is stable.
    */
   channel?: PatternIndexChannel;
 }
@@ -181,7 +183,8 @@ export type LocalCheckReport =
 export type ListingReport =
   | {
     status: "requested";
-    listing: PatternIndexListing;
+    /** Absent when the index answered none, as for one already shared. */
+    listing?: PatternIndexListing;
 
     /** The channel it was shared on, when one was asked for. */
     channel?: PatternIndexChannel;
@@ -444,7 +447,7 @@ export async function publishPatternFromDisk(
       const answer = await deps.client.shareVersion({ versionId, channel });
       return {
         status: "requested",
-        listing: answer.listing ?? "pending",
+        ...(answer.listing === undefined ? {} : { listing: answer.listing }),
         channel,
         changed: answer.changed,
       };
@@ -479,7 +482,7 @@ export async function publishPatternFromDisk(
     localCheck,
     listing,
     next: listing.status === "capped"
-      ? `Run cf pattern share ${options.entry} again once the limit resets to share it. Meanwhile ${
+      ? `Run the same command again once the limit resets to share it. Meanwhile ${
         tryIt(response.patternId)
       }`
       : tryIt(response.patternId),
@@ -733,22 +736,26 @@ async function requestShare(
 }
 
 /** What a share to beta stands at, to the author, in a clause. */
-const betaMeaning = (listing: PatternIndexListing): string => {
+const betaMeaning = (listing: PatternIndexListing | undefined): string => {
   switch (listing) {
     case "passed":
-      return "anyone with its link (cf pattern link) can open it; nobody finds it until cf pattern stable";
+      return "reachable by its link (cf pattern link); nobody finds it until cf pattern stable";
     case "held":
       return "held: the index found something identifying; see cf pattern mine";
     case "error":
       return "error: the check failed to run and waits for an admin re-run";
     default:
-      return "once the index's privacy check passes, anyone with its link (cf pattern link) can open it; nobody finds it until cf pattern stable";
+      return "once the index's privacy check passes, it is reachable by its link (cf pattern link); nobody finds it until cf pattern stable";
   }
 };
 
 /** What a listing state means to the author, in a clause. */
-const listingMeaning = (listing: PatternIndexListing): string => {
+const listingMeaning = (
+  listing: PatternIndexListing | undefined,
+): string => {
   switch (listing) {
+    case undefined:
+      return "shared";
     case "pending":
       return "checking: the index's privacy check is reading it";
     case "passed":
@@ -830,7 +837,9 @@ export const publishReportLines = (report: PublishReport): string[] => {
     case "requested":
       lines.push(
         listing.changed === false
-          ? "Already shared: where it is did not change (cf pattern link says where)."
+          ? listing.listing === "pending"
+            ? "Already being checked: where it goes did not change."
+            : "Already shared: where it is did not change (cf pattern link says where)."
           : listing.channel === "beta"
           ? `Beta: ${betaMeaning(listing.listing)}.`
           : `Listing: ${listingMeaning(listing.listing)}.`,

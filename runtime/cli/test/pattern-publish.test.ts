@@ -313,16 +313,25 @@ describe("pattern-publish", () => {
     });
 
     it("says where it is did not change when sharing on beta a source already stable", async () => {
-      const deps = depsWith(scripted([PASS, PASS], []));
-      await publishedReport(
+      const deps = depsWith(scripted([PASS, PASS, PASS], []));
+      const first = await publishedReport(
         { entry, slot: "cf-path:bins", channel: "stable" },
         deps,
       );
+      const checking = await publishedReport(
+        { entry, slot: "cf-path:bins", channel: "beta" },
+        deps,
+      );
+      index.setListing(first.patternId, "passed");
       const again = await publishedReport(
         { entry, slot: "cf-path:bins", channel: "beta" },
         deps,
       );
 
+      expect(checking.listing).toMatchObject({ changed: false });
+      expect(publishReportLines(checking).join("\n")).toContain(
+        "Already being checked: where it goes did not change.",
+      );
       expect(again.listing).toMatchObject({ changed: false });
       const text = publishReportLines(again).join("\n");
       expect(text).toContain("Already shared: where it is did not change");
