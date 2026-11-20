@@ -731,3 +731,30 @@ describe("a slot no evaluation bound", () => {
     }
   });
 });
+
+describe("a binding's state that the pattern computes", () => {
+  it("binds the slot of a binding whose state is an output of the pattern to that output, with the output's inputs", async () => {
+    // The state's `doubled` is the interim output 0: a value computed in
+    // memory, at no stored position. The slot takes the label of the
+    // output (PL §4.1, `SlotBinding`).
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("binding-output"),
+      { n: 2, log: [] },
+      { transactions: recorder },
+    );
+    const begun = recorder.changed.length;
+    instance.send(bindingOf(instance, "bump"), {});
+    const writes = recorder.changed.slice(begun)
+      .flatMap(({ writes }) => writes ?? [])
+      .filter(({ record }) => "body" in record);
+    expect(writes.length).toBeGreaterThan(0);
+    for (const write of writes) {
+      expect(write.slots[1]).toEqual({ output: 0 });
+      expect(write.outputs?.[0]?.slots[0]).toEqual({
+        chain: [{ doc: instance.argument, path: ["n"] }],
+        observes: "value",
+      });
+    }
+  });
+});

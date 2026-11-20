@@ -632,7 +632,12 @@ type Bound =
   | { observes: string; at: (Position | Ref)[] }
   | { upstream: { collection: number; keys: [number, string][] } }
   /** A constant of the plan, such as a literal a binding gives its state. */
-  | { constant: true };
+  | { constant: true }
+  /**
+   * An output of the pattern, such as the value a binding gives its state
+   * that the pattern computes: a value in memory, at no stored position.
+   */
+  | { output: number };
 
 /**
  * The slots that each cone instance last bound, by the instance's name
@@ -7288,6 +7293,19 @@ export class Instance {
         parts.push(`${slot}:constant`);
         continue;
       }
+      if ("output" in bound) {
+        const { cone } = this.plan.outputs[bound.output];
+        const upstream = this.#inputsOf(cone, this.#keysFor(cone, []));
+        if (upstream !== undefined) {
+          for (const at of upstream.positions ?? []) positions.push(at);
+        }
+        parts.push(
+          `${slot}>${bound.output}<${
+            upstream === undefined ? "" : this.#idOf(upstream)
+          }>`,
+        );
+        continue;
+      }
       if ("upstream" in bound) {
         const { collection, keys } = bound.upstream;
         const ids = this.#elementCones(collection).map((cone) => {
@@ -7857,8 +7875,17 @@ export class Instance {
     bound: Bound,
     outputs: Record<number, PlanInputs>,
     depth: number,
+    keys: [number, string][] = [],
   ): SlotBinding {
     if ("constant" in bound) return { constant: true };
+    if ("output" in bound) {
+      outputs[bound.output] ??= this.#namedInputs(
+        bound.output,
+        keys,
+        depth + 1,
+      );
+      return { output: bound.output };
+    }
     if ("upstream" in bound) {
       const { collection, keys } = bound.upstream;
       const output = this.#upstreamOutput(
@@ -7918,7 +7945,7 @@ export class Instance {
             ) ??
             this.#otherConeBound(slot, keys);
           if (bound !== undefined) {
-            into[slot] = this.#bindingOf(slot, bound, outputs, depth);
+            into[slot] = this.#bindingOf(slot, bound, outputs, depth, keys);
             continue;
           }
           const source = this.#sourceBinding(slot, byCollection) ??
@@ -7937,7 +7964,7 @@ export class Instance {
           if (slots[slot] !== undefined) continue;
           const bound = first((inputs) => inputs.slots.get(slot));
           if (bound !== undefined) {
-            slots[slot] = this.#bindingOf(slot, bound, outputs, depth);
+            slots[slot] = this.#bindingOf(slot, bound, outputs, depth, keys);
           } else if (source !== undefined) {
             const found = this.#sourceBinding(slot, byCollection, [source]);
             if (found !== undefined) slots[slot] = found;
@@ -8569,12 +8596,18 @@ export class Instance {
         : host.v(found);
       this.bindSlot(host, slot, from, found);
       // A literal the binding gives its state is a constant of the plan:
-      // the slot contributes no label, where it read nothing else.
+      // the slot contributes no label, where it read nothing else. A value
+      // the pattern computes is an output, which read no stored position.
       const held = host.bound.get(slot);
       if (
-        place.constant !== undefined && held !== undefined && "at" in held &&
-        held.at.length === 0
-      ) host.bound.set(slot, { constant: true });
+        held !== undefined && "at" in held && held.at.length === 0
+      ) {
+        if (place.constant !== undefined) {
+          host.bound.set(slot, { constant: true });
+        } else if (place.output !== undefined) {
+          host.bound.set(slot, { output: place.output });
+        }
+      }
       if (this.gives(read.observes, state, read.path)) continue;
       // An entry that yields nothing places nothing: an entry below a
       // path that is absent does not make a container there (ES §2.4,
