@@ -814,6 +814,16 @@ describe("write records the runtime instantiates with the option on", () => {
     expect(new Set(minted(within.label)).size).toBe(2);
   });
 
+  it("binds the slot of a literal a handler binding gives its state as a constant, and commits", async () => {
+    const { refused } = await commitWithOptionOn(
+      "constant-state",
+      { title: "t" },
+      [],
+      0,
+    );
+    expect(refused).toEqual([]);
+  });
+
   it("binds the slots of a `reduce` over an array of plain values in place a cell holds, and commits", async () => {
     const { refused, label } = await commitWithOptionOn(
       "reduce-entries",

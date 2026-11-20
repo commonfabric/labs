@@ -282,11 +282,15 @@ export const instantiatePlanLabels = (
    */
   const slotLabel = (
     binding: Exclude<SlotBinding, { output: number }>,
+    slot: number,
   ): InternedLabel => {
     if ("staged" in binding) return stagedLabel(binding.staged);
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+    // A constant of the plan, as a `const` node is, contributes nothing.
+    if ("constant" in binding) return table.empty;
     const { chain, observes } = binding;
     if (chain.length === 0) {
-      throw new PlanLabelError("a slot is bound to an empty chain");
+      throw new PlanLabelError(`slot ${slot} is bound to an empty chain`);
     }
     const clauses: CfcConfClause[] = [];
     for (const link of chain.slice(0, -1)) {
@@ -409,7 +413,7 @@ export const instantiatePlanLabels = (
           const label = self.outputLabel(binding.output);
           return label === NEUTRAL ? table.empty : label;
         }
-        if (binding !== undefined) return slotLabel(binding);
+        if (binding !== undefined) return slotLabel(binding, slot);
         if (enclosing !== undefined) return enclosing.slotLabel(slot);
         throw new TemplateInstantiationError(`slot ${slot} has no binding`);
       },

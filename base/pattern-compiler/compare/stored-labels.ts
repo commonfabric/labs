@@ -483,6 +483,9 @@ export const checkWrites = (
       const bindingLabel = (binding: SlotBinding, from: Place): Label => {
         if ("output" in binding) return outputLabel(binding.output, from);
         if ("staged" in binding) return consumedAt(tx, binding.staged);
+        if ("constant" in binding) {
+          return { confidentiality: [], integrity: [] };
+        }
         const { chain, observes } = binding;
         if (chain.length === 0) throw new NotEvaluated("an empty chain");
         const links = chain.slice(0, -1).map((link) =>

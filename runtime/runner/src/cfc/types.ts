@@ -868,7 +868,12 @@ export type SlotBinding =
     readonly observes: "value" | "shape" | "followRef";
   }
   | { readonly staged: CfcAddress }
-  | { readonly output: number };
+  | { readonly output: number }
+  /**
+   * A slot whose value is a constant of the plan, such as a literal a
+   * handler binding gives its state: it contributes no label.
+   */
+  | { readonly constant: true };
 
 /** The bindings of a template's slots, by index into the plan's slots. */
 export type SlotBindings = { readonly [slot: number]: SlotBinding };

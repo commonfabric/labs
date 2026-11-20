@@ -630,7 +630,9 @@ type Writer = (context: Context) => void;
  */
 type Bound =
   | { observes: string; at: (Position | Ref)[] }
-  | { upstream: { collection: number; keys: [number, string][] } };
+  | { upstream: { collection: number; keys: [number, string][] } }
+  /** A constant of the plan, such as a literal a binding gives its state. */
+  | { constant: true };
 
 /**
  * The slots that each cone instance last bound, by the instance's name
@@ -7262,6 +7264,10 @@ export class Instance {
     const positions: Address[] = [];
     const slots = [...inputs.slots].sort(([a], [b]) => a - b);
     for (const [slot, bound] of slots) {
+      if ("constant" in bound) {
+        parts.push(`${slot}:constant`);
+        continue;
+      }
       if ("upstream" in bound) {
         const { collection, keys } = bound.upstream;
         const ids = this.#elementCones(collection).map((cone) => {
@@ -7807,6 +7813,7 @@ export class Instance {
     outputs: Record<number, PlanInputs>,
     depth: number,
   ): SlotBinding {
+    if ("constant" in bound) return { constant: true };
     if ("upstream" in bound) {
       const { collection, keys } = bound.upstream;
       const output = this.#upstreamOutput(
@@ -8514,6 +8521,13 @@ export class Instance {
         ? this.handleOf(found, undefined, slot)
         : host.v(found);
       this.bindSlot(host, slot, from, found);
+      // A literal the binding gives its state is a constant of the plan:
+      // the slot contributes no label, where it read nothing else.
+      const held = host.bound.get(slot);
+      if (
+        place.constant !== undefined && held !== undefined && "at" in held &&
+        held.at.length === 0
+      ) host.bound.set(slot, { constant: true });
       if (this.gives(read.observes, state, read.path)) continue;
       // An entry that yields nothing places nothing: an entry below a
       // path that is absent does not make a container there (ES §2.4,

@@ -32,7 +32,9 @@ export type Address = { doc: string; path: readonly string[] };
 export type SlotBinding =
   | { chain: Address[]; observes: string }
   | { staged: Address }
-  | { output: number };
+  | { output: number }
+  /** A constant of the plan, which contributes no label. */
+  | { constant: true };
 
 /** The bindings of the slots a template reaches, by the slot's index. */
 export type SlotBindings = Record<number, SlotBinding>;

@@ -549,6 +549,7 @@ export class RuntimeTransactions implements TransactionHooks {
   /** Helper for `#slots()`, for one binding. */
   #binding(binding: SlotBinding): RuntimeSlotBinding {
     if ("output" in binding) return { output: binding.output };
+    if ("constant" in binding) return { constant: true };
     if ("staged" in binding) {
       return { staged: this.#cfcAddress(binding.staged) };
     }
