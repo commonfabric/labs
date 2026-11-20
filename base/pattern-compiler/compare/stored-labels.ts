@@ -126,7 +126,7 @@ export type LabelPlan = {
   stateCells?: { first?: { cone: number; write: number } }[];
   collections?: {
     membership?: Template;
-    source: { slot?: number; collection?: number };
+    source: { slot?: number; collection?: number; output?: number };
   }[];
   templates?: Template[];
   bindings?: { handler?: { body?: number } }[];
@@ -670,6 +670,9 @@ export const checkWrites = (
           }
           if (record.source.slot !== undefined) {
             return slotLabel(record.source.slot, from);
+          }
+          if (record.source.output !== undefined) {
+            return outputLabel(record.source.output, from);
           }
           throw new NotEvaluated(`collection ${collection} iterates nothing`);
         }

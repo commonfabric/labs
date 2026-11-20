@@ -642,7 +642,14 @@ type Bound =
    * An output of the pattern, such as the value a binding gives its state
    * that the pattern computes: a value in memory, at no stored position.
    */
-  | { output: number };
+  | { output: number }
+  /**
+   * The slot a binding takes a member of its state from, with the path
+   * below it, where the handler's read of the member went through no
+   * stored position: the index of an element, or an element of the result
+   * of another per-element construct.
+   */
+  | { place: { slot: number; rest: string[] } };
 
 /**
  * The slots that each cone instance last bound, by the instance's name
@@ -7454,6 +7461,13 @@ export class Instance {
         );
         continue;
       }
+      if ("place" in bound) {
+        // The state of a handler's binding: no cone instance binds one.
+        parts.push(
+          `${slot}@${bound.place.slot}/${bound.place.rest.join("/")}`,
+        );
+        continue;
+      }
       if ("upstream" in bound) {
         const { collection, keys } = bound.upstream;
         const ids = this.#elementCones(collection).map((cone) => {
@@ -7996,6 +8010,28 @@ export class Instance {
     }));
   }
 
+  /**
+   * The output whose array a collection iterates, through the collections
+   * it is over whose membership is that of their source: a `filter`, whose
+   * membership template is the fold over its own elements.
+   */
+  #sourceOutput(collection: number): number | undefined {
+    const templates = this.plan.templates ?? [];
+    let at = collection;
+    for (let depth = 0; depth < 64; depth++) {
+      const { membership, source } = this.plan.collections[at];
+      const expanded = membership?.op === "shared"
+        ? templates[membership.template]
+        : membership;
+      if (expanded?.op !== "fold" || expanded.collection !== at) {
+        return undefined;
+      }
+      if (source.collection === undefined) return source.output;
+      at = source.collection;
+    }
+    return undefined;
+  }
+
   /** The folded collections whose innermost enclosing one is `collection`. */
   #innerFolds(collection: number): number[] {
     let found = this.#innerFoldsOf.get(collection);
@@ -8136,6 +8172,16 @@ export class Instance {
       );
       return { output: bound.output };
     }
+    if ("place" in bound) {
+      return this.#placeBinding(
+        bound.place.slot,
+        bound.place.rest,
+        this.plan.slots[slot].observes,
+        outputs,
+        depth,
+        keys,
+      ) ?? { chain: [], observes: this.plan.slots[slot].observes };
+    }
     if ("upstream" in bound) {
       const { collection, keys } = bound.upstream;
       const output = this.#upstreamOutput(
@@ -8150,7 +8196,8 @@ export class Instance {
     }
     let chain = this.#addressesOf(bound.at);
     if (chain.length === 0) {
-      const source = this.#sourceReadBinding(slot, keys);
+      const source = this.#sourceReadBinding(slot, keys) ??
+        this.#indexBinding(slot, keys);
       if (source !== undefined) return source;
     }
     // Whether a `wish` failed is decided by its resolution, as its outcome
@@ -8170,6 +8217,82 @@ export class Instance {
       );
     }
     return this.#chainsOf(chain, bound.observes);
+  }
+
+  /**
+   * What a slot of root `index` is bound to: the index of an element is at
+   * no stored position and depends on the order of what the collection
+   * iterates, so the slot reads, in the class `enumeration`, the stored
+   * array the collection is over, through each `map` between them. A
+   * collection that a `filter` or a `flatMap` is on the way to has an index
+   * that depends on what that construct keeps: the slot stays unbound, and
+   * the preparation refuses the commit.
+   */
+  #indexBinding(
+    slot: number,
+    keys: readonly [number, string][],
+  ): SlotBinding | undefined {
+    const { root } = this.plan.slots[slot];
+    if (root.kind !== "index") return undefined;
+    let at = root.collection ?? -1;
+    // A chain of collections is as long as the plan is deep.
+    for (let depth = 0; depth < 64; depth++) {
+      const record = this.plan.collections[at];
+      if (record === undefined || record.construct !== "map") return undefined;
+      if (record.source.collection === undefined) break;
+      at = record.source.collection;
+    }
+    const source = this.plan.collections[at].source.slot;
+    if (source === undefined) return undefined;
+    const found = this.#sourceBinding(source, new Map(keys), [at]);
+    return found === undefined || !("chain" in found)
+      ? undefined
+      : { chain: found.chain, observes: "enumeration" };
+  }
+
+  /**
+   * What a slot of a binding's state is bound to where the handler's read
+   * of it went through no stored position (`Bound.place`): what the slot
+   * the member is taken from reads, at the path below it. An index is bound
+   * as `#indexBinding` binds it. An element is bound to the position it is
+   * at, for a reference or a plain value in place, and to the output of the
+   * upstream element that holds it, for an element of the result of another
+   * per-element construct.
+   */
+  #placeBinding(
+    place: number,
+    rest: readonly string[],
+    observes: string,
+    outputs: Record<number, PlanInputs>,
+    depth: number,
+    keys: [number, string][],
+  ): SlotBinding | undefined {
+    const record = this.plan.slots[place];
+    if (record.root.kind === "index") return this.#indexBinding(place, keys);
+    if (record.root.kind !== "element") return undefined;
+    const bound = this.#elementBound(place, new Map(keys));
+    if (bound === undefined) return undefined;
+    if ("upstream" in bound) {
+      const output = this.#upstreamOutput(
+        bound.upstream.collection,
+        [...record.path, ...rest],
+      );
+      if (output === undefined) return undefined;
+      outputs[output] ??= this.#namedInputs(
+        output,
+        bound.upstream.keys,
+        depth + 1,
+      );
+      return { output };
+    }
+    if (!("at" in bound)) return undefined;
+    const [at] = bound.at;
+    if (!(at instanceof Ref)) return undefined;
+    const chain = this.#addressesOf(
+      [new Ref(at.doc, [...at.path, ...rest])],
+      observes !== "identity",
+    );
+    return chain.length === 0 ? undefined : this.#chainsOf(chain, observes);
   }
 
   /**
@@ -8301,6 +8424,14 @@ export class Instance {
       }
       for (const output of reached.outputs) {
         outputs[output] ??= this.#namedInputs(output, keys, depth + 1);
+      }
+      // A folded collection over the array an output computes iterates
+      // that output, whose inputs the membership is instantiated with.
+      for (const folded of reached.folds.keys()) {
+        const output = this.#sourceOutput(folded);
+        if (output !== undefined) {
+          outputs[output] ??= this.#namedInputs(output, keys, depth + 1);
+        }
       }
       for (const [collection, body] of reached.folds) {
         elements[collection] = this.#foldElements(
@@ -8958,6 +9089,8 @@ export class Instance {
           host.bound.set(slot, { constant: true });
         } else if (place.output !== undefined) {
           host.bound.set(slot, { output: place.output });
+        } else if (place.slot !== undefined) {
+          host.bound.set(slot, { place: { slot: place.slot, rest } });
         }
       }
       if (this.gives(read.observes, state, read.path)) continue;

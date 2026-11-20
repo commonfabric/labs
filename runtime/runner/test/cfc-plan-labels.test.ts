@@ -448,6 +448,24 @@ describe("cfc-plan-labels", () => {
       });
     });
 
+    it("returns the join for a staged address below the target of the write that reads it", async () => {
+      await withSources((_runtime, tx, identity, target) => {
+        tx.recordCfcWritePolicyInput(
+          {
+            ...planWrite(identity, { ...target, path: ["a"] }, 2, target),
+            slots: { 2: { staged: { ...target, path: ["a", "inner"] } } },
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        expect(confidentialityAt(labels, target, "a").sort()).toEqual([
+          "secret-a",
+          "secret-b",
+        ]);
+      });
+    });
+
     it("joins, for a binding read after the transaction wrote the end of its chain, the label staged there with the label of each position below it", async () => {
       await withSources((_runtime, tx, identity, target) => {
         tx.recordCfcWritePolicyInput(
@@ -476,6 +494,80 @@ describe("cfc-plan-labels", () => {
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
         expect(confidentialityAt(labels, target, "b").sort()).toEqual([
+          "secret-a",
+          "secret-b",
+        ]);
+      });
+    });
+
+    it("reads a position of such a binding that the write itself covers as it was stored", async () => {
+      await withSources((_runtime, tx, identity, target) => {
+        tx.recordCfcWritePolicyInput(
+          {
+            ...planWrite(identity, { ...target, path: ["b"] }, 2, target),
+            slots: {
+              2: {
+                chain: [address("of:src-a")],
+                observes: "value",
+                below: [[{ ...target, path: ["b"] }]],
+                staged: true,
+              },
+            },
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        expect(confidentialityAt(labels, target, "b")).toEqual(["secret-a"]);
+      });
+    });
+
+    it("takes as the membership of a collection over the array an output computes the label of that output", async () => {
+      await withSources((runtime, tx, _identity, target) => {
+        // Collection 1 is a `filter` whose membership template is its own
+        // fold: here it iterates output 0, the template of slot 0.
+        const overOutput = runtime.compiledPlans.register(
+          {
+            ...plan,
+            collections: [plan.collections[0], {
+              ...plan.collections[1],
+              source: { output: 0 },
+            }],
+          },
+          "code",
+          runtimeWritePolicyAuthorization,
+        );
+        tx.recordCfcWritePolicyInput(
+          {
+            kind: "plan-write",
+            target: { ...target, path: ["a"] },
+            compiledPattern: overOutput,
+            record: { body: 0, write: 6 },
+            instance: target.id,
+            keys: [],
+            slots: {},
+            elements: {
+              1: {
+                uniform: {
+                  slots: {
+                    3: { chain: [address("of:src-a")], observes: "value" },
+                  },
+                },
+              },
+            },
+            outputs: {
+              0: {
+                slots: {
+                  0: { chain: [address("of:src-b")], observes: "value" },
+                },
+              },
+            },
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        expect(confidentialityAt(labels, target, "a").sort()).toEqual([
           "secret-a",
           "secret-b",
         ]);

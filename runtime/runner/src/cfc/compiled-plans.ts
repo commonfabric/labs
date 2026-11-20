@@ -41,10 +41,14 @@ export interface CompiledPlan {
   readonly templates: readonly Template[];
   readonly collections: readonly {
     readonly membership: Template;
-    /** What the collection iterates: a slot, or another collection. */
+    /**
+     * What the collection iterates: a slot, another collection, or the
+     * array an output computes.
+     */
     readonly source?: {
       readonly slot?: number;
       readonly collection?: number;
+      readonly output?: number;
     };
   }[];
   readonly stateCells: readonly {

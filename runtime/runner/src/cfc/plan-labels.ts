@@ -240,16 +240,39 @@ export const instantiatePlanLabels = (
       );
     }
     // A write covers its path and what is below it: the nearest covered
-    // path at or above the address gives the label.
+    // path at or above the address gives the label. A write above the
+    // address whose own label is being instantiated is passed over: it
+    // read below its target, where the label is that of a write further
+    // up, or the join.
     const documentKey = observedDocumentKey(documentOf(address));
     for (let length = address.path.length; length >= 0; length--) {
       const coveringKey = stringKey([
         documentKey,
         planLabelPathKey(address.path.slice(0, length)),
       ]);
-      if (covering.has(coveringKey)) return labelOfCovered(coveringKey);
+      if (!covering.has(coveringKey)) continue;
+      if (length < address.path.length && inProgress.has(coveringKey)) {
+        continue;
+      }
+      return labelOfCovered(coveringKey);
     }
     return join;
+  };
+
+  /**
+   * Whether the nearest covered path at or above `address` is that of a
+   * write whose label is being instantiated.
+   */
+  const coveredInProgress = (address: CfcAddress): boolean => {
+    const documentKey = observedDocumentKey(documentOf(address));
+    for (let length = address.path.length; length >= 0; length--) {
+      const coveringKey = stringKey([
+        documentKey,
+        planLabelPathKey(address.path.slice(0, length)),
+      ]);
+      if (covering.has(coveringKey)) return inProgress.has(coveringKey);
+    }
+    return false;
   };
 
   /** The label one journaled observation of `address` consumed. */
@@ -304,7 +327,13 @@ export const instantiatePlanLabels = (
       address: CfcAddress,
       observes: ReadObservationShape,
     ): { confidentiality: readonly CfcConfClause[]; integrity: CfcAtom[] } => {
-      if (binding.staged !== true || !env.wrote(address)) {
+      // A position the write being instantiated covers is read as it was
+      // stored: what the write itself stages there adds nothing to its own
+      // label.
+      if (
+        binding.staged !== true || !env.wrote(address) ||
+        coveredInProgress(address)
+      ) {
         return observed(address, observes);
       }
       const staged = stagedLabel(address);
@@ -543,6 +572,11 @@ export const instantiatePlanLabels = (
             ? self.membership(source.collection)
             : source?.slot !== undefined
             ? self.slotLabel(source.slot)
+            // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+            // A collection over the array an output computes iterates
+            // that output: its membership is the output's label.
+            : source?.output !== undefined
+            ? self.outputLabel(source.output)
             : undefined;
           if (result === undefined) {
             throw new TemplateInstantiationError(

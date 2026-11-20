@@ -77,6 +77,51 @@ describe("stored-labels", () => {
     });
   });
 
+  describe("soundnessOfScenario() on a fixture whose commits were refused", () => {
+    /** The refusals and the findings of each scenario of a fixture. */
+    const ran = async (fixture: string) => {
+      const refusals: string[] = [];
+      const found: string[] = [];
+      let dependent = 0;
+      for (const scenario of await fixtureScenarios(fixture)) {
+        const name = `${scenario.fixture} (${scenario.scenario})`;
+        const { soundness, refused } = await soundnessOfScenario(
+          name,
+          scenario.artifact,
+          scenario.artifacts,
+          scenario.argument,
+          scenario.events,
+        );
+        for (const reason of refused) {
+          refusals.push(reason.slice(reason.lastIndexOf(": ") + 2));
+        }
+        for (const line of lines(name, soundness)) found.push(line);
+        dependent += soundness?.dependent ?? 0;
+      }
+      return { refusals, found, dependent };
+    };
+
+    // The index of an element, in an output and in the state of a handler
+    // bound once per element, depends on the order of the collection's
+    // source and is at no stored position.
+    it("commits every transaction of `index-nodes`, and stores the clause of the array for a value that reads an index", async () => {
+      const { refusals, found, dependent } = await ran("index-nodes");
+
+      expect(refusals).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThan(0);
+    });
+
+    // A handler that reads a list and then writes one of its records reads
+    // its own target before the write.
+    it("commits every transaction of `keyed`, whose handler writes a record it read through the list that holds it", async () => {
+      const { refusals, found } = await ran("keyed");
+
+      expect(refusals).toEqual([]);
+      expect(found).toEqual([]);
+    });
+  });
+
   // `fixtures/remove-shift.tsx`: a word pushed from the event, the input
   // `note` pushed after it, and the removal of the first, which reads the
   // list and writes back the rest.
