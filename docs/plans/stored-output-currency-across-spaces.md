@@ -379,17 +379,30 @@ What to weigh, once there are numbers:
   flow Contextual Flow Control must rule on is settled through
   `docs/development/cfc-spec-correspondence.md` before step 5.
 
-## Decisions owed
+## Decisions
+
+Two are taken:
 
 1. **The source's store keeps a durable list of the spaces that read each
-   of its documents.** Today a source sees a reader only while a session is
-   open. Without the list, a reading space can still pull at each judgment,
-   which is exact for one hop on a cold demand, and loses both the trigger
-   for a live session and every chain.
+   of its documents.** A source otherwise sees a reader only while a
+   session is open, and without the list a reading space could pull at each
+   judgment, which is exact for one hop on a cold demand, and would have
+   neither the trigger for a live session nor any chain.
 2. **Memory servers exchange triggers and pulls for spaces no loop
-   serves.** That is a new surface between owners, under the service
-   identity. The alternative is to keep a loop for every space with a
-   registered reader, which is the cost this index exists to remove.
+   serves**, under the service identity. Keeping a loop for every space
+   with a registered reader is the cost this index exists to remove.
+
+Three roles are kept apart in the code so that the second decision can be
+revisited. What is true of an instance stays with its source, whose store
+alone knows its sequence numbers and whether a producer is stale. What a
+reading space knows of its sources stays in its own store, where a judgment
+reads it with the slices and the demand rows. Delivery, which is the list
+of who reads what, the trigger's fan-out and its retries, sits behind an
+interface of its own, so a service between spaces can take it over without
+a change to the other two.
+
+One is owed:
+
 3. **The demand rule of OW35 (b)**, as above.
 
 ## Not worked out
