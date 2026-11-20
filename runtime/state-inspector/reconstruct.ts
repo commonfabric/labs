@@ -368,16 +368,12 @@ function resolveBranchRow(
 }
 
 /**
- * Reconstruct a patched document WITHIN a single branch, replicating the
- * engine's `reconstructPatchedDocument`: pick a base — the latest `snapshot`
- * (if present and at/after the latest `set`/`delete`) else the latest
- * `set`/`delete` at/before `(rowSeq, rowOpIndex)` — then apply that branch's
- * `patch` rows strictly after the base up to the cut. A `set`/snapshot decodes
- * to its document; a `delete` (or no base) starts from `{}`. No cross-branch
- * composition: a child-local patch with no child base starts from `{}`, exactly
- * as the runtime reads it (NOT the inherited parent value).
+ * Reconstructs a patched document from its nearest set, delete, or snapshot.
+ * Branches with no local base inherit the parent's document at their fork
+ * point. Patches then apply from that ancestor through the requested branch,
+ * bounded by each fork and the requested revision.
  */
-function reconstructWithinBranch(
+function reconstructBranchDocument(
   space: SpaceDb,
   branch: string,
   scope: string,
@@ -386,77 +382,90 @@ function reconstructWithinBranch(
   rowOpIndex: number,
   options: { exact?: boolean } = {},
 ): StoredDocument {
-  // Tuple bounds follow the revision index's order, so SQLite can seek to
-  // the requested range instead of filtering the instance's entire history.
-  const base = space.get<RevRow>(
-    `SELECT seq, op_index, op, data FROM revision
-     WHERE branch = ? AND id = ? AND scope_key = ? AND op IN ('set','delete')
-       AND (seq, op_index) <= (?, ?)
-     ORDER BY seq DESC, op_index DESC LIMIT 1`,
-    branch,
-    id,
-    scope,
-    rowSeq,
-    rowOpIndex,
-  );
-
-  let doc: StoredDocument = base && base.op === "set"
-    ? storedDocument(base.data)
-    : {};
-  let baseSeq = base ? base.seq : 0;
-  let baseOpIndex = base ? base.op_index : -1;
-
-  // Prefer a snapshot base when it's at/after the set/delete base — the engine
-  // does this for speed AND it future-proofs against any revision compaction
-  // behind a snapshot. The snapshot is keyed by seq only and represents the full
-  // materialized document at that seq, so patches strictly AFTER its seq apply.
-  // An exact-row reconstruction wants the state after one row, not after its
-  // whole commit, so it takes no snapshot at the row's own seq (the engine's
-  // `readRevision` draws the same line).
-  if (hasTable(space, "snapshot")) {
-    const snap = space.get<{ seq: number; value: string }>(
-      options.exact
-        ? `SELECT seq, value FROM snapshot
-           WHERE branch = ? AND id = ? AND scope_key = ? AND seq < ?
-           ORDER BY seq DESC LIMIT 1`
-        : `SELECT seq, value FROM snapshot
-           WHERE branch = ? AND id = ? AND scope_key = ? AND seq <= ?
-           ORDER BY seq DESC LIMIT 1`,
+  let doc: StoredDocument = {};
+  const pending: RevRow[][] = [];
+  const chain = branchReadChain(space, branch, rowSeq);
+  for (const [index, link] of chain.entries()) {
+    const branch = link.branch;
+    const rowSeq = link.atSeq;
+    const cutOpIndex = index === 0 ? rowOpIndex : MAX_SEQ;
+    // Tuple bounds follow the revision index's order, so SQLite can seek to
+    // the requested range instead of filtering the instance's entire history.
+    const base = space.get<RevRow>(
+      `SELECT seq, op_index, op, data FROM revision
+       WHERE branch = ? AND id = ? AND scope_key = ? AND op IN ('set','delete')
+         AND (seq, op_index) <= (?, ?)
+       ORDER BY seq DESC, op_index DESC LIMIT 1`,
       branch,
       id,
       scope,
       rowSeq,
+      cutOpIndex,
     );
-    if (snap && snap.seq >= baseSeq) {
-      // A snapshot is a materialized document, held to the same root rule as
-      // any other. Decoding it without that check lets a malformed one through
-      // for later patches to rebuild a valid-looking document over.
-      doc = storedDocument(snap.value);
-      baseSeq = snap.seq;
-      baseOpIndex = MAX_SEQ; // patches with seq > snapshot.seq only
-    }
-  }
 
-  const patches = space.all<RevRow>(
-    `SELECT seq, op_index, op, data FROM revision
-     WHERE branch = ? AND id = ? AND scope_key = ? AND op = 'patch'
-       AND (seq, op_index) > (?, ?)
-       AND (seq, op_index) <= (?, ?)
-     ORDER BY seq ASC, op_index ASC`,
-    branch,
-    id,
-    scope,
-    baseSeq,
-    baseOpIndex,
-    rowSeq,
-    rowOpIndex,
-  );
-  for (const p of patches) {
-    // `applyPatchToDocument`, not bare `applyPatch`: a root op can replace the
-    // document with any value, and the engine rejects at the FIRST patch that
-    // leaves a non-document. Checking only the final result would let a later
-    // patch restore an object and launder the invalid step before it.
-    doc = applyPatchToDocument(doc, storedPatchList(p.data));
+    if (base) doc = base.op === "set" ? storedDocument(base.data) : {};
+    let hasBase = base !== undefined;
+    let baseSeq = base ? base.seq : 0;
+    let baseOpIndex = base ? base.op_index : -1;
+
+    // Prefer a snapshot base when it's at/after the set/delete base — the engine
+    // does this for speed AND it future-proofs against any revision compaction
+    // behind a snapshot. The snapshot is keyed by seq only and represents the full
+    // materialized document at that seq, so patches strictly AFTER its seq apply.
+    // An exact-row reconstruction wants the state after one row, not after its
+    // whole commit, so it takes no snapshot at the row's own seq (the engine's
+    // `readRevision` draws the same line).
+    if (hasTable(space, "snapshot")) {
+      const snap = space.get<{ seq: number; value: string }>(
+        options.exact && index === 0
+          ? `SELECT seq, value FROM snapshot
+             WHERE branch = ? AND id = ? AND scope_key = ? AND seq < ?
+             ORDER BY seq DESC LIMIT 1`
+          : `SELECT seq, value FROM snapshot
+             WHERE branch = ? AND id = ? AND scope_key = ? AND seq <= ?
+             ORDER BY seq DESC LIMIT 1`,
+        branch,
+        id,
+        scope,
+        rowSeq,
+      );
+      if (snap && snap.seq >= baseSeq) {
+        // A snapshot is a materialized document, held to the same root rule as
+        // any other. Decoding it without that check lets a malformed one through
+        // for later patches to rebuild a valid-looking document over.
+        doc = storedDocument(snap.value);
+        hasBase = true;
+        baseSeq = snap.seq;
+        baseOpIndex = MAX_SEQ; // patches with seq > snapshot.seq only
+      }
+    }
+
+    const patches = space.all<RevRow>(
+      `SELECT seq, op_index, op, data FROM revision
+       WHERE branch = ? AND id = ? AND scope_key = ? AND op = 'patch'
+         AND (seq, op_index) > (?, ?)
+         AND (seq, op_index) <= (?, ?)
+       ORDER BY seq ASC, op_index ASC`,
+      branch,
+      id,
+      scope,
+      baseSeq,
+      baseOpIndex,
+      rowSeq,
+      cutOpIndex,
+    );
+
+    pending.push(patches);
+    if (hasBase) break;
+  }
+  for (const patches of pending.reverse()) {
+    for (const p of patches) {
+      // `applyPatchToDocument`, not bare `applyPatch`: a root op can replace the
+      // document with any value, and the engine rejects at the FIRST patch that
+      // leaves a non-document. Checking only the final result would let a later
+      // patch restore an object and launder the invalid step before it.
+      doc = applyPatchToDocument(doc, storedPatchList(p.data));
+    }
   }
   return doc;
 }
@@ -490,7 +499,7 @@ export function reconstructRevision(
   }
   if (row.op === "delete") return undefined;
   if (row.op === "set") return storedDocument(row.data);
-  return reconstructWithinBranch(
+  return reconstructBranchDocument(
     space,
     branch,
     scope,
@@ -529,7 +538,7 @@ export type AbsenceStatus = Exclude<ReconstructOutcome["status"], "present">;
  * read path (`read()` → `readRowForBranch` → `reconstructPatchedDocument` in
  * `runtime/memory/v2`), proven identical by `reconstruct-parity.test.ts` which
  * drives the real engine. Branch inheritance resolves the visible ROW (not a
- * merged log); patched reconstruction stays within the resolved branch.
+ * merged log); a patch without a local base inherits at the fork point.
  *
  * A decode failure is returned as `undecodable` rather than thrown, so that one
  * corrupt entity does not abort a walk over a whole space.
@@ -564,8 +573,8 @@ export function reconstructOutcome(
     // error, naming the shape it found.
     const document = row.op === "set"
       ? storedDocument(row.data)
-      // patch: reconstruct within the branch that owns the resolved row.
-      : reconstructWithinBranch(
+      // Reconstruct from the branch that owns the resolved row.
+      : reconstructBranchDocument(
         space,
         rb,
         scope,

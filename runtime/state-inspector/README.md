@@ -102,8 +102,8 @@ failure mode it guards against:
 State-at-`(branch, seq)` reconstruction **replicates the engine's read path**
 (`read()` → `readRowForBranch` → `reconstructPatchedDocument` in
 `runtime/memory/v2`): it resolves the visible row with branch inheritance,
-reconstructs within the resolved branch from the latest
-`set`/`delete`/`snapshot` base, and applies patches through the server's own
+reconstructs from the latest `set`/`delete`/`snapshot` base or the inherited
+parent document at the fork point, and applies patches through the server's own
 `applyPatch` (`@commonfabric/memory/v2/patch`) — not a re-implementation, since
 that dialect has a custom `splice` op and specific add/missing-key semantics a
 hand-rolled applier gets wrong. Stored payloads go through the engine's rule
@@ -122,7 +122,9 @@ later patch restore an object and launder the invalid step before it. Every
 boundary a reconstruction crosses is checked where the engine checks it: base,
 snapshot, and each patch in turn. `reconstruct-parity.test.ts` **drives the real
 engine** and asserts `reconstructDocument == engine.read()` across branch
-inheritance, child-local patches, tombstones, patch-first, and snapshots.
+inheritance, child-local patches, tombstones, patch-first, and snapshots. A
+branch-local patch with no local set, delete, or snapshot starts from the parent
+document at the fork point; later parent writes remain outside the fork.
 Conflict and scope analysis likewise reuse the engine's exported
 `patchOverlapsRead` / `resolveScopeKey` rather than re-deriving them.
 
