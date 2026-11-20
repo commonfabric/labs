@@ -28,9 +28,10 @@ import { type Engine, serverSeq } from "./engine.ts";
 export { ANY_INSTANCE };
 
 /**
- * What the index holds about a slice's stored outputs: `0` clean, `1` a piece
- * that writes one of its inputs is marked or unrecorded, `2` one of its own
- * rows is behind its document or the slice was not vouched for.
+ * What the index holds about a slice's stored outputs: `0` clean, `1` one of
+ * its inputs is stale, which is a computed instance whose writer is marked,
+ * is unrecorded, or no longer vouches for it, `2` one of its own rows is
+ * behind its document or the slice was not vouched for.
  */
 export type CurrencyMark = 0 | 1 | 2;
 

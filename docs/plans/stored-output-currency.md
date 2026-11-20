@@ -123,8 +123,10 @@ origin.
 
 ### How a slice becomes marked
 
-A mark is `0` clean, `1` a piece that writes one of its inputs is marked, or
-`2` one of its own rows is behind.
+A mark is `0` clean, `1` one of its inputs is stale, or `2` one of its own
+rows is behind or the slice was not vouched for. An input is stale while a
+slice that decides it is marked, and in the two cases without a marked
+producer that "How a mark is cleared" lists.
 
 When a record is stored, each read row and each vouch row takes its
 instance's head sequence number if every revision of that instance above
@@ -182,8 +184,9 @@ inputs is stale, and `0` otherwise. An input is stale when:
   and what the viewer's slice read is no longer anyone's to vouch for.
 
 A slice that became clean is a cleared input: each slice marked `1` that
-reads an instance it writes is judged again, and so on outward. A slice marked `2` stays marked until its own record is replaced,
-which for a viewer's slice is that viewer's next visit. This is what lets a
+reads an instance it writes is judged again, and so on outward. A slice
+marked `2` stays marked until its own record is replaced, which for a
+viewer's slice is that viewer's next visit. This is what lets a
 recomputation that wrote an equal value clear the slices below it without
 starting their pieces.
 
