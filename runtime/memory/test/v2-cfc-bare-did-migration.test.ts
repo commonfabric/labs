@@ -11,6 +11,7 @@ import {
   type DocumentMigration,
   isMigrationDone,
   migrationSessionId,
+  respellBareDidEnvelope,
   retireBareDidLabels,
   runDocumentMigration,
 } from "../v2/cfc-bare-did-migration.ts";
@@ -273,6 +274,46 @@ describe("cfc-bare-did-migration", () => {
       expect(stored("of:space-doc")).toEqual({ value: VALUE, cfc: RESPELLED });
     });
 
+    it("writes back inline and respelled a label a restored document held by reference", async () => {
+      const label = { confidentiality: [OWNER] };
+      const labelId = `cid:${taggedHashStringOf(label)}`;
+      const byReference = {
+        version: 2,
+        schemaHash,
+        labelMap: {
+          version: 1,
+          entries: [{ path: [], origin: "derived", label: { $ref: labelId } }],
+        },
+      };
+      commit([{ op: "set", id: labelId, value: { value: label } }]);
+      const before = seed("of:by-ref", byReference).seq;
+      commit([{
+        op: "patch",
+        id: "of:by-ref",
+        patches: [{ op: "replace", path: "/value/items", value: ["c"] }],
+      }]);
+      await retireBareDidLabels(engine, { space: SPACE });
+
+      restoreBranch(engine, {
+        space: SPACE,
+        sourceSeq: before,
+        sessionId: "s:restore",
+        localSeq: 1,
+      });
+
+      expect(stored("of:by-ref")?.cfc).toEqual({
+        ...byReference,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            origin: "derived",
+            label: { confidentiality: [user(OWNER)] },
+          }],
+        },
+      });
+    });
+
     it("writes back as recorded the labels of a restore on a store not respelled", () => {
       const before = seed("of:space-doc", STALE).seq;
       commit([{
@@ -301,6 +342,30 @@ describe("cfc-bare-did-migration", () => {
       expect(isMigrationDone(engine, BARE_DID_RESPELLING.name)).toBe(true);
       expect(report).toEqual({ done: true, rewritten: 0, skipped: [] });
       expect(stored("of:new")?.cfc).toEqual(STALE);
+    });
+  });
+
+  describe("respellBareDidEnvelope()", () => {
+    it("leaves as they are the entries it cannot read a confidentiality from", () => {
+      const unreadable = [
+        "not an entry",
+        { path: [], origin: "derived", label: "not a label" },
+        { path: [], origin: "derived", label: { confidentiality: "none" } },
+      ];
+
+      const respelled = respellBareDidEnvelope(
+        envelope([...unreadable, entry([], "declared", [OWNER])]),
+        () => undefined,
+      );
+
+      expect(respelled).toEqual(
+        envelope([...unreadable, entry([], "declared", [user(OWNER)])]),
+      );
+    });
+
+    it("returns undefined for an envelope without a label map", () => {
+      expect(respellBareDidEnvelope({ version: 1 }, () => undefined))
+        .toBeUndefined();
     });
   });
 
@@ -343,6 +408,24 @@ describe("cfc-bare-did-migration", () => {
         (read(served, { id: "of:space-doc" }) as { cfc?: unknown })?.cfc,
       ).toEqual(RESPELLED);
       expect(isMigrationDone(served, BARE_DID_RESPELLING.name)).toBe(true);
+      await server.close();
+    });
+
+    it("serves the store with its labels as they stand when the respelling fails", async () => {
+      // A view where the migration's marker table belongs lets the walk
+      // finish and refuses only its last write, the marker.
+      engine = await open({
+        url: resolveSpaceStoreUrl(store, SPACE as `did:${string}:${string}`),
+      });
+      engine.prepare(
+        `CREATE VIEW store_migration AS SELECT 'x' AS name WHERE 0`,
+      ).run();
+      close(engine);
+      const server = serve(true, store);
+      const served = await server.engineForSpace(SPACE);
+
+      expect(read(served, { id: "of:space-doc" })).not.toBeNull();
+      expect(isMigrationDone(served, BARE_DID_RESPELLING.name)).toBe(false);
       await server.close();
     });
 
@@ -468,6 +551,30 @@ describe("cfc-bare-did-migration", () => {
         expect(valueOf("of:b")).toEqual({ stale: true, broken: true });
         expect(valueOf("of:c")).toEqual({ stale: false });
         expect(isMigrationDone(engine, freshen.name)).toBe(true);
+      });
+
+      it("rejects, rather than skipping, an instance whose rewrite throws on its retry", async () => {
+        commit([
+          set("of:a", { stale: true, broken: true }),
+          set("of:b", { stale: true }),
+        ]);
+        let calls = 0;
+        const failing: DocumentMigration = {
+          ...freshen,
+          rewrite: (document) => {
+            if ((document.value as { broken?: boolean }).broken !== true) {
+              return freshen.rewrite(document, () => undefined);
+            }
+            calls += 1;
+            if (calls > 1) throw new Error("rewrite bug");
+            return [{ op: "replace", path: "/value/missing/deep", value: 1 }];
+          },
+        };
+
+        await expect(runDocumentMigration(engine, failing)).rejects.toThrow(
+          "rewrite bug",
+        );
+        expect(isMigrationDone(engine, freshen.name)).toBe(false);
       });
 
       it("finishes on a later run what an interrupted run left", async () => {

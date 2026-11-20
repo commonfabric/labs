@@ -340,8 +340,8 @@ export const restoreBranch = (
       // A respelled store writes a recorded label back respelled too, so a
       // restore does not bring back what `cfc-bare-did-migration.ts`
       // retired.
-      const respelled = wanted !== null && respells
-        ? respellBareDidEnvelope(
+      if (wanted !== null && respells) {
+        const respelled = respellBareDidEnvelope(
           (wanted as { cfc?: unknown }).cfc,
           (ref) =>
             Engine.readState(engine, {
@@ -350,10 +350,10 @@ export const restoreBranch = (
               seq: sourceSeq,
             })
               ?.document?.value,
-        )
-        : undefined;
-      if (respelled !== undefined) {
-        wanted = { ...wanted, cfc: respelled } as typeof wanted;
+        );
+        if (respelled !== undefined) {
+          wanted = { ...wanted, cfc: respelled } as typeof wanted;
+        }
       }
       if (held === null ? wanted === null : valueEqual(held, wanted)) continue;
       if (scope !== "space") scopeKeys.set(operations.length, scopeKey);
