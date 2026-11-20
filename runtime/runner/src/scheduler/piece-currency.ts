@@ -35,10 +35,19 @@ export type PieceUnvouchedReason =
   | "foreign-write"
   /** A live computation of the slice is not clean. */
   | "not-clean"
-  /** A live computation of the slice read a document in another space. */
+  /**
+   * A live computation of the slice read a document in another space, at an
+   * instance or a seq the snapshot cannot name.
+   */
   | "foreign-read"
-  /** A live computation of the slice read a document whose writer names no piece. */
-  | "unattributed-writer";
+  /**
+   * A live computation of the slice read a document whose writer names no
+   * piece and cannot be answered for: it is not live, not clean, or runs
+   * once for each viewer.
+   */
+  | "unattributed-writer"
+  /** A live computation of the slice read a document a clock writes. */
+  | "clock-read";
 
 /**
  * One slice of a piece: what its computations did when they ran at one scope
@@ -51,17 +60,28 @@ export type PieceCurrencySlice = {
 
   /**
    * Why the slice cannot be vouched for, empty when it can: every live
-   * computation that ran at its key is clean, and everything they read is in
-   * the piece's space with a writer that names a piece.
+   * computation that ran at its key is clean, and everything they read is no
+   * document a clock writes, has no writer the slice cannot answer for, and
+   * is in the piece's space or is a shared instance of another space that
+   * the snapshot names the seq of.
    */
   unvouched: PieceUnvouchedReason[];
 
   /**
-   * The document instances the slice's live computations read. `scopeKey`
-   * is `ANY_INSTANCE` for a read whose instance the run does not name.
+   * The document instances the slice's live computations read, and those a
+   * writer that names no piece read to write one of them. `scopeKey` is
+   * `ANY_INSTANCE` for a read whose instance the run does not name. `seq`
+   * is, for a read in another space, the seq of that space this runtime's
+   * replica of it holds the instance at.
    */
   reads: Array<
-    { space: MemorySpace; id: string; scopeKey: string; derived: boolean }
+    {
+      space: MemorySpace;
+      id: string;
+      scopeKey: string;
+      derived: boolean;
+      seq?: number;
+    }
   >;
 
   /**
@@ -104,7 +124,28 @@ export type PieceCurrencyState = {
     SchedulerWriteIndex,
     "writersByEntity" | "getSchedulingWrites"
   >;
+
+  /**
+   * The documents a clock writes, each as `clockDocumentKey()` gives it. What
+   * a computation derives from one is current only until the clock's next
+   * tick, and a tick takes a runtime that holds the clock.
+   */
+  clockDocuments: ReadonlySet<string>;
+
+  /**
+   * The seq of another space's store at which this runtime's replica of it
+   * holds the shared instance of the document at `address`, or `undefined`
+   * where it cannot say.
+   */
+  sourceSeqOf: (
+    address: Pick<IMemorySpaceAddress, "space" | "id">,
+  ) => number | undefined;
 };
+
+/** The key `PieceCurrencyState.clockDocuments` holds a document under. */
+export const clockDocumentKey = (
+  address: Pick<IMemorySpaceAddress, "space" | "id">,
+): string => `${address.space}\0${address.id}`;
 
 /** The scope names a document id can have a writer registered under. */
 const SCOPE_NAMES = ["space", "user", "session"] as const;
@@ -190,7 +231,9 @@ const runsOf = (state: PieceCurrencyState, node: SchedulerNode): NodeRun[] => {
 
 /**
  * Snapshots the piece whose result document is `piece`, in `space`, or
- * returns `undefined` when no active node names it as its piece.
+ * returns `undefined` when no active node names it as its piece. Tells
+ * `state.nodes` of each computation that names no piece and whose output the
+ * piece read, so that a change to one reports the piece as changed.
  */
 export function snapshotPieceCurrency(
   state: PieceCurrencyState,
@@ -200,7 +243,10 @@ export function snapshotPieceCurrency(
   const nodes = state.nodes.nodesUnderDemandRoots([piece]).filter((node) =>
     identityOf(node.action)?.pieceRootId === piece
   );
-  if (nodes.length === 0) return undefined;
+  if (nodes.length === 0) {
+    state.nodes.setAnsweredFor(piece, new Set());
+    return undefined;
+  }
   const identity = identityOf(nodes[0].action)!;
   const unvouched = new Set<PieceUnvouchedReason>();
   if (!identity.pieceId.startsWith("space:")) unvouched.add("scoped-root");
@@ -270,45 +316,109 @@ export function snapshotPieceCurrency(
     }
   }
 
-  /** Whether some computation writes `id`, and whether each names a piece. */
+  /**
+   * The computations that name no piece and whose output the piece read.
+   * What one read can change, and it can become clean, with nothing of the
+   * piece's own changing, so the piece is due a snapshot whenever one
+   * changes.
+   */
+  const answeredFor = new Set<Action>();
+
+  /**
+   * Whether a computation that names a piece writes `id`, and the
+   * computations that write it and name none.
+   */
   const writersOf = (
     id: IMemorySpaceAddress["id"],
-  ): { written: boolean; unattributed: boolean } => {
-    let written = false;
-    let unattributed = false;
+  ): { attributed: boolean; unattributed: Action[] } => {
+    let attributed = false;
+    const unattributed: Action[] = [];
     for (const scope of SCOPE_NAMES) {
       const writers = state.writeIndex.writersByEntity.get(
         entityNameKey({ space, id, scope }),
       );
       if (writers === undefined) continue;
       for (const writer of writers) {
-        written = true;
-        // A writer that names no piece is one no record covers, so nothing
-        // says whether what it wrote is current.
-        if (identityOf(writer)?.pieceRootId === undefined) unattributed = true;
+        if (identityOf(writer)?.pieceRootId === undefined) {
+          unattributed.push(writer);
+        } else attributed = true;
       }
     }
-    return { written, unattributed };
+    return { attributed, unattributed };
   };
 
-  return {
+  /**
+   * What `writer`, a computation that names no piece, read, or `undefined`
+   * where it cannot be answered for. No record covers such a computation, so
+   * a slice that read what it wrote answers for it by taking over its reads:
+   * what it wrote is current while it ran clean, once for every viewer, and
+   * nothing it read has changed since.
+   */
+  const readsOf = (writer: Action): IMemorySpaceAddress[] | undefined => {
+    answeredFor.add(writer);
+    const node = state.nodes.get(writer);
+    const log = state.dependencies.get(writer);
+    if (
+      node === undefined || log === undefined || node.fanOut !== undefined ||
+      node.status !== "clean" || !isLive(state.liveness, node)
+    ) return undefined;
+    return [...log.reads, ...log.shallowReads];
+  };
+
+  const taken: PieceCurrencySnapshot = {
     piece,
     under,
     unvouched: [...unvouched],
     writes: [...writes],
     slices: [...slices].map(([key, slice]) => {
       const reads: PieceCurrencySlice["reads"] = [];
+      // A read taken over from a writer that names no piece joins the map
+      // while it is walked, and is walked in its turn.
       for (const read of slice.reads.values()) {
         if (read.space !== space) {
-          slice.unvouched.add("foreign-read");
-          reads.push({ ...read, derived: false });
+          // What says whether the instance moved since is its own space's
+          // index, which is asked with the seq it was read at. The replica
+          // holds that seq now: it tells the scheduler of a frame in the turn
+          // it applies one, so a run that is clean with the scheduler idle
+          // read, at the paths it read, the version the replica holds.
+          const seq = read.scopeKey === "space"
+            ? state.sourceSeqOf(read)
+            : undefined;
+          if (seq === undefined) slice.unvouched.add("foreign-read");
+          reads.push({
+            ...read,
+            derived: false,
+            ...(seq !== undefined && { seq }),
+          });
           continue;
         }
-        const { written, unattributed } = writersOf(read.id);
-        if (unattributed) slice.unvouched.add("unattributed-writer");
+        if (state.clockDocuments.has(clockDocumentKey(read))) {
+          slice.unvouched.add("clock-read");
+        }
+        const { attributed, unattributed } = writersOf(read.id);
+        const takenOver = unattributed.map(readsOf);
+        if (takenOver.includes(undefined)) {
+          slice.unvouched.add("unattributed-writer");
+        }
+        for (const inherited of takenOver) {
+          for (const address of inherited ?? []) {
+            const scopeKey = instanceRead(address, undefined);
+            const entry = `${address.space}\0${scopeKey}\0${address.id}`;
+            if (slice.reads.has(entry)) continue;
+            slice.reads.set(entry, {
+              space: address.space,
+              id: address.id,
+              scopeKey,
+            });
+          }
+        }
         reads.push({
           ...read,
-          derived: written || entityKindOfIdString(read.id) === "computed",
+          // A document only such writers write is an input the slice
+          // answers for through their reads, and no recorded piece's.
+          derived: attributed || takenOver.includes(undefined) ||
+            (unattributed.length === 0 &&
+              entityKindOfIdString(read.id) === "computed"),
         });
       }
       return {
@@ -319,4 +429,6 @@ export function snapshotPieceCurrency(
       };
     }),
   };
+  state.nodes.setAnsweredFor(piece, answeredFor);
+  return taken;
 }

@@ -161,6 +161,8 @@ export class ServingPortBridge {
         }),
       viewsChanged: (space, sessionId) =>
         endpoint.notify("observer.viewsChanged", { space, sessionId }),
+      currencyChanged: (space) =>
+        endpoint.notify("observer.currencyChanged", { space }),
       sessionChanged: (event) =>
         endpoint.notify("observer.sessionChanged", { event }),
     };
