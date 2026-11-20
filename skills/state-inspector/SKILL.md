@@ -49,9 +49,10 @@ of it all (`entities`/`piece`/`graph`).
 - _What was rejected_ — the engine rejects stale reads _before_ they persist, so
   they are not here. Zero anomalies means consistent, not "no concurrency."
 - _The live reactive graph_ — the dependency graph lives in runtime memory only;
-  the sole durable scheduler state is the `scheduler_basis` index (doc-granular
-  ids + seqs — no paths, no payloads), empty until the serving loop writes it.
-  Entity/commit history always works.
+  the durable scheduler state is the `scheduler_basis` index (doc-granular ids +
+  seqs — no paths, no payloads), empty until the serving loop writes it, and the
+  `currency_*` tables of a space whose serving loop keeps the currency index,
+  which the tool does not read. Entity/commit history always works.
 - _Change anything_ — it is read-only; it explains, it never reproduces or
   fixes.
 
@@ -215,8 +216,9 @@ fixed recipe. The recurring debugging questions and where they resolve:
 
 ## Gotchas that will mislead you if unflagged
 
-- **`scheduler_basis` is the only durable scheduler state** (besides the
-  watermark machinery; serving-loop.md §3b). The retired
+- **`scheduler_basis` is the only durable scheduler state the tool reads**
+  (serving-loop.md §3b names the others: the watermark machinery, and the
+  currency index where a space's serving loop keeps one). The retired
   `persistentSchedulerState` observation tables were deleted in server-execution
   v2 stage C.2, and the tool no longer reads them even from an old snapshot that
   still contains them. The entity-history surface always works; the basis table

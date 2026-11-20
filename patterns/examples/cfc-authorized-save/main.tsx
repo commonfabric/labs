@@ -1,3 +1,9 @@
+/**
+ * A title editor with a protected saved title that only a reviewed save button
+ * may write, next to a plain host button wired to the same action.
+ * Demonstrates a trusted surface that authorizes a write to a CFC-protected
+ * cell, and the contrast with an ordinary, unreviewed button.
+ */
 import {
   computed,
   Default,

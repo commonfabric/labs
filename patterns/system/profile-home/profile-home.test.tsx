@@ -266,7 +266,8 @@ export default pattern(() => {
   // The avatar the badge binds resolves (single context — owner-protected reads
   // are clean here; cross-stamp masking is the browser-only CT-1740 issue).
   const assert_avatar_set = assert(() => profile.avatar === "AL");
-  const assert_no_picture = assert(() => profile.picture === undefined);
+  // No picture is empty bytes.
+  const assert_no_picture = assert(() => bytesAre(profile.picture, []));
   const assert_picture_set = assert(() => bytesAre(profile.picture, PICTURE));
   const assert_picture_picked = assert(() =>
     bytesAre(profile.picture, PICKED_PICTURE)
@@ -275,10 +276,10 @@ export default pattern(() => {
     bytesAre(profile.picture, PICKED_PICTURE) && profile.avatar === "AL"
   );
   const assert_picture_cleared = assert(() =>
-    profile.picture === undefined && profile.avatar === "AL"
+    bytesAre(profile.picture, []) && profile.avatar === "AL"
   );
   const assert_avatar_cleared = assert(() =>
-    profile.picture === undefined && profile.avatar === ""
+    bytesAre(profile.picture, []) && profile.avatar === ""
   );
   // CT-1828: an empty send must not clear a previously-set avatar.
   const assert_avatar_unchanged_after_empty = assert(() =>

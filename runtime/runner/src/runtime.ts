@@ -53,6 +53,7 @@ import type {
   Pattern,
   Schema,
 } from "./builder/types.ts";
+import { IndexedCollectionMaintainer } from "./builtins/indexed-collection/maintainer.ts";
 import { registerBuiltins } from "./builtins/index.ts";
 import type { Cancel } from "./cancel.ts";
 import {
@@ -1528,6 +1529,7 @@ export class Runtime {
 
   readonly id: string;
   readonly scheduler: Scheduler;
+  readonly indexedCollections: IndexedCollectionMaintainer;
   readonly patternManager: PatternManager;
   readonly sourceReconciler: SourceReconciler;
   readonly moduleRegistry: ModuleRegistry;
@@ -2404,6 +2406,7 @@ export class Runtime {
 
       // Register built-in modules with runtime injection
       registerBuiltins(this);
+      this.indexedCollections = new IndexedCollectionMaintainer(this);
 
       // Set this runtime as the current runtime for global cell compatibility
       // Removed setCurrentRuntime call - no longer using singleton pattern
@@ -2461,6 +2464,9 @@ export class Runtime {
     } catch (error) {
       this.#releaseServerExecutionEnabler();
       immutableCellsFor(this).dispose();
+      // Unset when the failure came before the maintainer was constructed.
+      (this as { indexedCollections?: IndexedCollectionMaintainer })
+        .indexedCollections?.dispose();
       throw error;
     }
   }
@@ -2807,6 +2813,7 @@ export class Runtime {
     // `stopAll()` below would release.
     this.scheduler.endPieceStartWaits();
     this.scheduler.endPatternChangeWaits();
+    this.indexedCollections.dispose();
     try {
       // A kept store keeps RECORDING, so this path drains what could still write
       // into it. In-flight async builtin work is that shape: a fetch / llm call or
@@ -3472,6 +3479,16 @@ export class Runtime {
             }\0${address.id}`,
           );
         }
+      }),
+      // A released space opens again on its next use, as a first open does:
+      // its loads are kicked again, and the effects channel subscribes to
+      // it again.
+      manager.subscribeSpacesReleased?.((space) => {
+        const prefix = `${space}\0`;
+        for (const key of this.#missingDocLoadKicks) {
+          if (key.startsWith(prefix)) this.#missingDocLoadKicks.delete(key);
+        }
+        this.#effectsChannel?.forgetSpace(space);
       }),
     ];
     for (const cancel of cancels) {

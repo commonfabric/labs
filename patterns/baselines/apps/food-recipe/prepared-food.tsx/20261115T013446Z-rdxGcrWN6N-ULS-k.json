@@ -1,0 +1,290 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "category": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "other",
+        "enum": [
+          "appetizer",
+          "bread",
+          "dessert",
+          "main",
+          "other",
+          "side",
+          "starch",
+          "vegetable"
+        ]
+      },
+      "description": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "dietaryTags": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "description": "Diets it suits, declared by hand.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "name": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "prepTime": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": 0,
+        "description": "Minutes of prep it still needs.",
+        "type": "number"
+      },
+      "primaryIngredients": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "description": "Main ingredients, for \"no-X\" matching.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "requiresReheating": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": false,
+        "type": "boolean"
+      },
+      "servings": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": 4,
+        "type": "number"
+      },
+      "source": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "Where it comes from: \"Costco\", \"Aunt Mary\".",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/food-recipe/prepared-food.tsx",
+  "resultSchema": {
+    "$defs": {
+      "DietaryCompatibility": {
+        "properties": {
+          "compatible": {
+            "description": "Dietary tags the dish meets: \"vegan\", \"gluten-free\", \"nut-free\", ...",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "incompatible": {
+            "description": "Dietary tags the dish fails.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "primaryIngredients": {
+            "description": "The handful of ingredients that define the dish, for \"no-X\" matching.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "description": "Readable caveats: \"Contains dairy (butter)\".",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "compatible",
+          "incompatible",
+          "warnings",
+          "primaryIngredients"
+        ],
+        "type": "object"
+      },
+      "DietarySource": {
+        "enum": [
+          "analyzed",
+          "stale",
+          "declared",
+          "none"
+        ]
+      }
+    },
+    "description": "Prepared food: store-bought, guest-brought or takeout. #preparedFood",
+    "properties": {
+      "$FS": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addDietaryTag": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Add a dietary tag (lowercased; repeats ignored).",
+        "properties": {
+          "tag": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tag"
+        ],
+        "type": "object"
+      },
+      "category": {
+        "enum": [
+          "appetizer",
+          "bread",
+          "dessert",
+          "main",
+          "other",
+          "side",
+          "starch",
+          "vegetable"
+        ]
+      },
+      "description": {
+        "type": "string"
+      },
+      "dietaryCompatibility": {
+        "$ref": "#/$defs/DietaryCompatibility",
+        "description": "The declared tags in the shape a recipe's analysis has."
+      },
+      "dietarySource": {
+        "$ref": "#/$defs/DietarySource",
+        "description": "Always \"declared\": the tags are what someone entered."
+      },
+      "dietaryTags": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "name": {
+        "type": "string"
+      },
+      "prepTime": {
+        "type": "number"
+      },
+      "primaryIngredients": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "requiresReheating": {
+        "type": "boolean"
+      },
+      "servings": {
+        "type": "number"
+      },
+      "source": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "servings",
+      "category",
+      "dietaryTags",
+      "primaryIngredients",
+      "description",
+      "source",
+      "prepTime",
+      "requiresReheating",
+      "dietaryCompatibility",
+      "dietarySource",
+      "addDietaryTag",
+      "$NAME",
+      "$UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}

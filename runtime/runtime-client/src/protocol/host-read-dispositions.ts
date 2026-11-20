@@ -211,6 +211,13 @@ export const REQUEST_DISPOSITIONS = {
     kind: "no-cell-value",
     why: "the URL a space's host serves a blob at",
   },
+  [RequestType.SpaceHistoryList]: {
+    kind: "no-cell-value",
+    why: "a space's commit log: seqs, times and counts, and no document",
+  },
+  [RequestType.SpaceBranchCreate]: lifecycle,
+  [RequestType.SpaceBranchDelete]: lifecycle,
+  [RequestType.SpaceRestore]: write,
   [RequestType.GetSpaceRootPattern]: reference,
   [RequestType.PieceCreate]: reference,
   [RequestType.PieceGet]: reference,

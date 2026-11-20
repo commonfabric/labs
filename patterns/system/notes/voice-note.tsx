@@ -1,3 +1,9 @@
+/**
+ * A voice recorder that transcribes speech and keeps each transcription in a
+ * list with its time and length. You hold the microphone button to record, see
+ * the latest transcription, and delete saved transcriptions from the list.
+ */
+
 import {
   action,
   computed,

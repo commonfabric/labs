@@ -1,0 +1,58 @@
+{
+  "argumentSchema": {
+    "type": "unknown"
+  },
+  "pattern": "examples/cfc-render-policy-demo/main.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "conceal": {
+        "asCell": [
+          "stream"
+        ],
+        "type": "unknown"
+      },
+      "reveal": {
+        "asCell": [
+          "stream"
+        ],
+        "type": "unknown"
+      },
+      "revealSensitive": {
+        "ifc": {
+          "uiContract": {
+            "action": "TrustedRevealHealthData",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "TrustedHealthDisclosureSurface"
+            ],
+            "trustedPattern": "TrustedHealthDisclosureSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/examples/cfc-render-policy-demo/main.tsx",
+              "moduleIdentity": "DdjXz1oUPc6SczKsC6jDuNfL9VNs5zhg2PnDzuxHpko",
+              "path": [
+                "setRevealSensitive"
+              ]
+            }
+          }
+        },
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "revealSensitive",
+      "reveal",
+      "conceal",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

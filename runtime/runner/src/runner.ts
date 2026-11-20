@@ -134,6 +134,7 @@ import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
+import { documentLoad } from "./document-readiness.ts";
 import { type EntityKind, entityKindOfIdString } from "./entity-kind.ts";
 import { inSpaceRootCause } from "./in-space-root-cause.ts";
 import {
@@ -234,7 +235,10 @@ import {
   RetryImmediately,
 } from "./scheduler/retry-immediately.ts";
 import { getContentAddressedSchemasConfig } from "./schema-doc-config.ts";
-import { isSchemaMismatchError } from "./schema-view.ts";
+import {
+  isSchemaMismatchError,
+  isUnresolvedInputError,
+} from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
 import { combineOptionalSchema } from "./traverse.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
@@ -244,6 +248,7 @@ import {
   TransactionWrapper,
 } from "./storage/extended-storage-transaction.ts";
 import {
+  getDirectTransactionReadActivities,
   getTransactionReadActivities,
   getTransactionWriteDetails,
 } from "./storage/transaction-inspection.ts";
@@ -254,6 +259,7 @@ import {
   type MemorySpace,
   type Result,
   toThrowable,
+  type UnexaminedAbsence,
   type Unit,
   type URI,
 } from "./storage/interface.ts";
@@ -3103,6 +3109,19 @@ export class Runner {
     `${MemorySpace}/${ScopeKey}/${URI}`,
     Cancel
   >();
+
+  /**
+   * For each action, the documents whose load, asked for by a run of it kept
+   * in transit (`#keepsResultInTransit()`), failed, or settled with the
+   * document still in transit (`#transitAbsences()`), as a load from a space
+   * that refuses this replica settles (the store's ledger records no failure
+   * for one: the document is absent for its reader). Such a document is no
+   * longer on its way, so a later run refused for it clears its result rather
+   * than keeping it and asking for the load again. A load that delivered its
+   * document is not recorded, so a later transit of it, as a replaced
+   * replica's, keeps the result again.
+   */
+  readonly #settledTransitLoads = new WeakMap<Action, Set<string>>();
 
   /**
    * Tombstones for `#sessionPatternPointers` entries dropped by _capacity
@@ -12800,6 +12819,59 @@ export class Runner {
   }
 
   /**
+   * What the currency index needs to know of the piece running at
+   * `resultCell` that its computations do not say (serving-loop.md §3b):
+   * whether the piece records a source origin, which a start follows, and
+   * the ids of the cells it owns that are owed a default
+   * (`ownedCellOwesSeed`). Returns `undefined` for a piece that is not
+   * running here, or whose pattern this runtime cannot name from what its
+   * replica holds.
+   */
+  pieceCurrencyFacts(
+    resultCell: Cell<any>,
+  ): { followsOrigin: boolean; owned: string[] } | undefined {
+    const link = resultCell.getAsNormalizedFullLink();
+    const rootCell = link.path.length > 0
+      ? this.#runtime.getCellFromLink({ ...link, path: [] })
+      : resultCell;
+    if (!this.isRunning(rootCell)) return undefined;
+    const read = this.#runtime.readTx();
+    restrictToLocalReads(read.tx);
+    let ref: ReturnType<typeof getPatternIdentityRef>;
+    let followsOrigin: boolean;
+    try {
+      const reading = rootCell.withTx(read);
+      ref = getPatternIdentityRef(reading);
+      followsOrigin = typeof reading.getMetaRaw("patternSource") === "string";
+    } catch (error) {
+      if (validateLocalReadBasis(read) === undefined) throw error;
+      return undefined;
+    } finally {
+      read.clearReadOnly?.();
+      read.abort("pattern pointer read complete");
+    }
+    if (ref === undefined) return undefined;
+    const loaded = this.#runtime.patternManager
+      .artifactFromIdentitySyncInSpace(
+        ref.identity,
+        ref.symbol,
+        rootCell.space,
+      );
+    if (loaded === undefined) return undefined;
+    const pattern = this.#resolveToPattern(loaded as Pattern);
+    const ownerScope = rootCell.getAsNormalizedFullLink().scope;
+    const owned: string[] = [];
+    for (const descriptor of pattern.derivedInternalCells ?? []) {
+      const derivedLink = getDerivedInternalCell(rootCell, descriptor)
+        .getAsNormalizedFullLink();
+      if (ownedCellOwesSeed(derivedLink, ownerScope)) {
+        owned.push(derivedLink.id);
+      }
+    }
+    return { followsOrigin, owned };
+  }
+
+  /**
    * Stop a pattern. This will cancel the pattern and all its children.
    *
    * TODO: This isn't a good strategy, as other instances might depend on behavior
@@ -14719,6 +14791,185 @@ export class Runner {
     return { resultCell, cancelDeferredStart };
   }
 
+  /**
+   * Whether a run of `action` through `tx`, disposed of as one whose input
+   * did not resolve, keeps the result it already holds: whether `tx` read as
+   * absent a document still in transit to this replica, one of `links` when
+   * given (`#transitAbsences()`), and one of `writes`, the documents the node
+   * writes, already holds a value. When it does, `action` runs again once the
+   * loads of those documents have settled, whatever they find, since a
+   * document that arrives absent changes no value the run's reads could see.
+   * A document whose load failed, or settled without delivering it, as one
+   * in a space that refuses this replica does, is no longer in transit
+   * (`#settledTransitLoads`), so the run after that clears the result
+   * instead of asking for the load again.
+   */
+  #keepsResultInTransit(
+    action: Action,
+    tx: IExtendedStorageTransaction,
+    writes: readonly NormalizedFullLink[],
+    links?: readonly NormalizedFullLink[],
+  ): boolean {
+    const identity = tx.tx.scopeKeyIdentity;
+    const keyIdentity = identity ?? this.#runtime.scopeKeyIdentity;
+    const settled = this.#settledTransitLoads.get(action);
+    const absences = this.#transitAbsences(tx, links).filter((absence) =>
+      !settled?.has(entityKey(absence, keyIdentity))
+    );
+    if (absences.length === 0 || !this.#holdsResult(tx, writes)) return false;
+    // Each load is asked for here, under the run's own scope identity, so
+    // that an absence no read has asked the store about yet settles too.
+    const settle = (absence: UnexaminedAbsence) => {
+      let keys = this.#settledTransitLoads.get(action);
+      if (keys === undefined) {
+        keys = new Set();
+        this.#settledTransitLoads.set(action, keys);
+      }
+      keys.add(entityKey(absence, keyIdentity));
+    };
+    const loads = absences.map((absence) =>
+      documentLoad(
+        this.#runtime,
+        this.#runtime.getCellFromLink({
+          space: absence.space,
+          id: absence.id,
+          path: [],
+          scope: absence.scope,
+        }),
+        identity,
+      ).then(
+        () => {
+          if (this.#stillInTransit(absence, identity)) settle(absence);
+        },
+        () => settle(absence),
+      )
+    );
+    // Not a task the scheduler waits on to be idle: the run has finished, and
+    // what follows is a new run, as a change arriving on the change channel
+    // would start. Document readiness's re-arm is not one either
+    // (`createDocumentReadiness()`), though it registers its load with
+    // `trackUntilSettled()`, which `synced()` and `Cell.pull()` wait on.
+    void Promise.all(loads).then(() =>
+      this.#runtime.scheduler.invalidateAction(action)
+    );
+    return true;
+  }
+
+  /**
+   * Whether `absence`, a document {@link #transitAbsences} found, is still in
+   * transit by the same test, now that its load has settled: still with no
+   * record in this replica, the space's replica since then if it was
+   * replaced, and not reported absent by the store. A document in a space
+   * that refuses this replica stays in transit by that test however often
+   * its load settles; a delivered one does not.
+   */
+  #stillInTransit(
+    absence: UnexaminedAbsence,
+    identity: ScopeKeyIdentity | undefined,
+  ): boolean {
+    const provider = this.#runtime.storageManager.open(absence.space);
+    const unexamined = provider.stillUnexamined?.([absence]) ?? [absence];
+    return unexamined.length > 0 &&
+      provider.storeReportedAbsent?.(
+          { id: absence.id, scope: absence.scope },
+          identity,
+        ) !== true;
+  }
+
+  /**
+   * The documents `tx` read as absent that are still in transit to this
+   * replica, those among `links` when given: ones the replica has never
+   * examined, so that a load of each is in flight or was never asked for
+   * (`IStorageProvider.unexaminedAbsences()`), and that the store has not
+   * reported holding nothing at either (`storeReportedAbsent()`). Such an
+   * absence says nothing about the document yet, where one the replica or
+   * the store has reported is what the document holds (`speculation.md` §2,
+   * "transit, not knowledge").
+   */
+  #transitAbsences(
+    tx: IExtendedStorageTransaction,
+    links?: readonly NormalizedFullLink[],
+  ): UnexaminedAbsence[] {
+    const spaces = new Set<MemorySpace>();
+    if (links === undefined) {
+      for (const read of getDirectTransactionReadActivities(tx.tx) ?? []) {
+        spaces.add(read.space);
+      }
+    } else {
+      for (const link of links) spaces.add(link.space);
+    }
+    const wanted = links === undefined ? undefined : new Set(
+      links.map((link) => `${link.space}\0${link.id}\0${link.scope}`),
+    );
+    const identity = tx.tx.scopeKeyIdentity;
+    const found: UnexaminedAbsence[] = [];
+    for (const space of spaces) {
+      const provider = this.#runtime.storageManager.open(space);
+      for (const absence of provider.unexaminedAbsences?.(tx.tx) ?? []) {
+        const key = `${absence.space}\0${absence.id}\0${absence.scope}`;
+        if (wanted !== undefined && !wanted.has(key)) continue;
+        if (
+          provider.storeReportedAbsent?.(
+            { id: absence.id, scope: absence.scope },
+            identity,
+          ) === true
+        ) continue;
+        found.push(absence);
+      }
+    }
+    return found;
+  }
+
+  /**
+   * Whether any of `writes`, the documents a node writes, holds a value, read
+   * through `tx` as a presence probe.
+   */
+  #holdsResult(
+    tx: IExtendedStorageTransaction,
+    writes: readonly NormalizedFullLink[],
+  ): boolean {
+    return writes.some((link) =>
+      tx.readOrThrow(toMemorySpaceAddress(link), {
+        meta: PRESENCE_PROBE_READ,
+      }) !== undefined
+    );
+  }
+
+  /**
+   * On a serving runtime, writes the `result` back-link to `resultCell`, the
+   * result of the piece `pattern` sets up, onto each instance this run writes
+   * of one of `pattern`'s derived internal cells scoped narrower than
+   * `resultCell`, where the instance holds none, in the transaction `tx` that
+   * writes its value. Every instance of a derived internal cell carries that
+   * back-link (`docs/specs/space-model/4-cells.md`). A setup writes it onto
+   * the instances it runs under, and a served run for a demander writes the
+   * demander's instance, which no setup there has run under, so the
+   * instance's first value carries it. `writes` is what the node writes.
+   */
+  #writeServedBackLinks(
+    tx: IExtendedStorageTransaction,
+    pattern: Pattern,
+    resultCell: Cell<any>,
+    writes: readonly NormalizedFullLink[],
+  ): void {
+    if (!this.#runtime.servingPosture) return;
+    const descriptors = pattern.derivedInternalCells;
+    if (!descriptors?.length || writes.length === 0) return;
+    const ownerScope = resultCell.getAsNormalizedFullLink().scope;
+    const written = new Set(writes.map(({ space, id }) => `${space}/${id}`));
+    for (const descriptor of descriptors) {
+      const derived = getDerivedInternalCell(resultCell, descriptor, tx);
+      const { space, id, scope } = derived.getAsNormalizedFullLink();
+      if (
+        scopeRank(scope) <= scopeRank(ownerScope) ||
+        !written.has(`${space}/${id}`) ||
+        derived.getMetaRaw("result", { meta: PRESENCE_PROBE_READ }) !==
+          undefined
+      ) continue;
+      setResultCell(derived, resultCell.asSchema(pattern.resultSchema));
+    }
+  }
+
   #writeJavaScriptActionResult(
     tx: IExtendedStorageTransaction,
     resultSchema: JSONSchema | undefined,
@@ -15444,11 +15695,16 @@ export class Runner {
             // body that caught it — its own `try`/`catch`, a discarded
             // rejection — does not get to hand back a result built on data the
             // schema does not describe. Either way the run is disposed of as an
-            // argument that did not resolve: an undefined result through the
-            // ordinary path, not an error. The reads it took are registered,
+            // argument that did not resolve, not an error: an undefined result
+            // through the ordinary path. The one exception is an input still
+            // in transit, a document this replica has not loaded yet, where
+            // a node that already holds a result keeps it, so that a result
+            // read from data that has not arrived never replaces one read
+            // from data that had. The reads the run took are registered,
             // including the one that failed, so it runs again when the data
             // changes and may then find it valid.
             const refusal = tx.takeSchemaRefusal();
+            let keepsResult = false;
             if (refusal !== undefined) {
               logger.info(
                 "action",
@@ -15458,12 +15714,17 @@ export class Runner {
                 ],
               );
               result = undefined;
+              keepsResult = isUnresolvedInputError(refusal) &&
+                this.#keepsResultInTransit(action, tx, writes, [refusal.link]);
+            } else if (!isValidArgument) {
+              keepsResult = this.#keepsResultInTransit(action, tx, writes);
             }
             if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
+            if (keepsResult) return undefined;
             const normalized = normalizeSandboxResult(result, name);
-            return this.#writeJavaScriptActionResult(
+            const written = this.#writeJavaScriptActionResult(
               tx,
               module.resultSchema,
               normalized.value,
@@ -15476,6 +15737,8 @@ export class Runner {
               previousResultCellRef,
               tx.getNarrowestReadScope(),
             );
+            this.#writeServedBackLinks(tx, pattern, resultCell, writes);
+            return written;
           } finally {
             logger.timeEnd("action", "postRun");
           }

@@ -138,13 +138,18 @@ operations and refreshes the bound Cell's materialized value. The operation
 stream remains the editor's display authority until that read completes. A
 failed refresh leaves the editor read-only and emits `cf-error`.
 
-One collaborative epoch owns a field until it is explicitly released or its
-entity is deleted. An ordinary write may change other paths, but it cannot
-change an active collaborative path. Deliberate release plus replacement may be
-one ordered commit. Reopening the field creates a new epoch.
+One collaborative epoch owns a field until it is explicitly released, its
+entity is deleted, or a restore rewrites its document. An ordinary write may
+change other paths, but it cannot change an active collaborative path.
+Deliberate release plus replacement may be one ordered commit. Reopening the
+field creates a new epoch.
 
-The current implementation supports only the default branch. Collaborative
-queries, applies, and releases on child branches fail explicitly.
+An epoch belongs to one branch. A fork inherits a field's value and none of
+its epoch: the field is inactive there until an editor on the fork starts an
+epoch from the inherited value. Restoring a space to a point of its history
+ends the epoch of every field in a document the restore rewrites, as deleting
+the document would, and editors start again from the restored value
+([`space-history.md`](space-history.md)).
 
 ## Anchors
 

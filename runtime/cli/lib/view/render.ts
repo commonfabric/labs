@@ -1462,6 +1462,26 @@ export function overlayBox(width: number, height: number): OverlayBox {
   };
 }
 
+/**
+ * Returns the index of the overlay line drawn at the zero-based screen cell
+ * `x`, `y` while the overlay is scrolled to line `scroll`, or null when that
+ * cell is not inside the overlay's border.
+ */
+export function overlayLineAt(
+  view: Pick<ViewState, "width" | "height">,
+  scroll: number,
+  x: number,
+  y: number,
+): number | null {
+  const box = overlayBox(view.width, view.height);
+  const row = y - box.y - 1;
+  const col = x - box.x - 1;
+  if (row < 0 || row >= box.innerH || col < 0 || col >= box.innerW) {
+    return null;
+  }
+  return scroll + row;
+}
+
 function applyOverlay(
   rows: string[],
   view: ViewState,

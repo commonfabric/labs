@@ -306,6 +306,21 @@ async body. A run that could not proceed on the data available is a non-event.
 The reads it took stay registered, including the one that failed, so it runs
 again when the data changes and may then find it valid.
 
+A refusal over an input that has arrived clears the node's previous result,
+since the input then holds nothing the computation can use
+([derived-state correction decision](../history/development/2026-09-14-derived-state-correction.md)).
+A refusal over an input still in transit does not: where the read that refused
+found a document this replica has never examined and the store has not reported
+absent, and the node already holds a result, the run writes nothing and runs
+again once that document's load settles, so a client starting cold never
+replaces a stored result with one read from data that had not arrived. The same
+holds for an argument that did not resolve because a document it reads is in
+transit. A document whose load has settled is no longer in transit, whether the
+load failed or ended without delivering it, as a load from a space that refuses
+this replica ends, so the run after that clears the result.
+[`speculation.md`](../specs/server-side-execution/speculation.md) §2 states the
+rule and the decision behind it.
+
 The view withdraws the record for a refusal it catches itself — the optional
 property, a property default, or an array-item substitute. It clears only
 that exact refusal; another one held on the same transaction is somebody else's.

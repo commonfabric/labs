@@ -10,7 +10,12 @@ import { isPlainObject } from "@commonfabric/js-values/types";
 import type { SqliteNativeRow } from "../../v2.ts";
 import { assertReadOnly, assertWriteSafe } from "./guard.ts";
 import { columnOrigins } from "./column-origin.ts";
-import { createTableSQL, type TableSchema } from "./schema.ts";
+import {
+  addColumnSQL,
+  createIndexSQL,
+  createTableSQL,
+  type TableSchema,
+} from "./schema.ts";
 
 // Reserved schema names that may never be used as a pattern-db attach alias.
 const RESERVED_ALIASES = new Set(["main", "temp"]);
@@ -191,7 +196,9 @@ export function runWrite(
 }
 
 /**
- * Additive table reconciliation (Phase 2 V1): create missing tables. Destructive
+ * Additive table reconciliation (Phase 2 V1): create missing tables, add the
+ * columns an existing table's declaration has gained, and create declared
+ * secondary indexes. Destructive
  * or ambiguous changes to existing tables are out of scope and intentionally not
  * applied here; a future migration step handles them (refuse-by-default + opt-in
  * callback — see spec 08-open-questions Q9).
@@ -204,5 +211,26 @@ export function ensureTables(
   if (alias !== undefined) assertSafeAlias(alias);
   for (const [name, schema] of Object.entries(tables)) {
     db.exec(createTableSQL(name, schema, alias));
+    // A table that was there already keeps its rows, and gains the columns
+    // the declaration has gained since it was created.
+    const columns = db.prepare(
+      `SELECT name FROM ${
+        alias === undefined ? "" : `"${alias}".`
+      }pragma_table_info(?)`,
+    );
+    let existing: Set<string>;
+    try {
+      existing = new Set(
+        (columns.all(name) as { name: string }[]).map((column) => column.name),
+      );
+    } finally {
+      columns.finalize();
+    }
+    for (const statement of addColumnSQL(name, schema, existing, alias)) {
+      db.exec(statement);
+    }
+    for (const statement of createIndexSQL(name, schema, alias)) {
+      db.exec(statement);
+    }
   }
 }

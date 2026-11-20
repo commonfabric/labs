@@ -1,3 +1,9 @@
+/**
+ * A chat with a language model: a scrolling conversation, a prompt box with
+ * model choice and mentions of other pieces, and a Clear button. It can pin
+ * pieces to the conversation as attachments and use the tools it is given, and
+ * it titles itself from the first message.
+ */
 import {
   BuiltInLLMMessage,
   computed,
