@@ -2242,8 +2242,9 @@ cf agent runner --identity ./my.key --api-url https://toolshed.example \
 | `--local-only`              | Serve local jobs and start no Fabric lane; `--identity` and `--api-url` are then not needed.                                      |
 
 The model provider is the one `cf-harness` is configured with under its harness
-home directory. The Fabric lane uses the `context` prompt role, so the default
-`enforce-strict` mode admits only `submit_result`; set
+home directory, except for a local job whose profile names one
+([Local jobs](#local-jobs)). The Fabric lane uses the `context` prompt role, so
+the default `enforce-strict` mode admits only `submit_result`; set
 `CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit` to use read tools.
 
 A run's sandbox, and a local job's, is the one `cf-harness` selects from the
@@ -2467,6 +2468,22 @@ including returns and command receipts; a returning child reveals its sibling's
 last step, and the parent's step resumes when no child remains. Children cannot
 delegate further; nested progress needs lineage in the harness's transcript
 contract before that restriction is widened.
+
+A profile may name the `model` its jobs run, in place of the runner's `--model`,
+and the `modelProvider` they run on, `openai-codex` or
+`openai-compatible-gateway`, which the runner passes to `cf-harness` as
+`--model-provider`. A profile naming a provider fixes the account its jobs'
+model calls are billed to; one naming none leaves `cf-harness` to resolve a
+provider as each job starts, from `CF_HARNESS_MODEL_PROVIDER` and then the
+harness home's persisted preference. A provider `cf-harness` does not accept
+refuses the profile file. A follow-up continues its predecessor's recorded run,
+and `cf-harness` refuses to continue a run on a model or provider other than the
+one it recorded. A follow-up under a profile whose `modelProvider` differs from
+its predecessor's recorded provider therefore fails `PROVIDER_FAILURE` before
+any model call, with the `errorDetail`
+`continue provider mismatch: run uses <recorded>, requested <profile's>`. It
+records no run, so the conversation it ends can open no further follow-up; a
+host that changes a profile's provider starts a new job instead.
 
 A host profile may bound each model call with `maxInputBytes` and
 `maxOutputTokens`; a caller may only narrow either ceiling. Bounded calls use

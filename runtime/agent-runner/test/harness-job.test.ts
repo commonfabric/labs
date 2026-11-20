@@ -11,6 +11,7 @@ import type { HarnessModelUsage } from "@commonfabric/cf-harness/model/client";
 import type { HarnessImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import { materializeImageAttachmentContentPart } from "@commonfabric/cf-harness/image-attachments";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
+import { FileHarnessProviderSettingsStore } from "@commonfabric/cf-harness/auth/provider-settings";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { CfcReadCeilingError } from "@commonfabric/runner/cfc";
 import { renderCellReference } from "@commonfabric/runner/shared";
@@ -633,6 +634,68 @@ describe("runHarnessJob()", () => {
       expect(plain.seen.loopOptions?.depth).toBeUndefined();
       expect(plain.seen.loopOptions?.reasoningEffort).toBeUndefined();
     });
+
+    for (
+      const [preference, pinned, provider] of [
+        [
+          "openai-codex",
+          "openai-compatible-gateway",
+          "openai-compatible-gateway",
+        ],
+        ["openai-compatible-gateway", "openai-codex", "openai-codex"],
+        ["openai-codex", undefined, "openai-codex"],
+      ] as const
+    ) {
+      it(
+        `runs on ${provider} where the machine prefers ${preference} and the spec names ${
+          pinned ?? "no provider"
+        }`,
+        async () => {
+          const settings = new FileHarnessProviderSettingsStore({
+            path: join(runRoot, "harness-home", "config.json"),
+          });
+          await settings.initialize(preference);
+          // No provider and no gateway setting from the environment: the
+          // machine's preference decides unless the spec names a provider, and
+          // a gateway setting would refuse `openai-codex`.
+          const {
+            CF_HARNESS_MODEL_PROVIDER: _provider,
+            CF_HARNESS_GATEWAY_AUTH_MODE: _authMode,
+            ...sandbox
+          } = SCRIPTED_ENV;
+          let ranOn: string | undefined;
+          const result = await runHarnessJob(
+            plainSpec({
+              resultSchema: undefined,
+              ...(pinned !== undefined ? { modelProvider: pinned } : {}),
+            }),
+            {
+              runRoot,
+              signal: new AbortController().signal,
+              harnessDeps: {
+                env: { ...sandbox, CF_HARNESS_API_KEY: "unused-test-key" },
+                providerSettingsStore: settings,
+                createModelClient: ({ provider }) => ({
+                  providerId: provider,
+                  complete: () => Promise.reject(new Error("no model call")),
+                }),
+                createPromptLoop: (loopOptions) => {
+                  ranOn = loopOptions.engine?.config.modelProvider;
+                  return {
+                    runPrompt: () => Promise.resolve(loopResult(runRoot)),
+                    runTranscript: () =>
+                      Promise.reject(new Error("not a resume")),
+                  };
+                },
+              },
+            },
+          );
+
+          expect(result.outcome).toBe("completed");
+          expect(ranOn).toBe(provider);
+        },
+      );
+    }
 
     it("leaves usage out of the report when the loop reports none", async () => {
       const { result } = await runScripted(plainSpec(), async (context) => {

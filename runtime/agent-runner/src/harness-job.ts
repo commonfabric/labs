@@ -25,6 +25,7 @@ import {
   type RunCfHarnessCliDependencies,
   selectCfHarnessCliSandboxRuntime,
 } from "@commonfabric/cf-harness/cli";
+import type { HarnessModelProviderId } from "@commonfabric/cf-harness/config";
 import type { HarnessBrowserHost } from "@commonfabric/cf-harness/contracts/browser-host";
 import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
@@ -167,6 +168,13 @@ export interface HarnessJobSpec extends HarnessModelLimits {
 
   /** Model name passed to `cf-harness`. */
   model?: string;
+
+  /**
+   * The model provider passed to `cf-harness`; absent, the harness resolves
+   * its own. A follow-up naming one other than its predecessor's recorded
+   * provider is refused before any model call.
+   */
+  modelProvider?: HarnessModelProviderId;
 
   /** The job's system prompt: framing the task's author supplies. */
   instructions?: string;
@@ -482,6 +490,9 @@ const argvOf = (
     (profile) => ["--allow-subagent-profile", profile],
   ),
   ...(spec.model !== undefined ? ["--model", spec.model] : []),
+  ...(spec.modelProvider !== undefined
+    ? ["--model-provider", spec.modelProvider]
+    : []),
 ];
 
 /**

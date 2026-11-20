@@ -1,12 +1,13 @@
 /**
  * Host-approved profiles for local jobs: the authority a job runs with,
  * chosen by name. A profile says which tools a job may use, which host
- * configurations back them, how many model turns it gets, and the
- * prompt-slot role its task binds as, whether a job may bring a browser
- * host, and the fabric session, pattern index and subagent profiles its
- * tools run against. The host writes the file; a caller names a profile and
- * may only narrow it — fewer tools, fewer turns, fewer or readonly mounts,
- * no browser — never widen it, and never set its role or its fabric.
+ * configurations back them, how many model turns it gets, the model and
+ * model provider it runs on, and the prompt-slot role its task binds as,
+ * whether a job may bring a browser host, and the fabric session, pattern
+ * index and subagent profiles its tools run against. The host writes the
+ * file; a caller names a profile and may only narrow it — fewer tools, fewer
+ * turns, fewer or readonly mounts, no browser — never widen it, and never
+ * set its role, its model provider or its fabric.
  *
  * A profile is refused when it is read if it grants a tool nothing in it
  * backs, the same contradiction `cf-harness` refuses a run for, so a bad
@@ -15,7 +16,14 @@
 
 import { dirname, isAbsolute } from "@std/path";
 
-import { parseCfHarnessCliToolId } from "@commonfabric/cf-harness/cli";
+import {
+  createCfHarnessCliCapabilities,
+  parseCfHarnessCliToolId,
+} from "@commonfabric/cf-harness/cli";
+import {
+  type HarnessModelProviderId,
+  isHarnessModelProviderId,
+} from "@commonfabric/cf-harness/config";
 import type { HarnessModelLimits } from "@commonfabric/cf-harness/model/client";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
 import {
@@ -75,6 +83,17 @@ export interface LocalJobProfile extends HarnessModelLimits {
 
   /** Model name passed to `cf-harness`. */
   model?: string;
+
+  /**
+   * The `cf-harness` model provider every job under this profile runs on,
+   * and so the account its model calls are billed to. Absent, the harness
+   * resolves one as it does for any run, from its environment and then its
+   * persisted preference, when the job starts. A request cannot set or
+   * change it. A follow-up continues its predecessor's recorded run, which
+   * the harness refuses to continue on a provider other than the one it
+   * recorded.
+   */
+  modelProvider?: HarnessModelProviderId;
 
   /**
    * The reasoning effort a job runs at, and the most a request may ask for;
@@ -284,6 +303,7 @@ const profileOf = async (
     loomRetrievalConfig,
     commands,
     model,
+    modelProvider,
     reasoningEffort,
     cacheAffinityKey,
     browserHost,
@@ -351,6 +371,16 @@ const profileOf = async (
   }
   if (model !== undefined && typeof model !== "string") {
     fail("`model` must be a string");
+  }
+  const provider = isHarnessModelProviderId(modelProvider)
+    ? modelProvider
+    : undefined;
+  if (modelProvider !== undefined && provider === undefined) {
+    fail(
+      `\`modelProvider\` must be one of ${
+        createCfHarnessCliCapabilities().modelProviders.join(", ")
+      }`,
+    );
   }
   const effort = reasoningEffortOf(reasoningEffort);
   if (reasoningEffort !== undefined && effort === undefined) {
@@ -484,6 +514,7 @@ const profileOf = async (
       }
       : {}),
     ...(model !== undefined ? { model: model as string } : {}),
+    ...(provider !== undefined ? { modelProvider: provider } : {}),
     ...(effort !== undefined ? { reasoningEffort: effort } : {}),
     ...(cacheAffinityKey !== undefined
       ? { cacheAffinityKey: cacheAffinityKey as string }

@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  type LocalJobNarrowing,
   type LocalJobProfile,
   narrowLocalJobProfile,
   readLocalJobProfiles,
@@ -134,6 +135,35 @@ describe("local-jobs/profiles", () => {
       }
     });
 
+    it("keeps the model provider a profile names, which a request can neither set nor change", async () => {
+      const profiles = await read({
+        pinned: { ...ASK, modelProvider: "openai-codex", maxOutputTokens: 64 },
+        ask: ASK,
+      });
+      const pinned = profiles.get("pinned")!;
+      const ask = profiles.get("ask")!;
+      expect(pinned.modelProvider).toBe("openai-codex");
+      expect("modelProvider" in ask).toBe(false);
+      // A stand-in for a request body carrying a field no request may set.
+      const asking = {
+        maxModelTurns: 4,
+        modelProvider: "openai-compatible-gateway",
+      } as LocalJobNarrowing;
+      expect(narrowLocalJobProfile(pinned, asking)).toMatchObject({
+        profile: { modelProvider: "openai-codex", maxModelTurns: 4 },
+      });
+      expect(narrowLocalJobProfile(ask, asking)).toEqual({
+        profile: { ...ask, maxModelTurns: 4 },
+      });
+    });
+
+    it("refuses a model provider `cf-harness` does not accept, naming the ones it does", async () => {
+      await expect(read({ ask: { ...ASK, modelProvider: "anthropic" } }))
+        .rejects.toThrow(
+          "Local job profile `ask`: `modelProvider` must be one of openai-compatible-gateway, openai-codex.",
+        );
+    });
+
     it("reads a browser host grant, and leaves a withheld one out", async () => {
       const profiles = await read({
         ask: { ...ASK, browserHost: true },
@@ -243,6 +273,16 @@ describe("local-jobs/profiles", () => {
         "`commands`",
       ],
       ["a model that is not a string", { ...ASK, model: 7 }, "`model`"],
+      [
+        "a model provider it does not know",
+        { ...ASK, modelProvider: "anthropic" },
+        "`modelProvider`",
+      ],
+      [
+        "a model provider that is not a string",
+        { ...ASK, modelProvider: 7 },
+        "`modelProvider`",
+      ],
       [
         "a reasoning effort it does not know",
         { ...ASK, reasoningEffort: "extreme" },
