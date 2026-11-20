@@ -3811,7 +3811,8 @@ const valueWriteTargets = (
     : undefined;
   for (const [key, inputs] of planWrites ?? []) {
     for (const input of inputs) {
-      if (input.unchanged !== true) continue;
+      // The record of a container's membership labels no value at its path.
+      if (input.unchanged !== true || input.enumeration === true) continue;
       const path = canonicalizeLogicalPath(input.target.path);
       const existing = result.get(key);
       if (existing?.paths.some((written) => isPrefix(written, path))) continue;
@@ -5101,7 +5102,12 @@ export const planLabelsFor = (
 ): PlanLabels => {
   const writes = planWritesByTarget(tx);
   if (writes.size === 0) {
-    return { byTarget: new Map(), paths: new Map(), reasons: [] };
+    return {
+      byTarget: new Map(),
+      paths: new Map(),
+      enumerations: new Map(),
+      reasons: [],
+    };
   }
   const registry = tx.compiledPlans(runtimeWritePolicyAuthorization)!;
   // The transaction's flow observations by document, as the join counts
@@ -5157,6 +5163,13 @@ export const planLabelsFor = (
       const path = canonicalizeLogicalPath(address.path);
       return written.get(documentKeyOf(address))?.some((writtenPath) =>
         concretePathHasPrefix(path, writtenPath)
+      ) === true;
+    },
+    wroteWithin: (address) => {
+      const path = canonicalizeLogicalPath(address.path);
+      return written.get(documentKeyOf(address))?.some((writtenPath) =>
+        concretePathHasPrefix(path, writtenPath) ||
+        concretePathHasPrefix(writtenPath, path)
       ) === true;
     },
     observeLabel: (address, observes) => {
@@ -12478,6 +12491,9 @@ export function* prepareBoundaryCommitSteps(
   // mode it only feeds diagnostics. Derivation never rejects.
   const flowMode = state.flowLabelsMode;
   const flowPersist = flowMode === "persist";
+  // Whether labels of a compiled pattern's writes come from its templates
+  // (the experimental option `compiledPatterns`).
+  const planLabelsOn = tx.getCfcState().planLabels;
   // Inv-12 Stage 1 (SC-25): the cross-space label-metadata representation
   // dial. The flow join collects which spaces contributed label content, so
   // the per-target predicates below can tell a same-space join from one that
@@ -12545,7 +12561,12 @@ export function* prepareBoundaryCommitSteps(
   // off.
   const planLabels: PlanLabels = flowPersist
     ? planLabelsFor(tx, flowJoin, flowResolver)
-    : { byTarget: new Map(), paths: new Map(), reasons: [] };
+    : {
+      byTarget: new Map(),
+      paths: new Map(),
+      enumerations: new Map(),
+      reasons: [],
+    };
   for (const reason of planLabels.reasons) reasons.push(reason);
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
   // The label stamped at a path a compiled pattern's write covers is the
@@ -14161,6 +14182,55 @@ export function* prepareBoundaryCommitSteps(
           structureStampPaths.push(structureContainerPath);
         }
       }
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // A container whose members a compiled pattern's write changed in
+      // place stores the label of its membership as the `enumerate` entry
+      // at its path, in place of the one it carried: what the container
+      // stored of its membership joined with what decided the change
+      // (`PlanWrite.enumeration`). The entries of the positions the change
+      // left before it stay, and those of positions at or beyond the
+      // number of members the container has now go, so a position created
+      // again mints its existence entry again (§8.12.8). Behind
+      // `compiledPatterns`, which defaults off.
+      const enumerated = flowPersist
+        ? planLabels.enumerations.get(key)
+        : undefined;
+      for (const { path, label } of enumerated ?? []) {
+        const length = writtenValueAt(flowWrittenValues, [...path, "length"]);
+        let kept = 0;
+        for (const candidateEntry of persistedLabelEntries) {
+          const entryPath = candidateEntry.path;
+          const below = entryPath.length > path.length &&
+            concretePathHasPrefix(entryPath, path);
+          if (
+            candidateEntry.origin === "derived" &&
+            ((candidateEntry.observes === "enumerate" &&
+              pathKey(entryPath) === pathKey(path)) ||
+              (below && typeof length === "number" &&
+                /^(0|[1-9][0-9]*)$/.test(entryPath[path.length]) &&
+                Number(entryPath[path.length]) >= length))
+          ) {
+            continue;
+          }
+          persistedLabelEntries[kept++] = candidateEntry;
+        }
+        persistedLabelEntries.length = kept;
+        if (label.confidentiality.length > 0 || label.integrity.length > 0) {
+          persistedLabelEntries.push(markFlowStampEntry({
+            path,
+            label: {
+              ...(label.confidentiality.length > 0
+                ? { confidentiality: [...label.confidentiality] }
+                : {}),
+              ...(label.integrity.length > 0
+                ? { integrity: [...label.integrity] }
+                : {}),
+            },
+            origin: "derived",
+            observes: "enumerate",
+          }));
+        }
+      }
       // Each path a read was declared onward to lands here: its MEMBERSHIP
       // stamp is replaced from this attempt's join and what went onward,
       // whether or not the path itself was written (an incremental
@@ -14428,6 +14498,34 @@ export function* prepareBoundaryCommitSteps(
           if (anchoredSlots?.has(pathKey(path)) && isWriterStamp(stamp)) {
             placesSlotStamp = true;
           }
+        }
+        // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+        // A write that replaces an array decided its membership anew
+        // (§8.12.8, the `iterate` entries are replaced on overwrite): the
+        // label of the write is stored as the `enumerate` entry of the
+        // array too, so that a read of its members, their order or their
+        // number consumes it. An array inside the value written, at a path
+        // of its own below the written one, gets none. Behind
+        // `compiledPatterns`, which defaults off.
+        if (
+          planLabelsOn &&
+          (pathLabel.confidentiality.length > 0 ||
+            pathLabel.integrity.length > 0) &&
+          Array.isArray(writtenValueAt(flowWrittenValues, path))
+        ) {
+          persistedLabelEntries.push(markFlowStampEntry({
+            path,
+            label: {
+              ...(pathLabel.confidentiality.length > 0
+                ? { confidentiality: [...pathLabel.confidentiality] }
+                : {}),
+              ...(pathLabel.integrity.length > 0
+                ? { integrity: [...pathLabel.integrity] }
+                : {}),
+            },
+            origin: "derived",
+            observes: "enumerate",
+          }));
         }
         // Freeze-at-creation: mint the existence entry only when the path
         // has none (creation / legacy migration); a carried frozen entry

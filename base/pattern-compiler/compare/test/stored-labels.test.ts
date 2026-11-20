@@ -146,6 +146,230 @@ describe("stored-labels", () => {
     });
   });
 
+  // A list of plain values in place that handlers add to and remove from,
+  // each scenario with an event after the one whose write the input `note`
+  // decides: the later write reads nothing that carries the clause of
+  // `note`, and the list still holds what the earlier one put there.
+  describe("soundnessOfScenario() after several changes of the members of a list of plain values in place", () => {
+    const check = async (
+      fixture: string,
+      argument: Record<string, unknown>,
+      events: { binding: number; event: unknown }[],
+    ) => {
+      const { soundness, refused } = await soundnessOfScenario(
+        fixture,
+        await artifactOf(fixture),
+        () => undefined,
+        argument,
+        events,
+      );
+      return {
+        refused,
+        found: lines(fixture, soundness),
+        dependent: soundness?.dependent ?? 0,
+      };
+    };
+
+    it("finds the clause of the input in the stored label of a list that a later push added to", async () => {
+      const { refused, found, dependent } = await check(
+        "remove-shift",
+        { note: "n" },
+        [
+          { binding: 1, event: { word: "x" } },
+          { binding: 0, event: {} },
+          { binding: 1, event: { word: "y" } },
+        ],
+      );
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThanOrEqual(1);
+    });
+
+    it("finds it after a removal moved the value of the input and a later push added to the list", async () => {
+      const { refused, found, dependent } = await check(
+        "remove-shift",
+        { note: "n" },
+        [
+          { binding: 1, event: { word: "x" } },
+          { binding: 0, event: {} },
+          { binding: 1, event: { word: "y" } },
+          { binding: 2, event: { word: "x" } },
+          { binding: 1, event: { word: "z" } },
+        ],
+      );
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThanOrEqual(1);
+    });
+
+    it("finds it in the stored label of the number of members, after a push the input decided and one it did not", async () => {
+      const { refused, found, dependent } = await check(
+        "count-after-change",
+        { note: "n" },
+        [
+          { binding: 0, event: { word: "x" } },
+          { binding: 1, event: {} },
+          { binding: 0, event: { word: "y" } },
+        ],
+      );
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThanOrEqual(1);
+    });
+
+    it("finds it in the stored label of the number of members, after a removal the input decided found no member", async () => {
+      const { refused, found, dependent } = await check(
+        "count-after-change",
+        { note: "n" },
+        [
+          { binding: 0, event: { word: "n" } },
+          { binding: 0, event: { word: "y" } },
+          { binding: 2, event: {} },
+          { binding: 2, event: {} },
+          { binding: 0, event: { word: "z" } },
+        ],
+      );
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThanOrEqual(1);
+    });
+
+    it("finds it in the stored label of the number of members, after a removal the input decided and a later push", async () => {
+      const { refused, found, dependent } = await check(
+        "count-after-change",
+        { note: "n" },
+        [
+          { binding: 0, event: { word: "n" } },
+          { binding: 0, event: { word: "x" } },
+          { binding: 2, event: {} },
+          { binding: 0, event: { word: "y" } },
+        ],
+      );
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // `fixtures/handle-methods.tsx`: the other methods of a handle that change
+  // what a list holds, each after a write the input `note` decides.
+  describe("soundnessOfScenario() after the other methods of a handle changed a list of plain values in place", () => {
+    const check = async (events: { binding: string; event: unknown }[]) => {
+      const artifact = await artifactOf("handle-methods");
+      const { soundness, refused } = await soundnessOfScenario(
+        "handle-methods",
+        artifact,
+        () => undefined,
+        { note: "n" },
+        events.map(({ binding, event }) => ({
+          binding: artifact.plan.bindings.findIndex(({ name }) =>
+            name === binding
+          ),
+          event,
+        })),
+      );
+      return {
+        refused,
+        found: lines("handle-methods", soundness),
+        dependent: soundness?.dependent ?? 0,
+      };
+    };
+
+    it("finds the clause of the input in the label of what a `map` gives over a list that `set` emptied", async () => {
+      const { refused, found, dependent } = await check([
+        { binding: "addOnce", event: { word: "x" } },
+        { binding: "clearIfNoted", event: {} },
+      ]);
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThanOrEqual(1);
+    });
+
+    it("finds it in the label of the number of members after a write at the position behind the last member", async () => {
+      const { refused, found, dependent } = await check([
+        { binding: "addOnce", event: { word: "x" } },
+        { binding: "addOnce", event: { word: "y" } },
+        { binding: "putIfNoted", event: { at: 2 } },
+      ]);
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThanOrEqual(1);
+    });
+
+    it("finds it in the label of the number of members after `addUnique` of a member the list holds added nothing", async () => {
+      const { refused, found, dependent } = await check([
+        { binding: "addOnce", event: { word: "x" } },
+        { binding: "addOnce", event: { word: "y" } },
+        { binding: "putIfNoted", event: { at: 0 } },
+        { binding: "addOnce", event: { word: "noted" } },
+      ]);
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThanOrEqual(1);
+    });
+
+    it("finds it in the labels of a number and of a record written after a write the input decided", async () => {
+      const { refused, found, dependent } = await check([
+        { binding: "bumpIfNoted", event: {} },
+        { binding: "bump", event: { by: 2 } },
+        { binding: "markNote", event: {} },
+        { binding: "mark", event: { key: "k" } },
+      ]);
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // `fixtures/count-of-records.tsx`: the number of members of an array of
+  // references, after a push the input `note` decides and one it does not.
+  describe("soundnessOfScenario() after several pushes onto an array of references", () => {
+    it("finds the clause of the input in the stored label of the number of members", async () => {
+      const { soundness, refused } = await soundnessOfScenario(
+        "count-of-records",
+        await artifactOf("count-of-records"),
+        () => undefined,
+        { note: "n" },
+        [
+          { binding: 0, event: { title: "x" } },
+          { binding: 1, event: {} },
+          { binding: 0, event: { title: "y" } },
+        ],
+      );
+
+      expect(refused).toEqual([]);
+      expect(lines("count-of-records", soundness)).toEqual([]);
+      expect(soundness?.dependent).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // `fixtures/whole-after-push.tsx`: a text of everything a list holds,
+  // whose records declare a clause on a member, after two appended records.
+  describe("soundnessOfScenario() after pushes onto a list whose records declare a label", () => {
+    it("commits every transaction and finds the clause of the list in the stored label of the text", async () => {
+      const { soundness, refused } = await soundnessOfScenario(
+        "whole-after-push",
+        await artifactOf("whole-after-push"),
+        () => undefined,
+        { items: [{ note: "first", amount: 1 }] },
+        [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+      );
+
+      expect(refused).toEqual([]);
+      expect(lines("whole-after-push", soundness)).toEqual([]);
+      expect(soundness?.dependent).toBeGreaterThanOrEqual(1);
+    });
+  });
+
   // `fixtures/remove-reference.tsx`: two records pushed, each a document of
   // its own that holds the input `note`, and the removal of the first.
   describe("soundnessOfScenario() after a removal from an array of references", () => {

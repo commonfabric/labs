@@ -214,11 +214,14 @@ const linkOf = (address: CfcAddress): NormalizedFullLink =>
 /**
  * The reader of what `tx` reads of the runtime's storage: the label at a
  * position is the one a read of it in the class `consumes` consumes alone,
- * from the entries stored in its document at and above its path.
+ * from the entries stored in its document at and above its path. With
+ * `pointers`, it is joined with the confidentiality a read of the reference
+ * at the position consumes, as a read that follows the link there does.
  */
 export const storedReader = (
   tx: IExtendedStorageTransaction,
   consumes: "value" | "shape" = "value",
+  pointers = false,
 ): StoredReader<CfcAddress> => {
   const metadata = new Map<string, CfcMetadata | undefined>();
   const metadataOf = (address: CfcAddress): CfcMetadata | undefined => {
@@ -247,8 +250,21 @@ export const storedReader = (
         address.path,
         true,
       );
+      const pointer = stored === undefined || !pointers
+        ? undefined
+        : labelForConsumedEntries(
+          consumedEntriesForRead(stored, address.path, {
+            nonRecursive: true,
+            consumes: "followRef",
+          }),
+          address.path,
+          true,
+        );
       return {
-        confidentiality: [...label?.confidentiality ?? []],
+        confidentiality: [
+          ...label?.confidentiality ?? [],
+          ...pointer?.confidentiality ?? [],
+        ],
         integrity: [...label?.integrity ?? []],
       };
     },

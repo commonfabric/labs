@@ -104,12 +104,44 @@ export type NamedOutputInputs = PlanInputs & {
   keys: [number, string][];
 };
 
+/**
+ * A stored position with the class it is observed in: one whose stored label
+ * the label of a write holds beside what its template gives.
+ */
+export type Observed = {
+  address: Address;
+  observes: string;
+  /** The position alone is observed, and nothing below it. */
+  alone?: true;
+};
+
 /** The record of one written path (PL §4.1, `PlanWrite` without labels). */
 export type PlanWrite = NamedOutputInputs & {
   /** The written document and path. */
   target: Address;
   /** The record of the plan whose template gives the label of the write. */
   record: PlanRecord;
+  /**
+   * What a change of the members of a container in place compared to find
+   * the members, as a removal and `addUnique` do: stored positions whose
+   * labels the label of the write is joined with. The records of one change
+   * hold one array (provisional decision P39).
+   */
+  decided?: Observed[];
+  /**
+   * Further stored positions whose labels the label of the write is joined
+   * with: the position a member that the change moved to the target stood
+   * at, and for the membership of the container, what the container stored
+   * of it.
+   */
+  observed?: Observed[];
+  /**
+   * The record is of the membership of the container at the target, which
+   * a change of its members in place decided anew: its label is stored for
+   * a read of the container's members, their order and their number, and
+   * for no read of a member.
+   */
+  enumeration?: true;
 };
 
 /** What computed a `derive` (PL §1.1). */

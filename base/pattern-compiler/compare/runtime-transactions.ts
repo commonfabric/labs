@@ -59,6 +59,7 @@ import { runtimeOwnedStoreOwnerKey } from "../../../runtime/runner/src/cfc/runti
 import {
   type CfcAddress,
   type CfcMetadata,
+  type ObservedPosition as RuntimeObserved,
   type PlanElements,
   type PlanInputs as RuntimePlanInputs,
   type PlanWrite as RuntimePlanWrite,
@@ -83,6 +84,7 @@ import type {
 import type {
   Address,
   FoldElements,
+  Observed,
   PlanInputs,
   PlanWrite,
   SlotBinding,
@@ -454,14 +456,17 @@ export class RuntimeTransactions implements TransactionHooks {
     store: Store,
     schema?: Schema,
     writes?: readonly PlanWrite[],
+    splice?: { start: number; removed: number; inserted: number },
   ): void {
     const tx = this.#open();
     this.#counts.writes += 1;
     const written = this.#written.get(doc) ?? [];
-    written.push([...path]);
     this.#written.set(doc, written);
     const document = store.docs.get(doc);
     const attempts = tx.getWriteAttemptLog?.().length;
+    // Whether the change was written as the positions of a splice, which
+    // are then the paths written, and the path of the change is not.
+    let spliced = false;
     if (document === undefined) {
       if (!this.#documents.delete(doc)) return;
       tx.writeValueOrThrow(this.#address(doc, []), undefined, {
@@ -485,7 +490,30 @@ export class RuntimeTransactions implements TransactionHooks {
         : store.peek(doc, path.slice(0, -1));
       const absent = path.length > 0 && isWalkableObjectNotArray(parent) &&
         !Object.hasOwn(parent, path[path.length - 1]);
-      if (absent) {
+      const held = splice === undefined ? undefined : store.peek(doc, path);
+      if (splice !== undefined && Array.isArray(held)) {
+        // A splice of a stored array writes the number of members and the
+        // positions it changed, and no position before it: the labels
+        // stored for those stay with them. The number is written first, so
+        // that it is a write of its own where the array grows.
+        const moved = splice.removed !== splice.inserted;
+        const end = moved ? held.length : splice.start + splice.inserted;
+        spliced = true;
+        if (moved) {
+          written.push([...path, "length"]);
+          tx.writeValueOrThrow(
+            this.#address(doc, [...path, "length"]),
+            held.length,
+          );
+        }
+        for (let at = splice.start; at < end; at++) {
+          written.push([...path, `${at}`]);
+          tx.writeValueOrThrow(
+            this.#address(doc, [...path, `${at}`]),
+            this.#encode(held[at]),
+          );
+        }
+      } else if (absent) {
         tx.writeValueOrThrow(this.#address(doc, path), undefined, {
           delete: true,
         });
@@ -496,6 +524,7 @@ export class RuntimeTransactions implements TransactionHooks {
         );
       }
     }
+    if (!spliced) written.push([...path]);
     // The write policy of the write, as a cell's write records it
     // (`Cell.set`): the schema the write was made under where it declares
     // labels, and otherwise the schema the document's stored labels name.
@@ -599,15 +628,52 @@ export class RuntimeTransactions implements TransactionHooks {
     unchanged: boolean,
   ): void {
     if (this.#compiledPattern === undefined) return;
+    // The records of one change of the members of a list hold one array of
+    // what the change compared, and one set of bindings: each is given to
+    // the runtime as one object.
+    const observed = (positions: readonly Observed[]) =>
+      positions.map(({ address, observes, alone }) => ({
+        address: this.#cfcAddress(address),
+        observes: observesOf(observes),
+        ...(alone ? { alone: true as const } : {}),
+      }));
+    const decidedOf = new Map<readonly Observed[], RuntimeObserved[]>();
+    const inputsOf = new Map<
+      SlotBindings,
+      { write: PlanWrite; inputs: RuntimePlanInputs }
+    >();
     for (const write of writes) {
+      let decided = write.decided === undefined
+        ? undefined
+        : decidedOf.get(write.decided);
+      if (write.decided !== undefined && decided === undefined) {
+        decided = observed(write.decided);
+        decidedOf.set(write.decided, decided);
+      }
+      let shared = inputsOf.get(write.slots);
+      if (
+        shared === undefined || shared.write.selections !== write.selections ||
+        shared.write.picks !== write.picks ||
+        shared.write.elements !== write.elements ||
+        shared.write.dynamic !== write.dynamic ||
+        shared.write.outputs !== write.outputs
+      ) {
+        shared = { write, inputs: this.#inputs(write) };
+        inputsOf.set(write.slots, shared);
+      }
       const recorded: RecordedPlanWrite = {
-        ...this.#inputs(write),
+        ...shared.inputs,
         target: this.#cfcAddress(write.target),
         compiledPattern: this.#compiledPattern,
         record: write.record,
         instance: write.instance,
         keys: write.keys,
         ...(unchanged ? { unchanged: true as const } : {}),
+        ...(decided === undefined ? {} : { decided }),
+        ...(write.observed === undefined
+          ? {}
+          : { observed: observed(write.observed) }),
+        ...(write.enumeration ? { enumeration: true as const } : {}),
       };
       this.#recorded.push(recorded);
       if (unchanged) {

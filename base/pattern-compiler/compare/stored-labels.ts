@@ -401,6 +401,7 @@ const templateEntryAt = (
   const of = (exact: boolean) =>
     entries.filter((entry) =>
       entry.origin === "derived" && entry.observes !== "shape" &&
+      entry.observes !== "enumerate" &&
       entry.path.length === address.path.length &&
       entry.path.every((segment, index) =>
         segment === address.path[index] || (!exact && segment === "*")
@@ -482,17 +483,20 @@ const entriesAt = (
  * `deepLabelAlong` over the runtime's storage, with its atoms in the
  * evaluator's form and where each was found (`Stored`). A read in the class
  * `shape` reads the entries of the container at the address, through the
- * links at its position, and nothing below it.
+ * links at its position, and nothing below it. With `pointers`, the label
+ * at each position holds what a read of the reference there consumes
+ * (`storedReader`).
  */
 export const deepStoredAt = (
   tx: IExtendedStorageTransaction,
   address: CfcAddress,
   patterns: readonly string[],
   observes: "value" | "shape" = "value",
+  pointers = false,
 ): Stored => {
   const found: Record<string, string> = {};
   const label = deepLabelAlong(
-    storedReader(tx, observes),
+    storedReader(tx, observes, pointers),
     address,
     (axis, atom, at) => {
       const key = `${axis === "confidentiality" ? "C" : "I"} ${
@@ -850,6 +854,17 @@ export const checkWrites = (
       const { template, kept } = templateOfRecord(plan, write.record);
       if (template === undefined) {
         return { ...base, error: "the record names no template" };
+      }
+      // A record of a change of a list's members joins labels stored
+      // before the commit, which the storage no longer holds after it.
+      if (
+        write.decided !== undefined || write.observed !== undefined ||
+        write.enumeration === true
+      ) {
+        return {
+          ...base,
+          error: "joins labels stored before the commit",
+        };
       }
       try {
         const evaluated = evaluate(
@@ -1314,7 +1329,11 @@ export const soundnessOf = (
       result.checked += 1;
       if (JSON.stringify(read(source.instance)) === given) continue;
       result.dependent += 1;
-      stored ??= orderedLabel(deepStoredAt(tx, address, patterns).label);
+      // What a reader of the value consumes: at a position that holds a
+      // link, the label of the reference there too.
+      stored ??= orderedLabel(
+        deepStoredAt(tx, address, patterns, "value", true).label,
+      );
       const held = new Set(stored.confidentiality.map(atomKey));
       const { root = [], below = [] } = clauses.get(source.name) ?? {};
       if (below.some((clause) => held.has(clauseKey(clause)))) continue;

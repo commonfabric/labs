@@ -936,6 +936,15 @@ export type PlanElements =
     readonly groups: readonly (PlanInputs & { readonly count: number })[];
   };
 
+/** A stored position with the class a write record observes it in. */
+export type ObservedPosition = {
+  readonly address: CfcAddress;
+  readonly observes: "value" | "shape" | "followRef";
+
+  /** The position alone is observed, and nothing below it. */
+  readonly alone?: true;
+};
+
 /** One write of a compiled pattern, as the executor reports it. */
 export type PlanWrite = PlanInputs & {
   /** The written document and path. */
@@ -969,6 +978,29 @@ export type PlanWrite = PlanInputs & {
    * stays.
    */
   readonly unchanged?: true;
+
+  /**
+   * What a change of a container's members in place compared to find the
+   * members: stored positions whose labels the label of the write is joined
+   * with, each observed in its class as stored before the transaction. The
+   * records of one change hold one array.
+   */
+  readonly decided?: readonly ObservedPosition[];
+
+  /**
+   * Further stored positions whose labels the label of the write is joined
+   * with: the position a member the change moved to the target stood at,
+   * and for the membership of the container, what the container stored of
+   * it.
+   */
+  readonly observed?: readonly ObservedPosition[];
+
+  /**
+   * The record is of the membership of the container at the target, which
+   * a change of its members in place decided anew. Its label is stored as
+   * the `enumerate` entry at the target and labels no member.
+   */
+  readonly enumeration?: true;
 };
 
 /**

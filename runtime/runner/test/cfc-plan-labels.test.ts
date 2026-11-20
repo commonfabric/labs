@@ -1151,6 +1151,240 @@ describe("cfc-plan-labels", () => {
       );
     });
 
+    describe("for changes of the members of a list in place", () => {
+      /**
+       * Seeds three sources labeled `secret-a`, `secret-b` and `secret-c`
+       * and a target, enrolled as a store the runtime owns, and commits
+       * three transactions on it, each recording what the executor records
+       * for it. The first reads `a` and writes the list `["x", "y", "z"]`
+       * whole. The second reads `b` and appends `"w"`. The third reads `c`,
+       * compares the first two members and removes the second, which moves
+       * the two members behind it. With `again`, a fourth reads `b` and
+       * appends `"v"`, at the position the removal left without a member.
+       * Returns the confidentiality of each derived entry of the target as
+       * `observes /path`.
+       */
+      const changed = async (again = false) => {
+        let derived: Record<string, unknown[]> = {};
+        await withRuntime(true, async (runtime) => {
+          const seed = runtime.edit();
+          writeSeedEnvelopeDoc(seed, space);
+          for (const name of ["a", "b", "c"]) {
+            seedStoredEnvelope(seed, memoryAddress(`of:src-${name}`, []), {
+              value: { text: name },
+              cfc: {
+                version: 1,
+                schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                labelMap: {
+                  version: 1,
+                  entries: [{
+                    path: [],
+                    label: { confidentiality: [`secret-${name}`] },
+                  }],
+                },
+              },
+            });
+          }
+          const targetCell = runtime.getCell(
+            space,
+            "plan-list-target",
+            undefined,
+            seed,
+          );
+          targetCell.set({ list: [] });
+          const link = targetCell.getAsNormalizedFullLink();
+          const target: CfcAddress = {
+            space: link.space,
+            id: link.id,
+            scope: "space",
+            path: [],
+          };
+          seed.enrollRuntimeOwnedStore(
+            target,
+            "plan-labels-test",
+            runtimeWritePolicyAuthorization,
+          );
+          expect((await seed.commit().settled).error).toBeUndefined();
+          const identity = runtime.compiledPlans.register(
+            plan,
+            "code",
+            runtimeWritePolicyAuthorization,
+          );
+          const at = (...path: string[]): CfcAddress => ({ ...target, path });
+          const membership = [
+            {
+              address: at("list", "length"),
+              observes: "value" as const,
+              alone: true as const,
+            },
+            { address: at("list"), observes: "shape" as const },
+          ];
+          const commit = async (
+            source: string,
+            writes: [string[], FabricValue][],
+            records: (
+              record: (
+                path: string[],
+                more?: Partial<
+                  Extract<WritePolicyInput, { kind: "plan-write" }>
+                >,
+              ) => void,
+            ) => void,
+          ) => {
+            const tx = runtime.edit();
+            tx.readOrThrow(memoryAddress(`of:src-${source}`, ["value"]));
+            for (const [path, value] of writes) {
+              tx.writeValueOrThrow({ ...link, path }, value);
+            }
+            const write = ["a", "b", "c"].indexOf(source);
+            records((path, more = {}) =>
+              tx.recordCfcWritePolicyInput(
+                {
+                  ...planWrite(
+                    identity,
+                    at(...path),
+                    write,
+                    address(`of:src-${source}`),
+                  ),
+                  ...more,
+                },
+                runtimeWritePolicyAuthorization,
+              )
+            );
+            expect((await tx.commit().settled).error).toBeUndefined();
+          };
+          await commit("a", [[["list"], ["x", "y", "z"]]], (record) => {
+            record(["list"]);
+          });
+          await commit(
+            "b",
+            [[["list", "length"], 4], [["list", "3"], "w"]],
+            (record) => {
+              record(["list", "3"], { observed: membership });
+              record(["list", "length"], { observed: membership });
+              record(["list"], { observed: membership, enumeration: true });
+            },
+          );
+          const decided = [
+            { address: at("list"), observes: "shape" as const },
+            { address: at("list", "0"), observes: "value" as const },
+            { address: at("list", "1"), observes: "value" as const },
+          ];
+          await commit(
+            "c",
+            [
+              [["list", "length"], 3],
+              [["list", "1"], "z"],
+              [["list", "2"], "w"],
+            ],
+            (record) => {
+              record(["list", "1"], {
+                decided,
+                observed: [{ address: at("list", "2"), observes: "value" }],
+              });
+              record(["list", "2"], {
+                decided,
+                observed: [{ address: at("list", "3"), observes: "value" }],
+              });
+              record(["list", "length"], { decided, observed: membership });
+              record(["list"], {
+                decided,
+                observed: membership,
+                enumeration: true,
+              });
+            },
+          );
+          if (again) {
+            await commit(
+              "b",
+              [[["list", "length"], 4], [["list", "3"], "v"]],
+              (record) => {
+                record(["list", "3"], { observed: membership });
+                record(["list", "length"], { observed: membership });
+                record(["list"], { observed: membership, enumeration: true });
+              },
+            );
+          }
+          const reader = runtime.edit();
+          try {
+            const metadata = readStoredCfcMetadata(reader, {
+              space,
+              id: target.id,
+              scope: "space",
+              type: "application/json",
+            });
+            derived = Object.fromEntries(
+              (metadata?.labelMap.entries ?? [])
+                .filter((entry) => entry.origin === "derived")
+                .map((entry) => [
+                  `${entry.observes} /${entry.path.join("/")}`,
+                  [...(entry.label.confidentiality ?? [])].sort(),
+                ]),
+            );
+          } finally {
+            reader.abort();
+          }
+        });
+        return derived;
+      };
+
+      it("stores what the list stored of its membership joined with what decided each change as the `enumerate` entry of the list", async () => {
+        const derived = await changed();
+        expect(derived["enumerate /list"]).toEqual([
+          "secret-a",
+          "secret-b",
+          "secret-c",
+        ]);
+        expect(derived["value /list/length"]).toEqual([
+          "secret-a",
+          "secret-b",
+          "secret-c",
+        ]);
+      });
+
+      it("leaves the entries of the list and of the member before the removed one as they were", async () => {
+        const derived = await changed();
+        expect(derived["value /list"]).toEqual(["secret-a"]);
+        expect(derived["value /list/0"]).toBeUndefined();
+      });
+
+      it("stores at each position a member moved to the member's stored label joined with what decided the removal", async () => {
+        const derived = await changed();
+        // The comparison observed which positions the list has, so what
+        // decided the removal holds what the list stored of its membership.
+        expect(derived["value /list/1"]).toEqual([
+          "secret-a",
+          "secret-b",
+          "secret-c",
+        ]);
+        expect(derived["value /list/2"]).toEqual([
+          "secret-a",
+          "secret-b",
+          "secret-c",
+        ]);
+      });
+
+      it("stores no entry at the position the removal left without a member", async () => {
+        const derived = await changed();
+        expect(derived["value /list/3"]).toBeUndefined();
+        expect(derived["shape /list/3"]).toBeUndefined();
+      });
+
+      it("mints the existence entry of that position again when a member is added there, with what the list stores of its membership by then", async () => {
+        const derived = await changed(true);
+        expect(derived["shape /list/3"]).toEqual([
+          "secret-a",
+          "secret-b",
+          "secret-c",
+        ]);
+        expect(derived["value /list/3"]).toEqual([
+          "secret-a",
+          "secret-b",
+          "secret-c",
+        ]);
+      });
+    });
+
     describe("for a write that left the value as it was", () => {
       /**
        * Seeds a source labeled `secret-a` and a target holding `{ a: "" }`,

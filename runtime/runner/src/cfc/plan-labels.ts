@@ -111,6 +111,9 @@ export interface PlanLabelEnvironment {
   /** Whether the transaction wrote `address`, at it or at a path above it. */
   wrote(address: CfcAddress): boolean;
 
+  /** Whether the transaction wrote at `address`, above it or below it. */
+  wroteWithin(address: CfcAddress): boolean;
+
   /** The transaction's join, which every path not covered keeps. */
   readonly join: {
     readonly confidentiality: readonly CfcConfClause[];
@@ -131,6 +134,15 @@ export interface PlanLabels {
 
   /** The canonical path of each covered path, by document key. */
   readonly paths: ReadonlyMap<string, readonly (readonly string[])[]>;
+
+  /**
+   * The label of the membership of each container whose members a write
+   * changed in place, with the container's canonical path, by document key.
+   */
+  readonly enumerations: ReadonlyMap<
+    string,
+    readonly { path: readonly string[]; label: InternedLabel }[]
+  >;
 
   /** Refusal reasons; the commit is refused when there is any. */
   readonly reasons: readonly string[];
@@ -198,11 +210,16 @@ export const instantiatePlanLabels = (
   for (const [documentKey, inputs] of writes) {
     for (const input of inputs) {
       const pathKey = planLabelPathKey(input.target.path);
-      covering.set(stringKey([documentKey, pathKey]), {
-        documentKey,
-        pathKey,
-        input,
-      });
+      // The record of a container's membership labels no value at its
+      // path, so it is held apart from a write that covers the path.
+      covering.set(
+        stringKey(
+          input.enumeration === true
+            ? [documentKey, pathKey, "enumeration"]
+            : [documentKey, pathKey],
+        ),
+        { documentKey, pathKey, input },
+      );
     }
   }
   const labels = new Map<string, InternedLabel>();
@@ -279,8 +296,11 @@ export const instantiatePlanLabels = (
   const observed = (
     address: CfcAddress,
     observes: ReadObservationShape,
+    alone = false,
   ): { confidentiality: readonly CfcConfClause[]; integrity: CfcAtom[] } => {
-    const journaled = env.journaled(address, observes);
+    // An observation of the position alone is none the journal holds as
+    // such: a journaled read of a value is one of everything below it.
+    const journaled = alone ? undefined : env.journaled(address, observes);
     // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
     // An address the transaction did not read: the label stored there, from
     // an observation of the label alone.
@@ -289,7 +309,7 @@ export const instantiatePlanLabels = (
       read.document,
       read.type,
       canonicalizeLogicalPath(address.path),
-      read.profile,
+      alone ? { ...read.profile, nonRecursive: true } : read.profile,
     ).label;
     if (journaled === undefined) {
       for (const clause of label?.confidentiality ?? []) {
@@ -378,9 +398,63 @@ export const instantiatePlanLabels = (
     });
   };
 
+  // Per transaction: the confidentiality of what one change of a
+  // container's members compared, by the array its records share.
+  const decidedClauses = new Map<object, readonly CfcConfClause[]>();
+  // Per transaction: the template label of the records of one change of a
+  // container's members, which share their bindings, by those bindings.
+  const sharedTemplateLabels = new Map<
+    object,
+    { input: PlanWriteInput; label: InternedLabel }
+  >();
+
+  /**
+   * `label` joined with the labels stored at the positions `input` names
+   * beside its template (`decided`, `observed`): their confidentiality
+   * joins that of `label`, whose integrity the result keeps.
+   */
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+  // A change of a list's members in place stores, at each position it
+  // moved a member to, the member's stored label joined with what decided
+  // the change, and for the list's membership what the list stored of it
+  // joined with the same (provisional decision P39).
+  const withObserved = (
+    label: InternedLabel,
+    input: PlanWriteInput,
+  ): InternedLabel => {
+    if (input.decided === undefined && input.observed === undefined) {
+      return label;
+    }
+    const clausesOf = (
+      positions: NonNullable<PlanWriteInput["observed"]>,
+    ): CfcConfClause[] =>
+      positions.flatMap(({ address, observes, alone }) =>
+        observed(address, observes, alone === true).confidentiality
+      );
+    let decided = input.decided === undefined
+      ? []
+      : decidedClauses.get(input.decided);
+    if (decided === undefined) {
+      decided = table.intern({
+        confidentiality: clausesOf(input.decided!),
+      }).confidentiality;
+      decidedClauses.set(input.decided!, decided);
+    }
+    return table.select(
+      table.intern({
+        confidentiality: [...decided, ...clausesOf(input.observed ?? [])],
+      }),
+      label,
+    );
+  };
+
   /** Instantiates the template of one write. */
   const instantiateWrite = (input: PlanWriteInput): InternedLabel => {
-    if (!env.wrote(input.target)) {
+    if (
+      input.enumeration === true
+        ? !env.wroteWithin(input.target)
+        : !env.wrote(input.target)
+    ) {
       throw new PlanLabelError(
         `a plan-write names /${
           input.target.path.join("/")
@@ -395,8 +469,20 @@ export const instantiatePlanLabels = (
       return wishOutcomeLabel(plan, input, input.record.operation);
     }
     const { template, kept } = templateOf(plan, input.record);
+    const shared = input.decided === undefined && input.observed === undefined
+      ? undefined
+      : sharedTemplateLabels.get(input.slots);
+    if (shared !== undefined && sameTemplateInputs(shared.input, input)) {
+      work.memoHits++;
+      return withObserved(shared.label, input);
+    }
     const inputs = inputsFor(plan, input, input, undefined);
     let label = instantiateTemplate(template, inputs, table, work);
+    if (input.decided !== undefined || input.observed !== undefined) {
+      const own = label === NEUTRAL ? table.empty : label;
+      sharedTemplateLabels.set(input.slots, { input, label: own });
+      return withObserved(own, input);
+    }
     if (kept) {
       // Every kept output carries the atom of its pattern, a neutral one
       // included.
@@ -729,9 +815,19 @@ export const instantiatePlanLabels = (
   noteWork(env, work, bounds);
   const byTarget = new Map<string, Map<string, InternedLabel>>();
   const paths = new Map<string, (readonly string[])[]>();
+  const enumerations = new Map<
+    string,
+    { path: readonly string[]; label: InternedLabel }[]
+  >();
   if (reasons.length === 0) {
     for (const [coveringKey, label] of labels) {
       const { documentKey, pathKey, input } = covering.get(coveringKey)!;
+      if (input.enumeration === true) {
+        const held = enumerations.get(documentKey) ?? [];
+        held.push({ path: canonicalizeLogicalPath(input.target.path), label });
+        enumerations.set(documentKey, held);
+        continue;
+      }
       let labelsByPath = byTarget.get(documentKey);
       if (labelsByPath === undefined) {
         labelsByPath = new Map();
@@ -744,8 +840,20 @@ export const instantiatePlanLabels = (
       );
     }
   }
-  return { byTarget, paths, reasons };
+  return { byTarget, paths, enumerations, reasons };
 };
+
+/**
+ * Whether two writes of one compiled pattern name one record and hold the
+ * same objects as their inputs, so that their template instantiates to one
+ * label.
+ */
+const sameTemplateInputs = (a: PlanWrite, b: PlanWrite): boolean =>
+  a.compiledPattern === b.compiledPattern && a.instance === b.instance &&
+  a.slots === b.slots && a.selections === b.selections &&
+  a.picks === b.picks && a.elements === b.elements &&
+  a.dynamic === b.dynamic && a.outputs === b.outputs && a.keys === b.keys &&
+  JSON.stringify(a.record) === JSON.stringify(b.record);
 
 /** Reports the counts of one pre-pass. */
 const noteWork = (

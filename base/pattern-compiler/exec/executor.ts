@@ -66,6 +66,7 @@ import {
   type FoldElements,
   isUniformBody,
   type NamedOutputInputs,
+  type Observed,
   type PlanInputs,
   type PlanRecord,
   type PlanWrite,
@@ -716,6 +717,20 @@ type Writing = {
     doc?: string;
     path?: readonly string[];
   }[];
+  /**
+   * The writes are made through a handle, with what the method that makes
+   * them compared to decide which members a list keeps or gains: a splice
+   * of a stored list is then recorded by position (`#memberWrites`).
+   */
+  members?: {
+    decided: Observed[];
+    /**
+     * For each position of the list being changed, the position its member
+     * stood at before the first splice of these writes, or `undefined` for
+     * a member they added. Absent until a splice moves a member.
+     */
+    origin?: (number | undefined)[];
+  };
 };
 
 /**
@@ -998,6 +1013,14 @@ export class Handle {
   }
 
   push(...members: unknown[]): void {
+    this.#append(members);
+  }
+
+  /**
+   * Appends `members` to the list. `decided` is what the caller compared
+   * to decide that they are added, which the records of the write hold.
+   */
+  #append(members: unknown[], decided?: Observed[]): void {
     if (this.target instanceof StreamRef) return;
     if (this.fixed) {
       throw new Unsupported(
@@ -1018,7 +1041,7 @@ export class Handle {
       : Array.isArray(declared)
       ? structuredClone(declared)
       : [];
-    const recorded = this.instance.written(this.key("*"));
+    const recorded = this.instance.written(this.key("*"), decided);
     try {
       // A record that is pushed gets a document of its own, as a record
       // in a list that is set does (`Instance.anchored`).
@@ -1039,43 +1062,103 @@ export class Handle {
   }
 
   /**
-   * The positions of this list that hold `member`: the positions a
-   * reference names, for a handle, a reference stand-in or a value read
-   * from a cell, and the positions that hold an equal value, for a copy
-   * of a plain value (ruling Z25).
+   * The positions of this list that hold `member`, the first of them alone
+   * with `first`: the positions a reference names, for a handle, a
+   * reference stand-in or a value read from a cell, and the positions that
+   * hold an equal value, for a copy of a plain value (ruling Z25). `read`
+   * is what the comparison observed of the stored list: which positions it
+   * has, the reference at each compared position that holds a link, whose
+   * target it does not read, and the value at each compared position that
+   * holds a plain value in place.
    */
-  #positionsOf(member: unknown): number[] {
-    if (this.target instanceof StreamRef) return [];
-    const held = this.get();
-    if (!Array.isArray(held)) return [];
+  #positionsOf(
+    member: unknown,
+    first = false,
+  ): { positions: number[]; read: Observed[]; list?: Address } {
+    if (this.target instanceof StreamRef) return { positions: [], read: [] };
+    const { store } = this.instance;
     const list = this.target;
-    return held.flatMap((other, index) =>
-      this.instance.same(list.key(`${index}`), member) ||
-        this.instance.same(other, member)
-        ? [index]
-        : []
-    );
+    const located = store.locate(list, true);
+    if (!Array.isArray(located.value)) return { positions: [], read: [] };
+    const { doc, path } = located.ref;
+    const read: Observed[] = [{
+      address: { doc, path: [...path] },
+      observes: "enumeration",
+    }];
+    const positions: number[] = [];
+    for (let index = 0; index < located.value.length; index++) {
+      const held = located.value[index];
+      const at = list.key(`${index}`);
+      // A position that holds a link is compared as the reference it
+      // holds, which reads nothing of the document the link names.
+      let same = this.instance.unreported(() => this.instance.same(at, member));
+      if (isLink(held)) {
+        read.push({
+          address: { doc, path: [...path, `${index}`] },
+          observes: "identity",
+        });
+      } else {
+        read.push({
+          address: { doc, path: [...path, `${index}`] },
+          observes: "value",
+        });
+        same ||= this.instance.same(
+          store.read(located.ref.key(`${index}`), undefined, true),
+          member,
+        );
+      }
+      if (!same) continue;
+      positions.push(index);
+      if (first) break;
+    }
+    return { positions, read, list: { doc, path: [...path] } };
+  }
+
+  /**
+   * Reports that a method left the members of the stored list at `list`
+   * as they were, because of what it compared (`decided`): a removal that
+   * found no member to remove, and `addUnique` of a member the list holds.
+   * `through` is the handle the method would have written through. The
+   * membership of the list then stores what decided that it stays (ruling
+   * Z67).
+   */
+  #kept(through: Handle, decided: Observed[], list: Address | undefined): void {
+    if (list === undefined) return;
+    const recorded = this.instance.written(through, decided, false);
+    try {
+      this.instance.membersKept(list);
+    } finally {
+      recorded();
+    }
   }
 
   /**
    * Removes the members at `positions` from the stored list in place, each
    * as a splice of the list: no member the list keeps is written, and one
    * that is a reference stays the reference it was, to a document the
-   * removal does not write.
+   * removal does not write. `decided` is what the comparison that found
+   * the positions read, which the records of the removal hold.
    */
-  #removeAt(positions: readonly number[]): void {
+  #removeAt(positions: readonly number[], decided: Observed[]): void {
     if (this.target instanceof StreamRef || positions.length === 0) return;
     if (this.fixed) {
       throw new Unsupported(
         "a write through a handle to a value the instance holds no address for",
       );
     }
-    const recorded = this.instance.written(this);
+    const recorded = this.instance.written(this, decided);
     try {
       // From the last position on, so that each position named is the one
-      // the member holds when it is removed.
-      for (const at of [...positions].sort((a, b) => b - a)) {
-        this.instance.store.splice(this.target, at, 1, []);
+      // the member holds when it is removed, and each run of positions next
+      // to each other as one splice.
+      const last = [...positions].sort((a, b) => b - a);
+      for (let run = 0; run < last.length;) {
+        let end = run;
+        while (end + 1 < last.length && last[end + 1] === last[end] - 1) {
+          end++;
+        }
+        this.instance.store.splice(this.target, last[end], end - run + 1, []);
+        run = end + 1;
       }
     } finally {
       recorded();
@@ -1083,11 +1166,9 @@ export class Handle {
   }
 
   remove(member: unknown): void {
-    const [at] = this.instance.readDeciding(
-      this,
-      () => this.#positionsOf(member),
-    );
-    if (at !== undefined) this.#removeAt([at]);
+    const { positions, read, list } = this.#positionsOf(member, true);
+    if (positions.length === 0) this.#kept(this, read, list);
+    else this.#removeAt(positions, read);
   }
 
   send(event: unknown): void {
@@ -1115,9 +1196,9 @@ export class Handle {
   }
 
   removeAll(member: unknown): void {
-    this.#removeAt(
-      this.instance.readDeciding(this, () => this.#positionsOf(member)),
-    );
+    const { positions, read, list } = this.#positionsOf(member);
+    if (positions.length === 0) this.#kept(this, read, list);
+    else this.#removeAt(positions, read);
   }
 
   /** Removes each member that is `member` (`removeByValue` of a cell). */
@@ -1127,8 +1208,9 @@ export class Handle {
 
   /** Appends `member` unless the list holds it (`addUnique` of a cell). */
   addUnique(member: unknown): void {
-    if (this.#positionsOf(member).length > 0) return;
-    this.push(member);
+    const { positions, read, list } = this.#positionsOf(member, true);
+    if (positions.length > 0) this.#kept(this.key("*"), read, list);
+    else this.#append([member], read);
   }
 
   /**
@@ -1875,7 +1957,13 @@ export type TransactionHooks = {
    * holds the record of each path of the plan the change wrote
    * (`plan-write.ts`): one for a path that one record covers, several for
    * a change that wrote the paths of several, and none where no record of
-   * the plan covers the path.
+   * the plan covers the path. `splice` is the splice of a change whose
+   * records are those of the positions it changed and of the membership of
+   * the array (`PlanWrite.enumeration`), and of a write through a handle
+   * that added a member behind the last one: the position it starts at,
+   * and how many members of the array it removed and put there. Whoever
+   * stores the array then writes those positions and the number of
+   * members, and no other position.
    */
   change(
     doc: string,
@@ -1883,6 +1971,7 @@ export type TransactionHooks = {
     store: Store,
     schema?: Schema,
     writes?: readonly PlanWrite[],
+    splice?: { start: number; removed: number; inserted: number },
   ): void;
 
   /**
@@ -2411,14 +2500,32 @@ export class Instance {
     const open = this.#tx;
     const hooks = this.options.transactions;
     if (hooks !== undefined && (open !== undefined || this.#outside)) {
-      const path = change.covers ?? change.path;
-      const writes = this.#writesOf(change.doc, path, change.splice);
+      let path = change.covers ?? change.path;
+      let { splice } = change;
+      // A write through a handle at the position behind the last one of a
+      // stored list adds a member, as a splice there does.
+      if (
+        splice === undefined && this.#writing?.members !== undefined &&
+        change.old === undefined && /^\d+$/.test(path.at(-1) ?? "")
+      ) {
+        const list = this.store.peek(change.doc, path.slice(0, -1));
+        const start = Number(path.at(-1));
+        if (Array.isArray(list) && start === list.length - 1) {
+          splice = { start, removed: 0, inserted: 1 };
+          path = path.slice(0, -1);
+        }
+      }
+      const added = splice !== change.splice;
+      const writes = this.#writesOf(change.doc, path, splice);
       hooks.change(
         change.doc,
         path,
         this.store,
         change.schema,
         writes.length === 0 ? undefined : writes,
+        added || writes.some(({ enumeration }) => enumeration)
+          ? splice
+          : undefined,
       );
     }
     if (open !== undefined) {
@@ -7271,43 +7378,19 @@ export class Instance {
   }
 
   /**
-   * Runs the read of a list by which a removal through `handle` finds the
-   * members to remove, and binds the slot of the handle in the class
-   * `value` to every position that read went through. Which members the
-   * list keeps, and at which positions, depends on what the comparison with
-   * each member read, so the label of the removal's write holds it, and
-   * not that of the reference to the list alone.
+   * Runs `run` with no read reported, to the read through a handle in
+   * progress or to a store outside the executor: the comparison of two
+   * references resolves each to the position it names, which is no read
+   * of what the position holds.
    */
-  readDeciding<T>(handle: Handle, run: () => T): T {
-    const invoking = this.#invoking.at(-1);
-    const host = this.#handling === undefined
-      ? invoking?.host
-      : this.#handlerHost;
+  unreported<T>(run: () => T): T {
     const { store } = this;
     const outer = store.reader;
-    const reader: NonNullable<Store["reader"]> = {
-      by: outer?.by ??
-        { body: this.#handling ?? invoking?.body ?? -1, handle: -1 },
-      seen: [],
-    };
-    store.reader = reader;
+    store.reader = undefined;
     try {
-      return run();
+      return this.#quietly(run);
     } finally {
       store.reader = outer;
-      if (outer !== undefined) {
-        for (const position of reader.seen) outer.seen.push(position);
-      }
-      if (host !== undefined && handle.slot !== undefined) {
-        const bound = host.bound.get(handle.slot);
-        host.bound.set(handle.slot, {
-          observes: "value",
-          at: [
-            ...(bound !== undefined && "at" in bound ? bound.at : []),
-            ...reader.seen,
-          ],
-        });
-      }
     }
   }
 
@@ -8751,7 +8834,7 @@ export class Instance {
   #writesOf(
     doc: string,
     path: readonly string[],
-    splice: { start: number; inserted: number } | undefined,
+    splice: { start: number; removed: number; inserted: number } | undefined,
   ): PlanWrite[] {
     const owner = doc === this.id ? this : this.#instances.get(doc);
     if (owner !== undefined && owner.id === doc) {
@@ -8760,6 +8843,9 @@ export class Instance {
     const writing = this.#writing;
     if (writing === undefined) return [];
     const keys = writing.instance.contextKeys(writing.host.context);
+    if (splice !== undefined && writing.members !== undefined) {
+      return this.#memberWrites(doc, path, splice, writing, keys);
+    }
     return writing.records.flatMap(({ record, template, ...target }) => {
       // A write edge the plan has no template for has no record either.
       if (template === undefined) return [];
@@ -8792,6 +8878,155 @@ export class Instance {
         ),
       }];
     });
+  }
+
+  /**
+   * On the root: the records of a splice that a write through a handle made
+   * of the stored list at `path` (provisional decision P39). Each member
+   * added is recorded at its own position. Each member the splice moved is
+   * recorded at the position it stands at now, with the position it stood
+   * at before the writes, whose stored label its record keeps. The number
+   * of members and the membership of the list are recorded with what the
+   * list stored of its membership. Every record holds what the method
+   * compared to find the members. A position before the splice is not
+   * recorded: the splice left it as it was. With no splice given, the
+   * method left every member as it was.
+   */
+  #memberWrites(
+    doc: string,
+    path: readonly string[],
+    given: { start: number; removed: number; inserted: number } | undefined,
+    writing: Writing,
+    keys: [number, string][],
+  ): PlanWrite[] {
+    const members = writing.members!;
+    const now = this.store.peek(doc, path);
+    if (!Array.isArray(now)) return [];
+    // With no splice, the members stay as they are: the number of members
+    // and the membership are recorded, and no position.
+    const kept = given === undefined;
+    const splice = given ?? { start: now.length, removed: 0, inserted: 0 };
+    const end = splice.start + splice.inserted;
+    const moves = splice.removed !== splice.inserted && end < now.length;
+    if (members.origin === undefined && (moves || splice.removed > 0)) {
+      members.origin = Array.from(
+        { length: now.length - splice.inserted + splice.removed },
+        (_, index) => index,
+      );
+    }
+    if (members.origin !== undefined) {
+      spliceIn(
+        members.origin,
+        splice.start,
+        splice.removed,
+        Array.from({ length: splice.inserted }, () => undefined),
+      );
+    }
+    const { origin, decided } = members;
+    const held = decided.length === 0 ? {} : { decided };
+    const inputsOf = (template: Template) =>
+      writing.instance.#inputsFor(
+        template,
+        keys,
+        [{
+          slots: writing.host.bound,
+          selections: writing.host.selections,
+          picks: writing.host.picks,
+          dynamic: writing.host.dynamic,
+        }],
+      );
+    // What the list stored of its membership: the label of its number of
+    // members, read at that position alone, and that of its enumeration.
+    const membership: Observed[] = [
+      {
+        address: { doc, path: [...path, "length"] },
+        observes: "value",
+        alone: true,
+      },
+      { address: { doc, path: [...path] }, observes: "enumeration" },
+    ];
+    return writing.records.flatMap(({ record, template }) => {
+      // A write edge the plan has no template for has no record either.
+      if (template === undefined) return [];
+      const writes: PlanWrite[] = [];
+      // The position of a member added is one the membership of the list
+      // decided, so its record keeps what the list stored of that.
+      for (let at = splice.start; at < end; at++) {
+        const target = { doc, path: [...path, `${at}`] };
+        writes.push({
+          target,
+          record,
+          ...writing.instance.#storedInPlace(
+            template,
+            inputsOf(template),
+            target,
+          ),
+          ...held,
+          observed: membership,
+        });
+      }
+      const inputs = inputsOf(template);
+      if (moves) {
+        for (let at = end; at < now.length; at++) {
+          const from = origin?.[at];
+          writes.push({
+            target: { doc, path: [...path, `${at}`] },
+            record,
+            ...inputs,
+            ...held,
+            ...(from === undefined ? {} : {
+              observed: [{
+                address: { doc, path: [...path, `${from}`] },
+                observes: isLink(now[at]) ? "identity" : "value",
+              }],
+            }),
+          });
+        }
+      }
+      if (kept || splice.removed !== splice.inserted) {
+        writes.push({
+          target: { doc, path: [...path, "length"] },
+          record,
+          ...inputs,
+          ...held,
+          observed: membership,
+        });
+      }
+      writes.push({
+        target: { doc, path: [...path] },
+        record,
+        ...inputs,
+        ...held,
+        observed: membership,
+        enumeration: true,
+      });
+      return writes;
+    });
+  }
+
+  /**
+   * Reports the records of the membership of the stored list at `list` as
+   * those of a write that left it as it was (`TransactionHooks.unchanged`),
+   * for the writes being recorded through a handle.
+   */
+  membersKept(list: Address): void {
+    const { root } = this;
+    const hooks = root.options.transactions;
+    const writing = root.#writing;
+    if (
+      root.#tx === undefined || writing?.members === undefined ||
+      hooks?.unchanged === undefined
+    ) return;
+    const writes = root.#memberWrites(
+      list.doc,
+      list.path,
+      undefined,
+      writing,
+      writing.instance.contextKeys(writing.host.context),
+    );
+    if (writes.length > 0) {
+      hooks.unchanged(list.doc, list.path, this.store, undefined, writes);
+    }
   }
 
   /**
@@ -8956,7 +9191,12 @@ export class Instance {
    * a cone being run, the record of the writes until the returned
    * function is called.
    */
-  written(handle: Handle): () => void {
+  written(
+    handle: Handle,
+    decided?: Observed[],
+    /** Whether a write is made, which is counted. */
+    counted = true,
+  ): () => void {
     const invoking = this.#invoking.at(-1);
     const index = this.#handling ?? invoking?.body;
     const host = this.#handling === undefined
@@ -8971,7 +9211,7 @@ export class Instance {
     const write = body.writes.findIndex(({ target }) =>
       target.kind === "handle" && covers(target)
     );
-    if (this.#handling !== undefined) {
+    if (this.#handling !== undefined && counted) {
       const covered = write >= 0 ||
         body.envelopes.some((envelope) =>
           envelope.kind === "handle" && covers(envelope)
@@ -8979,14 +9219,18 @@ export class Instance {
       if (covered) this.counts.writesCovered += 1;
       else this.counts.writesNotCovered += 1;
     }
+    // A write that no write edge covers has no record. It is a write
+    // through a handle all the same, so one that adds a member to a list
+    // is given to the transaction hooks as the positions it wrote.
     return this.#recording(
-      write < 0 || host === undefined ? undefined : {
+      host === undefined ? undefined : {
         instance: this,
         host,
-        records: [{
+        records: write < 0 ? [] : [{
           record: { body: index, write },
           template: body.writes[write].template,
         }],
+        members: { decided: decided ?? [] },
       },
     );
   }

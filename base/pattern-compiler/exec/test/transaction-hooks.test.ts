@@ -936,6 +936,142 @@ describe("TransactionHooks for a removal from an array of references", () => {
 
 // `fixtures/unchanged-write.tsx`: `raise` writes the greater of the inputs
 // `level` and `floor`.
+describe("the records of a change of a list's members through a handle", () => {
+  /** The records of the changes of the last event sent, by target path. */
+  const recordsOf = (recorder: Recorder, from: number) =>
+    recorder.changed.slice(from).filter(({ cause }) => cause === "event")
+      .flatMap(({ writes }) => writes ?? []);
+
+  /** What a record observes beside its template, as `class /path`. */
+  const observedBy = (
+    positions: PlanWrite["observed"],
+  ) =>
+    (positions ?? []).map(({ address, observes }) =>
+      `${observes} /${address.path.join("/")}`
+    );
+
+  // `fixtures/remove-shift.tsx`: a list of plain values in place.
+  describe("over plain values in place", () => {
+    const pushed = async () => {
+      const recorder = new Recorder();
+      const instance = new Instance(
+        await artifactOf("remove-shift"),
+        { note: "n" },
+        { transactions: recorder },
+      );
+      const send = (name: string, event: unknown) => {
+        const from = recorder.changed.length;
+        instance.send(bindingOf(instance, name), event);
+        return recordsOf(recorder, from);
+      };
+      send("addWord", { word: "x" });
+      send("addNote", {});
+      return { send };
+    };
+
+    it("records a push at the position added, at the number of members and for the membership, each with what the list stored of its membership", async () => {
+      const { send } = await pushed();
+      const records = send("addWord", { word: "y" });
+
+      expect(
+        records.map(({ target, enumeration }) =>
+          `${enumeration ? "enumeration " : ""}/${target.path.join("/")}`
+        ),
+      ).toEqual(["/2", "/length", "enumeration /"]);
+      for (const { observed } of records) {
+        expect(observedBy(observed)).toEqual([
+          "value /length",
+          "enumeration /",
+        ]);
+      }
+    });
+
+    it("records a removal at each position from the removed one on, with the position its member stood at", async () => {
+      const { send } = await pushed();
+      send("addWord", { word: "y" });
+      const records = send("drop", { word: "x" });
+
+      expect(
+        records.filter(({ enumeration }) => !enumeration).map((
+          { target, observed },
+        ) => [`/${target.path.join("/")}`, observedBy(observed)]),
+      ).toEqual([
+        ["/0", ["value /1"]],
+        ["/1", ["value /2"]],
+        ["/length", ["value /length", "enumeration /"]],
+      ]);
+    });
+
+    it("gives every record of a removal what the comparison read: the membership and the value at each position", async () => {
+      const { send } = await pushed();
+      const records = send("drop", { word: "x" });
+
+      for (const { decided } of records) {
+        expect(observedBy(decided)).toEqual([
+          "enumeration /",
+          "value /0",
+          "value /1",
+        ]);
+      }
+      expect(new Set(records.map(({ decided }) => decided)).size).toBe(1);
+    });
+
+    it("records the membership alone, as left as it was, for a removal that finds no member", async () => {
+      const recorder = new Recorder();
+      const instance = new Instance(
+        await artifactOf("remove-shift"),
+        { note: "n" },
+        { transactions: recorder },
+      );
+      instance.send(bindingOf(instance, "addWord"), { word: "x" });
+      const from = recorder.changed.length;
+      instance.send(bindingOf(instance, "drop"), { word: "q" });
+      const unchanged = recorder.left.flatMap(({ writes }) => writes);
+
+      expect(recordsOf(recorder, from)).toEqual([]);
+      expect(
+        unchanged.map(({ target, enumeration }) =>
+          `${enumeration ? "enumeration " : ""}/${target.path.join("/")}`
+        ),
+      ).toEqual(["/length", "enumeration /"]);
+      expect(observedBy(unchanged[0].decided)).toEqual([
+        "enumeration /",
+        "value /0",
+      ]);
+    });
+  });
+
+  // `fixtures/remove-reference.tsx`: an array of references.
+  describe("over an array of references", () => {
+    it("gives the records of a removal the reference at each compared position, and reads no document a reference names", async () => {
+      const recorder = new Recorder();
+      const instance = new Instance(
+        await artifactOf("remove-reference"),
+        { note: "n" },
+        { transactions: recorder },
+      );
+      instance.send(bindingOf(instance, "add"), { title: "a" });
+      instance.send(bindingOf(instance, "add"), { title: "b" });
+      const from = recorder.changed.length;
+      instance.send(bindingOf(instance, "dropFirst"), {});
+      const records = recordsOf(recorder, from);
+
+      expect(observedBy(records[0].decided)).toEqual([
+        "enumeration /",
+        "identity /0",
+      ]);
+      expect(
+        records.filter(({ enumeration }) => !enumeration).map((
+          { target, observed },
+        ) => [`/${target.path.join("/")}`, observedBy(observed)]),
+      ).toEqual([
+        ["/0", ["identity /1"]],
+        ["/length", ["value /length", "enumeration /"]],
+      ]);
+    });
+  });
+});
+
 describe("TransactionHooks for a write that leaves the value as it was", () => {
   const raised = async (floor: number) => {
     const recorder = new Recorder();
