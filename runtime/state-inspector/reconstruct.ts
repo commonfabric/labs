@@ -482,15 +482,17 @@ function reconstructWithinBranch(
  * the branch inherits nothing (the default branch, a store without a `branch`
  * table, or a branch with no parent). This is the engine's fallback in
  * `reconstructPatchedDocument` for patches with no base on their own branch,
- * fork point `?? 0` included. `visited` holds the branches already asked on
+ * fork point `?? 0` included, and where a replay of a branch's own writes
+ * starts (`entityTimeline`). `visited` holds the branches already asked on
  * this read, so a malformed cycle in `parent_branch` ends rather than recurs.
+ * Throws when the parent's document does not decode.
  */
-function inheritedDocument(
+export function inheritedDocument(
   space: SpaceDb,
   branch: string,
   scope: string,
   id: string,
-  visited: Set<string>,
+  visited: Set<string> = new Set(),
 ): StoredDocument {
   // The default branch is named "" (falsy) — test for it by value.
   if (branch === "" || !hasTable(space, "branch") || visited.has(branch)) {
