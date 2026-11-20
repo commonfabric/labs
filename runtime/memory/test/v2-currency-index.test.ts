@@ -1103,6 +1103,34 @@ describe("currency-index", () => {
       expect(markOf("of:piece")).toBe(0);
     });
 
+    it("stores clean a piece that vouches for an instance a client wrote above the `asOf` of its first record, once a record covers that write", () => {
+      // The first record is taken below the client's write, so it answers
+      // for the instance at no seq, and the write is not an overwrite of
+      // anything the piece vouched for.
+
+      const vouching = record("of:piece", { produces: ["computed:out"] });
+      const before = write("of:piece");
+      const created = write("computed:out");
+      store(before, [vouching]);
+      expect(markOf("of:piece")).toBe(2);
+
+      store(created, [vouching]);
+
+      expect(markOf("of:piece")).toBe(0);
+    });
+
+    it("keeps marked a piece whose output was overwritten above the `asOf` of a record of it, through a later record that covers the overwrite", () => {
+      const vouching = record("of:piece", { produces: ["computed:out"] });
+      const asOf = write("of:piece", "computed:out");
+      store(asOf, [vouching]);
+      const overwritten = write("computed:out");
+      store(asOf, [vouching]);
+
+      store(overwritten, [vouching]);
+
+      expect(markOf("of:piece")).toBe(2);
+    });
+
     it("replaces a piece's rows as a set", () => {
       const asOf = write("of:a", "of:b");
       store(asOf, [record("of:piece", { reads: [input("of:a")] })]);

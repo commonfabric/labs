@@ -1006,6 +1006,23 @@ export const storeCurrencyRecords = (
           const at = standingOf(id, slice.key);
           unseen ||= at.unseen;
           const last = lastVouches.get(id)?.seq;
+          if (at.unseen) {
+            // A record taken below a commit to the instance answers for it
+            // at no seq. Its row keeps the seq the piece last answered at,
+            // and is not written for a piece that never did, so that a
+            // later record does not read the commit as an overwrite of
+            // something this one vouched for.
+            if (last !== undefined) {
+              statements.upsertVouch.run({
+                branch,
+                slice: slice.key,
+                piece,
+                id,
+                seq: last,
+              });
+            }
+            continue;
+          }
           // A head no derivation put there, above the seq the piece last
           // answered for the instance at, or on an instance a derivation
           // had written, is an overwrite from outside, which the piece's
@@ -1013,7 +1030,7 @@ export const storeCurrencyRecords = (
           // change did not wake it. An instance no derivation ever wrote
           // is one a client computed before a serving loop did, which a
           // clean run that left it alone agrees with.
-          const outside = !at.unseen && at.seq > 0 && !isDerivation(at.seq) &&
+          const outside = at.seq > 0 && !isDerivation(at.seq) &&
             (last === undefined ? derivedBefore(id, slice.key) : at.seq > last);
           overwritten ||= outside;
           statements.upsertVouch.run({
