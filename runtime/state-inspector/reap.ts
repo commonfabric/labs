@@ -12,7 +12,8 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isDeletionTombstone } from "@commonfabric/memory/acl";
 
 import type { CompactionCheck, StoreVerification } from "./compaction.ts";
-import { openSpace } from "./db.ts";
+import { sqlText, textBytes } from "./compact-views.ts";
+import { openSpace, type SpaceDb, tableNames } from "./db.ts";
 import { decodeStored } from "./decode.ts";
 
 /** The outcome of {@link verifyReap}. */
@@ -45,7 +46,101 @@ const KEPT: ReadonlyMap<string, string> = new Map([
   ],
   ["head", `branch = '' AND id = :acl AND scope_key = 'space'`],
   ["branch", `name = ''`],
+  ["mem_store_format", `1`],
+  ["mem_store_migration", `1`],
 ]);
+
+/**
+ * The `commit` columns a reap leaves as text whatever form the backup holds
+ * them in, and the compact-form columns it clears; the kept row is compared
+ * on its text.
+ */
+const COMMIT_COMPACT_COLUMNS = new Set(["digest", "reads"]);
+
+/**
+ * Registers, on `main`'s connection, functions that read a payload cell as
+ * text on either side: `mem_value_text` for the result where its store has
+ * no value objects (where it has, `openSpace` registered it), and
+ * `against_value_text(cell)` and `against_commit_text(seq, column)` for the
+ * backup, read through `backup`'s own connection.
+ */
+const registerTextFunctions = (main: SpaceDb, backup: SpaceDb): void => {
+  const options = { deterministic: true };
+  if (!tableNames(main.db).includes("mem_value_object")) {
+    main.db.function(
+      "mem_value_text",
+      (cell: string | null) => textBytes(cell),
+      options,
+    );
+  }
+  const backupCompact = tableNames(backup.db).includes("mem_value_object");
+  main.db.function(
+    "against_value_text",
+    (cell: string | number | null) => {
+      const text = backupCompact && typeof cell === "number"
+        ? backup.get<{ text: string | null }>(
+          `SELECT ${sqlText("mem_value_text(?)")} AS text`,
+          cell,
+        )?.text ?? null
+        : cell;
+      return typeof text === "string" ? textBytes(text) : text;
+    },
+    options,
+  );
+  main.db.function(
+    "against_commit_text",
+    (seq: number, column: string) =>
+      textBytes(
+        backup.get<{ text: string }>(
+          column === "original"
+            ? `SELECT original AS text FROM "commit" WHERE seq = ?`
+            : `SELECT resolution AS text FROM "commit" WHERE seq = ?`,
+          seq,
+        )?.text ?? null,
+      ),
+    options,
+  );
+};
+
+/**
+ * The SELECT list and source of `table` on one side of the comparison: every
+ * column as stored, except that the payload cells of `revision` and `commit`
+ * read as text and `commit`'s compact-form columns are left out.
+ */
+const sideOf = (
+  main: SpaceDb,
+  table: string,
+  schema: "main" | "against",
+): string => {
+  if (table !== "revision" && table !== "commit") {
+    return `SELECT * FROM ${schema}.${quoted(table)}`;
+  }
+  const columns = main.all<{ name: string }>(
+    `SELECT name FROM pragma_table_info(?, '${schema}') ORDER BY cid`,
+    table,
+  ).map((column) => column.name).filter((name) =>
+    table !== "commit" || !COMMIT_COMPACT_COLUMNS.has(name)
+  );
+  const list = columns.map((name) => {
+    if (table === "revision" && name === "data") {
+      return schema === "main"
+        ? `${sqlText(`mem_value_text("data")`)} AS "data"`
+        : `${sqlText(`against_value_text("data")`)} AS "data"`;
+    }
+    if (table === "commit" && (name === "original" || name === "resolution")) {
+      return schema === "main"
+        ? `"${name}"`
+        : `${sqlText(`against_commit_text("seq", '${name}')`)} AS "${name}"`;
+    }
+    return quoted(name);
+  });
+  // The result's `commit` is read through its view, which presents the
+  // payload as text; a reaped result holds it as text already.
+  const source = table === "commit" && schema === "main"
+    ? `"commit"`
+    : `${schema}.${quoted(table)}`;
+  return `SELECT ${list.join(", ")} FROM ${source}`;
+};
 
 /** The members of `parameters` that `sql` names, which is all SQLite accepts
  * for its statement. */
@@ -85,8 +180,11 @@ export function verifyReap(
   });
 
   const main = openSpace(options.result);
+  let backup: SpaceDb | undefined;
   try {
     main.db.prepare(`ATTACH DATABASE ? AS against`).run(options.against);
+    backup = openSpace(options.against);
+    registerTextFunctions(main, backup);
 
     // 1. The file itself.
     const integrity = main.all<{ integrity_check: string }>(
@@ -106,7 +204,9 @@ export function verifyReap(
 
     // 2. The deletion, as the backup records it.
     const acl = main.all<{ id: string; seq: number; data: string | null }>(
-      `SELECT h.id, h.seq, r.data FROM against.head h
+      `SELECT h.id, h.seq, ${
+        sqlText("against_value_text(r.data)")
+      } AS data FROM against.head h
        JOIN against.revision r ON r.branch = h.branch AND r.id = h.id
          AND r.scope_key = h.scope_key AND r.seq = h.seq
          AND r.op_index = h.op_index
@@ -171,14 +271,14 @@ export function verifyReap(
       const named = parametersOf(kept, parameters);
       const extra = main.get<{ n: number }>(
         `SELECT COUNT(*) AS n FROM (
-           SELECT * FROM main.${quoted(table)}
-           EXCEPT SELECT * FROM against.${quoted(table)} WHERE ${kept})`,
+           ${sideOf(main, table, "main")}
+           EXCEPT ${sideOf(main, table, "against")} WHERE ${kept})`,
         named,
       )!.n;
       const missing = main.get<{ n: number }>(
         `SELECT COUNT(*) AS n FROM (
-           SELECT * FROM against.${quoted(table)} WHERE ${kept}
-           EXCEPT SELECT * FROM main.${quoted(table)})`,
+           ${sideOf(main, table, "against")} WHERE ${kept}
+           EXCEPT ${sideOf(main, table, "main")})`,
         named,
       )!.n;
       check(
@@ -199,5 +299,6 @@ export function verifyReap(
     return finish();
   } finally {
     main.close();
+    backup?.close();
   }
 }

@@ -30,6 +30,11 @@ import {
   ProtocolError,
 } from "../v2.ts";
 import { isACL } from "../acl.ts";
+import { ValueStore } from "../v2/value-store.ts";
+import {
+  readCommitOriginalText,
+  type StoredCommitCells,
+} from "../v2/commit-record.ts";
 import {
   type CompactionProgress,
   CompactionRefused,
@@ -109,6 +114,21 @@ const compactionCommits = (db: Database) =>
   ).all<{ seq: number; session_id: string; class: string }>(
     `${COMPACTION_SESSION_PREFIX}%`,
   );
+
+/** Every commit's `original` as text, whichever form the row holds it in. */
+const payloadsOf = (db: Database): Array<{ seq: number; original: string }> => {
+  const values = new ValueStore(db);
+  try {
+    return db.prepare(
+      `SELECT seq, session_id, original, digest, reads FROM "commit" ORDER BY seq`,
+    ).all<StoredCommitCells>().map((row) => ({
+      seq: row.seq,
+      original: readCommitOriginalText(db, values, row),
+    }));
+  } finally {
+    values.close();
+  }
+};
 
 const value = (engine: Engine, id: string): unknown =>
   read(engine, { id: id as never });
@@ -555,9 +575,7 @@ describe("compactStore", () => {
       expect(run.hollowed).toBe(2);
       expect(phases).toEqual(["planned", "instance", "hollowing", "vacuum"]);
       const result = await reopen(out);
-      const payloads = result.database.prepare(
-        `SELECT seq, original FROM "commit" ORDER BY seq`,
-      ).all<{ seq: number; original: string }>();
+      const payloads = payloadsOf(result.database);
       expect(payloads.map((row) => [row.seq, isHollowedPayload(row.original)]))
         .toEqual([[1, false], [2, true], [3, true], [run.commitSeq, false]]);
       const marker = decodeHollowedPayload(payloads[1].original)!;
@@ -627,9 +645,7 @@ describe("compactStore", () => {
       keepPayloadsMs: 0,
     });
     const result = await reopen(out);
-    const payloads = result.database.prepare(
-      `SELECT seq, original FROM "commit" ORDER BY seq`,
-    ).all<{ seq: number; original: string }>();
+    const payloads = payloadsOf(result.database);
     const intact = payloads.filter((row) => !isHollowedPayload(row.original))
       .map((row) => row.seq);
     expect(intact).toEqual([1, 3, run.commitSeq]);
@@ -827,11 +843,9 @@ describe("compactStore", () => {
       }));
     expect(shape(resumed.database)).toEqual(shape(uninterrupted.database));
     const hollowedSeqs = (db: Database) =>
-      db.prepare(`SELECT seq, original FROM "commit"`).all<
-        { seq: number; original: string }
-      >().filter((row) => isHollowedPayload(row.original)).map((row) =>
-        row.seq
-      );
+      payloadsOf(db).filter((row) => isHollowedPayload(row.original)).map((
+        row,
+      ) => row.seq);
     expect(hollowedSeqs(resumed.database)).toEqual(
       hollowedSeqs(uninterrupted.database),
     );

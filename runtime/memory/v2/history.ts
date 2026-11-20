@@ -80,14 +80,16 @@ type CommitRow = {
   session_id: string;
   consequence_of: string | null;
   derived_through: number | null;
-  original: string;
+  original: string | Uint8Array;
+  digest: Uint8Array | null;
+  reads: Uint8Array | null;
   writes: number;
 };
 
 const SELECT_COMMITS = `
 SELECT c.seq, c.branch, c.class, c.created_at, c.acting_principal,
        c.session_id,
-       c.consequence_of, c.derived_through, c.original,
+       c.consequence_of, c.derived_through, c.original, c.digest, c.reads,
        (SELECT COUNT(*) FROM (
           SELECT DISTINCT r.id, r.scope_key FROM revision r
           WHERE r.commit_seq = c.seq
@@ -125,7 +127,10 @@ const payloadSummary = (
   };
 };
 
-const toCommitSummary = (row: CommitRow): CommitSummary => {
+const toCommitSummary = (
+  engine: Engine.Engine,
+  row: CommitRow,
+): CommitSummary => {
   const principal = row.acting_principal ??
     principalOfSessionKey(row.session_id);
   return {
@@ -147,7 +152,7 @@ const toCommitSummary = (row: CommitRow): CommitSummary => {
     ...(row.derived_through !== null
       ? { derivedThrough: row.derived_through }
       : {}),
-    ...payloadSummary(row.original, row.class),
+    ...payloadSummary(engine.commits.originalText(row), row.class),
     writes: row.writes,
   };
 };
@@ -184,7 +189,7 @@ export const listCommits = (
       floor,
       limit: limit - commits.length,
     }) as CommitRow[];
-    for (const row of rows) commits.push(toCommitSummary(row));
+    for (const row of rows) commits.push(toCommitSummary(engine, row));
   }
   return commits;
 };

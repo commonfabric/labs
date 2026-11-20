@@ -104,21 +104,31 @@ export const encodeStoredCommit = (
 };
 
 /**
- * Returns whether `stored`, a commit row's `original`, holds `incoming` in
- * either of the forms {@link encodeStoredCommit} writes. Both forms determine
- * the whole submission: the first is its encoding, and the second carries
- * that encoding's SHA-256. A resubmission without a well-formed read set
- * matches neither, since no admitted commit lacked one.
+ * Returns whether `holds` returns true for `incoming` in either of the forms
+ * {@link encodeStoredCommit} writes, where `holds` reports whether a commit
+ * row stores the text it is given. Both forms determine the whole submission:
+ * the first is its encoding, and the second carries that encoding's SHA-256.
+ * A resubmission without a well-formed read set matches neither, since no
+ * admitted commit lacked one.
+ */
+export const someStoredForm = (
+  incoming: ClientCommit,
+  holds: (form: string) => boolean,
+): boolean => {
+  if (!hasReadSet(incoming)) return false;
+  const whole = encodeMemoryBoundary(incoming);
+  return holds(whole) ||
+    (carriesReads(incoming) && holds(digestForm(incoming, whole)));
+};
+
+/**
+ * Returns whether `stored`, the text of a commit row's `original`, holds
+ * `incoming` in either of the forms {@link encodeStoredCommit} writes.
  */
 export const storesCommit = (
   stored: string,
   incoming: ClientCommit,
-): boolean => {
-  if (!hasReadSet(incoming)) return false;
-  const whole = encodeMemoryBoundary(incoming);
-  return stored === whole ||
-    (carriesReads(incoming) && stored === digestForm(incoming, whole));
-};
+): boolean => someStoredForm(incoming, (form) => form === stored);
 
 /** How many reads a stored commit records, and whether it keeps them. */
 export type StoredReadCounts = {

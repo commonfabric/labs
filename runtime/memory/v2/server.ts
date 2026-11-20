@@ -176,6 +176,11 @@ import {
 } from "./currency-index.ts";
 import * as Engine from "./engine.ts";
 import {
+  startStoreMigration,
+  type StoreMigrationHandle,
+  type StoreMigrationStatus,
+} from "./store-migration.ts";
+import {
   executeInvite,
   type InviteRequest,
   type InviteResult,
@@ -386,6 +391,9 @@ const echoBreakerReportCount = operationMeter.createCounter(
  * anything on.
  */
 const timing = getLogger("memory", { enabled: false });
+
+/** Reports a store migration that stopped on an error. */
+const storeMigrationLogger = getLogger("memory.store-migration");
 
 const SUBSCRIPTION_REFRESH_DELAY_MS = 5;
 
@@ -3555,6 +3563,9 @@ export class Server {
 
   #engines = new Map<string, Promise<Engine.Engine>>();
 
+  /** The background store migration of each file store this server opened. */
+  #storeMigrations = new Map<string, StoreMigrationHandle>();
+
   /**
    * Whether `close()` has reached this server's engines. From then on,
    * `#openEngineInner()` refuses, since `close()` would never close an engine
@@ -3800,6 +3811,13 @@ export class Server {
        * Engine.open (see DEFAULT_DOCUMENT_CACHE_BUDGET_BYTES there). */
       documentCacheBudgetBytes?: number;
       documentCacheMaxEntries?: number;
+
+      /**
+       * Whether a file store this server opens converts its text rows to the
+       * compact form in the background (store-migration.ts), one batch per
+       * event-loop turn, while the server serves it. Default `background`.
+       */
+      storeMigration?: "background" | "off";
 
       /** Whether each space's engine stores admitted commits' reads as a
        * digest where nothing reads them afterward; handed to Engine.open
@@ -5533,6 +5551,12 @@ export class Server {
     await this.#refreshing;
     await this.#drainSpacePublicationLocks();
     this.#closed = true;
+    // A migration batch writes through the engine; each stops after the
+    // batch in progress.
+    await Promise.all(
+      [...this.#storeMigrations.values()].map((run) => run.stop()),
+    );
+    this.#storeMigrations.clear();
     for (const engine of this.#engines.values()) {
       Engine.close(await engine);
     }
@@ -5635,6 +5659,16 @@ export class Server {
         throw new Error("Space durability checkpoint could not complete");
       }
     });
+  }
+
+  /**
+   * What the background store migration of `space` ends with: its status when
+   * it completes, fails or is stopped. `undefined` when none runs: the store
+   * is not a file, the option is `off`, the engine is not open, or the run
+   * has ended.
+   */
+  storeMigrationDone(space: string): Promise<StoreMigrationStatus> | undefined {
+    return this.#storeMigrations.get(space)?.done;
   }
 
   async readDocument(
@@ -13516,6 +13550,32 @@ export class Server {
   }
 
   /**
+   * Converts the store of `space` to the compact form in the background
+   * (store-migration.ts); `close()` stops the run before closing the engine.
+   * A store whose conversion is complete schedules nothing. A failed phase is
+   * logged and left failed, and the engine keeps serving both forms.
+   */
+  #startStoreMigration(space: string, engine: Engine.Engine): void {
+    const run = startStoreMigration(engine, { space });
+    this.#storeMigrations.set(space, run);
+    run.done.then((status) => {
+      if (this.#storeMigrations.get(space) === run) {
+        this.#storeMigrations.delete(space);
+      }
+      for (const phase of status.phases) {
+        if (phase.state === "failed" || phase.error !== undefined) {
+          storeMigrationLogger.error(
+            "store-migration",
+            () => [
+              `the store migration of ${space} stopped in its ${phase.phase} phase: ${phase.error}`,
+            ],
+          );
+        }
+      }
+    });
+  }
+
+  /**
    * Helper for `#openEngine()`, which does the opening: an engine already
    * open or opening is handed back; otherwise one is opened at the space's
    * store URL, its directory created first when the store is a file, and
@@ -13543,7 +13603,7 @@ export class Server {
       if (url.protocol === "file:") {
         await FS.ensureDir(Path.toFileUrl(Path.dirname(Path.fromFileUrl(url))));
       }
-      return await Engine.open({
+      const engine = await Engine.open({
         url,
         operationCodecs: this.#operationCodecs,
         operationCheckpointInterval: this.options.operationCheckpointInterval,
@@ -13558,6 +13618,13 @@ export class Server {
         commitObserver: (decision) =>
           this.#observeCommit({ ...decision, space }),
       });
+      if (
+        url.protocol === "file:" &&
+        (this.options.storeMigration ?? "background") === "background"
+      ) {
+        this.#startStoreMigration(space, engine);
+      }
+      return engine;
     })();
     // The SYNC engine view, which the read paths that must not add a
     // microtask boundary consult.

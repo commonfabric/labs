@@ -101,10 +101,12 @@ const withStore = async (
   }
 };
 
-/** Rows and bytes of `id` strictly before `(seq, opIndex)`, by hand. */
+/** Rows and bytes of `id` strictly before `(seq, opIndex)`, by hand; a cell
+ * holding a vid holds no bytes inline. */
 const behind = (db: Database, id: string, seq: number, opIndex: number) =>
   db.prepare(
-    `SELECT count(*) AS n, COALESCE(sum(length(CAST(data AS BLOB))), 0) AS bytes
+    `SELECT count(*) AS n, COALESCE(sum(CASE WHEN typeof(data) = 'integer'
+       THEN 0 ELSE length(CAST(data AS BLOB)) END), 0) AS bytes
      FROM revision WHERE id = ? AND (seq < ? OR (seq = ? AND op_index < ?))`,
   ).get<{ n: number; bytes: number }>(id, seq, seq, opIndex)!;
 

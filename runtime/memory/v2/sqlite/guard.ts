@@ -37,6 +37,13 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "execution_outbox",
   "instance_name_mark",
   "_cf_commit_watermark",
+  "mem_value_object",
+  "mem_value_hash",
+  "mem_entity",
+  "mem_read_shape",
+  "mem_read_chunk",
+  "mem_store_format",
+  "mem_store_migration",
 ];
 
 export type StatementKind = "select" | "write" | "other";

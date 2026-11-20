@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 
+import type { StoredCommitCells } from "../v2/commit-record.ts";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
 import {
   encodeStoredCommit,
@@ -215,8 +216,12 @@ describe("stored-commit", () => {
 
     const storedAt = (seq: number): StoredClientCommit =>
       decodeTrustedMemoryBoundary(
-        engine.database.prepare(`SELECT original FROM "commit" WHERE seq = ?`)
-          .get<{ original: string }>(seq)!.original,
+        engine.commits.originalText(
+          engine.database.prepare(
+            `SELECT seq, session_id, original, digest, reads
+             FROM "commit" WHERE seq = ?`,
+          ).get<StoredCommitCells>(seq)!,
+        ),
       ) as StoredClientCommit;
 
     // Session a writes the document at seq 1, then reads it in its next

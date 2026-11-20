@@ -2,3 +2,4 @@ export { createBaseJsonRegistry } from "./createBaseJsonRegistry.ts";
 export { JsonCodecEngine } from "./JsonCodecEngine.ts";
 export { SlotLimitError } from "./SlotLimitError.ts";
 export { membersWritten, type RootScalar } from "./text-scan.ts";
+export { JsonDecodeAct } from "./JsonDecodeAct.ts";

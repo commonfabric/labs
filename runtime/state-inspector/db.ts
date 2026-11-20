@@ -5,6 +5,12 @@
 // flight recorder (see README.md).
 
 import { type BindValue, Database, type Statement } from "@db/sqlite";
+import { ValueStore } from "@commonfabric/memory/v2/value-store";
+import {
+  CommitRecords,
+  resolutionText,
+} from "@commonfabric/memory/v2/commit-record";
+import { installCompactViews } from "./compact-views.ts";
 
 export interface CommitRow {
   seq: number;
@@ -65,6 +71,7 @@ export interface SpaceDb {
 export function openSpace(path: string): SpaceDb {
   const db = new Database(path, { readonly: true });
   shimScopeKey(db);
+  const compact = readCompactForm(db);
   const statements = new Map<string, Statement>();
   let closed = false;
   const statement = (sql: string): Statement => {
@@ -83,11 +90,60 @@ export function openSpace(path: string): SpaceDb {
     close: () => {
       if (closed) return;
       closed = true;
-      for (const stmt of statements.values()) stmt.finalize();
+      for (const stmt of statements.values()) {
+        // `finalize` reports the error of the statement's last step, which a
+        // view's function throwing on a malformed row leaves behind; the
+        // statement is released either way.
+        try {
+          stmt.finalize();
+        } catch {
+          // released
+        }
+      }
       statements.clear();
+      compact?.close();
       db.close();
     },
   };
+}
+
+/**
+ * Presents a store whose rows may be in the compact form (a store holding
+ * `mem_value_object`) in today's text form, through the TEMP VIEWs
+ * `installCompactViews` creates over the same connection, so every query here
+ * reads payload text whichever form a row holds. Returns what to close before
+ * the connection, or undefined for a store with no compact form. A cell that
+ * cannot be read back (a vid with no object, a hollowed row with no digest)
+ * reads as text naming why, which decodes as no payload does, as a damaged
+ * text row would: the inspector reports a damaged store rather than stopping
+ * on it.
+ */
+function readCompactForm(db: Database): { close(): void } | undefined {
+  if (!tableNames(db).includes("mem_value_object")) return undefined;
+  const values = new ValueStore(db);
+  const commits = new CommitRecords(db, values);
+  installCompactViews(db, {
+    valueText: (cell) => unreadableAsText(() => values.rowText(cell)),
+    commitOriginalText: (row) =>
+      unreadableAsText(() => commits.originalText(row)),
+    resolutionText: (seq, cell) =>
+      unreadableAsText(() => resolutionText(cell, seq)),
+  });
+  return {
+    close: () => {
+      commits.close();
+      values.close();
+    },
+  };
+}
+
+/** What `read` returns, or text naming why it threw. */
+function unreadableAsText<T>(read: () => T): T | string {
+  try {
+    return read();
+  } catch (error) {
+    return `unreadable: ${error instanceof Error ? error.message : error}`;
+  }
 }
 
 /**

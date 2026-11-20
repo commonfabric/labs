@@ -700,12 +700,13 @@ describe("engine-conflicts", () => {
      * counts `JSON.parse()` calls, which a revision's payload takes one of
      * each time it is decoded, and `pointers` counts `String.prototype.split()`
      * calls, which a touched path takes one of each time it is parsed from a
-     * JSON Pointer.
+     * JSON Pointer. `patchLists` counts the stored patch lists the commit
+     * path obtained, whether parsed or already held by `engine.shared`.
      */
     const raceDisjointKeys = (
       readCount: number,
       revised: number,
-    ): { documents: number; pointers: number } => {
+    ): { documents: number; pointers: number; patchLists: number } => {
       const map = `of:race-${readCount}-${revised}`;
       const keys = Array.from(
         { length: revised + readCount },
@@ -744,6 +745,7 @@ describe("engine-conflicts", () => {
       }
       using documents = spy(JSON, "parse");
       using pointers = spy(String.prototype, "split");
+      using patchLists = spy(engine.shared, "patchListOf");
       applyCommit(engine, {
         sessionId: `${sessionId}-reader`,
         commit: {
@@ -762,6 +764,7 @@ describe("engine-conflicts", () => {
       return {
         documents: documents.calls.length,
         pointers: pointers.calls.length,
+        patchLists: patchLists.calls.length,
       };
     };
 
@@ -772,12 +775,13 @@ describe("engine-conflicts", () => {
      */
     const revisionWork = (
       readCount: number,
-    ): { documents: number; pointers: number } => {
+    ): { documents: number; pointers: number; patchLists: number } => {
       const withRevision = raceDisjointKeys(readCount, 100);
       const without = raceDisjointKeys(readCount, 0);
       return {
         documents: withRevision.documents - without.documents,
         pointers: withRevision.pointers - without.pointers,
+        patchLists: withRevision.patchLists - without.patchLists,
       };
     };
 
@@ -789,10 +793,14 @@ describe("engine-conflicts", () => {
       // the revision and without it alike, so the difference is the
       // revision's alone. The revision is the same size in both runs, so a
       // count that grew with the reads differs between them. The floors show
-      // the reads reached the revision at all: every one of its 100 pointers
-      // was parsed.
+      // the reads reached the revision at all: its patch list was obtained,
+      // and every one of its 100 pointers was parsed. The list is counted
+      // where it is obtained rather than where it is parsed, since the commit
+      // that wrote it left it decoded in `engine.shared`, which hands it over
+      // without a parse while it is alive.
       expect(long.documents).toBe(short.documents);
-      expect(short.documents).toBeGreaterThan(0);
+      expect(long.patchLists).toBe(short.patchLists);
+      expect(short.patchLists).toBeGreaterThan(0);
       expect(long.pointers).toBe(short.pointers);
       expect(short.pointers).toBeGreaterThanOrEqual(100);
     });

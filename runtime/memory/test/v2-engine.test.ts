@@ -38,6 +38,7 @@ import {
   read,
   runAtomicCommit,
 } from "../v2/engine.ts";
+import { resolutionText } from "../v2/commit-record.ts";
 
 const createEngine = async (): Promise<{
   engine: Engine;
@@ -1221,7 +1222,7 @@ Deno.test("memory v2 engine backfills current head operations", async () => {
   try {
     defaultedDb.exec(`
       DROP INDEX idx_head_live_entity_ids;
-      DROP INDEX idx_head_branch;
+      DROP INDEX IF EXISTS idx_head_branch;
       ALTER TABLE head RENAME TO head_defaulted_migration;
       CREATE TABLE head (
         branch    TEXT    NOT NULL,
@@ -2160,7 +2161,10 @@ Deno.test("memory v2 engine persists set and delete commits as seq revisions", a
         value: document,
       }],
     });
-    assertEquals(decodeStored(commitRow.resolution), { seq: 1 });
+    assertEquals(
+      decodeStored(resolutionText(commitRow.resolution, commitRow.seq)),
+      { seq: 1 },
+    );
 
     const revisionRow = engine.database.prepare(
       `SELECT branch, id, seq, op_index, op, data, commit_seq
@@ -2183,7 +2187,10 @@ Deno.test("memory v2 engine persists set and delete commits as seq revisions", a
     assertEquals(revisionRow.seq, 1);
     assertEquals(revisionRow.op_index, 0);
     assertEquals(revisionRow.op, "set");
-    assertEquals(decodeStored(revisionRow.data), document);
+    assertEquals(
+      decodeStored(engine.values.rowText(revisionRow.data)),
+      document,
+    );
     assertEquals(revisionRow.commit_seq, 1);
     assertEquals(
       engine.database.prepare(
@@ -2443,7 +2450,7 @@ Deno.test("memory v2 engine replays patch revisions for current and point-in-tim
       }
       | undefined;
     assertEquals(patchRevision?.op, "patch");
-    assertEquals(decodeStored(patchRevision?.data), [
+    assertEquals(decodeStored(engine.values.rowText(patchRevision!.data)), [
       { op: "replace", path: "/value/profile/name", value: "Bob" },
       { op: "add", path: "/value/profile/title", value: "Dr" },
       {
@@ -2517,7 +2524,7 @@ Deno.test("memory v2 engine materializes snapshots and reuses them for later rea
       }
       | undefined;
     assertEquals(snapshotRow?.seq, 3);
-    assertEquals(decodeStored(snapshotRow?.value), {
+    assertEquals(decodeStored(engine.values.rowText(snapshotRow!.value)), {
       value: { tags: ["one", "two", "three"] },
     });
 
@@ -2809,7 +2816,7 @@ Deno.test("memory v2 engine resolves pending reads and rejects stale pending rea
        FROM "commit"
        WHERE session_id = 'session:1' AND local_seq = 3`,
     ).get() as { resolution: string } | undefined;
-    assertEquals(decodeStored(resolutionRow?.resolution), {
+    assertEquals(decodeStored(resolutionText(resolutionRow!.resolution, 3)), {
       seq: 3,
       resolvedPendingReads: [{
         localSeq: 2,
@@ -3624,7 +3631,7 @@ Deno.test("memory v2 engine persists fabric patch values at the storage boundary
          FROM revision
          WHERE id = 'entity:rich-patch' AND seq = 2`,
     ).get() as { data: string } | undefined;
-    assertEquals(decodeStored(patchRow?.data), [{
+    assertEquals(decodeStored(engine.values.rowText(patchRow!.data)), [{
       op: "replace",
       path: "/value/counter",
       value: 2n,
