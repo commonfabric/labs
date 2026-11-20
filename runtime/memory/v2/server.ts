@@ -527,9 +527,10 @@ export type SlowQuery = {
    * entity snapshots delivered to the client. This is the delivered-width
    * counterpart to `watches` and `managerReads`: a wide traversal that
    * yields few upserts is repeated server work, while a wide frame is also
-   * transport and client-ingest work. A refresh that produced no upserts
-   * answers with an empty catch-up and is not recorded, so a refresh entry
-   * never reports zero here. */
+   * transport and client-ingest work. A refresh with no upserts, removals,
+   * or new crossings answers with an empty catch-up and is not recorded; a
+   * refresh entry reporting zero here delivered removals or crossings
+   * alone. */
   upserts?: number;
 
   /** Query and watch operations: the costliest single root, which is what
