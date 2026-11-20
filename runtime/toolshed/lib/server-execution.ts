@@ -14,7 +14,7 @@ import {
   experimentalOptionsWithFollowedPosture,
   type RuntimeFetch,
 } from "@commonfabric/runner";
-import { toolshedClientBuild } from "./build-info.ts";
+import { buildInfo, toolshedClientBuild } from "./build-info.ts";
 import { publishServingExperimentalOverrides } from "./experimental-posture.ts";
 import { serverExecutionEnabledFromEnv } from "./server-execution-flag.ts";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
@@ -99,7 +99,15 @@ export type ServerExecutionEnvPolicy = {
   storeReadThrough?: boolean;
   overlapWaveCommit?: boolean;
   parkedRuntimeRetentionMs?: number;
+  currencyIndex?: "record" | "skip";
+  currencyEpoch?: string;
 };
+
+/**
+ * The currency epoch of a run with no baked commit: one per process, so its
+ * records are trusted until the process ends and by no other.
+ */
+const PROCESS_CURRENCY_EPOCH = `process:${crypto.randomUUID()}`;
 
 /**
  * Resolve the Phase-6 policy knobs from env (serving-loop.md §3's
@@ -124,7 +132,14 @@ export type ServerExecutionEnvPolicy = {
  *   (`SpaceServerPolicy.parkedRuntimeRetentionMs`,
  *   SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS) stays the host's
  *   built-in default unless overridden; the literal `0` keeps none, and
- *   a value past the longest delay a timer honors reads as unset.
+ *   a value past the longest delay a timer honors reads as unset;
+ * - the currency index (`SpaceServerPolicy.currencyIndex`,
+ *   SERVER_EXECUTION_CURRENCY_INDEX) defaults to `skip` where `build` names
+ *   the epoch of this build, and to none where it does not; the literal
+ *   `off` keeps none, `record` and `skip` select a mode, and anything else
+ *   warns and keeps the default. Its epoch (`SpaceServerPolicy.currencyEpoch`)
+ *   is SERVER_EXECUTION_CURRENCY_EPOCH as written, or else the build's, and
+ *   `skip` with neither runs as `record`, with a warning.
  *
  * Parsing is FAIL-CLOSED for the cap: an unparseable or negative value
  * ("abc", "-1", "1.5") falls back to the default and warns, instead of
@@ -136,6 +151,7 @@ export type ServerExecutionEnvPolicy = {
 export function serverExecutionPolicyFromEnv(
   envGet: EnvReader,
   warn: (message: string) => void = (message) => console.warn(message),
+  build?: { currencyEpoch: string },
 ): ServerExecutionEnvPolicy {
   /** A strictly non-negative decimal integer, or undefined for anything
    * else (garbage, sign, fraction, exponent — `parseInt` would accept
@@ -236,6 +252,34 @@ export function serverExecutionPolicyFromEnv(
         "the overlapped wave commit stays OFF",
     );
   }
+  const currencyRaw = readRaw("SERVER_EXECUTION_CURRENCY_INDEX");
+  const currencyDefault = build === undefined ? undefined : "skip";
+  let currencyIndex: "record" | "skip" | undefined = currencyDefault;
+  if (currencyRaw === "record" || currencyRaw === "skip") {
+    currencyIndex = currencyRaw;
+  } else if (currencyRaw === "off") {
+    currencyIndex = undefined;
+  } else if (currencyRaw !== undefined) {
+    warn(
+      "Server-execution v2: ignoring SERVER_EXECUTION_CURRENCY_INDEX=" +
+        `${JSON.stringify(currencyRaw)} (expected "record", "skip" or ` +
+        `"off"); the currency index stays ${
+          currencyDefault === undefined ? "OFF" : `"${currencyDefault}"`
+        }`,
+    );
+  }
+  const currencyEpoch = readRaw("SERVER_EXECUTION_CURRENCY_EPOCH") ??
+    build?.currencyEpoch;
+  // A record is trusted across builds only by the epoch it names, so
+  // leaving pieces unstarted on it takes a named epoch.
+  if (currencyIndex === "skip" && currencyEpoch === undefined) {
+    warn(
+      "Server-execution v2: SERVER_EXECUTION_CURRENCY_INDEX=skip needs " +
+        "SERVER_EXECUTION_CURRENCY_EPOCH; the currency index runs as " +
+        '"record"',
+    );
+    currencyIndex = "record";
+  }
   return {
     ...(flushDeadlineMs !== undefined ? { flushDeadlineMs } : {}),
     ...(flushDeadlineMaxMs !== undefined ? { flushDeadlineMaxMs } : {}),
@@ -245,6 +289,10 @@ export function serverExecutionPolicyFromEnv(
     ...(overlapWaveCommit !== undefined ? { overlapWaveCommit } : {}),
     ...(parkedRuntimeRetentionMs !== undefined
       ? { parkedRuntimeRetentionMs }
+      : {}),
+    ...(currencyIndex !== undefined ? { currencyIndex } : {}),
+    ...(currencyIndex !== undefined && currencyEpoch !== undefined
+      ? { currencyEpoch }
       : {}),
   };
 }
@@ -586,7 +634,23 @@ export function startServerExecutionHost(options: {
         "production default is ON)",
     );
   }
-  const policy = serverExecutionPolicyFromEnv(envGet);
+  const policy = serverExecutionPolicyFromEnv(envGet, undefined, {
+    // A compiled binary is the build its baked commit names. A source run
+    // serves whatever the checkout holds, which the commit it names does
+    // not say, so its records are its own process's alone.
+    currencyEpoch: buildInfo.commitSha ?? PROCESS_CURRENCY_EPOCH,
+  });
+  if (policy.currencyIndex !== "skip") {
+    console.log(
+      policy.currencyIndex === undefined
+        ? "Server-execution v2: currency index OFF by " +
+          "SERVER_EXECUTION_CURRENCY_INDEX=off (every demanded piece " +
+          'starts; default is "skip")'
+        : "Server-execution v2: currency index records and judges, and " +
+          "starts every demanded piece, by " +
+          'SERVER_EXECUTION_CURRENCY_INDEX=record (default is "skip")',
+    );
+  }
   if (policy.storeReadThrough !== true) {
     console.log(
       "Server-execution v2: store read-through OFF by " +

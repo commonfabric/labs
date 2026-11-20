@@ -385,6 +385,22 @@ export class ServingPortBridge {
         server.setViewSelection(space, handle, selection),
     );
     endpoint.onRequest(
+      "server.advanceCurrency",
+      ({ space }) => server.advanceCurrency(space),
+    );
+    endpoint.onRequest(
+      "server.storeCurrencyRecords",
+      ({ space, batch }) => server.storeCurrencyRecords(space, batch),
+    );
+    endpoint.onRequest(
+      "server.judgeCurrencyRoots",
+      ({ space, roots, excludePrincipal, epoch }) =>
+        server.judgeCurrencyRoots(space, roots, {
+          ...(excludePrincipal !== undefined && { excludePrincipal }),
+          epoch,
+        }),
+    );
+    endpoint.onRequest(
       "server.foreignWriteAuthorityFor",
       ({ space, principal }) =>
         server.foreignWriteAuthorityFor(space, principal),
