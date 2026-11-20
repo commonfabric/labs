@@ -404,10 +404,10 @@ WHERE w.branch = :branch AND w.piece = :piece AND w.owned = 0
     OR r.entity_scope_key = '${ANY_INSTANCE}'
     OR (r.entity_scope_key >= :lo AND r.entity_scope_key < :hi))
 `),
-  selectDerivedReads: engine.prepare(`
-SELECT entity, entity_scope_key FROM currency_read
+  selectLocalReads: engine.prepare(`
+SELECT entity, entity_scope_key, derived FROM currency_read
 WHERE branch = :branch AND slice = :slice AND piece = :piece
-  AND entity_space = :space AND derived = 1
+  AND entity_space = :space
 `),
 });
 
@@ -483,20 +483,24 @@ const staleInputsOf = (
   ref: SliceRef,
 ): { unrecorded: boolean; producers: SliceRef[] } => {
   const { branch, space, statements } = context;
-  const reads = statements.selectDerivedReads.all({
+  const reads = statements.selectLocalReads.all({
     branch,
     space,
     slice: ref.slice,
     piece: ref.piece,
-  }) as Array<{ entity: string; entity_scope_key: string }>;
+  }) as Array<{ entity: string; entity_scope_key: string; derived: number }>;
   let unrecorded = false;
   const producers = new Map<string, SliceRef>();
-  for (const { entity, entity_scope_key } of reads) {
+  for (const { entity, entity_scope_key, derived } of reads) {
     const writers = statements.selectWriters.all({
       branch,
       id: entity,
     }) as Array<{ piece: string }>;
-    if (writers.length === 0) unrecorded = true;
+    // The recording runtime knows a document as derived only while its
+    // writer is loaded there, so every read is looked up among the recorded
+    // writers, and the flag decides only whether a read with none is an
+    // input nothing computes or one whose producer is unknown.
+    if (writers.length === 0 && derived === 1) unrecorded = true;
     for (const { piece } of writers) {
       if (piece === ref.piece) continue;
       // The instance is as current as each slice of its writer it is

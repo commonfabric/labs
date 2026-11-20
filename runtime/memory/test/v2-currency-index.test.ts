@@ -608,6 +608,21 @@ describe("currency-index", () => {
       expect(stored.blockedBy).toEqual(["of:pieceB"]);
     });
 
+    it("stores marked `1` a piece that read, as an input, a document a marked piece writes", () => {
+      // A runtime that does not hold the producer records its output as a
+      // plain input.
+
+      const asOf = write("of:a", "of:b");
+      store(asOf, [
+        record("of:pieceB", { reads: [input("of:a")], writes: ["of:b"] }),
+      ]);
+      const changed = write("of:a");
+
+      store(changed, [record("of:pieceC", { reads: [input("of:b")] })]);
+
+      expect([markOf("of:pieceB"), markOf("of:pieceC")]).toEqual([2, 1]);
+    });
+
     it("clears the pieces marked `1` downstream of a piece stored clean, through a chain", () => {
       const asOf = write("of:a", "computed:b", "computed:c");
       store(asOf, [
