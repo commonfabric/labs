@@ -49,13 +49,6 @@ export const newLoopbackServer = (options?: {
    * of that name is.
    */
   namesInstances?: () => boolean;
-
-  /**
-   * Whether the server advertises `markedSplicesV1`, so that its clients send
-   * array changes as marked splices, as the memory server's own option of
-   * that name decides. Off unless `true`, as a deployment's is.
-   */
-  markedSplices?: boolean;
 }): MemoryV2Server.Server =>
   new MemoryV2Server.Server({
     authorizeSessionOpen: authorizeLoopbackSessionOpen,
@@ -71,9 +64,6 @@ export const newLoopbackServer = (options?: {
       : {}),
     ...(options?.store !== undefined ? { store: options.store } : {}),
     ...(options?.sessions !== undefined ? { sessions: options.sessions } : {}),
-    ...(options?.markedSplices !== undefined
-      ? { markedSplices: options.markedSplices }
-      : {}),
   });
 
 /**

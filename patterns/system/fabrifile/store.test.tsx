@@ -42,6 +42,10 @@ const outcomeOf = (outcome: FileRequestOutcome | undefined) =>
     ? outcome.code
     : outcome.status;
 
+/** The reason a refused request was given. */
+const reasonOf = (outcome: FileRequestOutcome | undefined) =>
+  outcome?.status === "refused" ? outcome.reason : undefined;
+
 /** The name a request that was carried out gave its entry. */
 const nameOf = (outcome: FileRequestOutcome | undefined) =>
   outcome?.status === "done" ? outcome.name : undefined;
@@ -90,8 +94,21 @@ export default pattern(() => {
     requests: {},
     myProfile: profile,
   });
-  // A store whose viewer has no profile yet.
+  // Stores whose viewer's profile wish found that none exists, could not
+  // look, and has not answered yet.
   const anonymous = FileStoreCore({
+    entries: [],
+    requests: {},
+    myProfile: undefined,
+    myProfileErrorCode: "no-match",
+  });
+  const unreadable = FileStoreCore({
+    entries: [],
+    requests: {},
+    myProfile: undefined,
+    myProfileErrorCode: "failed",
+  });
+  const unresolved = FileStoreCore({
     entries: [],
     requests: {},
     myProfile: undefined,
@@ -112,6 +129,8 @@ export default pattern(() => {
 
   const action_adds = action(() => {
     anonymous.add.send({ requestId: "add-anonymous", name: "new.png" });
+    unreadable.add.send({ requestId: "add-unreadable", name: "new.png" });
+    unresolved.add.send({ requestId: "add-unresolved", name: "new.png" });
     store.add.send({ requestId: "add-invalid", name: "new.png" });
     const space = spaceOf(list)!;
     sendAdd(store.add, space, "add-invalid-name", { name: ".hidden" });
@@ -201,6 +220,34 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           outcomeOf(anonymous.requests["add-anonymous"]) === "not-permitted"
+        ),
+      },
+      {
+        assertion: assert(() =>
+          reasonOf(anonymous.requests["add-anonymous"]) ===
+            "You have no profile yet."
+        ),
+      },
+      {
+        assertion: assert(() =>
+          outcomeOf(unreadable.requests["add-unreadable"]) === "not-permitted"
+        ),
+      },
+      {
+        assertion: assert(() =>
+          reasonOf(unreadable.requests["add-unreadable"]) ===
+            "Your profile couldn't be read."
+        ),
+      },
+      {
+        assertion: assert(() =>
+          outcomeOf(unresolved.requests["add-unresolved"]) === "not-permitted"
+        ),
+      },
+      {
+        assertion: assert(() =>
+          reasonOf(unresolved.requests["add-unresolved"]) ===
+            "Your profile hasn't loaded yet; try again."
         ),
       },
       {

@@ -4045,16 +4045,6 @@ export class Server {
       syncCidReferences?: boolean;
 
       /**
-       * Whether this server advertises `markedSplicesV1`, so that clients
-       * send array changes as marked splices (`PatchOp`'s `pinned`). Off
-       * unless `true`. This server reads marked splices whether or not it
-       * advertises them; a deployment turns this on only once every serving
-       * worker that may read its rows, a rollback's included, does too
-       * (docs/development/EXPERIMENTAL_OPTIONS.md, `markedSplicesV1`).
-       */
-      markedSplices?: boolean;
-
-      /**
        * Whether this server's posture names instances (INV-16): the
        * deployment's value of the `instanceNames` experimental flag. Asked at
        * every `session.open` that declares `instanceNames: true` of a space
@@ -4323,7 +4313,6 @@ export class Server {
       routedAuthV1: false,
       routedCompressionV1: false,
       syncCidReferencesV1: this.options.syncCidReferences !== false,
-      markedSplicesV1: this.options.markedSplices === true,
     };
   }
 
@@ -9062,9 +9051,8 @@ export class Server {
           // A branch other than the default is computed by the client that
           // opened it, so its documents and their labels are that client's
           // word, which a restore would write onto the default branch. Only
-          // the default branch's own history is restored from until the
-          // specification rules on what a restore may admit.
-          // SPEC-PENDING https://github.com/commonfabric/specs/pull/105
+          // the default branch's own history is restored from; what a
+          // restore may admit is ruled in commonfabric/specs pull request 105.
           if (
             message.source !== undefined && message.source !== DEFAULT_BRANCH
           ) {

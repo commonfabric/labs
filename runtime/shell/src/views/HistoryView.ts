@@ -4,7 +4,12 @@ import { css, html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 
 import { iconClose } from "../components/icons.ts";
-import type { HistoryStep, RuntimeInternals } from "../lib/runtime.ts";
+import {
+  type PatternChange,
+  type RuntimeInternals,
+  type SpaceHistoryStep,
+  withOlderSteps,
+} from "../lib/runtime.ts";
 import { BaseView } from "./BaseView.ts";
 
 /** The step of history a fork shows, and where the fork stands. */
@@ -16,8 +21,45 @@ export type OpenHistory = {
   busy: boolean;
 };
 
+/** A restore of a piece's pattern code the panel asked for, and its state. */
+export type PatternRestore = {
+  /** The piece whose pattern is being restored. */
+  pieceId: string;
+
+  /** The source revision it is being restored to. */
+  revisionId: string;
+
+  /** The scope that completes `pieceId` into a document address. */
+  scope?: PatternChange["scope"];
+
+  /** Whether the runtime has yet to answer. */
+  busy: boolean;
+
+  /**
+   * Why the runtime did not restore the source: it does not fit the piece's
+   * data as it stands.
+   */
+  warning?: string;
+
+  /** The token that, sent back, restores the source despite `warning`. */
+  confirmationToken?: string;
+
+  /** Why the restore failed, when it did. */
+  error?: string;
+};
+
+/**
+ * Returns whether `restore` was asked of `change`: the same revision of the
+ * same piece in the same scope, an omitted scope being the space's.
+ */
+function isRestoreOf(restore: PatternRestore, change: PatternChange): boolean {
+  return restore.pieceId === change.pieceId &&
+    restore.revisionId === change.revisionId &&
+    (restore.scope ?? "space") === (change.scope ?? "space");
+}
+
 /** Returns what the step list calls `step`. */
-function stepLabel(step: HistoryStep): string {
+function stepLabel(step: SpaceHistoryStep): string {
   switch (step.kind) {
     case "event":
       return step.events === 1 ? "Event" : `${step.events} events`;
@@ -145,6 +187,17 @@ export class XHistoryView extends BaseView {
       grid-column: 1 / -1;
     }
 
+    .pattern-change {
+      display: grid;
+      gap: 0.25rem;
+      justify-items: start;
+      padding: 0 0.75rem 0.5rem 1.5rem;
+    }
+
+    .pattern-change .note {
+      padding: 0;
+    }
+
     .note {
       margin: 0;
       padding: 0.75rem;
@@ -171,9 +224,31 @@ export class XHistoryView extends BaseView {
   @property({ attribute: false })
   accessor error: string | undefined = undefined;
 
+  /**
+   * The piece in view, where the view names one by id: its pattern changes
+   * are listed whether or not the space lists the piece.
+   */
+  @property({ attribute: false })
+  accessor pieceId: string | undefined = undefined;
+
+  /** The scope that completes `pieceId`, where it is not the space's. */
+  @property({ attribute: false })
+  accessor pieceScope: PatternChange["scope"] = undefined;
+
+  /** The pattern restore the panel asked for, while it is unsettled. */
+  @property({ attribute: false })
+  accessor patternRestore: PatternRestore | undefined = undefined;
+
+  /**
+   * How many changes the shell has made that add to the space's history; a
+   * new count lists the history again.
+   */
+  @property({ attribute: false })
+  accessor changes = 0;
+
   /** The steps listed so far, newest first. */
   @state()
-  private accessor _steps: readonly HistoryStep[] = [];
+  private accessor _steps: readonly SpaceHistoryStep[] = [];
 
   /** The seq the next older stretch of history starts below. */
   @state()
@@ -189,20 +264,27 @@ export class XHistoryView extends BaseView {
    */
   #list = new Task<[number | undefined], void>(this, {
     task: async ([before]) => {
-      const { rt, space } = this;
+      const { rt, space, pieceId, pieceScope } = this;
       const listing = ++this.#listing;
       if (rt === undefined || space === undefined) {
         this._steps = [];
         this._next = undefined;
         return;
       }
-      const page = await rt.spaceHistory(space, before);
+      const page = await rt.spaceHistory(
+        space,
+        before,
+        pieceId === undefined ? [] : [{
+          id: pieceId,
+          ...(pieceScope !== undefined ? { scope: pieceScope } : {}),
+        }],
+      );
       // A stretch that arrives after a later listing began belongs to a list
       // that one has replaced.
       if (listing !== this.#listing) return;
       this._steps = before === undefined
         ? page.steps
-        : [...this._steps, ...page.steps];
+        : withOlderSteps(this._steps, page.steps);
       this._next = page.next;
     },
   });
@@ -218,7 +300,11 @@ export class XHistoryView extends BaseView {
     // Returning from a fork, by discarding it or restoring from it, is what
     // can have added to the space's history; opening one adds nothing, and
     // keeps the stretch the open step was chosen from.
-    if (moved || (changed.has("open") && this.open === undefined)) {
+    if (
+      moved || changed.has("changes") || changed.has("pieceId") ||
+      changed.has("pieceScope") ||
+      (changed.has("open") && this.open === undefined)
+    ) {
       void this.#list.run([undefined]);
     }
   }
@@ -257,7 +343,7 @@ export class XHistoryView extends BaseView {
    * Renders one step. `eventIndex` counts the `event` steps listed before
    * this one, which gives a test a stable way to name such a step.
    */
-  #renderStep(step: HistoryStep, eventIndex: number) {
+  #renderStep(step: SpaceHistoryStep, eventIndex: number) {
     const current = this.open?.seq === step.seq;
     return html`
       <li>
@@ -281,7 +367,92 @@ export class XHistoryView extends BaseView {
             </span>
           `}
         </button>
+        ${step.patternChanges.map((change) =>
+          this.#renderPatternChange(change)
+        )}
       </li>
+    `;
+  }
+
+  /**
+   * Renders one change of a piece's pattern code a step recorded, with the
+   * way to put the piece back on that code without touching its data.
+   */
+  #renderPatternChange(change: PatternChange) {
+    const restore = this.patternRestore;
+    const mine = restore !== undefined && isRestoreOf(restore, change);
+    const blocked = this.open !== undefined || restore?.busy === true;
+    return html`
+      <div
+        class="pattern-change"
+        data-revision="${change.revisionId}"
+      >
+        <span>
+          ${change.pieceName ?? `Piece #${change.pieceId.slice(-6)}`}:
+          ${change.label}${change.current ? " · Current" : ""}
+        </span>
+        <span class="detail">${change.originLabel}</span>
+        ${change.current ? nothing : html`
+          <cf-button
+            class="pattern-restore"
+            variant="outline"
+            size="sm"
+            title="Puts the piece back on this version of its pattern code and keeps its current data"
+            ?disabled="${blocked}"
+            @click="${() =>
+              this.command({
+                type: "restore-pattern",
+                pieceId: change.pieceId,
+                revisionId: change.revisionId,
+                ...(change.scope !== undefined ? { scope: change.scope } : {}),
+              })}"
+          >Restore this pattern version</cf-button>
+        `}
+        ${mine && restore?.warning !== undefined
+          ? html`
+            <p class="note error" role="alert">${restore.warning}</p>
+            ${restore.confirmationToken === undefined ? nothing : html`
+              <cf-button
+                class="pattern-restore-confirm"
+                size="sm"
+                ?disabled="${blocked}"
+                @click="${() =>
+                  this.command({
+                    type: "restore-pattern",
+                    pieceId: change.pieceId,
+                    revisionId: change.revisionId,
+                    ...(change.scope !== undefined
+                      ? { scope: change.scope }
+                      : {}),
+                    confirmationToken: restore.confirmationToken,
+                  })}"
+              >Restore it anyway</cf-button>
+            `}
+          `
+          : nothing}
+        ${mine && restore?.error !== undefined
+          ? html`
+            <p class="note error" role="alert">${restore.error}</p>
+          `
+          : nothing}
+      </div>
+    `;
+  }
+
+  /**
+   * Renders what a pattern restore left to say, where the change it was
+   * asked of is on no step listed: listing the history again after a restore
+   * starts from the newest steps, which the change may be older than.
+   */
+  #unlistedRestoreNote() {
+    const restore = this.patternRestore;
+    const said = restore?.error ?? restore?.warning;
+    if (restore === undefined || said === undefined) return nothing;
+    const listed = this._steps.some((step) =>
+      step.patternChanges.some((change) => isRestoreOf(restore, change))
+    );
+    return listed ? nothing : html`
+      <p class="note error pattern-restore-note" role="alert">${said}</p>
     `;
   }
 
@@ -301,6 +472,7 @@ export class XHistoryView extends BaseView {
       ${this.error === undefined ? nothing : html`
         <p class="note error" role="alert">${this.error}</p>
       `}
+      ${this.#unlistedRestoreNote()}
       ${failed
         ? html`
           <p class="note error" role="alert">
