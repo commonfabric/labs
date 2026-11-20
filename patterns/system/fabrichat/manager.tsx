@@ -88,6 +88,7 @@ import {
   type SharedSpaceCatalogStorage,
   type SharedSpaceEntry,
 } from "../shared-space/shared-space-catalog.ts";
+import { shortDid } from "../social-space/short-did.ts";
 import { sameNameMarks } from "./logic.ts";
 import { listsRoomIn } from "./room-records.tsx";
 import FabriChatRoom from "./room.tsx";
@@ -2481,15 +2482,25 @@ export const FabriChatManagerCore = pattern<
       startRefusal,
     };
     // Per user, as `roomsForUser` is: a room's label is the title its entry
-    // holds, which a direct room has only once a member sets one. Its
-    // binding's name is its cause, as `roomsForUser`'s is.
+    // holds, which a direct room has only once a member sets one. Until then
+    // a direct room is labeled with its counterpart's principal, shortened by
+    // `shortDid()`, the one name for them the entry holds: the label reads
+    // nothing beyond the manager's records, so listing the rooms opens no
+    // other space. Its binding's name is its cause, as `roomsForUser`'s is.
+    // TODO(direct-room-label): Label a direct room with its counterpart's
+    // profile name, once one can be shown without reading another space while
+    // the rooms are listed.
     const shownForUser = computed((): PerUser<ShownEntry[]> =>
       roomsForUser.map((entry) => ({
         room: entry.room,
         ...(entry.revision === undefined ? {} : { revision: entry.revision }),
         label: entry.title ??
           (entry.kind === "direct"
-            ? `With ${entry.counterpart ?? "someone"}`
+            ? `With ${
+              entry.counterpart === undefined
+                ? "someone"
+                : shortDid(entry.counterpart)
+            }`
             : "Group chat"),
       }))
     );
