@@ -210,15 +210,12 @@ const upload = async (c: Context) => {
 // its blobs, and the FabriFile design's prerequisite that a blob write be
 // admitted only for a principal the space admits
 // (`docs/specs/fabrifile/README.md`, "Authorized blob reads") is unmet. That
-// makes the route a candidate for removal, and no client in this repository
-// uploads through it. The runtime client's upload,
-// `RuntimeProcessor.handleUploadBlob()` in
-// `runtime/runtime-client/src/backends/runtime-processor.ts`, takes its place:
-// it stages the record with `stageContentAddressedDocument()` in a transaction
-// it commits on the uploading session, signed by that session's principal, so
-// the memory server admits the write only for a principal holding `WRITE` on
-// the space. Whether an upload should require a credential is
-// [`top/2645`](https://estuary.saga-castor.ts.net/did:key:z6MknaHtzD7bZjEfbF4nAbzQBQcERadRVt91eYRtyjaTKbYK/fid1:N4HWSonEGO0Nu1Sw3Faywx_3YGAk800CUG7HicY8PMk).
+// makes the route a candidate for removal. The authenticated upload is the
+// runtime client's, `RuntimeProcessor.handleUploadBlob()` in
+// `runtime/runtime-client/src/backends/runtime-processor.ts`: it stages the
+// record with `stageContentAddressedDocument()` in a transaction it commits on
+// the uploading session, signed by that session's principal, so the memory
+// server admits the write only for a principal holding `WRITE` on the space.
 router.post("/:spaceDid/blobs", upload);
 router.post("/:spaceDid/blobs/:blobName", upload);
 

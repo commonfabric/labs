@@ -76,9 +76,11 @@ where it kept the old one. It returns `undefined` when the space holds no blob
 changes, so the space then holds the bytes under both names. The new blob's
 record is stored when the handler's transaction commits, and its bytes travel
 with the commit: the handler loads them first, and is run again once they
-arrive. The commit carries the bytes base64-encoded, so under the routed
-transport, whose frames hold at most 8 MiB, a file well within the upload limit
-can still be too large to rename.
+arrive. The commit carries the bytes base64-encoded, beside whatever else the
+handler writes, so under the routed transport, which takes at most 4 MiB in one
+request ([routed Mode A](../../specs/memory-v2/routed-mode-a.md)), a file of
+about 3 MB can be too large to rename, and the memory client refuses the
+handler's commit, unsent.
 
 ## What the store provides
 
