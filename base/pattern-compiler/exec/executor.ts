@@ -2893,6 +2893,7 @@ export class Instance {
     };
     this.#tx = open;
     this.store.journal = open.journal;
+    this.root.#givenNow.clear();
     this.options.transactions?.begin(cause);
     return open;
   }
@@ -2948,12 +2949,19 @@ export class Instance {
     this.#tx = undefined;
     this.store.journal = undefined;
     this.#transactions.push(open.record);
-    this.options.transactions?.end({
-      committed,
-      changes: committed ? open.journal : [],
-      store: this.store,
-      record: open.record,
-    });
+    // What the hooks report of labels while they end the transaction is
+    // what it stored, which the records it gave hold already.
+    this.root.#ending = true;
+    try {
+      this.options.transactions?.end({
+        committed,
+        changes: committed ? open.journal : [],
+        store: this.store,
+        record: open.record,
+      });
+    } finally {
+      this.root.#ending = false;
+    }
   }
 
   /**
@@ -7070,43 +7078,179 @@ export class Instance {
   }
 
   /**
-   * On the root: a label changed while its value did not
-   * (`labelsChanged`), and the labels of the kept outputs were not formed
+   * On the root: the records of outputs given to the transaction hooks, by
+   * what the inputs of each read: for each document, the paths read, each
+   * with the keys of the records that read it (`#recordKey`). A path may
+   * hold `*` at the position of an element.
+   */
+  readonly #recordReaders = new Map<string, LabelReaders>();
+
+  /** On the root: the positions each record in `#recordReaders` is at. */
+  readonly #recordReads = new Map<string, Address[]>();
+
+  /**
+   * On the root: the records whose template folds over the elements of a
+   * collection of an instance, by the instance and the collection.
+   */
+  readonly #recordFolds = new Map<string, Set<string>>();
+
+  /**
+   * On the root: the records whose inputs read a label that changed while
+   * the values did not (`labelsChanged`), and whose labels were not formed
    * again since.
    */
-  #relabeling = false;
+  readonly #relabels = new Set<string>();
+
+  /**
+   * On the root: the records given since the transaction in progress, or
+   * the last one, began. Their labels were formed from what that
+   * transaction stored.
+   */
+  readonly #givenNow = new Set<string>();
+
+  /** On the root: the transaction hooks are ending a transaction. */
+  #ending = false;
+
+  /** The key of the record of an output of this instance at a path. */
+  #recordKey(output: number, at: readonly string[]): string {
+    return JSON.stringify([this.id, output, at]);
+  }
+
+  /**
+   * On the root: keeps what the inputs of a record given for an output
+   * read, in place of what the record given for it before read, so that a
+   * change of a label finds the records that read it.
+   */
+  #noteRecord(key: string, instance: string, write: PlanWrite): void {
+    this.#givenNow.add(key);
+    this.#relabels.delete(key);
+    for (const { doc, path } of this.#recordReads.get(key) ?? []) {
+      let node = this.#recordReaders.get(doc);
+      for (const segment of path) node = node?.children.get(segment);
+      node?.readers.delete(key);
+    }
+    const positions: Address[] = [];
+    const seen = new Set<string>();
+    const read = (address: Address) => {
+      const id = JSON.stringify([address.doc, address.path]);
+      if (seen.has(id)) return;
+      seen.add(id);
+      positions.push(address);
+    };
+    const visit = (place: PlanInputs) => {
+      for (const binding of Object.values(place.slots)) {
+        if ("staged" in binding && typeof binding.staged === "object") {
+          read(binding.staged);
+        }
+        if (!("chain" in binding)) continue;
+        for (const address of binding.chain) read(address);
+        for (const chain of binding.below ?? []) {
+          for (const address of chain) read(address);
+        }
+      }
+      for (const addresses of Object.values(place.dynamic ?? {})) {
+        for (const address of addresses) read(address);
+      }
+      for (const chosen of Object.values(place.picks ?? {})) {
+        if (chosen !== null) visit({ slots: chosen.slots });
+      }
+      for (
+        const [collection, elements] of Object.entries(place.elements ?? {})
+      ) {
+        const folds = `${instance}\n${collection}`;
+        const held = this.#recordFolds.get(folds) ?? new Set();
+        held.add(key);
+        this.#recordFolds.set(folds, held);
+        if ("uniform" in elements) visit(elements.uniform);
+        else for (const group of elements.groups) visit(group);
+      }
+      for (const inputs of Object.values(place.outputs ?? {})) visit(inputs);
+    };
+    visit(write);
+    this.#recordReads.set(key, positions);
+    for (const { doc, path } of positions) {
+      const root: LabelReaders = this.#recordReaders.get(doc) ??
+        { readers: new Set(), children: new Map() };
+      this.#recordReaders.set(doc, root);
+      let node = root;
+      for (const segment of path) {
+        const child: LabelReaders = node.children.get(segment) ??
+          { readers: new Set(), children: new Map() };
+        node.children.set(segment, child);
+        node = child;
+      }
+      node.readers.add(key);
+    }
+  }
+
+  /**
+   * On the root: the keys of the records whose inputs read a position at,
+   * above or below a label entry of `changes`. A `*` in a path a record
+   * read stands for every element, and a `*` in a changed path for every
+   * position a record read there.
+   */
+  #recordsReading(changes: readonly LabelChange[]): Set<string> {
+    const found = new Set<string>();
+    const collect = (node: LabelReaders) => {
+      for (const reader of node.readers) found.add(reader);
+      for (const child of node.children.values()) collect(child);
+    };
+    const walk = (node: LabelReaders, rest: readonly string[]) => {
+      if (rest.length === 0) {
+        collect(node);
+        return;
+      }
+      for (const reader of node.readers) found.add(reader);
+      const [segment, ...more] = rest;
+      if (segment === "*") {
+        for (const child of node.children.values()) walk(child, more);
+        return;
+      }
+      for (const name of [segment, "*"]) {
+        const child = node.children.get(name);
+        if (child !== undefined) walk(child, more);
+      }
+    };
+    for (const { doc, paths } of changes) {
+      const root = this.#recordReaders.get(doc);
+      if (root === undefined) continue;
+      for (const path of paths) walk(root, path);
+    }
+    return found;
+  }
 
   /**
    * On the root: where a label changed alone, gives the transaction hooks
-   * the record of every kept output of this instance and of each instance
-   * it made, in a derivation transaction of its own, as those of writes
-   * that leave the values as they are (`TransactionHooks.unchanged`): the
-   * label of an output that read the changed label is formed again, and no
-   * value code runs. The executor keeps no record of which outputs read
-   * which label, so the work is the number of kept outputs with no kept
-   * output below them, each element of a per-element output counted, and
-   * not the number that read it.
+   * the record of each output whose inputs read it, in a derivation
+   * transaction of its own, as that of a write that leaves the value as it
+   * is and forms the label alone again (`PlanWrite.relabel`): the label
+   * entries below the output's path stay, and no value code runs. The work
+   * is the number of records that read the changed label.
    */
   #relabel(): void {
     const hooks = this.options.transactions;
-    if (!this.#relabeling || hooks?.unchanged === undefined) return;
-    this.#relabeling = false;
+    if (this.#relabels.size === 0 || hooks?.unchanged === undefined) return;
+    const keys = [...this.#relabels];
+    this.#relabels.clear();
     this.#within("derivation", () => {
-      for (const instance of new Set([this, ...this.#instances.values()])) {
-        const all = instance.#outputWrites(instance.id, [], undefined);
-        // An output with a kept output below its path is left out: the
-        // runtime stores a record's label for its path and clears what is
-        // stored below, and an output below that the plan has no template
-        // for has no record to store its label again.
-        const below = (path: readonly string[]) =>
-          instance.plan.outputs.some((output) =>
-            output.kept && output.path.length > path.length &&
-            matchesPath(output.path.slice(0, path.length), path)
-          );
-        const writes = all.filter(({ target }) => !below(target.path));
-        if (writes.length > 0) {
-          hooks.unchanged?.(instance.id, [], this.store, undefined, writes);
-        }
+      const byInstance = new Map<Instance, PlanWrite[]>();
+      for (const key of keys) {
+        const [id, output, at] = JSON.parse(key) as [string, number, string[]];
+        const instance = id === this.id ? this : this.#instances.get(id);
+        // An output whose path holds nothing now has no label to form.
+        if (
+          instance === undefined ||
+          this.store.peek(id, at) === undefined
+        ) continue;
+        const writes = byInstance.get(instance) ?? [];
+        writes.push({
+          ...instance.#outputRecord(id, output, at),
+          relabel: true,
+        });
+        byInstance.set(instance, writes);
+      }
+      for (const [instance, writes] of byInstance) {
+        hooks.unchanged?.(instance.id, [], this.store, undefined, writes);
       }
     });
   }
@@ -7758,18 +7902,28 @@ export class Instance {
    * length of the paths, and not the number of elements.
    */
   labelsChanged(changes: readonly LabelChange[], alone = false): void {
+    const regrouped = new Set<string>();
     for (const instance of new Set([this, ...this.#instances.values()])) {
-      instance.#regroupReaders(changes);
+      for (const key of instance.#regroupReaders(changes)) regrouped.add(key);
     }
     // Where the labels changed and no value did, nothing is evaluated
-    // again, and the label of an output that read a changed label is
-    // formed again behind the batch in progress, or the next one
-    // (`#relabel`).
-    if (alone && changes.length > 0) this.#relabeling = true;
+    // again, and the label of an output that read a changed label, or that
+    // folds over a collection with an element that did, is formed again
+    // behind the batch in progress, or the next one (`#relabel`).
+    if (!alone) return;
+    for (const key of [...regrouped, ...this.#recordsReading(changes)]) {
+      // A record given in the transaction that stored the label holds it.
+      if (!(this.#ending && this.#givenNow.has(key))) this.#relabels.add(key);
+    }
   }
 
-  /** Helper for `labelsChanged()`, for the folds of this instance. */
-  #regroupReaders(changes: readonly LabelChange[]): void {
+  /**
+   * Helper for `labelsChanged()`, for the folds of this instance. Returns
+   * the keys of the records whose template folds over a collection with an
+   * element it regrouped.
+   */
+  #regroupReaders(changes: readonly LabelChange[]): Set<string> {
+    const regrouped = new Set<string>();
     const readers = new Set<string>();
     const collect = (node: LabelReaders) => {
       for (const reader of node.readers) readers.add(reader);
@@ -7798,7 +7952,15 @@ export class Instance {
         if (inputs !== undefined) this.#forget(inputs);
       }
       this.#regroupKey(at.collection, at.around, at.key);
+      // The records whose template folds over the collection hold its
+      // groups, which the change of the element's label changed.
+      for (
+        const key of this.root.#recordFolds.get(
+          `${this.id}\n${at.collection}`,
+        ) ?? []
+      ) regrouped.add(key);
     }
+    return regrouped;
   }
 
   /**
@@ -9103,31 +9265,38 @@ export class Instance {
     // the label the runtime gives a write it has no record of.
     return found.filter(({ output }) => outputs[output].template !== undefined)
       .map(({ output, at }) => {
-        const record = outputs[output];
-        const stars = record.path.flatMap((segment, index) =>
-          segment === "*" ? [index] : []
-        );
-        const pairs = this.#keysAlong(at, stars);
-        const own = this.#keysFor(record.cone, pairs);
-        const inputs = this.#inputsOf(record.cone, own);
-        const result = this.#inputs.get(RESULT_INPUTS);
-        return {
-          target: { doc, path: at },
-          record: { output },
-          ...this.#storedInPlace(
-            record.template,
-            this.#inputsFor(
-              record.template,
-              this.collectionsOf(record.cone).map((collection, index) => [
-                collection,
-                own[index],
-              ]),
-              [inputs, result],
-            ),
-            { doc, path: at },
-          ),
-        };
+        const write = this.#outputRecord(doc, output, at);
+        this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
+        return write;
       });
+  }
+
+  /** The record of the output `output` of this instance at the path `at`. */
+  #outputRecord(doc: string, output: number, at: string[]): PlanWrite {
+    const record = this.plan.outputs[output];
+    const stars = record.path.flatMap((segment, index) =>
+      segment === "*" ? [index] : []
+    );
+    const pairs = this.#keysAlong(at, stars);
+    const own = this.#keysFor(record.cone, pairs);
+    const inputs = this.#inputsOf(record.cone, own);
+    const result = this.#inputs.get(RESULT_INPUTS);
+    return {
+      target: { doc, path: at },
+      record: { output },
+      ...this.#storedInPlace(
+        record.template,
+        this.#inputsFor(
+          record.template,
+          this.collectionsOf(record.cone).map((collection, index) => [
+            collection,
+            own[index],
+          ]),
+          [inputs, result],
+        ),
+        { doc, path: at },
+      ),
+    };
   }
 
   /**

@@ -724,6 +724,46 @@ describe("a label that changes while the value stays", () => {
     };
   };
 
+  /**
+   * The same instance and change of the label of item 3, reported as a
+   * change of the label alone. Returns the targets of the records given
+   * again, each with whether its label alone is formed again.
+   */
+  const relabeled = async (size: number) => {
+    const labels = new Map<string, string>();
+    const recorder = new Recorder((doc) => labels.get(doc) ?? "plain");
+    const documents = Array.from({ length: size }, (_, index) => ({
+      id: `item-${index}`,
+      kind: "input",
+      value: { title: `i${index}`, done: false },
+    }));
+    const instance = new Instance(
+      await artifactOf("fold-groups"),
+      {
+        tags: [],
+        items: documents.map(({ id }) => ({ $link: { doc: id, path: [] } })),
+      },
+      { transactions: recorder, documents },
+    );
+    labels.set("item-3", "secret");
+    recorder.labelsChanged?.([{ doc: "item-3", paths: [[]] }], true);
+    instance.dispatch();
+    return recorder.left.flatMap(({ writes }) =>
+      writes.map(({ target, relabel }) =>
+        `${relabel ? "label of " : ""}/${target.path.join("/")}`
+      )
+    ).sort();
+  };
+
+  it("gives again the records of the outputs that read the changed label, the same ones among 10 elements and among 1,000", async () => {
+    const small = await relabeled(10);
+    const large = await relabeled(1_000);
+
+    expect(small.length).toBeGreaterThan(0);
+    expect(small.every((target) => target.startsWith("label of "))).toBe(true);
+    expect(large).toEqual(small);
+  });
+
   it("regroups the elements that read the document, and no other", async () => {
     const small = await run(10);
     expect(small.counts).toEqual([1, 9]);
@@ -1107,7 +1147,7 @@ describe("TransactionHooks for a write that leaves the value as it was", () => {
     }]);
   });
 
-  it("gives the record of every kept output again, in a derivation transaction, after a label changed alone", async () => {
+  it("gives the record of each output that read it again, in a derivation transaction, after a label changed alone", async () => {
     const recorder = new Recorder();
     const instance = new Instance(
       await artifactOf("unchanged-write"),

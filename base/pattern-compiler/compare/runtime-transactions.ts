@@ -525,6 +525,10 @@ export class RuntimeTransactions implements TransactionHooks {
       }
     }
     if (!spliced) written.push([...path]);
+    // A write can change the label of a value a reader's own value does
+    // not change with, so the label entries the document stores before
+    // the transaction are kept as for a write that changes no value.
+    if (this.#compiledPattern !== undefined) this.#noteUnchanged(doc);
     // The write policy of the write, as a cell's write records it
     // (`Cell.set`): the schema the write was made under where it declares
     // labels, and otherwise the schema the document's stored labels name.
@@ -719,6 +723,7 @@ export class RuntimeTransactions implements TransactionHooks {
         ...(write.removes ? { removes: true as const } : {}),
         ...(write.moves === undefined ? {} : { moves: write.moves }),
         ...(write.start === undefined ? {} : { start: write.start }),
+        ...(write.relabel ? { relabel: true as const } : {}),
       };
       this.#recorded.push(recorded);
       if (unchanged) {

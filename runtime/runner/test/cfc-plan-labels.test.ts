@@ -1386,6 +1386,132 @@ describe("cfc-plan-labels", () => {
       });
     });
 
+    describe("for a record given again because a label changed alone", () => {
+      /**
+       * Seeds sources labeled `secret-a` and `secret-b` and a target, and
+       * commits a transaction that writes `{ x: "1" }` at `a` with a record
+       * of `a` bound to source `a` and one of `a/x` bound to source `b`.
+       * Then commits a transaction that writes nothing and gives the record
+       * of `a` again, bound to source `b`, as one that left the value as it
+       * was; with `relabel`, as one whose label alone is formed again.
+       * Returns the confidentiality of the target's derived `value` entries.
+       */
+      const givenAgain = async (relabel: boolean) => {
+        let value: Record<string, unknown[]> = {};
+        await withRuntime(true, async (runtime) => {
+          const seed = runtime.edit();
+          writeSeedEnvelopeDoc(seed, space);
+          for (const name of ["a", "b"]) {
+            seedStoredEnvelope(seed, memoryAddress(`of:src-${name}`, []), {
+              value: { text: name },
+              cfc: {
+                version: 1,
+                schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                labelMap: {
+                  version: 1,
+                  entries: [{
+                    path: [],
+                    label: { confidentiality: [`secret-${name}`] },
+                  }],
+                },
+              },
+            });
+          }
+          const cell = runtime.getCell(space, "plan-relabel", undefined, seed);
+          cell.set({ a: {} });
+          const link = cell.getAsNormalizedFullLink();
+          const target: CfcAddress = {
+            space: link.space,
+            id: link.id,
+            scope: "space",
+            path: [],
+          };
+          seed.enrollRuntimeOwnedStore(
+            target,
+            "plan-labels-test",
+            runtimeWritePolicyAuthorization,
+          );
+          expect((await seed.commit().settled).error).toBeUndefined();
+          const identity = runtime.compiledPlans.register(
+            plan,
+            "code",
+            runtimeWritePolicyAuthorization,
+          );
+          const first = runtime.edit();
+          first.readOrThrow(memoryAddress("of:src-a", ["value"]));
+          first.readOrThrow(memoryAddress("of:src-b", ["value"]));
+          first.writeValueOrThrow({ ...link, path: ["a"] }, { x: "1" });
+          for (
+            const [path, write, name] of [
+              [["a"], 0, "a"],
+              [["a", "x"], 1, "b"],
+            ] as const
+          ) {
+            first.recordCfcWritePolicyInput(
+              planWrite(
+                identity,
+                { ...target, path },
+                write,
+                address(`of:src-${name}`),
+              ),
+              runtimeWritePolicyAuthorization,
+            );
+          }
+          expect((await first.commit().settled).error).toBeUndefined();
+          const again = runtime.edit();
+          again.readOrThrow(memoryAddress("of:src-b", ["value"]));
+          again.recordCfcWritePolicyInput(
+            {
+              ...planWrite(
+                identity,
+                { ...target, path: ["a"] },
+                1,
+                address("of:src-b"),
+              ),
+              unchanged: true,
+              ...(relabel ? { relabel: true as const } : {}),
+            },
+            runtimeWritePolicyAuthorization,
+          );
+          expect((await again.commit().settled).error).toBeUndefined();
+          const reader = runtime.edit();
+          try {
+            const metadata = readStoredCfcMetadata(reader, {
+              space,
+              id: target.id,
+              scope: "space",
+              type: "application/json",
+            });
+            value = Object.fromEntries(
+              (metadata?.labelMap.entries ?? [])
+                .filter((entry) =>
+                  entry.origin === "derived" && entry.observes === "value"
+                )
+                .map((entry) => [
+                  `/${entry.path.join("/")}`,
+                  [...(entry.label.confidentiality ?? [])].sort(),
+                ]),
+            );
+          } finally {
+            reader.abort();
+          }
+        });
+        return value;
+      };
+
+      it("stores the label of the record at its path and keeps the entries below it", async () => {
+        const value = await givenAgain(true);
+        expect(value["/a"]).toEqual(["secret-b"]);
+        expect(value["/a/x"]).toEqual(["secret-b"]);
+      });
+
+      it("clears the entries below the path of a record that is one of a write that left the value as it was", async () => {
+        const value = await givenAgain(false);
+        expect(value["/a"]).toEqual(["secret-b"]);
+        expect(value["/a/x"]).toBeUndefined();
+      });
+    });
+
     describe("for a write that left the value as it was", () => {
       /**
        * Seeds a source labeled `secret-a` and a target holding `{ a: "" }`,

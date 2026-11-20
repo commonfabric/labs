@@ -1028,6 +1028,13 @@ export type PlanWrite = PlanInputs & {
    * is in no run of `moves` was removed.
    */
   readonly start?: number;
+
+  /**
+   * With `unchanged`: the record is given again because a label its inputs
+   * read changed and no value did. The label of the target alone is stored
+   * again, and the label entries below the target stay.
+   */
+  readonly relabel?: true;
 };
 
 /**

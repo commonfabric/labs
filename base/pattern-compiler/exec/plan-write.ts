@@ -160,6 +160,12 @@ export type PlanWrite = NamedOutputInputs & {
    * is in no run of `moves` was removed.
    */
   start?: number;
+  /**
+   * The record is given again because a label its inputs read changed and
+   * no value did: the label of the target alone is formed again, and what
+   * is stored of the labels below the target stays.
+   */
+  relabel?: true;
 };
 
 /** What computed a `derive` (PL §1.1). */

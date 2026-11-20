@@ -324,6 +324,18 @@ describe("stored-labels", () => {
       expect(dependent).toBeGreaterThanOrEqual(1);
     });
 
+    // The write gives the list the value it had, so no value changes, and
+    // the result of the `map` is not computed again.
+    it("finds it in the label of what a `map` gives over a list that `set` left empty under another label", async () => {
+      const { refused, found, dependent } = await check([
+        { binding: "clearIfNoted", event: {} },
+      ]);
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThanOrEqual(1);
+    });
+
     it("finds it in the label of the number of members after a write at the position behind the last member", async () => {
       const { refused, found, dependent } = await check([
         { binding: "addOnce", event: { word: "x" } },

@@ -141,6 +141,12 @@ export interface PlanLabels {
    */
   readonly enumerations: ReadonlyMap<string, readonly MembershipLabel[]>;
 
+  /**
+   * The canonical covered paths whose label alone is stored again
+   * (`PlanWrite.relabel`), by document key.
+   */
+  readonly labelOnly: ReadonlyMap<string, readonly (readonly string[])[]>;
+
   /** Refusal reasons; the commit is refused when there is any. */
   readonly reasons: readonly string[];
 }
@@ -848,6 +854,7 @@ export const instantiatePlanLabels = (
   const byTarget = new Map<string, Map<string, InternedLabel>>();
   const paths = new Map<string, (readonly string[])[]>();
   const enumerations = new Map<string, MembershipLabel[]>();
+  const labelOnly = new Map<string, (readonly string[])[]>();
   if (reasons.length === 0) {
     for (const [coveringKey, label] of labels) {
       const { documentKey, pathKey, input } = covering.get(coveringKey)!;
@@ -874,9 +881,14 @@ export const instantiatePlanLabels = (
       paths.get(documentKey)!.push(
         canonicalizeLogicalPath(input.target.path),
       );
+      if (input.relabel === true) {
+        const held = labelOnly.get(documentKey) ?? [];
+        held.push(canonicalizeLogicalPath(input.target.path));
+        labelOnly.set(documentKey, held);
+      }
     }
   }
-  return { byTarget, paths, enumerations, reasons };
+  return { byTarget, paths, enumerations, labelOnly, reasons };
 };
 
 /**

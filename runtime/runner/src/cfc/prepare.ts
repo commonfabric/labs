@@ -5179,6 +5179,7 @@ export const planLabelsFor = (
       byTarget: new Map(),
       paths: new Map(),
       enumerations: new Map(),
+      labelOnly: new Map(),
       reasons: [],
     };
   }
@@ -12638,6 +12639,7 @@ export function* prepareBoundaryCommitSteps(
       byTarget: new Map(),
       paths: new Map(),
       enumerations: new Map(),
+      labelOnly: new Map(),
       reasons: [],
     };
   for (const reason of planLabels.reasons) reasons.push(reason);
@@ -13326,6 +13328,23 @@ export function* prepareBoundaryCommitSteps(
     );
     const flowWrittenPrefixes = new PathPrefixIndex();
     for (const path of flowWrittenPaths) flowWrittenPrefixes.add(path);
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+    // A path whose label alone a compiled pattern's record forms again,
+    // because a label its inputs read changed and no value did
+    // (`PlanWrite.relabel`), is a target whose own entries are replaced
+    // and whose entries below stay: nothing was written there. Behind
+    // `compiledPatterns`, which defaults off.
+    const labelOnlyKeys = new Set(
+      (planLabels.labelOnly.get(key) ?? []).map(pathKey),
+    );
+    const valueWrittenPrefixes = labelOnlyKeys.size === 0
+      ? flowWrittenPrefixes
+      : new PathPrefixIndex();
+    if (labelOnlyKeys.size > 0) {
+      for (const path of flowWrittenPaths) {
+        if (!labelOnlyKeys.has(pathKey(path))) valueWrittenPrefixes.add(path);
+      }
+    }
     const flowWrittenValues = flowTarget?.valuesByPath;
     const valueTarget = valueTargets.get(key);
     // Pre-transaction snapshots (and slot presence at each recorded path)
@@ -13949,7 +13968,8 @@ export function* prepareBoundaryCommitSteps(
       if (
         flowPersist &&
         (entry.origin === "derived" || entry.origin === "structure") &&
-        (flowWrittenPrefixes.hasPrefixOf(clearProbePath) ||
+        (valueWrittenPrefixes.hasPrefixOf(clearProbePath) ||
+          labelOnlyKeys.has(pathKey(clearProbePath)) ||
           (restatedDataRoot && entry.origin === "derived" &&
             entry.observes !== "shape"))
       ) {
