@@ -379,6 +379,15 @@ export class RuntimeTransactions implements TransactionHooks {
   /** @inheritDoc */
   labelOf(doc: string, path: readonly string[]): string | undefined {
     if (this.#compiledPattern === undefined) return undefined;
+    // The label of a position the transaction wrote, at its path, above it
+    // or below it, is the staged one, which the storage does not hold.
+    if (
+      (this.#written.get(doc) ?? []).some((written) =>
+        written.every((segment, index) =>
+          index >= path.length || segment === path[index]
+        )
+      )
+    ) return undefined;
     const table = this.#runtime.compiledPlans.labels;
     if (!this.#metadata.has(doc)) {
       const tx = this.#tx ?? this.#runtime.edit();

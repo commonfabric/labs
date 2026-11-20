@@ -1787,8 +1787,10 @@ export type TransactionHooks = {
   /**
    * The identifier of the label at a position, where the store knows one:
    * equal labels have one identifier (provisional decision P31). The
-   * executor groups the elements of a `fold` by it; without it, every
-   * position is a group of its own.
+   * executor groups the elements of a `fold` by it, and the positions a
+   * slot's read reached through links; without it, every position is a
+   * group of its own. A position the transaction in progress wrote has no
+   * identifier: its label is the one the write stages.
    */
   labelOf?(doc: string, path: readonly string[]): string | undefined;
 
@@ -7918,8 +7920,31 @@ export class Instance {
         chains.push(current);
       }
     }
-    const [chain = [], ...below] = chains;
+    const [chain = [], ...rest] = chains;
+    const below = this.#distinctByLabel(rest);
     return { chain, observes, ...(below.length === 0 ? {} : { below }) };
+  }
+
+  /**
+   * One chain of each set of chains whose positions hold equal labels, in
+   * order (provisional decision P31): the label of a slot is the join over
+   * its chains, to which chains of equal labels add nothing, so a read of an
+   * array of references whose labels are equal reports one chain, however
+   * many elements it has. A chain with a position whose label the store
+   * names no identifier for is kept.
+   */
+  #distinctByLabel(chains: Address[][]): Address[][] {
+    const hooks = this.root.options.transactions;
+    if (chains.length < 2 || hooks?.labelOf === undefined) return chains;
+    const seen = new Set<string>();
+    return chains.filter((chain) => {
+      const labels = chain.map(({ doc, path }) => hooks.labelOf?.(doc, path));
+      if (labels.includes(undefined)) return true;
+      const key = JSON.stringify(labels);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   /** The other slots with the root and the path of `slot`, by its index. */

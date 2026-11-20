@@ -786,3 +786,52 @@ describe("an element at no stored position", () => {
     }
   });
 });
+
+// `fixtures/reduce.tsx` folds `items`, given here as references to a
+// document each: the slot of what the `reduce` computed is bound to the
+// position each step read, which a link of the array leads to.
+describe("the positions a slot's read reached through links", () => {
+  /** The chains below the slot of `total`, for `count` items. */
+  const chainsBelow = async (
+    count: number,
+    label: (doc: string) => string,
+  ): Promise<number> => {
+    const recorder = new Recorder((doc) => label(doc));
+    const documents = Array.from({ length: count }, (_, index) => ({
+      id: `item-${index}`,
+      kind: "input",
+      value: { title: `t${index}`, amount: index },
+    }));
+    new Instance(
+      await artifactOf("reduce"),
+      {
+        items: documents.map(({ id }) => ({ $link: { doc: id, path: [] } })),
+        amounts: [1],
+        bonus: 1,
+      },
+      { transactions: recorder, documents },
+    );
+    const total = recorder.changed.flatMap(({ writes }) => writes ?? []).find((
+      write,
+    ) => write.target.path.join("/") === "total");
+    const [binding] = Object.values(total?.slots ?? {});
+    if (binding === undefined || !("chain" in binding)) {
+      throw new Error("The write of `total` binds no slot to a chain.");
+    }
+    return binding.below?.length ?? 0;
+  };
+
+  it("reports one chain for the positions whose labels are equal, for 3 items and for 30", async () => {
+    const few = await chainsBelow(3, () => "one label");
+
+    expect(few).toBeGreaterThan(0);
+    expect(await chainsBelow(30, () => "one label")).toBe(few);
+  });
+
+  it("reports a chain for each position whose label is another", async () => {
+    const few = await chainsBelow(3, (doc) => doc);
+
+    expect(few).toBeGreaterThanOrEqual(3);
+    expect(await chainsBelow(30, (doc) => doc)).toBe(few * 10);
+  });
+});
