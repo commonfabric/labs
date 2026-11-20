@@ -131,6 +131,8 @@ export type LabelPlan = {
   templates?: Template[];
   bindings?: { handler?: { body?: number } }[];
   slots?: { root: { kind: string }; path: string[]; observes: string }[];
+  operations?: { kind?: string; input?: Template }[];
+  dynamicReads?: { why?: { kind?: string; operation?: number } }[];
 };
 
 /** The record of a write, as the write record names it. */
@@ -201,6 +203,23 @@ export const templateOfRecord = (
   if ("cone" in record) {
     return {
       template: plan.cones?.[record.cone]?.writes?.[record.write]?.template,
+      kept: false,
+    };
+  }
+  if ("operation" in record) {
+    // The outcome of a `wish` (PL §3.19): the confidentiality of its
+    // operands joined with that of what its resolution read, which this
+    // derivation has, and no integrity (`checkWrites`).
+    const input = plan.operations?.[record.operation]?.input;
+    const reads = (plan.dynamicReads ?? []).findIndex(({ why }) =>
+      why?.kind === "search" && why.operation === record.operation
+    );
+    return {
+      template: input === undefined ? undefined : {
+        op: "derive",
+        by: { expression: true },
+        inputs: [input, ...(reads < 0 ? [] : [{ op: "dynamic", reads }])],
+      } as Template,
       kept: false,
     };
   }
@@ -621,11 +640,11 @@ export const checkWrites = (
       };
       const bindingLabel = (binding: SlotBinding, from: Place): Label => {
         if ("output" in binding) return outputLabel(binding.output, from);
-        if ("staged" in binding) return consumedAt(tx, binding.staged);
         if ("constant" in binding) {
           return { confidentiality: [], integrity: [] };
         }
-        return chainsLabel(binding);
+        if ("chain" in binding) return chainsLabel(binding);
+        return consumedAt(tx, binding.staged);
       };
       const slotLabel = (slot: number, from: Place): Label => {
         if (slot >= OUTPUT_SLOT) return outputLabel(slot - OUTPUT_SLOT, from);
@@ -835,6 +854,8 @@ export const checkWrites = (
           { inputs: write },
           kept,
         );
+        // The outcome of a `wish` mints no integrity.
+        if ("operation" in write.record) evaluated.label.integrity = [];
         const comparison = compareLabels(
           orderedLabel(evaluated.label),
           orderedLabel(stored),

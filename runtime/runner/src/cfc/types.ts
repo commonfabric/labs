@@ -873,6 +873,13 @@ export type SlotBinding =
      * read in the class of `observes`.
      */
     readonly below?: readonly (readonly CfcAddress[])[];
+    /**
+     * The slot read the position at the end of `chain` after this
+     * transaction wrote it: each position of the binding that the
+     * transaction wrote takes the label staged there, and the others the
+     * label their observation consumed.
+     */
+    readonly staged?: true;
   }
   | { readonly staged: CfcAddress }
   | { readonly output: number }
@@ -942,7 +949,12 @@ export type PlanWrite = PlanInputs & {
     | { readonly output: number }
     | { readonly body: number; readonly write: number }
     | { readonly cone: number; readonly write: number }
-    | { readonly stateFirst: number };
+    | { readonly stateFirst: number }
+    /**
+     * The outcome of an entry of `Plan.operations` of kind `wish`, which has
+     * the label of that operation's own resolution.
+     */
+    | { readonly operation: number };
 
   /** The result-document id of the instance. */
   readonly instance: string;

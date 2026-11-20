@@ -312,6 +312,38 @@ export const simulatedOutcome = (
   );
 };
 
+/**
+ * The positions of the home that today's `wish` reads to resolve
+ * `operands`, as the executor reports them for the outcome: the list of
+ * profiles of the root for a target in the profile, nothing for a target at
+ * a path of the root of the space, and for a search what it searches of the
+ * seeded home, the mentionable pieces of the root and the elements of the
+ * profile.
+ */
+export const simulatedReads = (
+  operands: Record<string, unknown>,
+  home: Home,
+): { doc: string; path: string[] }[] => {
+  const query = typeof operands.query === "string" ? operands.query.trim() : "";
+  const key = `#${query.slice(1).split("/")[0]}`;
+  if (["#profile", "#profileName", "#profileBio"].includes(key)) {
+    return [{ doc: home.root.id, path: ["defaultPattern", "profiles"] }];
+  }
+  if (WELL_KNOWN.has(key)) return [];
+  const scope = strings(operands.scope) ?? [];
+  return [
+    ...(scope.includes(".")
+      ? [{
+        doc: home.root.id,
+        path: ["defaultPattern", "backlinksIndex", "mentionable"],
+      }]
+      : []),
+    ...(scope.includes("profile")
+      ? [{ doc: home.profile.id, path: ["elements"] }]
+      : []),
+  ];
+};
+
 /** What the executor of a run is given for its `wish` operations. */
 export type HomeStubs = {
   documents: HomeDocument[];
@@ -330,7 +362,9 @@ export const homeStubs = (home: Home): HomeStubs => {
     documents: [home.profile, home.root],
     wishes: (operands) => {
       const outcome = simulatedOutcome(operands, home);
-      if (outcome !== undefined) return { outcome };
+      if (outcome !== undefined) {
+        return { outcome, reads: simulatedReads(operands, home) };
+      }
       const text = typeof operands.query === "string"
         ? operands.query
         : "a query that is no text";

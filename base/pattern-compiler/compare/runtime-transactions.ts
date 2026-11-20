@@ -575,12 +575,14 @@ export class RuntimeTransactions implements TransactionHooks {
     // binding names no read, so a position read both before and after the
     // write takes the staged label, and a slot whose label then depends on
     // itself is refused as a cycle.
+    // A staged position that the read crossed links to, or that holds
+    // links the read followed, keeps those positions: the binding names
+    // them all, marked as read after the write.
     const position = JSON.stringify([last?.doc, last?.path]);
-    if (
-      last !== undefined && this.#wrote(last) &&
+    const staged = last !== undefined && this.#wrote(last) &&
       (this.#readAfterWrite.has(position) ||
-        !this.#readBeforeWrite.has(position))
-    ) {
+        !this.#readBeforeWrite.has(position));
+    if (staged && binding.chain.length === 1 && binding.below === undefined) {
       return { staged: this.#cfcAddress(last) };
     }
     // A position the transaction did not read, such as the one an element
@@ -596,6 +598,7 @@ export class RuntimeTransactions implements TransactionHooks {
           chain.map((address) => this.#cfcAddress(address))
         ),
       }),
+      ...(staged ? { staged: true as const } : {}),
     };
   }
 

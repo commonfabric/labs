@@ -26,6 +26,21 @@ import {
 // runtime resolves its own `wish` against the seeded documents, and the
 // executor is answered from a table with the same outcomes.
 
+/** The outputs of the fixture whose stored labels the tests read. */
+const OUTPUTS = [
+  "greeting",
+  "about",
+  "note",
+  "profile",
+  "count",
+  "matches",
+  "mentionable",
+  "registry",
+  "missing",
+  "quiet",
+  "problem",
+];
+
 const fixture = (name: string) =>
   new URL(`../fixtures/${name}`, import.meta.url);
 
@@ -134,7 +149,7 @@ describe("wish-home", () => {
             Object.assign(values, instance.result());
             const tx = runtime.edit();
             try {
-              for (const name of ["greeting", "about", "note"]) {
+              for (const name of OUTPUTS) {
                 labels[name] = JSON.stringify(
                   storedLabelAt(tx, {
                     space,
@@ -165,15 +180,27 @@ describe("wish-home", () => {
       });
     });
 
-    // An output that reads the outcome of a `wish` and nothing of the
-    // profile, as `count`, is left out: the outcome has no write record,
-    // and its label is the join of the transaction that resolved it.
     it("stores the user atom of the profile in the label of an output derived from it, and not in the label of an output of the argument", async () => {
       const { labels } = await stored();
 
       expect(labels.greeting).toContain("/User");
       expect(labels.about).toContain("/User");
+      expect(labels.profile).toContain("/User");
       expect(labels.note).not.toContain("/User");
+    });
+
+    // The outcome of each `wish` has the label of its own resolution (PL
+    // §3.19), and not the join of the transaction that resolved every
+    // `wish` of the instance, which read the profile.
+    it("stores no user atom of the profile in the label of an output that reads the outcome of a `wish` and nothing of the profile", async () => {
+      const { labels } = await stored();
+
+      expect(
+        ["count", "matches", "mentionable", "registry", "missing", "quiet"]
+          .filter((name) => labels[name].includes("/User")),
+      ).toEqual([]);
+      // The error of the `wish` for the profile is no part of the profile.
+      expect(labels.problem).not.toContain("/User");
     });
 
     it("stores for each write record the label the evaluator gives it, an atom of the other space in its committed form", async () => {

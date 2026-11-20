@@ -230,6 +230,8 @@ export type Plan = {
     /** For a `reduce`: the cone of its step. For an effect and a `wish`:
      * the built-in. */
     implementation?: { cone?: number; builtin?: string };
+    /** The template of the operands. */
+    input?: Template;
   }[];
   bindings: {
     name?: Name;
@@ -2538,6 +2540,11 @@ export class Instance {
         result?: unknown;
         error?: unknown;
         outcome?: Record<string, unknown>;
+        /**
+         * The positions the resolution read to find the outcome, which
+         * the write record of the outcome reports (PL §3.19).
+         */
+        reads?: Address[];
       } | undefined;
       /** What the clock holds when the executor starts. */
       now?: number;
@@ -3597,7 +3604,7 @@ export class Instance {
             recorded();
           }
           if (record.kind === "wish") {
-            this.#resolveWish(state, host.v(request));
+            this.#resolveWish(state, host.v(request), host, operation);
           } else if (!this.root.#operations.has(id)) {
             this.root.#operations.set(id, { instance: this, builtin });
           }
@@ -3616,7 +3623,12 @@ export class Instance {
    * documents the executor was given, or a value, stored in a document of
    * its own, which the result is a reference to.
    */
-  #resolveWish(state: Ref, operands: unknown): void {
+  #resolveWish(
+    state: Ref,
+    operands: unknown,
+    host: Host,
+    operation: number,
+  ): void {
     const { store } = this;
     const query = isRecord(operands) ? operands.query : operands;
     if (typeof query === "string" && /^#now(\/|$)/.test(query)) {
@@ -3636,27 +3648,60 @@ export class Instance {
     const answer = this.root.options.wishes?.(
       isRecord(operands) ? operands : { query: operands },
     );
-    if (answer?.outcome !== undefined) {
-      for (const [name, member] of Object.entries(answer.outcome)) {
-        store.write(state.key(OUTCOME, name), this.stored(member));
+    // The outcome is a write the plan has a record for: the operation, with
+    // the slots its operands reach and the positions its resolution read
+    // under the entry of `Plan.dynamicReads` that names it (PL §3.19, "The
+    // outcome of each `wish` has a label of its own").
+    const reads = (this.plan.dynamicReads ?? []).findIndex((held) => {
+      const why = (held as { why?: { kind?: string; operation?: number } }).why;
+      return why?.kind === "search" && why.operation === operation;
+    });
+    if (reads >= 0) host.dynamic.set(reads, [...answer?.reads ?? []]);
+    const { input } = this.plan.operations[operation];
+    const recorded = this.#recording({
+      instance: this,
+      host,
+      records: [{
+        record: { operation },
+        // What the record reports: the slots of the operands, and the
+        // reads of the resolution.
+        template: {
+          op: "derive",
+          by: { expression: true },
+          inputs: [
+            ...(input === undefined ? [] : [input]),
+            ...(reads < 0 ? [] : [{ op: "dynamic" as const, reads }]),
+          ],
+        },
+        doc: state.doc,
+        path: [...state.path, OUTCOME],
+      }],
+    });
+    try {
+      if (answer?.outcome !== undefined) {
+        for (const [name, member] of Object.entries(answer.outcome)) {
+          store.write(state.key(OUTCOME, name), this.stored(member));
+        }
+        return;
       }
-      return;
-    }
-    if (answer?.result === undefined) {
+      if (answer?.result === undefined) {
+        store.write(
+          state.key(OUTCOME, "error"),
+          this.stored(answer?.error ?? `no target for \`${query}\``),
+        );
+        return;
+      }
+      const target = identifierOf({ wish: this.id, target: `${query}` });
+      if (!store.docs.has(target)) {
+        store.create(target, "wish target", this.stored(answer.result));
+      }
       store.write(
-        state.key(OUTCOME, "error"),
-        this.stored(answer?.error ?? `no target for \`${query}\``),
+        state.key(OUTCOME, "result"),
+        this.stored(new Ref(target, [])),
       );
-      return;
+    } finally {
+      recorded();
     }
-    const target = identifierOf({ wish: this.id, target: `${query}` });
-    if (!store.docs.has(target)) {
-      store.create(target, "wish target", this.stored(answer.result));
-    }
-    store.write(
-      state.key(OUTCOME, "result"),
-      this.stored(new Ref(target, [])),
-    );
   }
 
   /**
@@ -8078,10 +8123,26 @@ export class Instance {
       }
       return { chain: [], observes: this.plan.slots[slot].observes };
     }
-    const chain = this.#addressesOf(bound.at);
+    let chain = this.#addressesOf(bound.at);
     if (chain.length === 0) {
       const source = this.#sourceReadBinding(slot, keys);
       if (source !== undefined) return source;
+    }
+    // Whether a `wish` failed is decided by its resolution, as its outcome
+    // is: a read of the mark of a failure in its state document, which
+    // holds nothing, is bound to the outcome, whose label is that of the
+    // resolution (PL §3.19).
+    const { root } = this.plan.slots[slot];
+    if (
+      root.kind === "operation" &&
+      this.plan.operations[root.operation ?? -1]?.kind === "wish"
+    ) {
+      chain = chain.map(({ doc, path }) =>
+        path.length === 1 && path[0] === FAILED &&
+          this.store.peek(doc, path) === undefined
+          ? { doc, path: [OUTCOME] }
+          : { doc, path }
+      );
     }
     return this.#chainsOf(chain, bound.observes);
   }

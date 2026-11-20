@@ -239,11 +239,17 @@ export const instantiatePlanLabels = (
         } of ${address.id} as staged, which the transaction did not write`,
       );
     }
-    const coveringKey = stringKey([
-      observedDocumentKey(documentOf(address)),
-      planLabelPathKey(address.path),
-    ]);
-    return covering.has(coveringKey) ? labelOfCovered(coveringKey) : join;
+    // A write covers its path and what is below it: the nearest covered
+    // path at or above the address gives the label.
+    const documentKey = observedDocumentKey(documentOf(address));
+    for (let length = address.path.length; length >= 0; length--) {
+      const coveringKey = stringKey([
+        documentKey,
+        planLabelPathKey(address.path.slice(0, length)),
+      ]);
+      if (covering.has(coveringKey)) return labelOfCovered(coveringKey);
+    }
+    return join;
   };
 
   /** The label one journaled observation of `address` consumed. */
@@ -284,11 +290,29 @@ export const instantiatePlanLabels = (
     binding: Exclude<SlotBinding, { output: number }>,
     slot: number,
   ): InternedLabel => {
-    if ("staged" in binding) return stagedLabel(binding.staged);
-    // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
-    // A constant of the plan, as a `const` node is, contributes nothing.
-    if ("constant" in binding) return table.empty;
+    if ("constant" in binding) {
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // A constant of the plan, as a `const` node is, contributes nothing.
+      return table.empty;
+    }
+    if (!("chain" in binding)) return stagedLabel(binding.staged);
     const { chain, observes } = binding;
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+    // A read made after the transaction wrote its position observes, at
+    // each position the transaction wrote, the label staged there.
+    const at = (
+      address: CfcAddress,
+      observes: ReadObservationShape,
+    ): { confidentiality: readonly CfcConfClause[]; integrity: CfcAtom[] } => {
+      if (binding.staged !== true || !env.wrote(address)) {
+        return observed(address, observes);
+      }
+      const staged = stagedLabel(address);
+      return {
+        confidentiality: staged.confidentiality,
+        integrity: observes === "followRef" ? [] : [...staged.integrity],
+      };
+    };
     if (chain.length === 0) {
       throw new PlanLabelError(`slot ${slot} is bound to an empty chain`);
     }
@@ -305,11 +329,11 @@ export const instantiatePlanLabels = (
         throw new PlanLabelError(`slot ${slot} is bound to an empty chain`);
       }
       for (const link of each.slice(0, -1)) {
-        for (const clause of observed(link, "followRef").confidentiality) {
+        for (const clause of at(link, "followRef").confidentiality) {
           clauses.push(clause);
         }
       }
-      const last = observed(each[each.length - 1], observes);
+      const last = at(each[each.length - 1], observes);
       for (const clause of last.confidentiality) clauses.push(clause);
       // The table holds each atom once, so two are equal where they are
       // one object.
@@ -337,6 +361,9 @@ export const instantiatePlanLabels = (
       input.compiledPattern,
       runtimeWritePolicyAuthorization,
     )!;
+    if ("operation" in input.record) {
+      return wishOutcomeLabel(plan, input, input.record.operation);
+    }
     const { template, kept } = templateOf(plan, input.record);
     const inputs = inputsFor(plan, input, input, undefined);
     let label = instantiateTemplate(template, inputs, table, work);
@@ -349,6 +376,41 @@ export const instantiatePlanLabels = (
       );
     }
     return label === NEUTRAL ? table.empty : label;
+  };
+
+  /**
+   * The label of the outcome of a `wish` (PL §3.19, "The outcome of each
+   * `wish` has a label of its own"): the instantiated `Operation.input`
+   * joined with the label of what the resolution read, which the write
+   * reports under the entry of `Plan.dynamicReads` of kind `search` that
+   * names the operation. It mints no integrity. A write that reports no
+   * reads for that entry takes the transaction's join for them.
+   */
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+  const wishOutcomeLabel = (
+    plan: CompiledPlan,
+    input: PlanWriteInput,
+    index: number,
+  ): InternedLabel => {
+    const operation = plan.operations?.[index];
+    if (operation?.kind !== "wish" || operation.input === undefined) {
+      throw new PlanLabelError(
+        "a plan-write names an operation that is no `wish` of the plan",
+      );
+    }
+    const inputs = inputsFor(plan, input, input, undefined);
+    const operands = instantiateTemplate(operation.input, inputs, table, work);
+    const reads = (plan.dynamicReads ?? []).findIndex(({ why }) =>
+      why?.kind === "search" && why.operation === index
+    );
+    const searched = reads < 0 ? table.empty : inputs.dynamicLabel(reads);
+    return table.intern({
+      confidentiality: [
+        ...(operands === NEUTRAL ? [] : operands.confidentiality),
+        ...searched.confidentiality,
+      ],
+      integrity: [],
+    });
   };
 
   /**
@@ -678,7 +740,7 @@ const templateOf = (
   } else if ("cone" in record) {
     const edge = plan.cones[record.cone]?.writes[record.write];
     found = edge && { template: edge.template, kept: false };
-  } else {
+  } else if ("stateFirst" in record) {
     const first = plan.stateCells[record.stateFirst]?.first;
     const edge = first && plan.cones[first.cone]?.writes[first.write];
     found = edge && { template: edge.template, kept: false };

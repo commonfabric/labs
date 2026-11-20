@@ -50,6 +50,18 @@ export interface CompiledPlan {
   readonly stateCells: readonly {
     readonly first?: { readonly cone: number; readonly write: number };
   }[];
+  /** The operations, each with the template of its operands. */
+  readonly operations?: readonly {
+    readonly kind?: string;
+    readonly input?: Template;
+  }[];
+  /**
+   * The reads no template names a slot for. An entry of kind `search` is
+   * what the resolution of the operation it names read.
+   */
+  readonly dynamicReads?: readonly {
+    readonly why?: { readonly kind?: string; readonly operation?: number };
+  }[];
 }
 
 /**

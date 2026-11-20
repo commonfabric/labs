@@ -57,7 +57,9 @@ export type PlanRecord =
   /** An entry of `Cone.writes`. */
   | { cone: number; write: number }
   /** The first value of a state cell, by `StateCell.first`. */
-  | { stateFirst: number };
+  | { stateFirst: number }
+  /** The outcome of an entry of `Plan.operations` of kind `wish`. */
+  | { operation: number };
 
 /** What the template of one place is instantiated with. */
 export type PlanInputs = {

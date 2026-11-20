@@ -422,6 +422,141 @@ describe("cfc-plan-labels", () => {
       });
     });
 
+    it("returns, for a staged address below a path a write covers, the label of that write", async () => {
+      await withSources((_runtime, tx, identity, target) => {
+        tx.recordCfcWritePolicyInput(
+          planWrite(
+            identity,
+            { ...target, path: ["a"] },
+            0,
+            address("of:src-a"),
+          ),
+          runtimeWritePolicyAuthorization,
+        );
+        tx.recordCfcWritePolicyInput(
+          {
+            ...planWrite(identity, { ...target, path: ["b"] }, 2, target),
+            slots: { 2: { staged: { ...target, path: ["a", "inner"] } } },
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        // The transaction's join holds `secret-b` too, which a staged
+        // address no write covers takes.
+        expect(confidentialityAt(labels, target, "b")).toEqual(["secret-a"]);
+      });
+    });
+
+    it("joins, for a binding read after the transaction wrote the end of its chain, the label staged there with the label of each position below it", async () => {
+      await withSources((_runtime, tx, identity, target) => {
+        tx.recordCfcWritePolicyInput(
+          planWrite(
+            identity,
+            { ...target, path: ["a"] },
+            0,
+            address("of:src-a"),
+          ),
+          runtimeWritePolicyAuthorization,
+        );
+        tx.recordCfcWritePolicyInput(
+          {
+            ...planWrite(identity, { ...target, path: ["b"] }, 2, target),
+            slots: {
+              2: {
+                chain: [{ ...target, path: ["a"] }],
+                observes: "value",
+                below: [[address("of:src-b")]],
+                staged: true,
+              },
+            },
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        expect(confidentialityAt(labels, target, "b").sort()).toEqual([
+          "secret-a",
+          "secret-b",
+        ]);
+      });
+    });
+
+    /** `plan` with a `wish` whose operands are slot 0. */
+    const wishPlan: CompiledPlan = {
+      ...plan,
+      operations: [{ kind: "wish", input: { op: "slot", slot: 0 } }, {
+        kind: "reduce",
+      }],
+      dynamicReads: [{ why: { kind: "search", operation: 0 } }],
+    };
+
+    /** A `plan-write` input for the outcome of operation `operation`. */
+    const outcomeWrite = (
+      runtime: Runtime,
+      target: CfcAddress,
+      operation: number,
+    ): Extract<WritePolicyInput, { kind: "plan-write" }> => ({
+      kind: "plan-write",
+      target,
+      compiledPattern: runtime.compiledPlans.register(
+        wishPlan,
+        "code",
+        runtimeWritePolicyAuthorization,
+      ),
+      record: { operation },
+      instance: target.id,
+      keys: [],
+      slots: { 0: { chain: [address("of:src-a")], observes: "value" } },
+      dynamic: { 0: [address("of:src-b")] },
+    });
+
+    it("returns for the outcome of a `wish` the label of its operands joined with the label of what its resolution read, with no integrity", async () => {
+      await withSources((runtime, tx, _identity, target) => {
+        tx.recordCfcWritePolicyInput(
+          outcomeWrite(runtime, { ...target, path: ["a"] }, 0),
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        expect(confidentialityAt(labels, target, "a").sort()).toEqual([
+          "secret-a",
+          "secret-b",
+        ]);
+        expect(
+          labels.byTarget.get(observedDocumentKey(target))?.get("/a")
+            ?.integrity,
+        ).toEqual([]);
+      });
+    });
+
+    it("returns for the outcome of a `wish` that read nothing the label of its operands alone", async () => {
+      await withSources((runtime, tx, _identity, target) => {
+        tx.recordCfcWritePolicyInput(
+          {
+            ...outcomeWrite(runtime, { ...target, path: ["a"] }, 0),
+            dynamic: { 0: [] },
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        expect(confidentialityAt(labels, target, "a")).toEqual(["secret-a"]);
+      });
+    });
+
+    it("refuses a write that names as its `wish` an operation of another kind", async () => {
+      await withSources((runtime, tx, _identity, target) => {
+        tx.recordCfcWritePolicyInput(
+          outcomeWrite(runtime, { ...target, path: ["a"] }, 1),
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toHaveLength(1);
+        expect(labels.reasons[0]).toContain("is no `wish` of the plan");
+      });
+    });
+
     it("mints for expression code of a pattern compiled in the atom of that pattern's entry of the plan's patterns", async () => {
       // PL §3.2, "The atom of the pattern": "code of a pattern B compiled
       // into a pattern A mints B's atom", entry `pattern` of
