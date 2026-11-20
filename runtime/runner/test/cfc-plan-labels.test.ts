@@ -1390,14 +1390,17 @@ describe("cfc-plan-labels", () => {
       /**
        * Seeds sources labeled `secret-a` and `secret-b` and a target, and
        * commits a transaction that writes `{ x: "1" }` at `a` with a record
-       * of `a` bound to source `a` and one of `a/x` bound to source `b`.
+       * of `a` bound to source `a` and one of `a/x`, that of a kept output,
+       * bound to source `b`.
        * Then commits a transaction that writes nothing and gives the record
        * of `a` again, bound to source `b`, as one that left the value as it
        * was; with `relabel`, as one whose label alone is formed again.
-       * Returns the confidentiality of the target's derived `value` entries.
+       * Returns the confidentiality of the target's derived `value` entries,
+       * and the text of the integrity of the one at `a/x`.
        */
       const givenAgain = async (relabel: boolean) => {
         let value: Record<string, unknown[]> = {};
+        let integrity = "";
         await withRuntime(true, async (runtime) => {
           const seed = runtime.edit();
           writeSeedEnvelopeDoc(seed, space);
@@ -1433,7 +1436,10 @@ describe("cfc-plan-labels", () => {
           );
           expect((await seed.commit().settled).error).toBeUndefined();
           const identity = runtime.compiledPlans.register(
-            plan,
+            {
+              ...plan,
+              outputs: [{ template: { op: "slot", slot: 1 }, kept: true }],
+            },
             "code",
             runtimeWritePolicyAuthorization,
           );
@@ -1441,22 +1447,27 @@ describe("cfc-plan-labels", () => {
           first.readOrThrow(memoryAddress("of:src-a", ["value"]));
           first.readOrThrow(memoryAddress("of:src-b", ["value"]));
           first.writeValueOrThrow({ ...link, path: ["a"] }, { x: "1" });
-          for (
-            const [path, write, name] of [
-              [["a"], 0, "a"],
-              [["a", "x"], 1, "b"],
-            ] as const
-          ) {
-            first.recordCfcWritePolicyInput(
-              planWrite(
+          first.recordCfcWritePolicyInput(
+            planWrite(
+              identity,
+              { ...target, path: ["a"] },
+              0,
+              address("of:src-a"),
+            ),
+            runtimeWritePolicyAuthorization,
+          );
+          first.recordCfcWritePolicyInput(
+            {
+              ...planWrite(
                 identity,
-                { ...target, path },
-                write,
-                address(`of:src-${name}`),
+                { ...target, path: ["a", "x"] },
+                1,
+                address("of:src-b"),
               ),
-              runtimeWritePolicyAuthorization,
-            );
-          }
+              record: { output: 0 },
+            },
+            runtimeWritePolicyAuthorization,
+          );
           expect((await first.commit().settled).error).toBeUndefined();
           const again = runtime.edit();
           again.readOrThrow(memoryAddress("of:src-b", ["value"]));
@@ -1492,21 +1503,32 @@ describe("cfc-plan-labels", () => {
                   [...(entry.label.confidentiality ?? [])].sort(),
                 ]),
             );
+            integrity = JSON.stringify(
+              (metadata?.labelMap.entries ?? []).find((entry) =>
+                entry.origin === "derived" && entry.observes === "value" &&
+                entry.path.join("/") === "a/x"
+              )?.label.integrity ?? [],
+            );
           } finally {
             reader.abort();
           }
         });
-        return value;
+        return { value, integrity };
       };
 
       it("stores the label of the record at its path and keeps the entries below it", async () => {
-        const value = await givenAgain(true);
+        const { value } = await givenAgain(true);
         expect(value["/a"]).toEqual(["secret-b"]);
         expect(value["/a/x"]).toEqual(["secret-b"]);
       });
 
+      it("keeps the atom of a kept output below the path", async () => {
+        const { integrity } = await givenAgain(true);
+        expect(integrity).toContain(CFC_ATOM_TYPE.TransformedBy);
+      });
+
       it("clears the entries below the path of a record that is one of a write that left the value as it was", async () => {
-        const value = await givenAgain(false);
+        const { value } = await givenAgain(false);
         expect(value["/a"]).toEqual(["secret-b"]);
         expect(value["/a/x"]).toBeUndefined();
       });

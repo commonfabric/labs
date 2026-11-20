@@ -13630,7 +13630,12 @@ export function* prepareBoundaryCommitSteps(
         flowPreviousPresence,
       )
       : [];
-    for (const root of assertedRoots) flowWrittenPrefixes.add(root);
+    for (const root of assertedRoots) {
+      flowWrittenPrefixes.add(root);
+      if (valueWrittenPrefixes !== flowWrittenPrefixes) {
+        valueWrittenPrefixes.add(root);
+      }
+    }
     let flowCleared = false;
     let remintCleared = false;
     let linkCleared = false;
@@ -13753,8 +13758,10 @@ export function* prepareBoundaryCommitSteps(
       ) {
         return entry.label;
       }
+      // A path whose label alone is formed again was not written, so it is
+      // no writer of what a stamp at, above or below it labels.
       if (
-        !flowWrittenPrefixes.overlaps(
+        !valueWrittenPrefixes.overlaps(
           transformedByProbePath({ origin: entry.origin, path: entryPath }),
         )
       ) {
