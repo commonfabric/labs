@@ -63,6 +63,16 @@ write carries no stamp, and the second level releases nothing.
 `docs/specs/cfc-transformed-by-input-witnesses.md` says what the witness covers
 and what it does not.
 
+`seat-views.tsx` is a card table with hidden hands, and is a spike, not a
+recommended form: it runs only on a branch that carries the draft list release
+of commonfabric/specs#59. The table's state is sealed under the policy alone,
+one handler writes it, and each seat's view is released to the principals listed
+in that seat's occupant list, through a `Members` clause the runtime adds to the
+seat's key when the table's owner sets the table up. Each occupant is shown
+their own seat's view and nobody else's. `SEAT-VIEWS-FINDINGS.md` records what
+the runtime does with it, what it took to get there, and why it does not yet
+hold against the table's owner.
+
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
 as the policy subject and requires that exact manifest to be installed in the
@@ -91,4 +101,6 @@ deno task cf test patterns/examples/cfc-exchange-rules/blessed-object.test.tsx
 deno task cf test patterns/examples/cfc-exchange-rules/custody-projector.test.tsx
 deno task cf test patterns/examples/cfc-exchange-rules/custody-answer-room.test.tsx
 deno task cf test patterns/examples/cfc-exchange-rules/witnessed-chain.test.tsx
+deno task cf test patterns/examples/cfc-exchange-rules/seat-views.test.tsx
+deno task cf test patterns/examples/cfc-exchange-rules/seat-views-multi-user.test.tsx
 ```
