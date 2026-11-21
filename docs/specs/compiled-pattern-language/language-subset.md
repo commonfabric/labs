@@ -1119,6 +1119,14 @@ const DonutSearch = pattern<{ donuts: Donut[] }>(({ donuts }) => {
   and where the value is given to a language-model built-in as a tool,
   the rule for a tool applies to whichever closure was selected
   (`plan-and-label-templates.md`, §3.15).
+- **A closure through `inSpace` as a tool is refused.** By ruling
+  (2026-11-20; Z83 of the continuation plan) a pattern factory value with
+  the modifier `inSpace` is not given to a language-model built-in as a
+  tool. A closure whose own body calls `P.inSpace(space)(...)` makes the
+  instance in the other space and is accepted as a tool
+  (`plan-and-label-templates.md`, §3.15, point 4). The diagnostic has no
+  identifier in [§10](#10-diagnostics-catalog) yet, and the prototype does
+  not report it.
 - **Tier F.** A function body does not write a pattern closure as a value.
   An inline `pattern(...)` there is legal only as the callee of an
   instantiation, in every kind of function body, a `lift` and a `computed`
@@ -1231,9 +1239,9 @@ refused shapes are:
 - a call that holds another `patternTool` call. The inner call is decided
   on its own.
 
-Three further points are the choices of the prototype's implementer and
-await confirmation. They are not rulings (the continuation plan's
-question 314).
+Three further points were the choices of the prototype's implementer. By
+ruling (2026-11-20; Z84 of the continuation plan, its question 314) the
+three stand.
 
 - *A call whose result is spread, read by a member access, or called is
   refused.* Today `patternTool` returns the record
