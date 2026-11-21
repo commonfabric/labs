@@ -1512,3 +1512,176 @@ describe("the cost of labels from templates for a `filter`", () => {
     }
   });
 });
+
+describe("the label of a position of the result of a `map`", () => {
+  /**
+   * Runs `ordered-rows.tsx` over `size` items, each a document of its own
+   * under a clause of its own, with the inputs `items` and `notes` each a
+   * document under a clause of its own, applies `change`, and returns, for
+   * each row's `text` of `sorted`, `filed` and `plain`, and each `text` of
+   * the rows of `nested`, the clauses of the label a value read there
+   * consumes, as text.
+   */
+  const rows = async (
+    size: number,
+    change?: (
+      instance: Instance,
+      ids: readonly string[],
+      write: (doc: string, path: string[], value: unknown) => Promise<void>,
+    ) => Promise<void> | void,
+  ) => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const artifact = await artifactOf("ordered-rows");
+    const id = identifierOf({ test: "ordered-rows", size });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    try {
+      const audience = await scenarioAudience();
+      const schemaOf = (name: string) =>
+        ({
+          ifc: { confidentiality: [inputClause(name, audience)] },
+        }) as JSONSchema;
+      const tx = runtime.edit();
+      const documents: { id: string; kind: string; value: unknown }[] = [];
+      const held = (name: unknown, schema: JSONSchema, value: unknown) => {
+        const cell = runtime.getCell(space, name, schema, tx);
+        const link = cell.getAsNormalizedFullLink();
+        recordRelevantSchemaWritePolicyInput(tx, link, schema);
+        cell.set(value);
+        hooks.external(link.id);
+        documents.push({ id: link.id, kind: "input", value });
+        return link.id;
+      };
+      // Item `index` is ranked last for the lowest index, so `sorted` holds
+      // the items in the reverse of their order in `items`.
+      const ids = Array.from(
+        { length: size },
+        (_, index) =>
+          held({ orderedItem: index }, schemaOf(`item-${index}`), {
+            title: `t${index}`,
+            rank: size - index,
+            tags: [`a${index}`, `b${index}`],
+          }),
+      );
+      const link = (doc: string) => ({ $link: { doc, path: [] } });
+      const items = ids.map(link);
+      const notes = Array.from(
+        { length: size },
+        (_, index) => ({ text: `n${index}` }),
+      );
+      const given = {
+        items: link(held({ orderedInput: "items" }, schemaOf("items"), items)),
+        notes: link(held({ orderedInput: "notes" }, schemaOf("notes"), notes)),
+      };
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+      });
+      expect(await hooks.settled()).toEqual([]);
+      await change?.(instance, ids, async (doc, path, value) => {
+        instance.store.write(new Ref(doc, path), value);
+        instance.settle();
+        expect(await hooks.settled()).toEqual([]);
+      });
+      expect(await hooks.settled()).toEqual([]);
+      const read = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(read, {
+          space,
+          id: hooks.entityOf(instance.id),
+          scope: "space",
+        });
+        const at = (path: readonly string[]) =>
+          JSON.stringify(
+            (metadata === undefined ? undefined : labelForConsumedEntries(
+              consumedEntriesForRead(metadata, path, {
+                nonRecursive: false,
+                consumes: "value",
+              }),
+              path,
+              false,
+            ))?.confidentiality ?? [],
+          );
+        const result = instance.result() as Record<string, unknown[]>;
+        const texts = (name: string) =>
+          result[name].map((_, index) => at([name, `${index}`, "text"]));
+        return {
+          sorted: texts("sorted"),
+          filed: texts("filed"),
+          plain: texts("plain"),
+          nested: result.nested.flatMap((row, index) =>
+            (row as { tags: unknown[] }).tags.map((_, tag) =>
+              at(["nested", `${index}`, "tags", `${tag}`, "text"])
+            )
+          ),
+        };
+      } finally {
+        read.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  const holdsAll = (labels: string[], names: string[]) => {
+    for (const label of labels) {
+      for (const name of names) expect(label).toContain(`"input:${name}"`);
+    }
+  };
+
+  it("joins into a read of a row of a `map` over the result of a `lift` that is an array of references the label of what decided the order", async () => {
+    const { sorted } = await rows(3);
+
+    expect(sorted.length).toBe(3);
+    holdsAll(sorted, ["item-0", "item-1", "item-2"]);
+  });
+
+  it("joins the label of the order into every row after a writer changes the rank of one item", async () => {
+    const { sorted, nested } = await rows(3, async (_, ids, write) => {
+      await write(ids[2], ["rank"], 10);
+    });
+
+    holdsAll(sorted, ["item-0", "item-1", "item-2"]);
+    holdsAll(nested, ["item-0", "item-1", "item-2"]);
+  });
+
+  it("joins into a read of a row of a `map` over an array of references the label of the array, after a handler changes its order", async () => {
+    const before = await rows(3);
+    const after = await rows(3, (instance) => {
+      instance.send(bindingOf(instance, "rotate"), {});
+      instance.settle();
+    });
+
+    holdsAll(before.filed, ["items"]);
+    holdsAll(after.filed, ["items"]);
+  });
+
+  it("joins into a read of a row of a `map` over an array of plain values in place, within a row of a `map` over sorted references, the label of both orders", async () => {
+    const { nested } = await rows(3);
+
+    expect(nested.length).toBe(6);
+    holdsAll(nested, ["item-0", "item-1", "item-2"]);
+  });
+
+  it("joins into a read of a row of a `map` over an array of plain values in place the label of the array", async () => {
+    const { plain } = await rows(3);
+
+    holdsAll(plain, ["notes"]);
+  });
+});

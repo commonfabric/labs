@@ -336,6 +336,20 @@ export class Unsupported extends Error {
  * result is not evaluated again for it, and the runtime stores each row
  * where the result stands (`Instance.#storeUnit`).
  */
+/**
+ * An output a change of the result document is recorded for
+ * (`Instance.#recordedOutputs`): the output, the path of the result
+ * document it is stored at, whether its records are `bound`, and whether
+ * it holds the result of a per-element construct (`members`), whose
+ * position takes the label of the collection's membership.
+ */
+type RecordedOutput = {
+  output: number;
+  path: readonly string[];
+  bound?: true;
+  members?: true;
+};
+
 export class Assembled {
   constructor(
     readonly collection: number,
@@ -10450,7 +10464,7 @@ export class Instance {
     splice: { start: number; removed: number; inserted: number } | undefined,
   ): PlanWrite[] {
     const outputs = this.#recordedOutputs();
-    const found: { output: number; at: string[] }[] = [];
+    const found: { output: number; at: string[]; members?: true }[] = [];
     let nearest: number | undefined;
     outputs.forEach((output, index) => {
       if (
@@ -10461,7 +10475,12 @@ export class Instance {
       ) nearest = index;
     });
     if (nearest !== undefined) {
-      found.push({ output: outputs[nearest].output, at: [...path] });
+      const { output, path: at, members } = outputs[nearest];
+      found.push({
+        output,
+        at: [...path],
+        ...(members && at.length === path.length ? { members } : {}),
+      });
     }
     const held = this.store.peek(doc, path);
     outputs.forEach((output) => {
@@ -10477,7 +10496,13 @@ export class Instance {
         first: boolean,
       ): void => {
         if (rest.length === 0) {
-          if (value !== undefined) found.push({ output: index, at });
+          if (value !== undefined) {
+            found.push({
+              output: index,
+              at,
+              ...(output.members ? { members: output.members } : {}),
+            });
+          }
           return;
         }
         const [segment, ...more] = rest;
@@ -10505,21 +10530,20 @@ export class Instance {
     // An output the plan has no template for has a record with no inputs:
     // the runtime gives its path the label of a write it has no record of,
     // where it would otherwise take the label of a kept output above it.
-    // A change of the array a kept output with a collection holds, other
-    // than an addition at its end, decides anew which member stands at
-    // each position, and an addition at its end leaves each member before
-    // it where it stood.
+    // A change that wrote the array of a kept output that holds the result
+    // of a per-element construct, at the array or above it, other than by
+    // an addition at its end, decides anew which member stands at each
+    // position, and an addition at its end leaves each member before it
+    // where it stood. A write above the array writes it whole.
     const appends = splice !== undefined && Array.isArray(held) &&
       splice.removed === 0 && splice.start + splice.inserted === held.length;
-    return found.map(({ output, at }) => {
+    return found.map(({ output, at, members }) => {
       const write = this.#outputRecord(doc, output, at);
       this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
-      if (
-        this.plan.outputs[output].collection === undefined ||
-        !this.plan.outputs[output].kept || at.length !== path.length ||
-        !Array.isArray(held)
-      ) return write;
-      return appends
+      if (members !== true || !Array.isArray(this.store.peek(doc, at))) {
+        return write;
+      }
+      return appends && at.length === path.length
         ? { ...write, membersAppended: true as const }
         : { ...write, membersChanged: true as const };
     });
@@ -10537,16 +10561,11 @@ export class Instance {
    * an element: its records are `bound`, and the runtime gives their
    * paths the label of a write it has no record of.
    */
-  #recordedOutputs(): {
-    output: number;
-    path: readonly string[];
-    bound?: true;
-  }[] {
+  #recordedOutputs(): RecordedOutput[] {
     if (this.#recorded !== undefined) return this.#recorded;
     const { outputs } = this.plan;
     const templates = this.plan.templates ?? [];
-    const found: { output: number; path: readonly string[]; bound?: true }[] =
-      [];
+    const found: RecordedOutput[] = [];
     const hasElementEntry = (path: readonly string[]) =>
       outputs.some((output) =>
         output.kept && output.path.length > path.length &&
@@ -10583,8 +10602,9 @@ export class Instance {
     };
     const add = (output: number, path: readonly string[], depth: number) => {
       const record = outputs[output];
-      const entry: (typeof found)[number] = { output, path };
+      const entry: RecordedOutput = { output, path };
       found.push(entry);
+      if (record.collection !== undefined && record.kept) entry.members = true;
       if (record.collection !== undefined || depth > 64) return;
       if (record.kept && hasElementEntry(record.path)) return;
       const held = collectionOf(record.template, true, 0);
@@ -10593,6 +10613,7 @@ export class Instance {
         entry.bound = true;
         return;
       }
+      entry.members = true;
       const source = outputs[held.output];
       outputs.forEach((element, index) => {
         if (
@@ -10618,9 +10639,7 @@ export class Instance {
   }
 
   /** The result of `#recordedOutputs()`, made once. */
-  #recorded:
-    | { output: number; path: readonly string[]; bound?: true }[]
-    | undefined;
+  #recorded: RecordedOutput[] | undefined;
 
   /**
    * What names the inputs of the cone instance of an output for the element

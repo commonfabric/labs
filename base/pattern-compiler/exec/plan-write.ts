@@ -316,7 +316,8 @@ export type PlanWrite = NamedOutputInputs & {
   relabel?: true;
   /**
    * The target holds the result of a per-element construct, and the write
-   * changed its members otherwise than by adding at its end.
+   * changed its members otherwise than by adding at its end, or wrote it
+   * whole as part of a write above it.
    */
   membersChanged?: true;
   /**

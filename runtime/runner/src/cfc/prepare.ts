@@ -15086,25 +15086,50 @@ export function* prepareBoundaryCommitSteps(
       // position's own entries (§4.6.3, "Wildcard per-class entries"). An
       // addition at the end leaves them as they are. Behind
       // `compiledPatterns`, which defaults off.
-      for (const path of planLabels.membersChanged.get(key) ?? []) {
+      //
+      // A container held within a member of another such container is
+      // reached through a position of the outer one too, so its templates
+      // hold the outer container's templates of the same class as well: a
+      // more specific template replaces a less specific one within the
+      // structure component, and the read of a position of the inner
+      // container depends on both decisions. The outer containers come
+      // first.
+      const changedMembers = [...(planLabels.membersChanged.get(key) ?? [])]
+        .sort((a, b) => a.length - b.length);
+      for (const path of changedMembers) {
         const star = pathKey([...path, "*"]);
         let kept = 0;
+        const outer = new Map<string, CfcConfClause[]>();
         for (const candidateEntry of persistedLabelEntries) {
-          if (
-            candidateEntry.origin === "structure" &&
+          const candidatePath = candidateEntry.path;
+          const template = candidateEntry.origin === "structure" &&
             candidateEntry.observes !== undefined &&
             candidateEntry.observes !== "enumerate" &&
-            pathKey(candidateEntry.path) === star
-          ) continue;
+            candidatePath[candidatePath.length - 1] === "*";
+          if (template && pathKey(candidatePath) === star) continue;
+          if (
+            template && candidatePath.length <= path.length &&
+            isPrefix(candidatePath, path)
+          ) {
+            const held = outer.get(candidateEntry.observes!) ?? [];
+            for (const atom of candidateEntry.label.confidentiality ?? []) {
+              held.push(atom as CfcConfClause);
+            }
+            outer.set(candidateEntry.observes!, held);
+          }
           persistedLabelEntries[kept++] = candidateEntry;
         }
         persistedLabelEntries.length = kept;
         const confidentiality = flowLabelAt(key, path).confidentiality;
-        if (confidentiality.length === 0) continue;
         for (const observes of ["shape", "value", "followRef"] as const) {
+          const joined = uniqueCfcAtoms([
+            ...confidentiality,
+            ...(outer.get(observes) ?? []),
+          ]);
+          if (joined.length === 0) continue;
           persistedLabelEntries.push(markFlowStampEntry({
             path: [...path, "*"],
-            label: { confidentiality: [...confidentiality] },
+            label: { confidentiality: joined },
             origin: "structure",
             observes,
           }));

@@ -1129,7 +1129,8 @@ export type PlanWrite = {
 
   /**
    * The target holds the result of a per-element construct, and the write
-   * changed its members otherwise than by adding at its end: which member
+   * changed its members otherwise than by adding at its end, or wrote it
+   * whole as part of a write above it: which member
    * stands at each position was decided anew, so the label of the record,
    * that of the collection's membership, is stored once for every
    * position.
