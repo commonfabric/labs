@@ -221,6 +221,29 @@ describe("Server", () => {
         ).toMatchObject({ servable: [], refused: { "unvouched-instance": 1 } });
       });
 
+      it("returns the piece for an output one record writes that the space holds no instance of", async () => {
+        // A derived document that exists only at instances narrower than the
+        // space has no back-link to read at the `space` instance.
+
+        const asOf = write({ [PIECE]: { value: {} }, [INPUT]: { value: 1 } });
+        await server.storeCurrencyRecords(SPACE, {
+          asOf,
+          seen: [],
+          epoch: EPOCH,
+          records: [{ ...record(), writes: [OUTPUT, "computed:per-user"] }],
+        });
+
+        expect(
+          await server.judgeCurrencyRoots(SPACE, ["computed:per-user"], {
+            epoch: EPOCH,
+          }),
+        ).toEqual({
+          servable: [{ root: "computed:per-user", piece: PIECE }],
+          refused: {},
+          marked: [],
+        });
+      });
+
       it("returns no result for missing records, invalid back-links, or a cycle", async () => {
         write({
           "of:plain": { value: 1 },

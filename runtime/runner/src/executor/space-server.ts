@@ -222,6 +222,7 @@ import {
 import { ensureSpaceRootPattern } from "../ensure-space-root.ts";
 import { sourceDocKey } from "../compilation-cache/cell-cache.ts";
 import { asPatternIdentityRef } from "../meta-seam.ts";
+import { entityKindOfIdString } from "../entity-kind.ts";
 import {
   stampWaveRunContext,
   WaveAccumulator,
@@ -786,15 +787,6 @@ export async function selectForeignStaleInstances(
   return added;
 }
 
-/** The well-known never-a-piece id classes excluded from piece demand
- * (RULED 2026-08-07): a `computed:` doc is a derivation result, a
- * `cid:` doc is a content-addressed bundle, and the watermark doc is
- * the settledness subscription — none can ever carry `patternIdentity`
- * meta, so an `ensurePieceRunning` attempt (and its retry churn) is
- * structurally futile. Remaining `of:` ids are NOT distinguishable by
- * id class (a not-yet-created piece and a never-a-piece value doc look
- * alike) — the complete terminal-state design is the owed follow-up. */
-
 /** The dedupe key of a demanding (principal, session) pair in the
  * registry (stage B): both components, so two sessions of one user are
  * two demanders (a node beneath the root may narrow to session for that
@@ -833,15 +825,32 @@ export function demandersOfRoots(
   return [...demanders.values()];
 }
 
+/**
+ * Whether `id` is of a class that leads to no piece, so that a demand for
+ * it owes no structure load (RULED 2026-08-07): the watermark document is
+ * the settledness subscription, the effects document is a session-scoped
+ * value document every client of a serving space subscribes to
+ * (protocol.md §5), and a `cid:` document is a content-addressed bundle.
+ * None carries a pattern pointer or a back-link to a document that does.
+ * The remaining `of:` ids cannot be told apart by class, and the terminal
+ * state of the structure load covers the ones that are no piece's.
+ */
 const neverAPieceRootId = (id: string): boolean =>
   id === SERVER_EXECUTION_WATERMARK_DOC_ID ||
-  // Phase 4: the effects doc is a session-scoped VALUE doc every
-  // flag-ON client subscribes to (protocol.md §5) — it can never carry
-  // `patternIdentity` meta, so piece demand for it is structurally
-  // futile (the same never-a-piece class as the watermark doc).
   id === SERVER_EXECUTION_EFFECTS_DOC_ID ||
-  id.startsWith("computed:") ||
   id.startsWith("cid:");
+
+/**
+ * Whether `id` names a `computed:` document, the result of a derivation. It
+ * carries no pattern pointer and does carry a `result` back-link to the
+ * piece that derives it (`docs/specs/space-model/4-cells.md`), which a
+ * structure load follows as it follows an argument's. A session is sent
+ * many of them for each piece it watches, so one is a structure-load root
+ * only when a demand names it as a root (serving-loop.md §1, "A computed
+ * document a demand names").
+ */
+const isComputedId = (id: string): boolean =>
+  entityKindOfIdString(id) === "computed";
 
 /**
  * A pattern-lifecycle verb the serving loop runs on the space's runtime on
@@ -6148,13 +6157,18 @@ export class SpaceServer implements TransactionSealDestination {
       // structure load's input) when any session's row says so, or it is
       // warm, or a session's row was sent one of a piece's values: a piece
       // reached only through a data link starts for the session that demands
-      // its values, as one it watches does (design §2.8 flag 4).
+      // its values, as one it watches does (design §2.8 flag 4). A
+      // `computed:` document a session was sent is no root on that ground:
+      // a session watching a piece is sent every one the piece derives, and
+      // the piece starts from the root that reached them.
       let first: { id: string; scope: CellScope } | undefined;
       let root = warm !== undefined;
       const pairs = new Map<string, ScopeKeyIdentity>();
       for (const row of rows?.values() ?? []) {
         first ??= row;
-        if (row.root || row.piece === true) root = true;
+        if (row.root || (row.piece === true && !isComputedId(row.id))) {
+          root = true;
+        }
         // Anonymous sessions (no principal) contribute the key but own no
         // instance — not a demander (`fanOutInstances` drops principal-less
         // pairs; parity with `watchedRootsForSpace`'s identity-less rows).
@@ -6298,19 +6312,16 @@ export class SpaceServer implements TransactionSealDestination {
         // per-cycle ensure churn (stage P2-F, the OW19 design).
         if (this.#terminalStructureLoads.has(key)) {
           continue;
-        } // Id-class exclusion (RULED 2026-08-07): well-known never-a-piece
-        // ids register NO piece demand — no `ensurePieceRunning` attempt,
-        // no retry, no `structureLoadDeferred` increment (the counter
-        // stays meaningful for genuinely not-yet-loadable pieces).
-        // `computed:` docs are derivation results, `cid:` docs are
-        // content-addressed bundles, and the watermark doc is the
-        // settledness subscription every waitForSettled/overlay client
-        // holds — none can ever carry `patternIdentity` meta. The remaining
-        // `of:` ids — which id classes cannot split into not-yet-created
-        // pieces vs never-a-piece value docs — are covered by the TERMINAL
-        // state below (stage P2-F): confirmed-synced-no-meta parks the
-        // root, and the commit-triggered re-arm keeps the creation race
-        // sound.
+        } // Id-class exclusion (RULED 2026-08-07): an id of a class that
+        // leads to no piece (`neverAPieceRootId()`) registers NO piece
+        // demand — no `ensurePieceRunning` attempt, no retry, no
+        // `structureLoadDeferred` increment (the counter stays meaningful
+        // for genuinely not-yet-loadable pieces). Every other id is loaded,
+        // a `computed:` one through its back-link. The ids that turn out to
+        // be no piece's — which id classes cannot split from pieces not yet
+        // created — are covered by the TERMINAL state below (stage P2-F):
+        // confirmed-synced-no-meta parks the root, and the commit-triggered
+        // re-arm keeps the creation race sound.
         else if (neverAPieceRootId(root.id)) {
           this.#pendingStructureLoads.delete(key);
           this.#structureLoadDeferralStreaks.delete(key);
@@ -6576,7 +6587,8 @@ export class SpaceServer implements TransactionSealDestination {
       const rootScope: CellScope = resolved === undefined
         ? this.#demandRootAddresses.get(key)?.scope ?? "space"
         : (resolved.scope ?? "space") as CellScope;
-      if (neverAPieceRootId(rootId)) continue;
+      // A `computed:` root whose load resolved to no piece owes no seed.
+      if (neverAPieceRootId(rootId) || isComputedId(rootId)) continue;
       let seeded = this.#seededDemanders.get(rootId);
       if (seeded === undefined) {
         seeded = new Set();

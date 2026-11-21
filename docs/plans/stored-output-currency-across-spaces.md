@@ -403,10 +403,10 @@ source's index holds as one no piece there is behind on. A read the reader
 has not registered always stands, and so does every read of a space the
 reader is not armed with. With a row that stands, stands a row for each
 piece the source's index records as writing its document, for the same
-pair. A serving loop starts no piece for a demanded document that a
-computation derives, and an instance that is an actor's own may not exist
-yet for it to find the piece from, so the piece is what it is given to
-load. What stands is worked out
+pair. A serving loop finds the piece of a computed document it is asked for
+through the document's back-link, and an instance that is an actor's own
+may not exist yet for it to find the piece from, so the piece is what it is
+given to load. What stands is worked out
 again whenever the source's index or the arming changes, and a reading
 space that offers rows pulls from the source when it is not armed with it
 and when the source tells it of a change, so that it is armed whenever a

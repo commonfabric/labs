@@ -1850,6 +1850,21 @@ export const selectCurrencyWriters = (
 };
 
 /**
+ * The piece of `space` that derives the `computed:` document `id`: the one
+ * piece whose record says it writes the document, at any instance of it.
+ * `undefined` when `id` names no computed document, or when the records of
+ * no piece or of several say they write it.
+ */
+export const selectCurrencyDeriver = (
+  engine: Engine,
+  options: { space: string; id: string },
+): string | undefined => {
+  if (!options.id.startsWith(COMPUTED_ID_PREFIX)) return undefined;
+  const writers = selectCurrencyWriters(engine, options);
+  return writers.length === 1 ? writers[0] : undefined;
+};
+
+/**
  * What `space`'s index last worked out of the instance `(id, scopeKey)` for
  * the spaces that read it, or `undefined` where no space registered it: its
  * head, and whether a piece here computes it and does not answer for it at

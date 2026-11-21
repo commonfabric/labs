@@ -11,6 +11,7 @@ import type {
   CurrencyRecord,
 } from "@commonfabric/memory/v2/currency-index";
 import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
+import { entityKindOfIdString } from "../entity-kind.ts";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace, URI } from "../storage/interface.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";
@@ -392,10 +393,11 @@ export class StoreCurrency {
   }
 
   /**
-   * Judges the roots of `rootKeys` that are space-scoped and that `eligible`
-   * passes: the ones awaiting their first structure load that are not warm
-   * demand. A root whose piece is running here is not judged. `demandChanged`
-   * says whether any session's rows changed since the last call.
+   * Judges the roots of `rootKeys` that are space-scoped or `computed:`
+   * documents and that `eligible` passes: the ones awaiting their first
+   * structure load that are not warm demand. A root whose piece is running
+   * here is not judged. `demandChanged` says whether any session's rows
+   * changed since the last call.
    *
    * @returns The keys the store can serve, which the caller leaves unloaded
    * under `skip` and loads anyway under `record`, and the keys a judgment
@@ -410,7 +412,13 @@ export class StoreCurrency {
   ): Promise<{ servable: string[]; rearm: CurrencyRearm[] }> {
     const eligibleRoots = new Map<string, string>();
     for (const [key, root] of rootKeys) {
-      if (root.scope === "space" && eligible(key, root)) {
+      // A root narrower than the space is judged only where it is a
+      // `computed:` document, which the judgment reads as the piece that
+      // writes it and as one of the demanded instances that piece vouches
+      // for.
+      const judgeable = root.scope === "space" ||
+        entityKindOfIdString(root.id) === "computed";
+      if (judgeable && eligible(key, root)) {
         eligibleRoots.set(key, root.id);
       } else {
         this.#served.delete(key);

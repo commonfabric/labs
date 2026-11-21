@@ -14,6 +14,7 @@ import {
   judgeCurrencyRoots,
   pullCurrencyExports,
   registerCurrencyReads,
+  selectCurrencyDeriver,
   selectCurrencyNextExpiry,
   selectCurrencyPiece,
   selectCurrencyReadersMoved,
@@ -1327,6 +1328,36 @@ describe("currency-index", () => {
 
         expect(stored.falseClean).toEqual([]);
       });
+    });
+  });
+
+  describe("selectCurrencyDeriver()", () => {
+    it("returns the one piece recorded as writing a computed document", () => {
+      store(0, [record("of:piece", { writes: ["computed:total"] })]);
+
+      expect(
+        selectCurrencyDeriver(engine, { space: SPACE, id: "computed:total" }),
+      )
+        .toBe("of:piece");
+    });
+
+    it("returns `undefined` for a document that is no computed one, though one piece is recorded as writing it", () => {
+      store(0, [record("of:piece", { writes: ["of:argument"] })]);
+
+      expect(selectCurrencyDeriver(engine, { space: SPACE, id: "of:argument" }))
+        .toBeUndefined();
+    });
+
+    it("returns `undefined` for a computed document that no piece, or more than one, is recorded as writing", () => {
+      store(0, [
+        record("of:piece", { writes: ["computed:shared"] }),
+        record("of:other", { writes: ["computed:shared"] }),
+      ]);
+
+      expect([
+        selectCurrencyDeriver(engine, { space: SPACE, id: "computed:shared" }),
+        selectCurrencyDeriver(engine, { space: SPACE, id: "computed:none" }),
+      ]).toEqual([undefined, undefined]);
     });
   });
 

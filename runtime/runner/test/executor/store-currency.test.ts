@@ -256,6 +256,53 @@ describe("StoreCurrency", () => {
       });
     });
 
+    describe("judge()", () => {
+      it("asks the memory server about the space-scoped roots and the `computed:` roots of any scope, and about no other narrower root", async () => {
+        const asked: string[][] = [];
+        const currency = new StoreCurrency({
+          space: SPACE,
+          server: {
+            judgeCurrencyRoots: (_space, roots) => {
+              asked.push([...roots]);
+              return Promise.resolve({
+                servable: roots.map((root) => ({ root, piece: "of:piece" })),
+                refused: {},
+                marked: [],
+              });
+            },
+          } as Pick<HostMemoryServer, "judgeCurrencyRoots"> as HostMemoryServer,
+          mode: "skip",
+          epoch: "epoch-one",
+          serviceIdentity: "did:key:service",
+          stats: emptyServingLoopStats(),
+          onOwed: () => {},
+          onMarked: () => {},
+        });
+        const idleRuntime = {
+          scheduler: { hasNodesUnderDemandRoot: () => false },
+        } as unknown as Runtime;
+
+        const judged = await currency.judge(
+          idleRuntime,
+          new Map([
+            ["shared", { id: "of:result", scope: "space" }],
+            ["derived", { id: "computed:total", scope: "space" }],
+            ["own-derived", { id: "computed:draft", scope: "user" }],
+            ["own-state", { id: "of:draft", scope: "user" }],
+          ]),
+          () => true,
+          true,
+        );
+
+        expect(asked).toEqual([[
+          "of:result",
+          "computed:total",
+          "computed:draft",
+        ]]);
+        expect(judged.servable).toEqual(["shared", "derived", "own-derived"]);
+      });
+    });
+
     describe("noteIndexChanged()", () => {
       /** The root every judgment of these cases is asked about. */
       const ROOT = "of:root";

@@ -178,6 +178,7 @@ import {
   judgeCurrencyRoots,
   pullCurrencyExports,
   registerCurrencyReads,
+  selectCurrencyDeriver,
   selectCurrencyExport,
   selectCurrencyImports,
   selectCurrencyNextExpiry,
@@ -13291,7 +13292,10 @@ export class Server {
    * sessions as `demandForSpace()` reads them, after bringing the currency
    * index's marks up to the store's head. A root that is no result document
    * is judged as the piece its `result` back-links lead to, which is the
-   * piece a structure load of it starts.
+   * piece a structure load of it starts. A `computed:` root that one
+   * recorded piece writes is judged as that piece without its back-links
+   * being read, so one a session names at an instance narrower than the
+   * space, which the space may hold no instance of, is judged too.
    *
    * A root may rest on a slice that read another space. Each space read by
    * a slice the demand rows are resolved under is followed first: one that
@@ -13330,8 +13334,14 @@ export class Server {
     };
     if (roots.length === 0) return { servable: [], ...found() };
 
-    /** The recorded piece `root` leads to, if its back-links reach one. */
+    /**
+     * The recorded piece `root` leads to: the one piece recorded as deriving
+     * it where it is a computed document, or else the piece its back-links
+     * reach, if they reach one.
+     */
     const pieceOf = (root: string): string | undefined => {
+      const deriver = selectCurrencyDeriver(engine, { space, id: root });
+      if (deriver !== undefined) return deriver;
       let id = root;
       for (let hops = 0; hops <= CURRENCY_ROOT_HOPS_MAX; hops++) {
         if (selectCurrencyPiece(engine, { piece: id }) !== undefined) {
