@@ -779,6 +779,29 @@ describe("stored-labels", () => {
     });
   });
 
+  // `fixtures/input-writes.tsx`: `add` pushes a record onto the input list
+  // `items`.
+  describe("inStorage()", () => {
+    it("leaves the argument as it was given, so that a second run starts from the same values", async () => {
+      const artifact = await artifactOf("input-writes");
+      const argument = { label: "l", count: 1, items: [{ text: "a" }] };
+      const space = (await Identity.fromPassphrase("pattern-compiler-compare"))
+        .did();
+      const options = instanceOptions("input-writes", space, () => undefined);
+      const events = sentEvents(artifact, argument, [
+        { binding: 0, event: {} },
+      ], options);
+
+      await inStorage(artifact, argument, events, options, undefined, true);
+
+      expect(argument).toEqual({
+        label: "l",
+        count: 1,
+        items: [{ text: "a" }],
+      });
+    });
+  });
+
   describe("soundnessOf()", () => {
     // `fixtures/briefing.tsx` computes `climate` from `city`.
     const checked = async (clause: (name: string) => Atom[] | undefined) => {

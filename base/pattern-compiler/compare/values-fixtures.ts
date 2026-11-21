@@ -94,6 +94,10 @@ const WRITTEN: Record<string, Written[]> = {
     argument: { note: "n" },
     events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
   }],
+  "time-of-day": [{
+    argument: { note: "n" },
+    events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+  }],
   // A pattern instantiated in a function body: two instances.
   "instantiate": [{
     argument: { note: "n" },

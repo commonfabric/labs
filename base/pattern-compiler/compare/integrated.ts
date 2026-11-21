@@ -64,7 +64,13 @@ import {
 } from "./corpus.ts";
 import { generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
-import { drawing, eventSeed, restoreRandom, seedRandom } from "./random.ts";
+import {
+  drawing,
+  eventSeed,
+  restoreRandom,
+  scenarioGlobals,
+  seedRandom,
+} from "./random.ts";
 import {
   type RecordedPlanWrite,
   RuntimeTransactions,
@@ -265,7 +271,19 @@ export const instanceOptions = (
   secret: "the secret of the comparison",
   artifacts,
   measure: "patches" as const,
+  // Two runs of one scenario hold the same values.
+  globals: scenarioGlobals,
 });
+
+/** Makes an instance with the draws of its start seeded (`random.ts`). */
+const started = (make: () => Instance): Instance => {
+  seedRandom(eventSeed(-1));
+  try {
+    return drawing(make);
+  } finally {
+    restoreRandom();
+  }
+};
 
 /** Runs a module in memory. */
 const inMemory = (
@@ -275,7 +293,9 @@ const inMemory = (
   options: ReturnType<typeof instanceOptions>,
 ) => {
   const began = performance.now();
-  const instance = new Instance(artifact, argument, options);
+  const instance = started(() =>
+    new Instance(artifact, structuredClone(argument), options)
+  );
   const settle = performance.now() - began;
   const snapshots = [snapshot(instance)];
   const times: number[] = [];
@@ -376,6 +396,9 @@ export const inStorage = async (
     hooks.onCommitted((writes) => committed(runtime, hooks, writes));
   }
   try {
+    // The executor changes the values it is handed in place: it is given a
+    // copy, so that the caller's argument starts a later run as it is.
+    argument = structuredClone(argument);
     // The inputs as cells of their own, each under a schema with a clause.
     let given = argument;
     let documents: {
@@ -436,12 +459,14 @@ export const inStorage = async (
     resetAllTimingStats();
     let instance: Instance | undefined;
     const settle = await measure(() => {
-      instance = new Instance(artifact, given, {
-        ...options,
-        transactions: hooks,
-        documents,
-        ...(home === undefined ? {} : { wishes: home.wishes }),
-      });
+      instance = started(() =>
+        new Instance(artifact, given, {
+          ...options,
+          transactions: hooks,
+          documents,
+          ...(home === undefined ? {} : { wishes: home.wishes }),
+        })
+      );
     });
     if (instance === undefined) throw new Error("no instance");
     const compare = (point: string, expected: string | undefined) => {

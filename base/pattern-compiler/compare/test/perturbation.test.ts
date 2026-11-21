@@ -167,5 +167,43 @@ describe("perturbation", () => {
         valueAt(baseline?.result(), ["climate"]),
       );
     });
+
+    // `fixtures/time-of-day.tsx`: `post` appends a member made from the
+    // time of day, a draw of `Math.random` and one of `crypto.randomUUID`.
+    it("holds the same values in the two runs as given of a scenario whose handler reads the time of day and draws an identifier", async () => {
+      const artifact = await artifactOf("time-of-day");
+      const argument = { note: "n" };
+      const options = instanceOptions(
+        "time-of-day",
+        "did:key:unused",
+        () => undefined,
+      );
+      const { skipped, baseline } = await perturbedRuns(
+        artifact,
+        argument,
+        sentEvents(artifact, argument, [
+          { binding: 0, event: {} },
+          { binding: 0, event: {} },
+        ], options),
+        options,
+        generateInputs(
+          artifact.plan as Parameters<typeof generateInputs>[0],
+          artifact.schemas as Parameters<typeof generateInputs>[1],
+        ),
+      );
+
+      expect(skipped).toBeUndefined();
+      const messages = valueAt(baseline?.result(), ["messages"]) as {
+        id: string;
+        uuid: string;
+        at: number;
+        day: string;
+      }[];
+      expect(messages.length).toBe(2);
+      expect(messages[0].id).not.toBe(messages[1].id);
+      expect(messages[0].uuid).not.toBe(messages[1].uuid);
+      expect(messages[0].at).not.toBe(messages[1].at);
+      expect(messages[0].day).toBe("2026-01-01");
+    });
   });
 });

@@ -2831,6 +2831,13 @@ export class Instance {
       /** What the clock holds when the executor starts. */
       now?: number;
       /**
+       * What the value code reads under each name here in place of the
+       * realm's global of that name, as `Date` and `crypto`: a caller
+       * that needs two runs to hold the same values gives the sources of
+       * the time of day and of random draws here.
+       */
+      globals?: Record<string, unknown>;
+      /**
        * `patches`: a transaction does not count the bytes of each
        * document it wrote as a whole (`Transaction.bytes`), which costs
        * a pass over the document.
@@ -3360,12 +3367,14 @@ export class Instance {
     if (text === undefined) {
       throw new Unsupported("an import of a module the artifact does not hold");
     }
+    const globals = Object.entries(this.root.options.globals ?? {});
     const run = new Function(
       "$rt",
       "$exports",
+      ...globals.map(([name]) => name),
       `"use strict";\n${text.source}\n//# sourceURL=compiled:${text.path}`,
     );
-    run(this.#runtimeObject, exports);
+    run(this.#runtimeObject, exports, ...globals.map(([, value]) => value));
     return exports;
   }
 

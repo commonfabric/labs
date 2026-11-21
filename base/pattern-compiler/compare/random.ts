@@ -78,11 +78,72 @@ const generator = (seed: number): () => number => {
   };
 };
 
+/** The time of day `scenarioGlobals` gives before the first event. */
+const SCENARIO_START = Date.UTC(2026, 0, 1);
+
 /**
- * Has `Math.random` draw from a generator that starts from `seed`.
- * Returns whether the realm's function is the one this module installed.
+ * The time of day the value code of a run with `scenarioGlobals` reads:
+ * one time for the start and one for each event, a minute apart, set by
+ * `seedRandom` and kept after the event for what is evaluated later.
+ */
+let scenarioTime = SCENARIO_START;
+
+/** A `Date` whose time without an argument is `scenarioTime`. */
+class ScenarioDate extends Date {
+  constructor(...given: unknown[]) {
+    super(...((given.length === 0 ? [scenarioTime] : given) as [number]));
+  }
+
+  static override now(): number {
+    return scenarioTime;
+  }
+}
+
+/** A `crypto` whose draws are draws of `Math.random`. */
+const scenarioCrypto = {
+  subtle: crypto.subtle,
+  getRandomValues: <T extends ArrayBufferView>(into: T): T => {
+    const bytes = new Uint8Array(into.buffer, into.byteOffset, into.byteLength);
+    for (let at = 0; at < bytes.length; at++) {
+      bytes[at] = Math.floor(Math.random() * 256);
+    }
+    return into;
+  },
+  randomUUID: (): string => {
+    const hex = Array.from(
+      scenarioCrypto.getRandomValues(new Uint8Array(16)),
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join("");
+    return [
+      hex.slice(0, 8),
+      hex.slice(8, 12),
+      `4${hex.slice(13, 16)}`,
+      `8${hex.slice(17, 20)}`,
+      hex.slice(20),
+    ].join("-");
+  },
+};
+
+/**
+ * The globals of the value code of a run whose values depend on no time of
+ * day and on no draw outside the seeded sequence (`Instance`'s option
+ * `globals`): `Date` gives the time of the event being handled, the same
+ * in every run, and `crypto` draws from `Math.random`, which `seedRandom`
+ * seeds for the event.
+ */
+export const scenarioGlobals: Record<string, unknown> = {
+  Date: ScenarioDate,
+  crypto: scenarioCrypto,
+};
+
+/**
+ * Has `Math.random` draw from a generator that starts from `seed`, and
+ * sets the time of day of `scenarioGlobals` to that of the event the seed
+ * is of (`eventSeed`). Returns whether the realm's function is the one
+ * this module installed.
  */
 export const seedRandom = (seed: number): boolean => {
+  scenarioTime = SCENARIO_START + (seed - eventSeed(-1)) * 60_000;
   // The timing statistics of the logger draw from `Math.random()` once a
   // statistic holds its full number of samples (`TimingDataStore.record` in
   // `base/logger/src/logger.ts`), and they record inside a handler's run.
