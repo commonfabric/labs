@@ -26,17 +26,20 @@ relying on a detail here.
   puts the patterns it makes there, so patterns on one loom can build on each
   other. That is their private **Making** loom unless they name another. A slug
   is found only in its own space.
-- **`my-patterns/.claude/settings.json`** carries `CF_API_URL` and `CF_SPACE`
-  (their Making loom's host and space), `CF_IDENTITY` and `CF_SERVICE_URL`
-  (their Common Fabric service) as `env`, so a pattern on Making needs none of
+- **`my-patterns/<name>/loom.json`** says which loom: `{"loom_id": "…"}`. Before
+  any `cf` command for that pattern, run `loom.ensure-space` with `{}` and that
+  `loom_id` as context, and pass its `space` and `host` as
+  `--space <space> --api-url <host>`. Ask every time rather than keeping the
+  answer: the service decides, and asking again changes nothing. A pattern whose
+  `loom.json` also says `"home": true` is one saved before this (**save**,
+  below): its flags are `/config`'s `homeSpace` `space` and `host` instead.
+- **`my-patterns/.claude/settings.json`** carries `CF_IDENTITY` and
+  `CF_SERVICE_URL` (their Common Fabric service) as `env`, so no command needs
   those flags, and lists labs' own `CLAUDE.md` and `.claude/rules/` in
   `claudeMdExcludes`, so a session here does not take on labs' developer
   instructions. Claude Code applies both only to a session started in
   `my-patterns/`, and only once the person trusts the folder. The values are a
   copy: the person's service is the authority, and setup refreshes them.
-- **`my-patterns/<name>/loom.json`**, only for a pattern that lives anywhere
-  else: `{"loom_id", "space", "host"}`. Every `cf` command for that pattern then
-  passes `--space <space> --api-url <host>`.
 - **`my-patterns/CLAUDE.md`** says what the folder is for.
 
 Both files come from this skill's `templates/`.
@@ -80,10 +83,8 @@ command names the service and the key itself: `<key>` is
 4. **Where their pieces go.** `cf fetch -i <key> <service>/config`: its
    `identityDid` must equal `cf id did <key>`, or stop and say this Mac holds
    someone else's key. Then find their Making loom (**Which loom**, below) and
-   run `loom.ensure-space` with `{}` and that loom's `loom_id` as context: its
-   `space` and `host` are where their patterns go. If it is refused `no_space`,
-   their service keeps patterns on its own Mac; use `/config`'s `homeSpace`
-   instead. If neither answers, stop and say so; never guess a host or a space.
+   run `loom.ensure-space` on it: it must answer a `space` and a `host`. If it
+   is refused, stop and say so; never guess a host or a space.
 5. **The person is in the index**, as the same member their service is. If
    `cf index whoami -i <key>` says this machine has not joined, hand the
    service's membership to this Mac, in one line, so the chain never reaches the
@@ -95,8 +96,10 @@ command names the service and the key itself: `<key>` is
    copy their invite link and run `pbpaste | cf index join -i <key>`.
 6. **Settings remembered.** Write `my-patterns/CLAUDE.md` and
    `my-patterns/.claude/settings.json` from `templates/`, replacing every `<…>`
-   placeholder with the value steps 2 to 4 found and the labs root's absolute
-   path, and keeping any other settings already there.
+   placeholder with the value steps 2 and 3 found and the labs root's absolute
+   path, and keeping any other settings already there except `CF_SPACE` and
+   `CF_API_URL`, which older setups wrote and which now come from the pattern's
+   loom.
 7. **Hand over.** New pattern sessions start in `my-patterns/`, and the person
    accepts Claude Code's prompt to trust that folder.
 
@@ -107,10 +110,8 @@ command names the service and the key itself: `<key>` is
   `loom.find` with `{"name": "Making"}`: use the loom titled exactly Making, the
   most recently used if there are several; if there is none, `loom.create` with
   `{"title": "Making"}`. For a loom they name, `loom.find` with its name, and
-  ask which one when several match. Before the first save on any loom other than
-  Making, run `loom.ensure-space` on it and write `<name>/loom.json`. Whenever
-  it answers `shared: true`, say that putting a new pattern on a shared loom
-  from here is not built yet, and offer Making.
+  ask which one when several match. Write its `loom_id` to `<name>/loom.json`
+  before the first save.
 - **save** keeps the person's Weaver up to date and nothing else. Check it
   compiles first (`cf check <entry>`). Which save it is depends on what exists,
   not on what this session remembers: if `cf piece inspect --cell my-<name>`
@@ -120,28 +121,32 @@ command names the service and the key itself: `<key>` is
   `cf piece new <entry> --slug my-<name>
   --no-index-version`. Never pass
   `--force` to take a slug: that strands the piece already on their Making loom.
-  A pattern first saved before patterns lived in their loom's space is in
-  `homeSpace`: when the inspect finds nothing, inspect there too (with `--space`
-  and `--api-url`), and if it is there, write that space to `<name>/loom.json`
-  and keep saving there rather than making a second piece. It cannot be built
-  on, or build on another, until it is in the same space; say so when they ask,
-  as moving it is not built yet. Without `--no-index-version` every save becomes
-  a version in the index, which floods undo and can be shared on its own. When
-  `setsrc` refuses because the new version does not fit the piece's data, offer
-  a fresh piece or keeping the old version; nothing carries data over yet.
+  A pattern with no `<name>/loom.json` was first saved before patterns lived in
+  their loom's space, into `/config`'s `homeSpace`: inspect there (its `space`
+  and `host` as the flags), and if the piece is there, write
+  `{"loom_id": "<Making's>", "home": true}` and keep saving into `homeSpace`
+  rather than making a second piece; if it is not there, the pattern is new, and
+  **Which loom** comes first. Such a pattern cannot be built on, or build on
+  another, until it is in their loom's space; say so when they ask, as moving it
+  is not built yet. Without `--no-index-version` every save becomes a version in
+  the index, which floods undo and can be shared on its own. When `setsrc`
+  refuses because the new version does not fit the piece's data, offer a fresh
+  piece or keeping the old version; nothing carries data over yet.
 - **When a save fails with cf's version note** ("cf is newer than the server"),
   their service runs an older Common Fabric than this copy of labs. Say so in
   those words, check out the commit the note names (or the newest release tag at
   or before it) in this clone, and save again; do not set
   `CF_SKIP_VERSION_CHECK`.
-- **Into their Weaver**, after the first save, and again whenever its loom does
-  not hold the piece: `loom.add` with
-  `{"ref": "pattern:<space>/<pieceId>", "focus": true}` and that loom's
-  `loom_id` as context; `<space>` is the one the piece was saved into, and
-  `cf piece inspect --cell my-<name>` names the `pieceId`. Adding a piece the
-  loom already holds brings it forward rather than adding it twice. Later saves
-  update it in place. Tell them which loom it is on, on any device their Weaver
-  runs on.
+- **Into their Weaver**, right after the first save: `loom.add` with
+  `{"ref": "pattern:<space>/<pieceId>", "focus": true, "made_in_space": true}`
+  and the pattern's `loom_id` as context; `<space>` is the one the piece was
+  saved into, and `cf piece inspect --cell my-<name>` names the `pieceId`.
+  `made_in_space` tells the loom the save already put the piece in its space, so
+  it shows once, even after the loom is shared; leave it out for a pattern saved
+  into `homeSpace`, and when adding again later because the loom no longer holds
+  it. Adding a piece the loom already holds brings it forward rather than adding
+  it twice. Later saves update it in place. Tell them which loom it is on, on
+  any device their Weaver runs on.
 - **build on** ("feed my digest from the triage pattern", "make this read what
   that one finds"): one pattern takes another's output as its input. Both must
   live in one space, so the new one goes on the loom the other is on; if the
@@ -151,12 +156,11 @@ command names the service and the key itself: `<key>` is
   Then:
   - **This one** (a particular pattern of theirs): save the new pattern, then
     `cf piece link my-<other>/<output field> my-<name>/<input field>`.
-  - **Whichever one** (a pattern meant for other people, who each have their
-    own): put a `#tag` in the doc comment on the other pattern's output type
-    (`/** The emails a #triage pattern kept. */`), save it, and in the new
-    pattern read it with `wish({ query: "#triage", scope: ["."] })`, which finds
-    a tagged piece in the same space. When the wish finds nothing, say so rather
-    than linking a piece instead.
+  - **Whichever one** (a pattern meant for other people, each of whom has their
+    own copy of the other): the labs way is a `#tag` in the doc comment on the
+    other pattern's output type and a `wish` for it, but a wish does not yet
+    find a piece in a loom's space. Say it is not built yet, and offer **this
+    one** for their own copy.
 
   Never read again a source another pattern already reads (their mail, their
   calendar): build on that pattern. Never copy its data into the new one, write

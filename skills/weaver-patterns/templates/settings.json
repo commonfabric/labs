@@ -1,8 +1,6 @@
 {
   "env": {
     "CF_SERVICE_URL": "<the address of their Common Fabric service>",
-    "CF_API_URL": "<the host setup step 4 found>",
-    "CF_SPACE": "<the space setup step 4 found>",
     "CF_IDENTITY": "<absolute path of their identity key>"
   },
   "claudeMdExcludes": [
