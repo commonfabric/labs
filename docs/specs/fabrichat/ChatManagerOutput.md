@@ -197,7 +197,10 @@ session that has none is refused.
   membership is not listed until its membership is recorded: by a `joinRoom`
   no message or reaction sent, as a visit sends, or by the host's adoption of
   the catalog's rooms ([`FabriChatManager`](FabriChatManager.md#adopting-the-catalogs-rooms)).
-  Each room is listed once, a standalone room once for its space. A room whose
+  Each room is listed once, a standalone room once for its space. A
+  conversation listed through its container's membership is left out while
+  the catalog's entry for its container is `archived`
+  ([`FabriChatManager`](FabriChatManager.md#state)). A room whose
   space is [deleted](../random-space-identities.md#deleting-a-space) is left out
   once its catalog entry is in the `deleted` state, which the runtime that hears
   of the deletion records; until then it is listed, and opening it is how a
@@ -242,7 +245,9 @@ session that has none is refused.
   explicit choice about a room a container declares. An optional
   `catalogRevision` records that standalone catalog membership governs the
   room, including when its catalog entry is removed. These choices are
-  independent of the catalog's container membership.
+  independent of the catalog's container membership, which `rooms` reads
+  beside them, leaving out a conversation whose container's entry is
+  `archived`.
 - **`sharedSpaceCatalog`** is that catalog
   ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), as
   stored. A standalone room's catalog `title` is a display hint: the room's

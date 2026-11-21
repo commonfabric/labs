@@ -13,7 +13,9 @@
  * its membership is recorded: by a visit to it, which sends `joinRoom`, or by
  * the host's adoption of the catalog's rooms (`adoptCatalogRoomsOf()` in
  * `@commonfabric/piece`). Forgetting a container conversation archives only
- * that conversation; accepting or joining it restores it.
+ * that conversation; accepting or joining it restores it. Archiving its
+ * container in the catalog leaves it out of the rooms listed until the
+ * container is restored.
  *
  * It creates each room with `inSpace()` as the root of a space of its own,
  * which declares itself a `fabrichat-room`. The space grants the room's
@@ -188,6 +190,24 @@ const effectiveMemberships = (
       ...(catalogRevision !== undefined && { catalogRevision }),
     };
   });
+
+/**
+ * Whether the catalog archives the container of `membership`, as
+ * `effectiveMemberships()` returns it, where the container's membership is
+ * what governs the room: one declared by a container and governed by no
+ * standalone catalog entry. Such a room is left out of the rooms listed while
+ * its container is archived, and listed again once the container is
+ * restored, its membership unchanged. A container the catalog has no entry
+ * for leaves the room listed. The container's entry is the one for the space
+ * its link names (`spaceOfLink()`), so this reads no container.
+ */
+const containerArchived = (
+  entries: Record<string, RoomCatalogEntry>,
+  membership: RoomMembership,
+): boolean =>
+  membership.container !== undefined &&
+  membership.catalogRevision === undefined &&
+  entries[spaceOfLink(membership.container) ?? ""]?.state === "archived";
 
 /** Each request's outcome, by its `requestId`. */
 export type RequestsCell = Writable<
@@ -2503,17 +2523,19 @@ export const FabriChatManagerCore = pattern<
       );
     });
     // Each saved room, newest first: the memberships the catalog leaves
-    // saved, other than those whose space the catalog says is deleted. It
-    // reads the manager's records and the catalog alone, so listing the rooms
-    // reads nothing in any room's space. It is per user, as the people drawn
-    // from it are, and its binding's name is its cause, the identity of the
-    // document that stores it, so renaming it moves its data.
+    // saved, other than those whose space the catalog says is deleted, or
+    // whose container it archives. It reads the manager's records and the
+    // catalog alone, so listing the rooms reads nothing in any room's space,
+    // nor in any container's. It is per user, as the people drawn from it
+    // are, and its binding's name is its cause, the identity of the document
+    // that stores it, so renaming it moves its data.
     const roomsForUser = computed((): PerUser<ChatIndexEntry[]> =>
       listedEntries(
         effectiveMemberships(roomMembership.get() ?? [], catalogEntries)
           .filter((membership) =>
             membership.state === "saved" &&
-            !roomDeleted(catalogEntries, membership.room)
+            !roomDeleted(catalogEntries, membership.room) &&
+            !containerArchived(catalogEntries, membership)
           ),
         catalogEntries,
         direct.get() ?? {},

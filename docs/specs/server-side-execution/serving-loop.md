@@ -1759,8 +1759,17 @@ non-re-derivable writes; a rebase that conflicts semantically DROPS
 the contribution whole — there is no event to requeue, and the loop
 re-derives its bookkeeping next wave (a raced watermark advance is
 re-advanced; watermark forgery is an accepted authored intrusion —
-protocol.md §1's threat model). A fourth kind is a spec edit here
-first.
+protocol.md §1's threat model). A bookkeeping write conflicts on the
+same terms a derivation's does: when its document moved past the wave's
+basis, or past the view its own seal stood on through a commit this
+tenure did not make. The second is the arrival seed's case: it can find a
+viewer's instance absent because the replica has not taken the viewer's
+first write, and seal its create of the instance into a wave opened after
+that write was admitted, where the write sits at or below the basis. The
+create cannot rebase, so it is dropped rather than landing over the
+write, and the seed runs once more against the viewer's instance loaded
+fresh, filling the default's missing fields under what the viewer wrote
+(scopes.md §2). A fourth kind is a spec edit here first.
 
 **The flag-ON client's speculative-consequence deferred start
 (RULED 2026-08-13; the Phase-4 P1-5 flag).** A flag-ON CLIENT's

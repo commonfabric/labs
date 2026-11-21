@@ -1484,6 +1484,33 @@ function samePatternRef(
 }
 
 /**
+ * The fields of an object default that `held`, an instance's stored value,
+ * lacks, at any depth: each as its path from the instance's value and the
+ * default it takes. A field `held` holds is kept whole where it is not an
+ * object the default also describes as one; only an object can hold some of
+ * a default's fields and not others.
+ */
+function missingDefaultFields(
+  held: FabricValue,
+  schemaDefault: JSONValue,
+  at: readonly string[] = [],
+  missing: { path: string[]; value: JSONValue }[] = [],
+): { path: string[]; value: JSONValue }[] {
+  if (!isPlainObject(held) || !isPlainObject(schemaDefault)) return missing;
+  const fields = held as Record<string, FabricValue>;
+  for (
+    const [field, value] of Object.entries(
+      schemaDefault as Record<string, JSONValue>,
+    )
+  ) {
+    const path = [...at, field];
+    if (fields[field] === undefined) missing.push({ path, value });
+    else missingDefaultFields(fields[field], value, path, missing);
+  }
+  return missing;
+}
+
+/**
  * Whether `link`, a cell an instance in a piece's tree owns, is owed a
  * default: it declares one at a scope narrower than that of its owning
  * instance's result cell, `ownerScope`, which a start's preparation seeds
@@ -9029,6 +9056,31 @@ export class Runner {
   }
 
   /**
+   * Whether the instance `link` names, read through `readTx`, holds its
+   * default: it is present and carries its owner link, which every setup or
+   * seed that initializes an instance writes. An instance a session's first
+   * write created before any seed reached it carries no owner link, so it is
+   * still owed its initialization: the link, and the fields of an object
+   * default the write left out (`#seedOwedDefaults`). Recording the link even
+   * when nothing is missing is what lets a later removal of a default field
+   * stand. One that carries the link was initialized, and a field missing
+   * from it is one its writers removed.
+   */
+  #instanceHoldsDefault(
+    readTx: IExtendedStorageTransaction,
+    link: NormalizedFullLink,
+  ): boolean {
+    if (!this.#documentPresent(readTx, link)) return false;
+    if (ContextualFlowControl.declaresStream(link.schema)) return true;
+    return readTx.readOrThrow({
+      space: link.space,
+      id: link.id,
+      path: ["result"],
+      ...(link.scope !== undefined && { scope: link.scope }),
+    }, { meta: PRESENCE_PROBE_READ }) !== undefined;
+  }
+
+  /**
    * Whether a swap of `resultCell` to `pattern` would read a document this
    * replica lacks: the argument document `argumentLink` names, which the
    * swap's setup reads whole, or an owned cell the stored manifest lists —
@@ -11346,27 +11398,65 @@ export class Runner {
       options.onSyncError(error);
       return false;
     }
-    return await this.#seedOwedDefaults(
-      instances,
-      identity,
-      isCurrent,
-      options.allowReadOnly,
-    );
+    return await this.#seedOwedDefaults(instances, identity, isCurrent, {
+      allowReadOnly: options.allowReadOnly,
+    });
   }
 
   /**
-   * Fills the absent actor instances of the defaults `instances` declare at
-   * a scope narrower than that of the instance's result, each in a
-   * transaction of its own (`#prepareCellsForRunningPattern` says why),
-   * under `identity` and while `isCurrent` holds. Returns whether every one
-   * was verified or seeded.
+   * Returns whether `identity`, the actor a seed or a start runs under, is no
+   * actor at all on this serving runtime: absent, or the runtime's own
+   * session, which is where a transaction naming no actor resolves.
+   */
+  #isServingOwnIdentity(identity: ScopeKeyIdentity | undefined): boolean {
+    if (identity === undefined) return true;
+    const own = this.#runtime.scopeKeyIdentity;
+    return identity.principal === own.principal &&
+      identity.sessionId === own.sessionId;
+  }
+
+  /**
+   * Fills the actor instances of the defaults `instances` declare at a scope
+   * narrower than that of the instance's result, each in a transaction of
+   * its own (`#prepareCellsForRunningPattern` says why), under `identity`
+   * and while `isCurrent` holds: an absent instance takes the whole default,
+   * and one a first write created, carrying no owner link and holding only
+   * some fields of an object default, takes the rest.
+   * Returns whether every one was verified or seeded.
+   *
+   * A serving runtime fills no instance of its own. Its starts name no actor,
+   * and a seed under its own session would be one no viewer ever reads: the
+   * service's session is nobody's, and each new serving runtime has a new one,
+   * so every start would seed every started piece's defaults again. Identity
+   * arrives with the work (protocol.md, "Server-side runs never derive
+   * identity from their own session"), and a demander's instances come from
+   * the arrival seed (scopes.md). Readers of an unseeded instance see the
+   * schema default.
+   *
+   * On a serving runtime a seed seals into the open wave, which can still
+   * drop it: a viewer's first write that the replica had not taken when the
+   * seed probed is admitted first, and the seed's create of the instance
+   * would land over it (`conflictsFor` in wave.ts). A dropped seed runs
+   * once more against the viewer's instances loaded fresh, and fills the
+   * default under what the viewer wrote (`#seedAgainIfDropped`). With
+   * `options.retryDropped` false, a drop is reported and not retried. A seed
+   * that is lost for good, which this method already reported as done, calls
+   * `options.onLost`.
    */
   async #seedOwedDefaults(
     instances: readonly ResumePatternInstance[],
     identity: ScopeKeyIdentity | undefined,
     isCurrent: () => boolean,
-    allowReadOnly?: boolean,
+    options: {
+      allowReadOnly?: boolean;
+      retryDropped?: boolean;
+      onLost?: () => void;
+    } = {},
   ): Promise<boolean> {
+    const { allowReadOnly, retryDropped = true, onLost } = options;
+    if (this.#runtime.servingPosture && this.#isServingOwnIdentity(identity)) {
+      return true;
+    }
     let defaultsPrepared = true;
     const readOnlySpaces = new Map<MemorySpace, boolean>();
     for (const instance of instances) {
@@ -11419,7 +11509,11 @@ export class Runner {
       }
       if (owed.length === 0) continue;
       const owedIds = owed.map(({ derivedLink }) => derivedLink.id);
+      // The attempt that committed, whose wave settlement says whether the
+      // seed landed.
+      let attempt: IExtendedStorageTransaction | undefined;
       const outcome = await this.#runtime.editWithRetry((tx) => {
+        attempt = tx;
         if (!isCurrent()) {
           defaultsPrepared = false;
           return;
@@ -11492,11 +11586,28 @@ export class Runner {
           // constant default derives nothing from a value it was seeded
           // beside. Kept out of scheduling and out of CFC taint, as the
           // write-elision probe in pattern-binding.ts is.
+          const held = derived.getRawUntyped({
+            meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+          });
+          // An instance that is present can still owe its initialization. A
+          // session's first write can create its instance before any seed
+          // reaches it, holding only the fields written and no owner link.
+          // The seed then writes the link and fills the default's other
+          // fields under it, at any depth, changing none it holds; it writes
+          // the link even when no field is missing, so that a later removal
+          // of a default field stands. An instance carrying its owner link
+          // was initialized by a setup or a seed, and a field missing from
+          // it is one its writers removed, so it is left as it is. Which
+          // fields are missing decides only what is written into this same
+          // instance, so the probes stay out of CFC taint.
           if (
-            derived.getRawUntyped({
-              meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
-            }) !== undefined
+            held !== undefined &&
+            derived.getMetaRaw("result", { meta: PRESENCE_PROBE_READ }) !==
+              undefined
           ) continue;
+          const missing = held === undefined
+            ? undefined
+            : missingDefaultFields(held, schemaDefault);
           // A default belongs to its owning piece, so it carries the label on
           // the piece's root. The pattern pointer and the manifest read above
           // are members of the piece's document, and reading a member
@@ -11513,9 +11624,26 @@ export class Runner {
             rootRead = true;
           }
           // The graph has not enrolled its stores yet. This lazy seed keeps
-          // the generic ownership claim and its declaration behavior.
+          // the generic ownership claim and its declaration behavior. The
+          // owner link marks the instance initialized, the repaired one
+          // included.
           recordRuntimeOwnedStore(tx, owner, derivedLink);
           setResultCell(derived, owner.asSchema(instance.pattern.resultSchema));
+          if (missing !== undefined) {
+            for (const { path, value: fieldDefault } of missing) {
+              const value = fabricFromConvertibleJsValue(fieldDefault);
+              let field: Cell<any> = derived;
+              for (const key of path) field = field.key(key);
+              field.setRawUntyped(value);
+              tx.recordCfcWritePolicyInput({
+                kind: "initialization",
+                mode: "seed",
+                target: { ...derivedLink, path },
+                value,
+              }, runtimeWritePolicyAuthorization);
+            }
+            continue;
+          }
           const value = fabricFromConvertibleJsValue(schemaDefault);
           derived.setRawUntyped(value);
           tx.recordCfcWritePolicyInput({
@@ -11533,8 +11661,84 @@ export class Runner {
           }: ${outcome.error.message}`,
         );
       }
+      const settlement = attempt === undefined
+        ? undefined
+        : waveSettlementOf(attempt);
+      if (settlement !== undefined) {
+        void this.#seedAgainIfDropped(
+          settlement,
+          instance,
+          owed.map(({ derivedLink }) => derivedLink),
+          identity,
+          isCurrent,
+          { retry: retryDropped, onLost },
+        );
+      }
     }
     return defaultsPrepared;
+  }
+
+  /**
+   * Seeds `instance`'s defaults for `identity` once more when the wave the
+   * seed sealed into dropped it, after loading each owed instance in
+   * `owed` fresh, so that the seed reads what a viewer's first write put
+   * there and fills the default under it. A seed that is itself the retry
+   * reports a second drop rather than trying again. A seed lost for good, by
+   * a second drop, a retry that fails or comes back incomplete, or a failed
+   * settlement that is no conflict drop, calls `onLost`, so a caller that
+   * took the first seal as done can ask again.
+   */
+  async #seedAgainIfDropped(
+    settlement: NonNullable<ReturnType<typeof waveSettlementOf>>,
+    instance: ResumePatternInstance,
+    owed: readonly NormalizedFullLink[],
+    identity: ScopeKeyIdentity | undefined,
+    isCurrent: () => boolean,
+    { retry, onLost }: { retry: boolean; onLost?: () => void },
+  ): Promise<void> {
+    const settled = await settlement;
+    if (settled.error === undefined) return;
+    // Only a conflict drop is worth the one immediate retry, which reads
+    // what the conflicting write left. Any other failed settlement, a
+    // rejected wave commit among them, still loses the seed.
+    if (settled.error.waveWithdrawalCause !== "contribution-dropped") {
+      onLost?.();
+      return;
+    }
+    const resultId = instance.resultCell.getAsNormalizedFullLink().id;
+    if (!retry) {
+      logger.warn("scoped-default-seed-dropped", () => [
+        `the retried seed of the defaults the piece at ${resultId} owes was ` +
+        "dropped again; its instances read the schema default until a " +
+        "later seed",
+      ]);
+      onLost?.();
+      return;
+    }
+    try {
+      for (const link of owed) {
+        if (!isCurrent()) return;
+        await this.#syncFamilyCell(
+          this.#runtime.getCellFromLink(link),
+          identity,
+        );
+      }
+      if (!isCurrent()) return;
+      const complete = await this.#seedOwedDefaults(
+        [instance],
+        identity,
+        isCurrent,
+        { retryDropped: false, onLost },
+      );
+      if (!complete) onLost?.();
+    } catch (error) {
+      logger.warn("scoped-default-seed-dropped", () => [
+        `seeding again the defaults the piece at ${resultId} owes, after ` +
+        "the wave dropped the first seed, failed",
+        error,
+      ]);
+      onLost?.();
+    }
   }
 
   /**
@@ -12734,14 +12938,18 @@ export class Runner {
    * defaults rather than standing in for the whole value. Each owed cell is
    * probed in the instance `identity` resolves it to, and loaded first when
    * neither the replica nor the store read-through can say whether it holds
-   * a value; the cells found absent are seeded, one transaction per piece
-   * instance (`#seedOwedDefaults`). Returns whether every owed default was
+   * a value; the cells found absent, or created by a first write that left
+   * some fields of an object default unwritten, are seeded, one transaction
+   * per piece instance (`#seedOwedDefaults`). Returns whether every owed default was
    * verified or seeded. A piece not running here, or whose pattern pointer
-   * this runtime cannot read, seeds nothing and returns `false`.
+   * this runtime cannot read, seeds nothing and returns `false`. A seed
+   * returned as done that the serving loop's wave later loses for good calls
+   * `options.onLost`.
    */
   async seedOwedDefaultsFor(
     resultCell: Cell<any>,
     identity: ScopeKeyIdentity,
+    options: { onLost?: () => void } = {},
   ): Promise<boolean> {
     const isCurrent = this.#currentWithinLifecycle();
     const link = resultCell.getAsNormalizedFullLink();
@@ -12797,21 +13005,26 @@ export class Runner {
           !ownedCellOwesSeed(derivedLink, ownerScope) ||
           !canResolveScopeKey(derivedLink.scope, identity)
         ) continue;
-        if (this.#documentPresent(readTx, derivedLink)) continue;
-        if (!this.#storeReportedAbsent(derivedLink, identity)) {
+        if (this.#instanceHoldsDefault(readTx, derivedLink)) continue;
+        if (
+          !this.#documentPresent(readTx, derivedLink) &&
+          !this.#storeReportedAbsent(derivedLink, identity)
+        ) {
           // The store may hold a value the replica has not loaded; the
           // probe after the load reads what arrived.
           await this.#syncFamilyCell(derived, identity);
           if (!isCurrent()) return false;
           readTx = this.#familyReadTx(identity);
-          if (this.#documentPresent(readTx, derivedLink)) continue;
+          if (this.#instanceHoldsDefault(readTx, derivedLink)) continue;
         }
         owesSeed = true;
       }
       if (owesSeed) seeds.push(instance);
     }
     if (seeds.length === 0) return true;
-    return await this.#seedOwedDefaults(seeds, identity, isCurrent);
+    return await this.#seedOwedDefaults(seeds, identity, isCurrent, {
+      onLost: options.onLost,
+    });
   }
 
   /**
