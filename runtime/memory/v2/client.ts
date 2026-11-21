@@ -3535,6 +3535,7 @@ export class SpaceSession {
   #restoreComplete: PromiseWithResolvers<void> | undefined;
   #viewCapabilityLostObservers = new Set<() => void>();
   #terminationObservers = new Set<(error: Error) => void>();
+  #serverSeqObservers = new Set<(serverSeq: number) => void>();
   #watchSpecPositions = new Map<string, number[]>();
   #watchView: WatchView | null = null;
   #precedingWatchSyncs: SessionSync[] = [];
@@ -4494,6 +4495,18 @@ export class SpaceSession {
   }
 
   /**
+   * Observes the newest seq of the space this session has learned of
+   * (`serverSeq`) moving forward, whether by an answer to a request of its
+   * own or by an update the server pushes. The seq is that of the space's
+   * own history, so it moves only for commits this session hears of: its
+   * own, and those to documents it watches.
+   */
+  subscribeServerSeq(observer: (serverSeq: number) => void): () => void {
+    this.#serverSeqObservers.add(observer);
+    return () => this.#serverSeqObservers.delete(observer);
+  }
+
+  /**
    * Observes this session ending with an error, which `closeError` then
    * holds: a revocation (a takeover, an authorization denial, or a space
    * marked for instance names, which requires an update), a permanent
@@ -5090,6 +5103,7 @@ export class SpaceSession {
     this.#viewInterests = [];
     this.#viewCapabilityLostObservers.clear();
     this.#terminationObservers.clear();
+    this.#serverSeqObservers.clear();
     this.#watchView?.close();
     this.#watchView = null;
   }
@@ -5162,6 +5176,7 @@ export class SpaceSession {
     this.#watchView?.close();
     this.#watchView = null;
     this.#endPresenceRooms(error);
+    this.#serverSeqObservers.clear();
     const observers = [...this.#terminationObservers];
     this.#terminationObservers.clear();
     for (const observer of observers) {
@@ -5750,7 +5765,15 @@ export class SpaceSession {
   }
 
   #noteResult(serverSeq: number): void {
-    this.#serverSeq = Math.max(this.#serverSeq, serverSeq);
+    if (serverSeq <= this.#serverSeq) return;
+    this.#serverSeq = serverSeq;
+    for (const observer of [...this.#serverSeqObservers]) {
+      try {
+        observer(serverSeq);
+      } catch (cause) {
+        console.error("server-seq subscriber threw:", cause);
+      }
+    }
   }
 
   #noteOperationWatchCursors(sync: SessionSync): void {

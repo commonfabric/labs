@@ -257,15 +257,33 @@ export class XHistoryView extends BaseView {
   /** How many listings have begun, which tells a superseded one apart. */
   #listing = 0;
 
+  /** Stops following the history of the space listed, while it is followed. */
+  #stopFollowing: (() => void) | undefined = undefined;
+
+  /** The newest seq of the space the runtime has reported. */
+  #reportedSeq = 0;
+
+  /**
+   * The reported seq the latest listing began after, so that a listing
+   * answers every report made before it and only a later one lists again.
+   * A report is not compared with the steps listed: a commit the history
+   * does not list, such as one of another branch, would otherwise be
+   * listed for without end.
+   */
+  #coveredSeq = 0;
+
   /**
    * Lists a stretch of history: the newest when `before` is absent, which
    * replaces the list, and otherwise the one below `before`, which extends
-   * it.
+   * it. With `refresh`, the newest stretch is listed because the space moved
+   * on: it replaces only the steps it reaches, keeps the older ones listed
+   * beneath it, and reuses the piece sources already read.
    */
-  #list = new Task<[number | undefined], void>(this, {
-    task: async ([before]) => {
+  #list = new Task<[number | undefined, boolean?], void>(this, {
+    task: async ([before, refresh]) => {
       const { rt, space, pieceId, pieceScope } = this;
       const listing = ++this.#listing;
+      this.#coveredSeq = this.#reportedSeq;
       if (rt === undefined || space === undefined) {
         this._steps = [];
         this._next = undefined;
@@ -278,16 +296,74 @@ export class XHistoryView extends BaseView {
           id: pieceId,
           ...(pieceScope !== undefined ? { scope: pieceScope } : {}),
         }],
+        { reuseSources: refresh === true },
       );
       // A stretch that arrives after a later listing began belongs to a list
       // that one has replaced.
       if (listing !== this.#listing) return;
-      this._steps = before === undefined
-        ? page.steps
-        : withOlderSteps(this._steps, page.steps);
-      this._next = page.next;
+      if (before !== undefined) {
+        this._steps = withOlderSteps(this._steps, page.steps);
+        this._next = page.next;
+      } else if (refresh === true) {
+        const reached = page.steps.at(-1)?.startSeq;
+        const below = reached === undefined
+          ? []
+          : this._steps.filter((step) => step.seq < reached);
+        this._steps = withOlderSteps(page.steps, below);
+        if (below.length === 0) this._next = page.next;
+      } else {
+        this._steps = page.steps;
+        this._next = page.next;
+      }
+      // The space moved on again while this listing was made.
+      if (this.#reportedSeq > this.#coveredSeq) {
+        queueMicrotask(() => this.#refresh());
+      }
     },
   });
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.#follow();
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.#stopFollowing?.();
+    this.#stopFollowing = undefined;
+  }
+
+  /**
+   * Follows the history of the space listed, so that the list grows as the
+   * space moves on, once the panel is in the page and has a runtime and a
+   * space.
+   */
+  #follow(): void {
+    this.#stopFollowing?.();
+    this.#stopFollowing = undefined;
+    this.#reportedSeq = 0;
+    this.#coveredSeq = 0;
+    const { rt, space } = this;
+    if (!this.isConnected || rt === undefined || space === undefined) return;
+    this.#stopFollowing = rt.watchSpaceHistory(space, (seq) => {
+      this.#reportedSeq = Math.max(this.#reportedSeq, seq);
+      this.#refresh();
+    });
+  }
+
+  /**
+   * Lists the newest steps again when the space has moved on past the
+   * newest one listed. A listing under way is left to finish, and is
+   * followed by this one; a fork that is open keeps the list it was opened
+   * from, which closing it lists again.
+   */
+  #refresh(): void {
+    if (this.open !== undefined) return;
+    if (this.#reportedSeq <= this.#coveredSeq) return;
+    if (this.#reportedSeq <= (this._steps[0]?.seq ?? 0)) return;
+    if (this.#list.status === TaskStatus.PENDING) return;
+    void this.#list.run([undefined, true]);
+  }
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     const moved = changed.has("rt") || changed.has("space");
@@ -296,6 +372,7 @@ export class XHistoryView extends BaseView {
     if (moved) {
       this._steps = [];
       this._next = undefined;
+      this.#follow();
     }
     // Returning from a fork, by discarding it or restoring from it, is what
     // can have added to the space's history; opening one adds nothing, and

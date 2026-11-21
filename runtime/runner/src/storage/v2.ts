@@ -5167,6 +5167,12 @@ type ProviderOptions = {
   /** Called when the space's memory session is replaced on reconnect. */
   onSessionReplaced?: () => void;
 
+  /**
+   * Called when the newest seq of the space the replica's session has
+   * learned of moves forward; see `SpaceSession.subscribeServerSeq()`.
+   */
+  onServerSeq?: (serverSeq: number) => void;
+
   /** Called when `sessionError()` starts reporting `error`. */
   onSessionError?: (error: Error) => void;
 
@@ -5349,6 +5355,7 @@ class Provider
 
   #routeAbort = new AbortController();
   #operationSubscriptions = new Set<ProviderOperationSubscription>();
+  #serverSeqObservers = new Set<(serverSeq: number) => void>();
   #presenceMemberships = new Set<ProviderPresenceMembership>();
 
   /**
@@ -5385,6 +5392,13 @@ class Provider
           address.scope,
           address.scopeKey,
         ),
+      // Observers belong to the provider, so a replacement replica's session
+      // reports to the same ones.
+      onServerSeq: (serverSeq) => {
+        for (const observer of [...this.#serverSeqObservers]) {
+          observer(serverSeq);
+        }
+      },
       // A released root is not read again on a replacement replica.
       onWatchesReleased: (roots) => {
         for (const root of roots) {
@@ -5899,6 +5913,12 @@ class Provider
     return this.#followReplacement((replica) => replica.listHistory(options));
   }
 
+  /** See `IStorageProvider.subscribeServerSeq`. */
+  subscribeServerSeq(observer: (serverSeq: number) => void): () => void {
+    this.#serverSeqObservers.add(observer);
+    return () => this.#serverSeqObservers.delete(observer);
+  }
+
   listBranches(): Promise<BranchInfo[]> {
     return this.#followReplacement((replica) => replica.listBranches());
   }
@@ -5981,6 +6001,7 @@ class Provider
       subscription.cancel?.();
     }
     this.#operationSubscriptions.clear();
+    this.#serverSeqObservers.clear();
     this.#routeAbort.abort(new Error("memory replica closed"));
     this.options.routeState.generation++;
     await this.replica.close();
@@ -5994,6 +6015,7 @@ class Provider
         subscription.cancel?.();
       }
       this.#operationSubscriptions.clear();
+      this.#serverSeqObservers.clear();
       this.#routeAbort.abort(new Error("memory replica closed"));
       this.options.routeState.generation++;
     }
@@ -6679,6 +6701,8 @@ export class SpaceReplica
   #onAccessChange?: (error: Error | undefined) => void;
   #onSessionAnswered?: () => void;
   #cancelTermination: Cancel | undefined;
+  #onServerSeq?: (serverSeq: number) => void;
+  #cancelServerSeq: Cancel | undefined;
   #onSessionReplaced?: () => void;
   #onSessionError?: (error: Error) => void;
 
@@ -6714,6 +6738,7 @@ export class SpaceReplica
     this.#subscription = options.subscription;
     this.#onAccessChange = options.onAccessChange;
     this.#onSessionAnswered = options.onSessionAnswered;
+    this.#onServerSeq = options.onServerSeq;
     this.#onSessionReplaced = options.onSessionReplaced;
     this.#onSessionError = options.onSessionError;
     this.#scopeKeyIdentity = options.scopeKeyIdentity;
@@ -8525,6 +8550,8 @@ export class SpaceReplica
   async close(): Promise<void> {
     this.#cancelTermination?.();
     this.#cancelTermination = undefined;
+    this.#cancelServerSeq?.();
+    this.#cancelServerSeq = undefined;
     this.#localCoverageObservers.clear();
     this.#viewPlanObservers.clear();
     this.#cancelViewCapabilityLost?.();
@@ -8704,6 +8731,8 @@ export class SpaceReplica
   closeNow(): void {
     this.#cancelTermination?.();
     this.#cancelTermination = undefined;
+    this.#cancelServerSeq?.();
+    this.#cancelServerSeq = undefined;
     this.#localCoverageObservers.clear();
     this.#viewPlanObservers.clear();
     this.#cancelViewCapabilityLost?.();
@@ -13826,6 +13855,11 @@ export class SpaceReplica
           this.#lastAuthorizationError = null;
           this.#onAccessChange?.(undefined);
           this.#onSessionAnswered?.();
+          this.#cancelServerSeq?.();
+          const onServerSeq = this.#onServerSeq;
+          this.#cancelServerSeq = onServerSeq === undefined
+            ? undefined
+            : resolved.session.subscribeServerSeq(onServerSeq);
           this.#cancelTermination?.();
           this.#cancelTermination = resolved.session.subscribeTermination(
             (error) => {

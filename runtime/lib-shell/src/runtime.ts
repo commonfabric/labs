@@ -509,6 +509,19 @@ export interface SlugReferenceRefusal {
  */
 export class RuntimeInternals extends EventTarget {
   #client: RuntimeClient;
+  /** How many `watchSpaceHistory()` watches each space has open. */
+  #historyWatchers = new Map<DID, number>();
+
+  /**
+   * The piece sources the latest `spaceHistory()` of each space read, and
+   * the pieces it was asked to read beside the listed ones, for a listing
+   * that reuses them.
+   */
+  #historySources = new Map<
+    DID,
+    { named: string; sources: PieceSourceOfScope[] }
+  >();
+
   #disposed = false;
   #favorites: FavoritesManager;
   #callbacks: RuntimeInternalsCallbacks;
@@ -928,22 +941,87 @@ export class RuntimeInternals extends EventTarget {
    * changes of pattern code the space's pieces recorded during it, as a
    * piece's own source history lists them: the pieces the space lists, and
    * those `pieces` names beside them, which is how a piece the space does
-   * not list has its changes shown.
+   * not list has its changes shown. With `options.reuseSources`, the sources
+   * the previous listing of the space read for the same `pieces` are used
+   * again instead of being read, which suits a listing made because the
+   * space moved on rather than because a piece's source may have changed.
    */
   async spaceHistory(
     space: DID,
     before?: number,
     pieces: readonly { id: string; scope?: CellScope }[] = [],
+    options: { reuseSources?: boolean } = {},
   ): Promise<{ steps: SpaceHistoryStep[]; next?: number }> {
     this.#check();
+    const named = JSON.stringify(
+      pieces.map(({ id, scope }) => [id, scope ?? "space"]),
+    );
+    const held = this.#historySources.get(space);
+    const reading = options.reuseSources === true && held?.named === named
+      ? Promise.resolve(held.sources)
+      : this.#pieceSources(space, pieces).then((sources) => {
+        this.#historySources.set(space, { named, sources });
+        return sources;
+      });
     const [page, sources] = await Promise.all([
       this.#client.spaceHistory({
         space,
         ...(before !== undefined ? { before } : {}),
       }),
-      this.#pieceSources(space, pieces),
+      reading,
     ]);
     return { ...page, steps: withPatternChanges(page.steps, sources) };
+  }
+
+  /**
+   * Calls `onAdvance` with the newest seq of `space` this runtime has
+   * learned of, each time it moves forward: when the server accepts a
+   * commit this runtime made, and when it pushes one to a document this
+   * runtime watches. A commit to a document it does not watch is not
+   * reported until one it does follows. Returns the function that stops the
+   * calls.
+   */
+  watchSpaceHistory(
+    space: DID,
+    onAdvance: (seq: number) => void,
+  ): () => void {
+    this.#check();
+    const listener = (
+      advanced: RuntimeClientEvents["spaceseqadvanced"][0],
+    ) => {
+      if (advanced.space === space) onAdvance(advanced.seq);
+    };
+    this.#client.on("spaceseqadvanced", listener);
+    const watchers = (this.#historyWatchers.get(space) ?? 0) + 1;
+    this.#historyWatchers.set(space, watchers);
+    if (watchers === 1) this.#setHistoryWatch(space, true);
+    let stopped = false;
+    return () => {
+      if (stopped) return;
+      stopped = true;
+      this.#client.off("spaceseqadvanced", listener);
+      const left = (this.#historyWatchers.get(space) ?? 1) - 1;
+      if (left > 0) {
+        this.#historyWatchers.set(space, left);
+        return;
+      }
+      this.#historyWatchers.delete(space);
+      if (!this.#disposed) this.#setHistoryWatch(space, false);
+    };
+  }
+
+  /**
+   * Helper for `watchSpaceHistory()`, which asks the worker to start or
+   * stop reporting `space`'s seq. A refusal is logged: the history it would
+   * have followed is still listed when asked for.
+   */
+  #setHistoryWatch(space: DID, watch: boolean): void {
+    this.#client.watchSpaceHistory(space, watch).catch((error) => {
+      logger.warn("space-history-watch", () => [
+        `${watch ? "following" : "unfollowing"} the history of ${space}:`,
+        error,
+      ]);
+    });
   }
 
   /**
