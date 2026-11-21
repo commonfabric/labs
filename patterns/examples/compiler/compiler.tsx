@@ -1,5 +1,12 @@
+/**
+ * A live code editor that compiles the TypeScript pattern source you type
+ * with `compileAndRun` and offers a button to navigate to the resulting piece,
+ * or shows the compile error. It starts with a simple counter pattern as the
+ * sample source.
+ */
 import {
   compileAndRun,
+  computed,
   Default,
   handler,
   ifElse,
@@ -9,6 +16,7 @@ import {
   UI,
   Writable,
 } from "commonfabric";
+import { compileFailure } from "./compile-failure.ts";
 
 type Input = {
   code:
@@ -47,10 +55,12 @@ const handleEditContent = handler<
 );
 
 export default pattern<Input>(({ code }) => {
-  const { result, error, errors: _ } = compileAndRun({
+  const { result, error, errors } = compileAndRun({
     files: [{ name: "/main.tsx", contents: code }],
     main: "/main.tsx",
   });
+
+  const problem = computed(() => compileFailure(error, errors));
 
   return {
     [NAME]: "My First Compiler",
@@ -60,11 +70,10 @@ export default pattern<Input>(({ code }) => {
           value={code}
           language="text/x.typescript"
           oncf-change={updateCode({ code })}
-          //errors={errors}
         />
         {ifElse(
-          error,
-          <b>fix the error: {error}</b>,
+          problem,
+          <b>fix the error: {problem}</b>,
           <cf-button
             onClick={visit({ result })}
           >

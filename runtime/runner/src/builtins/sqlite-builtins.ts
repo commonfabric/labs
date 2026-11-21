@@ -28,6 +28,11 @@ import {
   ownedStoreLinks,
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
+import { indexedCollectionDescriptorOf } from "./indexed-collection/definition.ts";
+import {
+  maintenanceRevisionCell,
+  memberKeyOf,
+} from "./indexed-collection/maintenance.ts";
 import { resultRowKeys, SQLITE_ROW_SALT } from "./sqlite/row-identity.ts";
 import {
   computeRowLabelRead,
@@ -41,7 +46,7 @@ import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { setResultCell } from "../result-utils.ts";
-import { readRuntimeSecret, runtimeSecretLink } from "../runtime-secret.ts";
+import { runtimeSecretLink } from "../runtime-secret.ts";
 import { schemaHasIfc } from "../schema-ifc.ts";
 import { isCellScope, narrowestScope } from "../scope.ts";
 import { computeInputHashFromValue } from "./fetch-utils.ts";
@@ -78,6 +83,7 @@ import {
   type FabricValue,
   valueEqual,
 } from "@commonfabric/data-model";
+import { isCfLinkColumn } from "@commonfabric/memory/sqlite/columns";
 import { validateRowLabelSpec } from "@commonfabric/memory/sqlite/row-label";
 import {
   columnDeclaresIfc,
@@ -91,6 +97,7 @@ import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import {
+  asBoundCell,
   type Cell,
   convertCellsToLinks,
   createCell,
@@ -793,8 +800,13 @@ export function sqliteDatabase(
         scope,
       );
       const options = inputsCell.withTx(tx).get() as
-        | { tables?: SqliteDbRef["tables"] }
+        | { tables?: SqliteDbRef["tables"]; index?: unknown }
         | undefined;
+      // An indexed collection is a database whose handle also carries the
+      // descriptor its tables were derived from.
+      const index = indexedCollectionDescriptorOf(
+        snapshotQueryResult(options),
+      );
       // `handle` is a builtin RESULT cell (makeResultCell), and result cells
       // are always `of:`-schemed — the computed kind applies only to derived
       // internal cells — so stripping the entity scheme yields the handle's
@@ -866,6 +878,7 @@ export function sqliteDatabase(
             ...(tables !== undefined && { tables }),
             scope,
             ...(owner !== undefined && { owner }),
+            ...(index !== undefined && { index }),
             // Carry db.exec's write revision forward — dropping it would make
             // this re-derivation look like "new inputs" to every handle hasher.
             ...(typeof prior?.rev === "number" && { rev: prior.rev }),
@@ -883,14 +896,23 @@ export function sqliteDatabase(
         if (result.error) {
           return;
         }
+        const durable = () => {
+          initialized.add(instance);
+          if (index !== undefined) {
+            runtime.indexedCollections.register(
+              handle.getAsNormalizedFullLink(),
+              id,
+            );
+          }
+        };
         const waveSettlement = waveSettlementOf(settledTx);
         if (waveSettlement === undefined) {
-          initialized.add(instance);
+          durable();
           return;
         }
         void waveSettlement.then((waveResult) => {
           if (!waveResult.error) {
-            initialized.add(instance);
+            durable();
           }
         });
       });
@@ -956,6 +978,21 @@ export function sqliteQueryMemoDecision(options: {
   return "issue";
 }
 
+/**
+ * Returns `params` with every cell bound to a named `_cf_link` parameter
+ * replaced by the reference an indexed collection stores that cell under.
+ * A cell bound anywhere else is left for the parameter encoder to refuse.
+ */
+function withMemberKeys(params: WireParams): WireParams {
+  if (!isObjectNotArray(params)) return params;
+  return Object.fromEntries(
+    Object.entries(params).map(([name, value]) => {
+      const cell = isCfLinkColumn(name) ? asBoundCell(value) : undefined;
+      return [name, cell === undefined ? value : memberKeyOf(cell)];
+    }),
+  ) as WireParams;
+}
+
 /** sqliteQuery: reactive server-side read. */
 export function sqliteQuery(
   inputsCell: Cell<any>,
@@ -980,6 +1017,21 @@ export function sqliteQuery(
 
   /** Resolved request targets with an outstanding RPC. */
   const inFlightIssues = new Set<string>();
+
+  /**
+   * The collection revision each request target's last completed request
+   * asked under, for a query over an indexed collection. Held here and not in
+   * the result: the revision moves on every write to the collection, and a
+   * result that recorded it would change for its readers when its rows did
+   * not.
+   */
+  const servedRevisions = new Map<string, string>();
+
+  /** The collection revision each request target's latest run observed. */
+  const wantedRevisions = new Map<string, string>();
+
+  /** The scheduler's handle on this node's action, once it has one. */
+  let registeredAction: Action | undefined;
 
   /** Pending publications, partitioned by result and physical binding instance. */
   const stagings = new Map<
@@ -1192,9 +1244,20 @@ export function sqliteQuery(
       return;
     }
     const linkCols = asCellColumnsFromRowSchema(inputs.rowSchema);
+    // A query over an indexed collection looks its members up by the
+    // reference they are stored under, so a cell bound as a parameter is
+    // bound as that reference.
+    // Only the declaration is read off the handle: the handle also names the
+    // member added last, whose fields are no input of this query.
+    const overCollection = indexedCollectionDescriptorOf({
+      index: snapshotQueryResult((inputs.db as { index?: unknown }).index),
+    }) !== undefined;
     let params: WireParams;
     try {
-      params = encodeSqliteParams(inputs.sql, inputs.params);
+      params = encodeSqliteParams(
+        inputs.sql,
+        overCollection ? withMemberKeys(inputs.params) : inputs.params,
+      );
     } catch (error) {
       result.withTx(tx).set({
         pending: false,
@@ -1221,6 +1284,23 @@ export function sqliteQuery(
     // query returns, when the transaction that read them has finished. The
     // row schema's is the typed alternative, `MaxConfidentiality<Row>`.
     const reactOn = snapshotQueryResult(inputs.reactOn);
+    // A query over an indexed collection follows the collection's write
+    // revision without being told to, and keeps that revision out of the
+    // request's identity: the request is the same question asked again.
+    const refreshToken = !overCollection
+      ? undefined
+      : computeInputHashFromValue({
+        rev: (inputs.db as { rev?: number }).rev ?? 0,
+        // The last write maintenance made, which the handle does not
+        // count.
+        maintained: maintenanceRevisionCell(
+          runtime,
+          databaseSpace,
+          db.id,
+          tx,
+        ).get() ?? null,
+        reactOn: reactOn ?? null,
+      });
     const declaredCeiling = snapshotQueryResult(inputs.maxConfidentiality);
     const rowSchemaCeiling = snapshotQueryResult(
       (inputs.rowSchema as {
@@ -1236,7 +1316,7 @@ export function sqliteQuery(
       db,
       sql: inputs.sql,
       params: params ?? null,
-      reactOn: reactOn ?? null,
+      reactOn: refreshToken === undefined ? (reactOn ?? null) : null,
       ...correlation,
       // The contract a result's labels are written under is part of the
       // identity, so a result stored under another contract cannot stand as
@@ -1368,7 +1448,20 @@ export function sqliteQuery(
       inFlightHere: inFlightIssues.has(effectKey),
       speculativeRun: speculationRunContextOf(tx) !== undefined,
     });
-    if (decision === "hit") {
+    // A settled result asked under an older revision of its collection is
+    // asked again in place: no claim is written, so the result changes only
+    // if the rows do. One request per target is out at a time, since that is
+    // what the outbox admits, so a run that finds one in flight records the
+    // revision it wants and leaves the asking to that request's completion.
+    // A speculative run owns no query, as for any request.
+    if (refreshToken !== undefined) {
+      wantedRevisions.set(effectKey, refreshToken);
+    }
+    const quietRefresh = decision === "hit" && refreshToken !== undefined &&
+      servedRevisions.get(effectKey) !== refreshToken &&
+      !inFlightIssues.has(effectKey) &&
+      speculationRunContextOf(tx) === undefined;
+    if (decision === "hit" && !quietRefresh) {
       // The §4 memo hit (server-execution v2): the committed result records
       // this request hash AND carries a settled result — the stored result
       // is the value, no re-issue. A bare pending claim is never a hit.
@@ -1388,9 +1481,11 @@ export function sqliteQuery(
       requestHash: hash,
       ...correlation,
     };
-    result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set(
-      pendingState,
-    );
+    if (!quietRefresh) {
+      result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set(
+        pendingState,
+      );
+    }
 
     const sql = inputs.sql;
     requestStaged = true;
@@ -1421,15 +1516,23 @@ export function sqliteQuery(
         releaseStaging();
         return;
       }
+      // A refresh that never went out left the settled result standing, and
+      // the next run asks again.
+      if (quietRefresh) {
+        releaseStaging();
+        return;
+      }
       runtime.trackAsyncWork(
         settleAbandonedRequest(
           runtime,
-          "sqliteQuery",
-          effectKey,
+          {
+            builtinId: "sqliteQuery",
+            effectKey,
+            identity: runIdentity,
+            scope,
+            attributeToBuiltin: true,
+          },
           (settleTx) => {
-            if (runIdentity !== undefined) {
-              settleTx.tx.scopeKeyIdentity = runIdentity;
-            }
             // The cancellation is asked again here, not only where this was
             // scheduled: `editWithRetry` runs this callback once per attempt,
             // and a retry is where the time passes in which a node can go
@@ -1878,19 +1981,11 @@ export function sqliteQuery(
                 // own. Nothing that varies between runs over unchanged data
                 // may reach a key, or an unchanged result would mint a
                 // document per row per run.
-                wtx.ensureRuntimeSecret(
+                const salt = wtx.ensureRuntimeSecret(
                   base.space,
                   SQLITE_ROW_SALT,
                   runtimeWritePolicyAuthorization,
                 );
-                const salt = readRuntimeSecret(
-                  wtx,
-                  base.space,
-                  SQLITE_ROW_SALT,
-                );
-                if (salt === undefined) {
-                  throw new Error("sqlite: the space's row salt is unreadable");
-                }
                 const rowKeys = resultRowKeys({
                   salt,
                   rows: resultRows,
@@ -2057,6 +2152,19 @@ export function sqliteQuery(
           }
         } finally {
           inFlightIssues.delete(effectKey);
+          if (refreshToken !== undefined) {
+            // This request read the collection at the revision its run
+            // observed, or a later one. A run that has observed a different
+            // one since had no request to send while this one was out, so it
+            // is run again to send its own.
+            servedRevisions.set(effectKey, refreshToken);
+            if (
+              wantedRevisions.get(effectKey) !== refreshToken &&
+              registeredAction !== undefined && !cancelled.signal.aborted
+            ) {
+              runtime.scheduler.invalidateAction(registeredAction);
+            }
+          }
         }
       },
       {
@@ -2068,6 +2176,9 @@ export function sqliteQuery(
   };
   return {
     action,
+    onActionRegistered: (registered) => {
+      registeredAction = registered;
+    },
     storeWrites: ownedStoreLinks(runtime, parentCell, [
       resultCellCause("sqliteQuery", cause),
     ]),

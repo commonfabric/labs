@@ -45,8 +45,10 @@ import {
   type ManagerProfileCell,
 } from "../../../system/fabrichat/schemas.tsx";
 import {
+  createOwnPrivateInbox,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
+  ensurePrivateInboxOnly,
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
   type PrivateInboxRefusalHolder,
@@ -247,12 +249,21 @@ export interface MainOutput {
 export default pattern<MainInput, MainOutput>((
   { privateInbox, profiles, direct, requests, outgoingNotices },
 ) => {
+  const ownPrivateInbox = new Writable<PrivateInboxHolder>({}).for(
+    "ownPrivateInbox",
+  );
   const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([]).for(
     "retainedPrivateInboxes",
   );
   const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({}).for(
     "privateInboxRefusal",
   );
+  const pointProfiles = pointProfilesAtPrivateInbox({
+    privateInbox,
+    retainedPrivateInboxes,
+    // deno-lint-ignore no-explicit-any
+    profiles: profiles as any,
+  });
   const catalog = new Writable<SharedSpaceCatalogStorage>({
     entries: {},
     offers: {},
@@ -276,14 +287,23 @@ export default pattern<MainInput, MainOutput>((
     profiles,
     ensurePrivateInbox: ensurePrivateInbox({
       privateInbox,
+      ownPrivateInbox,
       retainedPrivateInboxes,
       privateInboxRefusal,
       // deno-lint-ignore no-explicit-any
       profiles: profiles as any,
-      pointProfiles: pointProfilesAtPrivateInbox({
-        privateInbox,
-        // deno-lint-ignore no-explicit-any
-        profiles: profiles as any,
+      pointProfiles,
+      createOwn: createOwnPrivateInbox({
+        ownPrivateInbox,
+        ensure: ensurePrivateInboxOnly({
+          privateInbox,
+          ownPrivateInbox,
+          retainedPrivateInboxes,
+          privateInboxRefusal,
+          // deno-lint-ignore no-explicit-any
+          profiles: profiles as any,
+          pointProfiles,
+        }),
       }),
     }),
     createProfile: createProfile({ profiles }),

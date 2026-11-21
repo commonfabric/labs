@@ -49,6 +49,8 @@ Deno.test("idle time uses compact relative units", () => {
   assertEquals(formatIdleFor("2026-07-21T09:00:00.000Z", now), "3h");
   assertEquals(formatIdleFor("2026-07-18T12:00:00.000Z", now), "3d");
   assertEquals(formatIdleFor("2026-06-30T12:00:00.000Z", now), "3w");
+  assertEquals(formatIdleFor("2026-04-21T12:00:00.000Z", now), "3mo");
+  assertEquals(formatIdleFor("2024-06-21T12:00:00.000Z", now), "2y");
   assertEquals(formatIdleFor(null, now), "—");
   assertEquals(formatIdleFor("not-a-date", now), "—");
 });
@@ -100,4 +102,23 @@ Deno.test("session rows sort by title, idle time, and worktree", () => {
     sortSessionRows(rows, "worktree", "ascending").map((row) => row.title),
     ["session 2", "Session 10", null],
   );
+});
+
+Deno.test("session rows without a sort value stay last in their input order", () => {
+  const rows = [
+    { title: "first untimed", updatedAt: null, gitWorktreeRoot: null },
+    {
+      title: "timed",
+      updatedAt: "2026-07-21T09:00:00.000Z",
+      gitWorktreeRoot: null,
+    },
+    { title: "second untimed", updatedAt: null, gitWorktreeRoot: null },
+  ];
+
+  for (const direction of ["ascending", "descending"] as const) {
+    assertEquals(
+      sortSessionRows(rows, "idleFor", direction).map((row) => row.title),
+      ["timed", "first untimed", "second untimed"],
+    );
+  }
 });

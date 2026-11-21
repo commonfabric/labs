@@ -417,7 +417,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/flat-keys.tsx#default"
+            "sha256:1cdaeb92d7c0e0193ae3ae09bbff38886e124a064aebd532eaf7c36a2afbce36"
           ],
           "picks": [],
           "selectors": [

@@ -48,8 +48,8 @@ export default pattern<TableStoryInput, TableStoryOutput>(() => {
     ),
     controls: (
       <div style={{ color: "#6b7280", fontSize: "13px", padding: "8px 12px" }}>
-        No interactive controls. Attributes: striped, hover, bordered,
-        full-width, sticky-header. Sizes: sm, md, lg.
+        No interactive controls. Props: striped, hover, bordered, fullWidth,
+        stickyHeader. Sizes: sm, md, lg.
       </div>
     ),
   };

@@ -18,9 +18,16 @@ import {
   type Cell,
   pattern,
   TESTS,
+  UI,
   Writable,
 } from "commonfabric";
-import { type MessageRecord, type MessagesValue } from "./room-records.tsx";
+import { clickButton } from "../../tools/test-support/vnode-helpers.ts";
+import { FabriChatMessageRow } from "./message-row.tsx";
+import {
+  type ComposerState,
+  type MessageRecord,
+  type MessagesValue,
+} from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
 import {
   CHAT_EDIT_ACTION,
@@ -34,6 +41,7 @@ import {
 } from "./schemas.tsx";
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
+type RowArg = Parameters<typeof FabriChatMessageRow>[0];
 
 // A labeled stand-in for a viewer's `#profile`.
 type TestProfile = AddIntegrity<
@@ -109,6 +117,22 @@ export default pattern(() => {
   );
   const foreign = elsewhere.key("message");
 
+  // Alice's row for her message in the room, editing through the composer.
+  const aliceComposer = Writable.of<ComposerState>({});
+  const aliceOnFirst = FabriChatMessageRow({
+    message: messages.key(0),
+    myProfile: aliceProfile,
+    inThread: false,
+    kind: "group" as const,
+    composer: aliceComposer,
+    // Stand-ins for what the room derives; a row's streams read none of it.
+    places: {},
+    cannotWrite: false,
+    rowFacts: {},
+    ...records,
+  } as RowArg);
+  const action_start_edit = action(() => clickButton(aliceOnFirst[UI], "Edit"));
+
   return {
     [TESTS]: [
       { action: placeElsewhere },
@@ -166,6 +190,25 @@ export default pattern(() => {
         trustedUi: editGesture,
       },
       { assertion: assert(() => bodies(messages) === "Alice, edited") },
+      // Her row's Edit opens the composer on the message, and saving the
+      // edit closes it again.
+      { action: action_start_edit },
+      {
+        assertion: assert(() =>
+          aliceComposer.get()?.editing?.get()?.body === "Alice, edited"
+        ),
+      },
+      {
+        action: aliceOnFirst.editMessage,
+        event: typed("Alice, edited again"),
+        trustedUi: editGesture,
+      },
+      {
+        assertion: assert(() =>
+          bodies(messages) === "Alice, edited again" &&
+          aliceComposer.get()?.editing?.get() === undefined
+        ),
+      },
       {
         action: bob.obliterateMessage,
         event: { message: messageOf(messages.key(0)) },

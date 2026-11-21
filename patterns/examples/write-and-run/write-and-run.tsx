@@ -1,3 +1,10 @@
+/**
+ * Takes a description of a pattern, has a language model write its source
+ * code, compiles and runs it with `compileAndRun`, renders the result inline,
+ * and offers a button to open it. The generated code is shown in a read-only
+ * code editor, and compile errors are reported inline.
+ */
+
 import {
   compileAndRun,
   computed,
@@ -12,6 +19,7 @@ import {
   type VNode,
   Writable,
 } from "commonfabric";
+import { compileFailure } from "../compiler/compile-failure.ts";
 
 interface Input {
   prompt: string | Default<"Create a simple counter">;
@@ -111,9 +119,12 @@ Generate ONLY the TypeScript code, no explanations or markdown.`;
   // Compute states
   const isGenerating = generated.pending;
   const hasCode = computed(() => !!generated.result);
-  const hasError = computed(() => !!compiled.error);
+  const compileError = computed(() =>
+    compileFailure(compiled.error, compiled.errors)
+  );
+  const hasError = computed(() => !!compileError);
   const isReady = computed(() =>
-    !compiled.pending && !!compiled.result && !compiled.error
+    !compiled.pending && !!compiled.result && !compileError
   );
 
   return {
@@ -150,7 +161,7 @@ Generate ONLY the TypeScript code, no explanations or markdown.`;
             ifElse(
               hasError,
               <div style={{ color: "red" }}>
-                <b>Compile error:</b> {compiled.error}
+                <b>Compile error:</b> {compileError}
               </div>,
               ifElse(
                 isReady,
@@ -200,6 +211,6 @@ Generate ONLY the TypeScript code, no explanations or markdown.`;
     prompt,
     generatedCode: generated.result,
     compiledPiece: compiled.result,
-    error: compiled.error,
+    error: compileError,
   };
 });

@@ -56,6 +56,7 @@ import {
   EventIntentOutcomeNotice,
   EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
+  type HistoryStep,
   InitializationData,
   type LoggerCountsData,
   type LoggerCountsResponse,
@@ -90,6 +91,7 @@ import {
 import { assertNoKeyMaterial } from "./shared/key-material.ts";
 import {
   type EveryFieldOf,
+  normalizeBranches,
   normalizeMemoryUrl,
   normalizeOrigin,
   normalizeSpaceHostMap,
@@ -226,6 +228,7 @@ export function attachOptionsFrom(
     spaceHostMap: options.spaceHostMap,
     identity: options.identity.did(),
     spaceDid: options.spaceDid,
+    branches: options.branches,
     experimental: options.experimental,
     cfcEnforcementMode: options.cfcEnforcementMode,
     cfcFlowLabels: options.cfcFlowLabels,
@@ -876,6 +879,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       ),
       spaceHostMap: normalizeSpaceHostMap(options.spaceHostMap),
       spaceDid: options.spaceDid,
+      branches: normalizeBranches(options.branches),
       experimental: options.experimental,
       cfcEnforcementMode: options.cfcEnforcementMode,
       cfcFlowLabels: options.cfcFlowLabels,
@@ -916,6 +920,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       spaceHostMap: options.spaceHostMap,
       identity: options.identity.keyPair,
       spaceDid: options.spaceDid,
+      branches: options.branches,
       experimental: options.experimental,
       cfcEnforcementMode: options.cfcEnforcementMode,
       cfcFlowLabels: options.cfcFlowLabels,
@@ -1880,6 +1885,69 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       ...(options.download === true ? { download: true } : {}),
     });
     return response.url;
+  }
+
+  /**
+   * Returns a stretch of the history of `options.space`, newest first: its
+   * steps that began below `options.before`, or its newest ones, and the
+   * seq to pass as `before` for the stretch older than this one.
+   */
+  async spaceHistory(
+    options: { space: DID; before?: number },
+  ): Promise<{ steps: HistoryStep[]; next?: number }> {
+    return await this.#conn.request<RequestType.SpaceHistoryList>({
+      type: RequestType.SpaceHistoryList,
+      space: options.space,
+      ...(options.before !== undefined ? { before: options.before } : {}),
+    });
+  }
+
+  /**
+   * Forks the branch `options.name` of `options.space` from the point
+   * `options.forkSeq` of its history. A runtime client initialized with the
+   * branch in `RuntimeClientOptions.branches` runs the space as the branch
+   * holds it.
+   */
+  async createSpaceBranch(
+    options: { space: DID; name: string; forkSeq: number },
+  ): Promise<void> {
+    await this.#conn.request<RequestType.SpaceBranchCreate>({
+      type: RequestType.SpaceBranchCreate,
+      space: options.space,
+      name: options.name,
+      forkSeq: options.forkSeq,
+    });
+  }
+
+  /**
+   * Deletes the branch `options.name` of `options.space`, which then takes
+   * no further commit. Its name stays taken.
+   */
+  async deleteSpaceBranch(
+    options: { space: DID; name: string },
+  ): Promise<void> {
+    await this.#conn.request<RequestType.SpaceBranchDelete>({
+      type: RequestType.SpaceBranchDelete,
+      space: options.space,
+      name: options.name,
+    });
+  }
+
+  /**
+   * Restores `options.space` to the state the point `options.seq` of its
+   * history held, as one new commit of the space's history. Only an owner
+   * of the space may. Returns the seq of that commit, or `undefined` when
+   * the space already held the state.
+   */
+  async restoreSpace(
+    options: { space: DID; seq?: number },
+  ): Promise<number | undefined> {
+    const response = await this.#conn.request<RequestType.SpaceRestore>({
+      type: RequestType.SpaceRestore,
+      space: options.space,
+      ...(options.seq !== undefined ? { seq: options.seq } : {}),
+    });
+    return response.seq;
   }
 
   async detectNonIdempotent(

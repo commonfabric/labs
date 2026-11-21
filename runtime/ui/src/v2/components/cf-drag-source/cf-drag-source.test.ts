@@ -352,54 +352,90 @@ describe("CFDragSource", () => {
     });
   });
 
-  describe("the cell it drags", () => {
-    // A bound cell may be a link; what a drop zone receives is the cell it
-    // resolves to, once known.
+  describe("the cell a drop delivers", () => {
+    // A bound cell may hold a link. A drop delivers the cell the link leads
+    // to when the press begins: a `.map()` row keeps its bound cell while the
+    // list moves another entry into that row.
 
-    /** A cell whose resolution the test settles. */
-    function linkCell() {
+    /**
+     * A cell holding a link to `target`, whose target the test moves with
+     * `moveTo()`. Each resolution waits for `resolution` and lands on the
+     * target as it stood when the resolution was asked for.
+     */
+    function linkCell(
+      target: CellHandle,
+      resolution: Promise<void> = Promise.resolve(),
+    ) {
       const { cell: link } = pieceCell("of:link");
-      const resolution = Promise.withResolvers<CellHandle>();
-      link.resolveAsCell = () => resolution.promise;
-      return { link, resolution };
+      let current = target;
+      link.resolveAsCell = () => {
+        const landed = current;
+        return resolution.then(() => landed);
+      };
+      const moveTo = (next: CellHandle) => {
+        current = next;
+      };
+      return { link, moveTo };
     }
 
-    /** Drags `source` and returns the cell its drag carries. */
-    function draggedCell(source: CFDragSource): CellHandle {
+    /** Drags `source` and returns the drag it starts, before releasing it. */
+    function drag(source: CFDragSource) {
       press(source, source.querySelector("span")!, 10, 10);
       pointer("pointermove", 50, 50);
-      return getCurrentDrag()!.cell;
+      const started = getCurrentDrag()!;
+      pointer("pointerup", 50, 50);
+      return started;
     }
 
     it("is the cell its bound cell resolves to", async () => {
-      const { link, resolution } = linkCell();
-      const { source } = await mountSource({ cell: link });
       const { cell: target } = pieceCell("of:target");
-
-      resolution.resolve(target);
-      await resolution.promise;
-
-      expect(draggedCell(source)).toBe(target);
-    });
-
-    it("is the bound cell while its resolution is pending", async () => {
-      const { link } = linkCell();
+      const { link } = linkCell(target);
       const { source } = await mountSource({ cell: link });
 
-      expect(draggedCell(source)).toBe(link);
+      expect(await drag(source).droppedCell).toBe(target);
     });
 
-    it("is not the resolution of a cell it was bound to before", async () => {
-      const { link, resolution } = linkCell();
+    it("is what the bound cell resolves to when each press begins", async () => {
+      const { cell: first } = pieceCell("of:first");
+      const { cell: second } = pieceCell("of:second");
+      const { link, moveTo } = linkCell(first);
       const { source } = await mountSource({ cell: link });
-      resolution.resolve(pieceCell("of:stale").cell);
-      await resolution.promise;
+      const before = drag(source).droppedCell;
 
-      const { link: next } = linkCell();
+      moveTo(second);
+
+      expect([await before, await drag(source).droppedCell]).toEqual([
+        first,
+        second,
+      ]);
+    });
+
+    it("leaves the drag starting at once, with the bound cell, while it resolves", async () => {
+      const { link } = linkCell(
+        pieceCell("of:target").cell,
+        Promise.withResolvers<void>().promise,
+      );
+      const { source, events } = await mountSource({ cell: link });
+
+      expect(drag(source).cell).toBe(link);
+      expect(events.map(({ type }) => type)).toEqual([
+        "cf-drag-start",
+        "cf-drag-end",
+      ]);
+    });
+
+    it("is what the cell bound mid-press resolves to", async () => {
+      const { link } = linkCell(pieceCell("of:stale").cell);
+      const { cell: target } = pieceCell("of:target");
+      const { link: next } = linkCell(target);
+      const { source } = await mountSource({ cell: link });
+      press(source, source.querySelector("span")!, 10, 10);
+
       source.cell = next;
       await source.updateComplete;
+      pointer("pointermove", 50, 50);
 
-      expect(draggedCell(source)).toBe(next);
+      expect(await getCurrentDrag()!.droppedCell).toBe(target);
     });
   });
 });

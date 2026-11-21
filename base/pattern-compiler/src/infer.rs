@@ -575,7 +575,7 @@ impl<'a> Resolver<'_, 'a> {
             }
             "equals" | "valueEqual" | "isWellFormedDID" => self.of(Shape::Boolean),
             // A key of what `equals` compares, or `undefined` for a value
-            // with no place in the graph (provisional decision P32).
+            // with no place in the graph (provisional decision P41).
             "equalsKey" => {
                 let string = self.intern(Shape::String);
                 let undefined = self.intern(Shape::Undefined);

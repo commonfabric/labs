@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/rows-state.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst toggle = handler((_, { open }) => {\n  open.set(!open.get());\n});\nconst rename = handler(\n  (event, { item }) => {\n    item.key(\"title\").set(event.text);\n  },\n);\nconst loud = lift((input) => input.title.toUpperCase());\nconst Detail = pattern(\"unhashed:pattern/compare/fixtures/rows-state.tsx#Detail\");\nconst Plain = pattern(\"unhashed:pattern/compare/fixtures/rows-state.tsx#Plain\");\nconst Keyed = pattern(\n  \"unhashed:pattern/compare/fixtures/rows-state.tsx#Keyed\",\n);\nObject.defineProperty($exports, \"Plain\", { enumerable: true, get: () => Plain });\nObject.defineProperty($exports, \"Keyed\", { enumerable: true, get: () => Keyed });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ title: $h.slot(1), note: $h.slot(0) })));\n});"
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst toggle = handler((_, { open }) => {\n  open.set(!open.get());\n});\nconst rename = handler(\n  (event, { item }) => {\n    item.key(\"title\").set(event.text);\n  },\n);\nconst loud = lift((input) => input.title.toUpperCase());\nconst Detail = pattern(\"sha256:25a7a483e196bddc7b80375c61dc28aa84d7e8279a984d4a9fe0e8d415cd2bcd\");\nconst Plain = pattern(\"sha256:87535997700b07028d3a4c04fde98289e2b9b1a8342bfed4d6882fd88b4d9f72\");\nconst Keyed = pattern(\n  \"sha256:fc0ff461203694a4bd449924108a767c15fea17d9864258d7531c3854b37baa3\",\n);\nObject.defineProperty($exports, \"Plain\", { enumerable: true, get: () => Plain });\nObject.defineProperty($exports, \"Keyed\", { enumerable: true, get: () => Keyed });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ title: $h.slot(1), note: $h.slot(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -95,7 +95,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/rows-state.tsx#Detail"
+            "sha256:25a7a483e196bddc7b80375c61dc28aa84d7e8279a984d4a9fe0e8d415cd2bcd"
           ],
           "picks": [],
           "selectors": [],
@@ -198,7 +198,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/rows-state.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst toggle = handler((_, { open }) => {\n  open.set(!open.get());\n});\nconst rename = handler(\n  (event, { item }) => {\n    item.key(\"title\").set(event.text);\n  },\n);\nconst loud = lift((input) => input.title.toUpperCase());\nconst Detail = pattern(\"unhashed:pattern/compare/fixtures/rows-state.tsx#Detail\");\nconst Plain = pattern(\"unhashed:pattern/compare/fixtures/rows-state.tsx#Plain\");\nconst Keyed = pattern(\n  \"unhashed:pattern/compare/fixtures/rows-state.tsx#Keyed\",\n);\nObject.defineProperty($exports, \"Plain\", { enumerable: true, get: () => Plain });\nObject.defineProperty($exports, \"Keyed\", { enumerable: true, get: () => Keyed });\n$rt.body(0, ($a) => ((input) => input.title.toUpperCase())($a));\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.child(0, ($h) => (({ item: $h.slot(7) })));\n$rt.element(0, ($h) => (({ loud: $h.invoke(0, ({ title: $h.slot(1) })), open: $h.slot(4), toggle: $h.stream(0), rename: $h.stream(1), detail: $h.slot(8) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(0) })));\n});\n$rt.body(1, ($e, $s) => ((_, { open }) => {\n  open.set(!open.get());\n})($e, $s));\n$rt.body(2, ($e, $s) => ((event, { item }) => {\n    item.key(\"title\").set(event.text);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst toggle = handler((_, { open }) => {\n  open.set(!open.get());\n});\nconst rename = handler(\n  (event, { item }) => {\n    item.key(\"title\").set(event.text);\n  },\n);\nconst loud = lift((input) => input.title.toUpperCase());\nconst Detail = pattern(\"sha256:25a7a483e196bddc7b80375c61dc28aa84d7e8279a984d4a9fe0e8d415cd2bcd\");\nconst Plain = pattern(\"sha256:87535997700b07028d3a4c04fde98289e2b9b1a8342bfed4d6882fd88b4d9f72\");\nconst Keyed = pattern(\n  \"sha256:fc0ff461203694a4bd449924108a767c15fea17d9864258d7531c3854b37baa3\",\n);\nObject.defineProperty($exports, \"Plain\", { enumerable: true, get: () => Plain });\nObject.defineProperty($exports, \"Keyed\", { enumerable: true, get: () => Keyed });\n$rt.body(0, ($a) => ((input) => input.title.toUpperCase())($a));\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.child(0, ($h) => (({ item: $h.slot(7) })));\n$rt.element(0, ($h) => (({ loud: $h.invoke(0, ({ title: $h.slot(1) })), open: $h.slot(4), toggle: $h.stream(0), rename: $h.stream(1), detail: $h.slot(8) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(0) })));\n});\n$rt.body(1, ($e, $s) => ((_, { open }) => {\n  open.set(!open.get());\n})($e, $s));\n$rt.body(2, ($e, $s) => ((event, { item }) => {\n    item.key(\"title\").set(event.text);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -418,7 +418,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/rows-state.tsx#Detail"
+                "compiled": "sha256:25a7a483e196bddc7b80375c61dc28aa84d7e8279a984d4a9fe0e8d415cd2bcd"
               },
               "name": "Detail",
               "within": [
@@ -566,7 +566,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/rows-state.tsx#Plain"
+            "sha256:87535997700b07028d3a4c04fde98289e2b9b1a8342bfed4d6882fd88b4d9f72"
           ],
           "picks": [],
           "selectors": [],
@@ -848,7 +848,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/rows-state.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst toggle = handler((_, { open }) => {\n  open.set(!open.get());\n});\nconst rename = handler(\n  (event, { item }) => {\n    item.key(\"title\").set(event.text);\n  },\n);\nconst loud = lift((input) => input.title.toUpperCase());\nconst Detail = pattern(\"unhashed:pattern/compare/fixtures/rows-state.tsx#Detail\");\nconst Plain = pattern(\"unhashed:pattern/compare/fixtures/rows-state.tsx#Plain\");\nconst Keyed = pattern(\n  \"unhashed:pattern/compare/fixtures/rows-state.tsx#Keyed\",\n);\nObject.defineProperty($exports, \"Plain\", { enumerable: true, get: () => Plain });\nObject.defineProperty($exports, \"Keyed\", { enumerable: true, get: () => Keyed });\n$rt.body(0, ($a) => ((input) => input.title.toUpperCase())($a));\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.child(0, ($h) => (({ item: $h.slot(7) })));\n$rt.element(0, ($h) => (({ loud: $h.invoke(0, ({ title: $h.slot(1) })), open: $h.slot(4), toggle: $h.stream(0), rename: $h.stream(1), detail: $h.slot(8) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(0) })));\n});\n$rt.body(1, ($e, $s) => ((_, { open }) => {\n  open.set(!open.get());\n})($e, $s));\n$rt.body(2, ($e, $s) => ((event, { item }) => {\n    item.key(\"title\").set(event.text);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst toggle = handler((_, { open }) => {\n  open.set(!open.get());\n});\nconst rename = handler(\n  (event, { item }) => {\n    item.key(\"title\").set(event.text);\n  },\n);\nconst loud = lift((input) => input.title.toUpperCase());\nconst Detail = pattern(\"sha256:25a7a483e196bddc7b80375c61dc28aa84d7e8279a984d4a9fe0e8d415cd2bcd\");\nconst Plain = pattern(\"sha256:87535997700b07028d3a4c04fde98289e2b9b1a8342bfed4d6882fd88b4d9f72\");\nconst Keyed = pattern(\n  \"sha256:fc0ff461203694a4bd449924108a767c15fea17d9864258d7531c3854b37baa3\",\n);\nObject.defineProperty($exports, \"Plain\", { enumerable: true, get: () => Plain });\nObject.defineProperty($exports, \"Keyed\", { enumerable: true, get: () => Keyed });\n$rt.body(0, ($a) => ((input) => input.title.toUpperCase())($a));\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.child(0, ($h) => (({ item: $h.slot(7) })));\n$rt.element(0, ($h) => (({ loud: $h.invoke(0, ({ title: $h.slot(1) })), open: $h.slot(4), toggle: $h.stream(0), rename: $h.stream(1), detail: $h.slot(8) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(0) })));\n});\n$rt.body(1, ($e, $s) => ((_, { open }) => {\n  open.set(!open.get());\n})($e, $s));\n$rt.body(2, ($e, $s) => ((event, { item }) => {\n    item.key(\"title\").set(event.text);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -1068,7 +1068,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/rows-state.tsx#Detail"
+                "compiled": "sha256:25a7a483e196bddc7b80375c61dc28aa84d7e8279a984d4a9fe0e8d415cd2bcd"
               },
               "name": "Detail",
               "within": [
@@ -1222,7 +1222,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/rows-state.tsx#Keyed"
+            "sha256:fc0ff461203694a4bd449924108a767c15fea17d9864258d7531c3854b37baa3"
           ],
           "picks": [],
           "selectors": [],

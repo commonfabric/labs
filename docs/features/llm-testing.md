@@ -2,12 +2,14 @@
 
 ## Overview
 
-LLM-powered patterns have test coverage at three layers:
+LLM-powered patterns have test coverage at four layers:
 
 1. **Client guard** — `LLMClient` blocks live LLM calls in test environments
 2. **Server-side tests** — toolshed route logic (model resolution, JSON mode,
    tool conversion)
 3. **Runner smoke tests** — full pattern-to-mock-response path
+4. **Pattern tests** — `cf test` answers every model request a pattern test
+   makes from the answers the test states in its `llmMocks` export
 
 ## Test-environment guard
 
@@ -27,6 +29,29 @@ Use enableMockMode() and addMockResponse() to set up mocks.
 
 When mock mode is enabled via `enableMockMode()`, the mock interception runs
 first and the guard is never reached.
+
+A client constructed with a `fetch` of its own, as in
+`new LLMClient(fakeFetch)`, sends its requests through that function. The
+guard refuses only the global `fetch`, so it lets such a client through; a
+test that hands a client the global `fetch` is refused like any other.
+`base/llm/src/client.test.ts` tests the client's request and response
+handling that way.
+
+## Responders
+
+Mock mode is one case of a more general hook. While a responder is installed
+with `setLLMResponder()`, every request any `LLMClient` in the process makes
+goes to it, and none reaches the guard or the network. A responder implements
+`LLMResponder`: a `sendRequest()` that receives the request, the streaming
+callback, and the abort signal, and a `generateObject()`. The JSON-transport
+checks on schemas run before the responder sees a request.
+
+`enableMockMode()` installs the mock catalog below as the responder, and
+`disableMockMode()` removes it. `cf test` installs one of its own for each
+pattern test (`runtime/cli/lib/llm-mock.ts`), which answers from the test's
+`llmMocks` and fails the test for a request none of them answers;
+[Pattern Testing](../common/workflows/pattern-testing.md#model-requests) says
+how a test states them.
 
 ## Writing tests that use LLM
 
@@ -72,25 +97,28 @@ route handler. To exercise the route's own handling of a response — an empty
 answer, a provider that turns the request down, a stream that stops early —
 drive `generateText` with a stand-in language model instead.
 
-`findModel` reads the exported `MODELS` registry in
-`runtime/toolshed/routes/ai/llm/models.ts`, and that registry is a plain
-mutable object. A test registers a model under a name of its own, runs the
-generation, and takes the entry back out afterwards:
+`generateText` and `generateObject` take the model registry to resolve the
+request's model from, and `createLLMRouter()` in `llm.router.ts` builds the
+routes over a registry and a response cache. A test builds a registry of its
+own with `createModelRegistry()` from
+`runtime/toolshed/routes/ai/llm/models.ts`, with no provider keys and no
+gateway, registers its stand-in model, and passes that registry along.
+`runtime/toolshed/test/fixtures/llm-models.ts` holds the helpers the route
+tests share:
 
 ```ts
 // Shown for illustration only.
-MODELS["mock:test-model"] = {
-  model: new MockLanguageModelV4({ doStream: { stream } }),
-  name: "mock:test-model",
-  capabilities: { /* the fields the route reads */ },
-  aliases: [],
-};
-try {
-  await generateText({ model: "mock:test-model", messages });
-} finally {
-  delete MODELS["mock:test-model"];
-}
+const models = registryWith(
+  "mock:test-model",
+  new MockLanguageModelV4({ doStream: { stream } }),
+);
+await generateText({ model: "mock:test-model", messages }, models);
 ```
+
+The registry takes the `fetch` its providers send through, gateway discovery
+included, so `routes/ai/llm/models.test.ts` drives discovery, its failures,
+and the choice of the `default` model with a `fetch` of its own and no
+network.
 
 Two properties of the AI SDK shape what these tests can assert.
 
@@ -207,7 +235,9 @@ in `beforeEach` to reset between tests.
 
 | File | What it tests |
 |------|--------------|
-| `base/llm/src/client.test.ts` | Guard behavior, mock mode API, fixture loading |
+| `base/llm/src/client.test.ts` | Guard behavior, mock mode API, responders, fixture loading |
+| `runtime/cli/test/llm-mock.test.ts` | Reading a pattern test's `llmMocks` and answering from them |
+| `runtime/cli/test/test-runner-llm-mocks.test.ts` | `cf test` answering requests, and failing a test for an unanswered request |
 | `runtime/toolshed/routes/ai/llm/generateText.test.ts` | JSON mode config, response cleaning, failure reporting against a mock model |
 | `runtime/toolshed/routes/ai/llm/generateObject.test.ts` | Model resolution, error paths |
 | `runtime/toolshed/routes/ai/llm/llm.status.test.ts` | The HTTP status a failed generation answers with, through the real router |

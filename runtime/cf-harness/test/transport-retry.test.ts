@@ -178,6 +178,20 @@ describe("transport-retry", () => {
       expect(resolved).toBe(true);
     });
 
+    it("resolves once the timer fires while its signal stays unaborted", async () => {
+      using time = new FakeTime();
+      const controller = new AbortController();
+      let resolved = false;
+      const waiting = abortableDelay(50, controller.signal).then(() => {
+        resolved = true;
+      });
+      await time.tickAsync(49);
+      expect(resolved).toBe(false);
+      await time.tickAsync(1);
+      await waiting;
+      expect(resolved).toBe(true);
+    });
+
     it("resolves at once for a zero delay", async () => {
       await abortableDelay(0);
     });

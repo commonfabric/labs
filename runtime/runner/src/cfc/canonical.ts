@@ -331,6 +331,7 @@ export const canonicalizeWritePolicyInput = (
     case "result-wiring":
     case "owner-adoption":
     case "initialization":
+    case "plan-write":
       return {
         ...input,
         target: {
@@ -380,6 +381,7 @@ export const canonicalizeWritePolicyInput = (
         ? input
         : { ...input, target: canonicalizeAttemptedWrite(input.target) };
     case "sink-request":
+    case "plan-inputs":
       return input;
   }
 };
@@ -675,6 +677,19 @@ export const canonicalizePreparedDigestInput = (
     ? {
       structureContainers: dedupeSorted(
         [...input.structureContainers].map(canonicalizeAttemptedWrite).sort(
+          compareAddress,
+        ),
+        compareAddress,
+      ),
+    }
+    : {}),
+  // A set, like the containers: what preparation decides from it depends on
+  // which paths were written outside a builtin, not on the order.
+  ...(input.nonBuiltinWrites !== undefined &&
+      input.nonBuiltinWrites.length > 0
+    ? {
+      nonBuiltinWrites: dedupeSorted(
+        [...input.nonBuiltinWrites].map(canonicalizeAttemptedWrite).sort(
           compareAddress,
         ),
         compareAddress,

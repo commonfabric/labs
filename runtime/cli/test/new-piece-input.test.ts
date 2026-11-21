@@ -32,7 +32,7 @@ describe("piece creation input", () => {
           {
             newPiece: (_config, _entry, options) => {
               received = options;
-              return Promise.resolve("fid1:created");
+              return Promise.resolve({ pieceId: "fid1:created" });
             },
           },
         )
@@ -58,7 +58,7 @@ describe("piece creation input", () => {
           {
             newPiece: () => {
               created = true;
-              return Promise.resolve("fid1:unwanted");
+              return Promise.resolve({ pieceId: "fid1:unwanted" });
             },
           },
         )).rejects.toThrow();

@@ -9,6 +9,8 @@
  * - Large batch loading (500 events)
  * - Invalid event handling (graceful rejection)
  * - Dense scope (100 unique tags in 1 scope)
+ * - The view: event and scope counts, top tags, and recent events with a
+ *   badge colored by action
  *
  * Run: deno task cf test patterns/dev/experimental/folksonomy-aggregator.test.tsx --verbose
  *
@@ -16,7 +18,24 @@
  * instead of action() closures to avoid "reactive reference outside
  * reactive context" errors when accessing reactive proxy objects.
  */
-import { assert, Cell, handler, pattern, Stream, TESTS } from "commonfabric";
+import {
+  assert,
+  Cell,
+  handler,
+  NAME,
+  pattern,
+  Stream,
+  TESTS,
+  UI,
+} from "commonfabric";
+import {
+  childNodes,
+  hasExactText,
+  hasText,
+  innermostNode,
+  propValue,
+  textContent,
+} from "../../tools/test-support/vnode-helpers.ts";
 import AggregatorPattern from "./folksonomy-aggregator.tsx";
 
 export interface TagEvent {
@@ -288,6 +307,30 @@ function makeDenseEvents(): TagEvent[] {
   return events;
 }
 
+/** The value shown above the stat label `label`. */
+function statValue(ui: unknown, label: string): string {
+  const stat = innermostNode(ui, (node) => {
+    const children = childNodes(node);
+    return children.length === 2 && hasExactText(children[1], label);
+  });
+  return textContent(childNodes(stat)[0]).trim();
+}
+
+/** The style of the recent-event badge reading `action`, as JSON, or
+ * `undefined` when no event shows that action. */
+function badgeStyle(ui: unknown, action: string): string | undefined {
+  return JSON.stringify(
+    propValue(
+      innermostNode(
+        ui,
+        (node) =>
+          hasExactText(node, action) && propValue(node, "style") !== undefined,
+      ),
+      "style",
+    ),
+  );
+}
+
 // ============================================================================
 // Module-scope Handlers
 // ============================================================================
@@ -345,6 +388,11 @@ export default pattern(() => {
     newEvents: makeRemoveEvents(),
   });
 
+  const action_post_use_event = postEventHandler({
+    stream: aggregator.postEvent,
+    event: { scope: "scope-r", tag: "permanent", action: "use", timestamp: 30 },
+  });
+
   // --- Test 5: Large batch ---
   const action_load_large_batch = setEventsHandler({
     eventsCell,
@@ -394,6 +442,12 @@ export default pattern(() => {
     }
     return true;
   });
+
+  const assert_initial_view = assert(() =>
+    aggregator[NAME] === "🏷️ Folksonomy Aggregator (0 events)" &&
+    statValue(aggregator[UI], "Total Events") === "0" &&
+    hasText(aggregator[UI], "No events yet")
+  );
 
   // --- Test 1: Basic correctness ---
   const assert_basic_has_typescript = assert(() => {
@@ -501,6 +555,30 @@ export default pattern(() => {
     return permanent?.count === 1;
   });
 
+  // The view counts the nine events in one scope, ranks the surviving tags,
+  // and lists the newest event first.
+  const assert_remove_view = assert(() => {
+    const ui = aggregator[UI];
+    return aggregator[NAME] === "🏷️ Folksonomy Aggregator (9 events)" &&
+      statValue(ui, "Total Events") === "9" &&
+      statValue(ui, "Unique Scopes") === "1" &&
+      hasText(ui, "removable (2)permanent (1)") &&
+      hasText(ui, "addpermanentinscope-rremoveremovableinscope-r") &&
+      !hasText(ui, "No events yet") &&
+      badgeStyle(ui, "add")?.includes('"background":"#dcfce7"') === true &&
+      badgeStyle(ui, "remove")?.includes('"background":"#fee2e2"') === true &&
+      badgeStyle(ui, "use") === undefined;
+  });
+
+  // A "use" counts like an add and gets its own badge color.
+  const assert_use_view = assert(() => {
+    const ui = aggregator[UI];
+    return statValue(ui, "Total Events") === "10" &&
+      hasText(ui, "removable (2)permanent (2)") &&
+      badgeStyle(ui, "use")?.includes('"background":"#fef3c7"') === true &&
+      badgeStyle(ui, "use")?.includes('"color":"#92400e"') === true;
+  });
+
   // --- Test 5: Large batch ---
   const assert_batch_multiple_scopes = assert(() => {
     const suggs = (aggregator.suggestions || {}) as Record<
@@ -578,6 +656,7 @@ export default pattern(() => {
     [TESTS]: [
       // === Initial state: empty ===
       { assertion: assert_initial_empty },
+      { assertion: assert_initial_view },
 
       // === Test 1: Basic correctness ===
       // Post 1 event via stream, verify suggestions contain it
@@ -605,6 +684,9 @@ export default pattern(() => {
       { action: action_load_remove },
       { assertion: assert_removable_count_2 },
       { assertion: assert_permanent_count_1 },
+      { assertion: assert_remove_view },
+      { action: action_post_use_event },
+      { assertion: assert_use_view },
 
       // === Test 5: Large batch ===
       // 500 events across 10 scopes

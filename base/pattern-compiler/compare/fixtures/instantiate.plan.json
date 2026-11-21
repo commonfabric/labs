@@ -194,7 +194,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/instantiate.tsx#Row"
+            "sha256:eaf5ca5c5dcc8ddc36f33c54814854882cf5865b052662d0a70b22a126090deb"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",
@@ -783,7 +783,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/instantiate.tsx#default"
+            "sha256:c44706f52161e106f826a0e815671e65f4fd0cc6a50f33234e18ede60fc53800"
           ],
           "picks": [],
           "selectors": [],

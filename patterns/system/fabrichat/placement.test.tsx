@@ -131,6 +131,14 @@ export default pattern(() => {
       {
         assertion: assert(() => placement[VIEWS].chat.messages?.count === 1),
       },
+      // Alice, having written in the room, is its one participant, which the
+      // placement lists under the room's title.
+      {
+        assertion: assert(() =>
+          placement[NAME] === "Team" &&
+          placement[VIEWS].chat.participants.length === 1
+        ),
+      },
       { assertion: assert(() => reactionCount(messages) === 1) },
       {
         assertion: assert(() =>
@@ -154,6 +162,8 @@ export default pattern(() => {
           unreadable[VIEWS].chat.state === "unavailable" &&
           unreadable[VIEWS].chat.about === undefined &&
           unreadable[VIEWS].chat.canSend === false &&
+          unreadable[VIEWS].chat.participants.length === 0 &&
+          unreadable[NAME] === "Chat (unavailable)" &&
           unreadableAdapter[NAME] === "Chat (unavailable)" &&
           shownPart(unreadableAdapter[UI]) === "room:none unavailable:block"
         ),

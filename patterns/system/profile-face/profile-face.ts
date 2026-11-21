@@ -1,12 +1,12 @@
 /**
  * A profile's face: the picture, or else the legacy avatar text, that a
- * reader shows as the face of the person whose own profile it is. Anyone can
- * write a profile's picture, and each write labels the picture with its
- * writer, so a stored value is the owner's face only when its own cell
- * represents the owner (`writtenPrincipalOf()`). Every pattern that shows or
- * keeps a profile's face reads it through `profileFace()`, except the
- * profile pattern itself, which states the same rule inline because it is
- * compiled as a single file.
+ * reader shows as the face of the person whose own profile it is. Each write
+ * labels the picture with its writer, earlier releases let anyone set one, and
+ * bytes can be stored without a label, so a stored value is the owner's face
+ * only when its own cell represents the owner (`writtenPrincipalOf()`). Every
+ * pattern that shows or keeps a profile's face reads it through
+ * `profileFace()`, except the profile pattern itself, which states the same
+ * rule inline because it is compiled as a single file.
  */
 
 import {

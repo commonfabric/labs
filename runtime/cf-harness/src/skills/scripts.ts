@@ -53,8 +53,8 @@ export const normalizeSkillScriptPath = (path: string): string => {
   ) {
     throw new Error("script path must stay within the skill directory");
   }
-  if (normalized === "scripts" || !normalized.startsWith("scripts/")) {
-    throw new Error("script path must be under scripts/");
+  if (!normalized.startsWith("scripts/") || normalized.endsWith("/")) {
+    throw new Error("script path must name a file under scripts/");
   }
   return normalized;
 };

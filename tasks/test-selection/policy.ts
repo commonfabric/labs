@@ -468,12 +468,6 @@ const exclusions: readonly Exclusion[] = [
       "a change whose lines only the integration script runs.",
   },
   {
-    member: "base/identity",
-    kind: "source",
-    reason: "Every one of its tests runs in a browser through " +
-      "deno-web-test. It has no Deno-only half to measure.",
-  },
-  {
     member: "runtime/deno-web-test",
     kind: "source",
     reason: "Its tests drive the browser harness end to end.",

@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/whole-argument.tsx",
-              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Context = pattern(\"unhashed:pattern/compare/fixtures/whole-argument.tsx#Context\");\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/whole-argument.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => ($h.slot(0)));\n});"
+              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Context = pattern(\"sha256:78ba26ee11e24f5413766528fee177387ee45f6994f1a81832375d003ad687e4\");\nconst $default = (pattern(\n  \"sha256:a93807eab6b1b4d0154e6ced23133377b1beec93ef64a00237fbf1927f05bafc\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => ($h.slot(0)));\n});"
             }
           ],
           "outputsBelow": [],
@@ -66,7 +66,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/whole-argument.tsx#Context"
+            "sha256:78ba26ee11e24f5413766528fee177387ee45f6994f1a81832375d003ad687e4"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/0",
@@ -131,7 +131,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/whole-argument.tsx",
-              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Context = pattern(\"unhashed:pattern/compare/fixtures/whole-argument.tsx#Context\");\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/whole-argument.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\nconst context = $rt.thunk(($h) => ($rt.at($arg, [], $h)));\nreturn $rt.thunk(($h) => ($rt.force(context, $h)));\n});\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\nconst $s1 = $rt.setups[1]({ \"input\": $rt.thunk(($h) => ($h.output(0))), \"count\": $rt.thunk(($h) => ($h.slot(1))), \"label\": (\"l\"), \"jam\": $rt.thunk(($h) => ($h.slot(1))) }, $h);\nconst context = $rt.thunk(($h) => ($rt.force($s1, $h)));\nreturn $rt.thunk(($h) => (({ context: $rt.force(context, $h) })));\n});"
+              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Context = pattern(\"sha256:78ba26ee11e24f5413766528fee177387ee45f6994f1a81832375d003ad687e4\");\nconst $default = (pattern(\n  \"sha256:a93807eab6b1b4d0154e6ced23133377b1beec93ef64a00237fbf1927f05bafc\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\nconst context = $rt.thunk(($h) => ($rt.at($arg, [], $h)));\nreturn $rt.thunk(($h) => ($rt.force(context, $h)));\n});\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\nconst $s1 = $rt.setups[1]({ \"input\": $rt.thunk(($h) => ($h.output(0))), \"count\": $rt.thunk(($h) => ($h.slot(1))), \"label\": (\"l\"), \"jam\": $rt.thunk(($h) => ($h.slot(1))) }, $h);\nconst context = $rt.thunk(($h) => ($rt.force($s1, $h)));\nreturn $rt.thunk(($h) => (({ context: $rt.force(context, $h) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -261,8 +261,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/whole-argument.tsx#default",
-            "unhashed:pattern/compare/fixtures/whole-argument.tsx#Context"
+            "sha256:a93807eab6b1b4d0154e6ced23133377b1beec93ef64a00237fbf1927f05bafc",
+            "sha256:78ba26ee11e24f5413766528fee177387ee45f6994f1a81832375d003ad687e4"
           ],
           "picks": [],
           "selectors": [],

@@ -89,6 +89,28 @@ describe("pattern-vintage-accepted-drops", () => {
       });
     });
 
+    it("leaves a value that cannot hold the named path as it was", () => {
+      const nested = new Set(["topics[].crossrefs", "meta.crossrefs"]);
+      const state = {
+        topics: "not a list",
+        meta: [{ crossrefs: 1 }],
+        other: new Map([["crossrefs", 1]]),
+      };
+
+      expect(strip(state, nested)).toEqual({
+        value: state,
+        applied: new Set(),
+      });
+      expect(strip(state, nested).value).toBe(state);
+    });
+
+    it("leaves an object that is not a bare literal as it was", () => {
+      const held = new Map([["crossrefs", 1]]);
+
+      expect(strip({ topics: [held] }).value).toEqual({ topics: [held] });
+      expect(strip({ topics: [held] }).applied).toEqual(new Set());
+    });
+
     it("removes a named path from every element of its list", () => {
       expect(
         strip({ topics: [{ title: "a", crossrefs: 1 }, { title: "b" }] }),

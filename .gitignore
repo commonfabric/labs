@@ -81,3 +81,6 @@ topics-read-budget-limits.derived
 
 # Build output of the Rust crate in base/pattern-compiler.
 /base/pattern-compiler/target/
+
+# A Weaver user's own patterns (skills/weaver-patterns)
+/my-patterns/

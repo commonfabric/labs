@@ -8,7 +8,7 @@ import { CFResizablePanelGroup } from "../cf-resizable-panel-group/index.ts";
 import { CFResizableHandle } from "./index.ts";
 
 /** A handle inside a group lying in `direction`, with no panels, and the
- * deltas of every `cf-handle-adjust` it fires. */
+ * deltas of every adjustment it asks its group for. */
 async function handleIn(direction: "horizontal" | "vertical") {
   const group = new CFResizablePanelGroup();
   group.direction = direction;
@@ -19,12 +19,18 @@ async function handleIn(direction: "horizontal" | "vertical") {
   return { handle, deltas: adjustments(handle) };
 }
 
-/** The deltas of every `cf-handle-adjust` `handle` fires from now on. */
+/** The deltas of every adjustment `handle` asks of the group it is in now,
+ * from now on. */
 function adjustments(handle: CFResizableHandle): number[] {
   const deltas: number[] = [];
-  handle.addEventListener("cf-handle-adjust", (event) => {
-    if (event instanceof CustomEvent) deltas.push(event.detail.delta);
-  });
+  const group = handle.closest("cf-resizable-panel-group");
+  if (group instanceof CFResizablePanelGroup) {
+    const adjusted = group.handleAdjusted.bind(group);
+    group.handleAdjusted = (from, delta) => {
+      if (from === handle) deltas.push(delta);
+      adjusted(from, delta);
+    };
+  }
   return deltas;
 }
 
@@ -80,7 +86,7 @@ describe("CFResizableHandle", () => {
   });
 
   describe("keys", () => {
-    it("fire `cf-handle-adjust` by one with Left and Right in a horizontal group, and not with Up and Down", async () => {
+    it("ask the group to move by one with Left and Right in a horizontal group, and not with Up and Down", async () => {
       const { handle, deltas } = await handleIn("horizontal");
       expect(press(handle, "ArrowLeft")).toBe(true);
       expect(press(handle, "ArrowRight")).toBe(true);
@@ -89,7 +95,7 @@ describe("CFResizableHandle", () => {
       expect(deltas).toEqual([-1, 1]);
     });
 
-    it("fire `cf-handle-adjust` by one with Up and Down in a vertical group, and not with Left and Right", async () => {
+    it("ask the group to move by one with Up and Down in a vertical group, and not with Left and Right", async () => {
       const { handle, deltas } = await handleIn("vertical");
       expect(press(handle, "ArrowUp")).toBe(true);
       expect(press(handle, "ArrowDown")).toBe(true);
@@ -98,7 +104,7 @@ describe("CFResizableHandle", () => {
       expect(deltas).toEqual([-1, 1]);
     });
 
-    it("fire `cf-handle-adjust` toward either end with Home and End", async () => {
+    it("ask the group to move toward either end with Home and End", async () => {
       const { handle, deltas } = await handleIn("vertical");
       expect(press(handle, "Home")).toBe(true);
       expect(press(handle, "End")).toBe(true);

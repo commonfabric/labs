@@ -1,7 +1,10 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { classifyCallbackBoundary } from "../../src/policy/callback-boundary.ts";
+import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 
 function createProgramWithFiles(
   files: Record<string, string>,
@@ -137,4 +140,57 @@ Deno.test("classifyCallbackBoundary: a user-defined table alias does not match t
       true,
     );
   }
+});
+
+describe("classifyCallbackBoundary()", () => {
+  describe("a callback in an applied `lift`", () => {
+    // `lift(fn)(input)` applies the lifted function to its input. A callback
+    // passed as that input is a compute-owned boundary of its own; the
+    // callback `lift` lifts is a lift builder's.
+
+    function liftCallbacks(): {
+      lifted: ts.ArrowFunction;
+      input: ts.ArrowFunction;
+      checker: ts.TypeChecker;
+    } {
+      const { sourceFile, checker } = createProgramWithFiles({
+        "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+        "/test.tsx": `
+          import { lift } from "commonfabric";
+          const result = lift((f: () => number) => f())(() => 1);
+        `,
+      });
+      const arrows: ts.ArrowFunction[] = [];
+      const visit = (node: ts.Node): void => {
+        if (ts.isArrowFunction(node)) arrows.push(node);
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+      const [lifted, input] = arrows;
+      if (!lifted || !input) throw new Error("Expected two callbacks");
+      return { lifted, input, checker };
+    }
+
+    it("returns a compute-owned `lift-applied` boundary for the input callback", () => {
+      const { input, checker } = liftCallbacks();
+      expect(classifyCallbackBoundary(input, checker)).toEqual({
+        kind: "supported",
+        boundaryKind: "lift-applied",
+        bodyContext: {
+          strategy: "explicit",
+          kind: "compute",
+          owner: "lift-applied",
+        },
+      });
+    });
+
+    it("returns a `lift-builder` boundary for the lifted callback", () => {
+      const { lifted, checker } = liftCallbacks();
+      expect(classifyCallbackBoundary(lifted, checker)).toEqual({
+        kind: "supported",
+        boundaryKind: "lift-builder",
+        bodyContext: { strategy: "explicit", kind: "compute", owner: "lift" },
+      });
+    });
+  });
 });

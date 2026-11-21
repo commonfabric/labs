@@ -534,7 +534,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/spread-stream.tsx#default"
+            "sha256:9254acfc3598c91edadb8fa9341b74db7b7a9363ec04bed8515f99a349bdb101"
           ],
           "picks": [],
           "selectors": [],

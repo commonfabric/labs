@@ -47,6 +47,10 @@ pub struct ModuleAnalysis {
     /// (`plan-and-label-templates.md` §1.1).
     #[serde(skip)]
     pub plans: Vec<crate::plan::PatternPlan>,
+    /// The text the offsets of the plans are in, where it is not the text
+    /// the module was given with (`crate::tool_rewrite`).
+    #[serde(skip)]
+    pub rewritten: Option<String>,
 }
 
 impl ModuleAnalysis {
@@ -72,6 +76,16 @@ pub struct DefRef {
 }
 
 /// Resolves an import of one module to a definition of another.
+/// The content hash of a JSON value: SHA-256 over its text, written
+/// `sha256:` and hex. `serde_json` writes the members of an object in the
+/// order of their names.
+pub(crate) fn content_hash(value: &serde_json::Value) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(value.to_string().as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("sha256:{hex}")
+}
+
 pub struct Resolver<'m, 'a> {
     paths: HashMap<String, usize>,
     models: &'m [Option<ModuleModel>],
@@ -82,6 +96,9 @@ pub struct Resolver<'m, 'a> {
     /// The span and kind of each body of each module, once the walk of
     /// `crate::check` has found them.
     bodies: std::cell::RefCell<Vec<Vec<BodySpan>>>,
+    /// The identity of each module (`module_identity`), formed for every
+    /// module at the first request.
+    module_identities: std::cell::OnceCell<Vec<String>>,
 }
 
 /// The span of a body and its kind.
@@ -97,7 +114,7 @@ pub enum Place {
 }
 
 impl<'m, 'a> Resolver<'m, 'a> {
-    fn new(
+    pub(crate) fn new(
         files: &'m [SourceFile],
         models: &'m [Option<ModuleModel>],
         parsed: &'m [Option<Parsed<'a>>],
@@ -114,10 +131,130 @@ impl<'m, 'a> Resolver<'m, 'a> {
             parsed,
             types: Types::default(),
             bodies: std::cell::RefCell::new(vec![Vec::new(); files.len()]),
+            module_identities: std::cell::OnceCell::new(),
         }
     }
 
-    fn set_bodies(&self, module: usize, bodies: &[Body]) {
+    /// The content-addressed identity of a module (PL §1.5, the `module`
+    /// of `Body.code`), from its path, its source text, and what it
+    /// imports. The modules of one import cycle depend on each other's
+    /// text, so the cycle is hashed as one: the paths and texts of its
+    /// modules, ordered by path, and the identities of the modules outside
+    /// it that they import. A module's identity is the hash of that and its
+    /// own path. Each is formed once, for every module, in one pass over the
+    /// import graph.
+    pub fn module_identity(&self, module: usize) -> String {
+        self.module_identities
+            .get_or_init(|| self.form_module_identities())
+            .get(module)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The identities of all modules (`module_identity`): the import graph's
+    /// strongly connected components, by Tarjan's algorithm, which finds
+    /// each after every component it imports.
+    fn form_module_identities(&self) -> Vec<String> {
+        let count = self.files.len();
+        let edges: Vec<Vec<usize>> = (0..count)
+            .map(|module| {
+                let mut targets: Vec<usize> = self.models[module]
+                    .as_ref()
+                    .map(|model| &model.imports[..])
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter_map(|import| self.module_of(module, &import.specifier))
+                    .collect();
+                targets.dedup();
+                targets
+            })
+            .collect();
+        let mut identities = vec![String::new(); count];
+        let mut component_of = vec![usize::MAX; count];
+        let mut index = vec![usize::MAX; count];
+        let mut low = vec![0usize; count];
+        let mut on_stack = vec![false; count];
+        let mut stack: Vec<usize> = Vec::new();
+        let mut next = 0usize;
+        let mut components = 0usize;
+        for root in 0..count {
+            if index[root] != usize::MAX {
+                continue;
+            }
+            // An explicit stack of (module, next edge) in the place of
+            // recursion, which a long import chain would overflow.
+            let mut frames: Vec<(usize, usize)> = vec![(root, 0)];
+            index[root] = next;
+            low[root] = next;
+            next += 1;
+            stack.push(root);
+            on_stack[root] = true;
+            while let Some(&mut (module, ref mut edge)) = frames.last_mut() {
+                if let Some(&target) = edges[module].get(*edge) {
+                    *edge += 1;
+                    if index[target] == usize::MAX {
+                        index[target] = next;
+                        low[target] = next;
+                        next += 1;
+                        stack.push(target);
+                        on_stack[target] = true;
+                        frames.push((target, 0));
+                    } else if on_stack[target] {
+                        low[module] = low[module].min(index[target]);
+                    }
+                    continue;
+                }
+                frames.pop();
+                if let Some(&(parent, _)) = frames.last() {
+                    low[parent] = low[parent].min(low[module]);
+                }
+                if low[module] != index[module] {
+                    continue;
+                }
+                let mut members = Vec::new();
+                while let Some(member) = stack.pop() {
+                    on_stack[member] = false;
+                    component_of[member] = components;
+                    members.push(member);
+                    if member == module {
+                        break;
+                    }
+                }
+                components += 1;
+                members.sort_by(|a, b| self.files[*a].path.cmp(&self.files[*b].path));
+                let texts: Vec<serde_json::Value> = members
+                    .iter()
+                    .map(|member| {
+                        serde_json::json!({
+                            "path": self.files[*member].path,
+                            "source": self.files[*member].text,
+                        })
+                    })
+                    .collect();
+                let mut imported: Vec<&str> = members
+                    .iter()
+                    .flat_map(|member| &edges[*member])
+                    .filter(|target| component_of[**target] != component_of[module])
+                    .map(|target| identities[*target].as_str())
+                    .collect();
+                imported.sort_unstable();
+                imported.dedup();
+                let component = content_hash(&serde_json::json!({
+                    "modules": texts,
+                    "imports": imported,
+                }));
+                for member in &members {
+                    identities[*member] = content_hash(&serde_json::json!({
+                        "component": component,
+                        "path": self.files[*member].path,
+                    }));
+                }
+            }
+        }
+        identities
+    }
+
+    pub(crate) fn set_bodies(&self, module: usize, bodies: &[Body]) {
         self.bodies.borrow_mut()[module] =
             bodies.iter().map(|body| (body.span, body.kind)).collect();
     }
@@ -279,6 +416,14 @@ fn join(from: &str, specifier: &str) -> String {
 
 /// Runs the front end over a set of modules.
 pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
+    let rewritten = crate::tool_rewrite::rewrite(files);
+    let mut analysis = analyze_rewritten(rewritten.files());
+    rewritten.finish(&mut analysis);
+    analysis
+}
+
+/// [`analyze`] for modules that `crate::tool_rewrite` has rewritten.
+fn analyze_rewritten(files: &[SourceFile]) -> ProgramAnalysis {
     let allocators: Vec<Allocator> = files.iter().map(|_| Allocator::default()).collect();
     let mut failures = Vec::new();
     let parsed: Vec<Option<Parsed<'_>>> = files
@@ -533,6 +678,7 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         modules.push(ModuleAnalysis {
             path: files[index].path.clone(),
             plans: std::mem::take(&mut all_plans[index]),
+            rewritten: None,
             model,
             bodies: check.bodies,
             diagnostics,
@@ -850,6 +996,8 @@ fn footprint_counts(
 /// The footprint of every body of the program `files` that the analysis of
 /// `footprint-analysis.md` runs on.
 pub fn footprints(files: &[SourceFile]) -> Vec<crate::footprint::BodyFootprint> {
+    let rewritten = crate::tool_rewrite::rewrite(files);
+    let files = rewritten.files();
     let allocators: Vec<Allocator> = files.iter().map(|_| Allocator::default()).collect();
     let parsed: Vec<Option<Parsed<'_>>> = files
         .iter()
@@ -899,28 +1047,63 @@ pub const TYPE_MARKER: &str = "/*?*/";
 /// marked by writing it in parentheses. An expression with no type is given
 /// as the label the measurement counts it under.
 pub fn types_at_markers(files: &[SourceFile]) -> Vec<String> {
+    at_markers(files, |resolver, module, expression| {
+        Some(match expression {
+            Some(expression) => match resolver.declared(module, expression) {
+                Ok(ty) => resolver.display(ty),
+                Err(origin) => origin.label().to_string(),
+            },
+            None => "no expression at the marker".to_string(),
+        })
+    })
+}
+
+/// The JSON schema of the input type of each pattern factory value that is
+/// marked with [`TYPE_MARKER`], as [`types_at_markers`] finds the marked
+/// expressions. A marked expression that is no pattern factory value has
+/// no entry.
+pub fn closure_inputs_at_markers(files: &[SourceFile]) -> Vec<serde_json::Value> {
+    at_markers(files, |resolver, module, expression| {
+        let factory = resolver.declared(module, expression?).ok()?;
+        match resolver.shape(factory) {
+            crate::types::Shape::PatternFactory(input, _) => Some(resolver.schema_of(input)),
+            _ => None,
+        }
+    })
+}
+
+/// What `describe` gives for the expression at each [`TYPE_MARKER`] of a
+/// program, in the order of the files and of the source. `describe` is
+/// given `None` for a marker that no expression starts at.
+fn at_markers<T, F>(files: &[SourceFile], describe: F) -> Vec<T>
+where
+    F: for<'m, 'a> Fn(&Resolver<'m, 'a>, usize, Option<&oxc_ast::ast::Expression<'a>>) -> Option<T>,
+{
     use oxc_ast::ast::Expression;
     use oxc_ast_visit::{walk, Visit};
     use oxc_span::GetSpan;
 
-    struct Find<'r, 'm, 'a> {
+    struct Find<'r, 'm, 'a, T, F> {
         resolver: &'r Resolver<'m, 'a>,
         module: usize,
         start: u32,
-        found: Option<String>,
+        describe: &'r F,
+        found: Option<Option<T>>,
     }
-    impl<'a> Visit<'a> for Find<'_, '_, 'a> {
+    impl<'a, T, F> Visit<'a> for Find<'_, '_, 'a, T, F>
+    where
+        F: for<'m, 'b> Fn(&Resolver<'m, 'b>, usize, Option<&Expression<'b>>) -> Option<T>,
+    {
         fn visit_expression(&mut self, it: &Expression<'a>) {
             if it.span().start == self.start {
-                self.found = Some(match self.resolver.declared(self.module, it) {
-                    Ok(ty) => self.resolver.display(ty),
-                    Err(origin) => origin.label().to_string(),
-                });
+                self.found = Some((self.describe)(self.resolver, self.module, Some(it)));
             }
             walk::walk_expression(self, it);
         }
     }
 
+    let rewritten = crate::tool_rewrite::rewrite(files);
+    let files = rewritten.files();
     let allocators: Vec<Allocator> = files.iter().map(|_| Allocator::default()).collect();
     let parsed: Vec<Option<Parsed<'_>>> = files
         .iter()
@@ -939,7 +1122,7 @@ pub fn types_at_markers(files: &[SourceFile]) -> Vec<String> {
         }
     }
     resolver.types.borrow_mut().reports.clear();
-    let mut types = Vec::new();
+    let mut found = Vec::new();
     for (module, file) in files.iter().enumerate() {
         let Some(parsed) = &parsed[module] else {
             continue;
@@ -951,16 +1134,17 @@ pub fn types_at_markers(files: &[SourceFile]) -> Vec<String> {
                 resolver: &resolver,
                 module,
                 start: (offset + TYPE_MARKER.len() + blank) as u32,
+                describe: &describe,
                 found: None,
             };
             find.visit_program(parsed.program);
-            types.push(
+            found.extend(
                 find.found
-                    .unwrap_or_else(|| "no expression at the marker".to_string()),
+                    .unwrap_or_else(|| describe(&resolver, module, None)),
             );
         }
     }
-    types
+    found
 }
 
 /// Reports what a computation or the reactive tier may not do when it does

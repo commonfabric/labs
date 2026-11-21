@@ -60,6 +60,7 @@ import {
   spoolRecords,
   stopOnSignals,
 } from "./ci-lane.ts";
+import { defaultBase, gitIn } from "./repository-files.ts";
 import {
   finishRunRecording,
   type RunRecording,
@@ -77,7 +78,6 @@ import {
 import { fetchManifest } from "./test-selection/store.ts";
 import {
   type FailedCommand,
-  passed,
   printSummary,
   type RunSummary,
   type TestResult,
@@ -143,21 +143,6 @@ export function parseGapArgs(args: readonly string[]): GapOptions | undefined {
 }
 
 /**
- * What a change is measured against where the command line names
- * nothing: `upstream/main` in a checkout of a fork, which is where a pull
- * request's base lives, and `origin/main` otherwise.
- */
-export async function defaultBase(root: string): Promise<string> {
-  const upstream = await new Deno.Command("git", {
-    args: ["rev-parse", "--verify", "--quiet", "upstream/main"],
-    cwd: root,
-    stdout: "null",
-    stderr: "null",
-  }).output();
-  return upstream.success ? "upstream/main" : "origin/main";
-}
-
-/**
  * The files the working tree differs from its merge base with `base` by,
  * whether committed or not, and the files that are new and not ignored.
  */
@@ -168,7 +153,16 @@ export async function localChanges(
   const git = (args: readonly string[]) =>
     gitOutput(root, args, `cannot list the changes against ${base}`);
   return new Set([
-    ...pathsOf(await git(["diff", "-z", "--name-only", "--merge-base", base])),
+    ...pathsOf(
+      await git([
+        "diff",
+        "-z",
+        "--name-only",
+        "--no-renames",
+        "--merge-base",
+        base,
+      ]),
+    ),
     ...pathsOf(await git(["ls-files", "-z", "--others", "--exclude-standard"])),
   ]);
 }
@@ -611,11 +605,14 @@ export interface Snapshot {
  * with this process's environment less whatever names another repository,
  * index or work tree, and with the repository's hooks and file-system
  * monitor turned off, since those are for its owner's checkouts. A snapshot
- * that fails leaves nothing behind.
+ * that fails leaves nothing behind. `stat` reads when the repository's
+ * index was last accessed and written.
  */
 export async function snapshotTree(
   root: string,
   under?: string,
+  stat: (path: string) => Promise<Pick<Deno.FileInfo, "atime" | "mtime">> =
+    Deno.stat,
 ): Promise<Snapshot> {
   const directory = await Deno.makeTempDir({
     prefix: "test-gap-build-",
@@ -648,7 +645,7 @@ export async function snapshotTree(
       (await git(["rev-parse", "--git-path", "index"], making)).trim(),
     );
     await Deno.copyFile(original, index);
-    const { atime, mtime } = await Deno.stat(original);
+    const { atime, mtime } = await stat(original);
     if (atime === null || mtime === null) {
       throw new Error(`cannot read when ${original} was written`);
     }
@@ -912,9 +909,6 @@ export async function runGap(gap: Gap, context: GapContext): Promise<GapRun> {
       (run.kept === undefined ? "" : `, and ${run.kept}`),
     seconds: (performance.now() - startedAt) / 1000,
   };
-  if (!run.ok && passed(run.summary)) {
-    notes.push("The run failed for a reason the output above gives.");
-  }
   return run;
 }
 
@@ -974,7 +968,7 @@ export async function main(
     console.error(USAGE);
     return 2;
   }
-  const base = options.base ?? await defaultBase(root);
+  const base = options.base ?? await defaultBase(gitIn(root));
   const changed = await localChanges(root, base);
   const suites = await (deps.topology ?? loadTopology)(root);
   const fetched = await resolveManifest({ root }, deps);

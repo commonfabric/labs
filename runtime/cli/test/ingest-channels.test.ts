@@ -173,6 +173,12 @@ describe("resolveSpaceDid", () => {
       );
     });
 
+    it("throws for a space that is not a DID, which would change the path", () => {
+      expect(() =>
+        controlPlaneUrl(new URL("https://host.example"), "mint", "../admin")
+      ).toThrow("Not a space DID: ../admin");
+    });
+
     it("does not mutate the caller's URL", () => {
       const base = new URL("https://host.example/fabric");
       controlPlaneUrl(base, "list");

@@ -1286,6 +1286,24 @@ describe("launch", () => {
       ).rejects.toThrow("`--port` was given no value");
     });
 
+    it("throws naming a flag written with an empty or blank value", async () => {
+      // Falling through to the default would ignore a value someone typed.
+
+      for (const args of [["--port="], ["--store", " "]]) {
+        const flag = args[0].replace("=", "");
+        await expect(
+          prepareConsoleLaunch([...NAMED_ARGS, ...args], {}, io()),
+        ).rejects.toThrow(`\`${flag}\` was given no value`);
+      }
+      // The same flag given a value is read.
+      const { plan } = await prepareConsoleLaunch(
+        [...NAMED_ARGS, "--port=8123"],
+        {},
+        io(),
+      );
+      expect(plan.environment.CF_HARNESS_CONSOLE_PORT).toBe("8123");
+    });
+
     it("returns the port for the `=` spelling a negative value needs", async () => {
       await expect(
         prepareConsoleLaunch([...NAMED_ARGS, "--port=-1"], {}, io()),

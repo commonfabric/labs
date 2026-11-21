@@ -181,8 +181,13 @@ const CASES: &[Case] = &[
         "const Box = pattern<{ fresh: boolean }>(({ fresh }) => ({ label: fresh ? \"fresh\" : \"stale\" }));",
     ),
     case(
-        "removed-form:pattern-tool",
+        "removed-form:pattern-tool-interim",
         "const Search = pattern<{ flavor: string; donuts: string[] }>(({ flavor, donuts }) => donuts.filter((donut) => donut === flavor));\nconst Box = pattern<{ donuts: string[] }>(({ donuts }) => ({ tool: /*!*/patternTool(Search, { donuts }) }));",
+        "const Box = pattern<{ donuts: string[] }>(({ donuts }) => ({ tool: pattern<{ flavor: string }>(({ flavor }) => donuts.filter((donut) => donut === flavor)) }));",
+    ),
+    case(
+        "removed-form:pattern-tool",
+        "const Search = pattern<{ flavor: string; donuts: string[] }>(({ flavor, donuts }) => donuts.filter((donut) => donut === flavor));\nconst Box = pattern<{ more: { donuts: string[] } }>(({ more }) => ({ tool: /*!*/patternTool(Search, { ...more }) }));",
         "const Box = pattern<{ donuts: string[] }>(({ donuts }) => ({ tool: pattern<{ flavor: string }>(({ flavor }) => donuts.filter((donut) => donut === flavor)) }));",
     ),
     case(
@@ -634,6 +639,15 @@ const CASES: &[Case] = &[
         "side-write:cycle",
         "const copy = lift((x: { from: Cell<number>; to: Cell<number> }) => { /*!*/x.to.set(x.from.get()); return 1; });\nexport const P = pattern<{ a: Cell<number>; b: Cell<number> }>(({ a, b }) => { const one = copy({ from: a, to: b }); const two = copy({ from: b, to: a }); return { one, two }; });",
         "const copy = lift((x: { from: Cell<number>; to: Cell<number> }) => { x.to.set(x.from.get()); return 1; });\nexport const P = pattern<{ a: Cell<number>; b: Cell<number>; c: Cell<number> }>(({ a, b, c }) => { const one = copy({ from: a, to: b }); const two = copy({ from: b, to: c }); return { one, two }; });",
+    ),    case(
+        "array-by-key:declaration",
+        "interface Repo { id: number; open: boolean }\nexport default pattern<{ saved: /*!*/ArrayByKey<Repo, \"open\"> }>(({ saved }) => ({ saved }));",
+        "interface Repo { id: number; open: boolean }\nexport default pattern<{ saved: ArrayByKey<Repo, \"id\"> }>(({ saved }) => ({ saved }));",
+    ),
+    case(
+        "array-by-key:mismatch",
+        "interface Repo { id: number; name: string }\nconst Sub = pattern<{ given: ArrayByKey<Repo, \"name\"> }>(({ given }) => ({ given }));\nexport default pattern<{ saved: ArrayByKey<Repo, \"id\"> }>(({ saved }) => ({ sub: Sub({ given: /*!*/saved }) }));",
+        "interface Repo { id: number; name: string }\nconst Sub = pattern<{ given: ArrayByKey<Repo, \"id\"> }>(({ given }) => ({ given }));\nexport default pattern<{ saved: ArrayByKey<Repo, \"id\"> }>(({ saved }) => ({ sub: Sub({ given: saved }) }));",
     ),
 ];
 

@@ -12,7 +12,7 @@ interface Item {
 }
 
 // The distinct references of a list, found by the key of what `equals`
-// compares (provisional decision P32).
+// compares (provisional decision P41).
 const distinct = lift(
   ({ items }: { items: ReadonlyCell<Item>[] | Default<[]> }): number => {
     const seen = new Set<unknown>();

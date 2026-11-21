@@ -11,6 +11,16 @@ next.
 
 - **Branch:** `claude/fable-pattern-language-redesign-vvh48e` in
   `commonfabric/labs`, draft pull request #9788.
+- **The stack of pull requests.** Four draft pull requests, each based on the
+  one before it. #9788 holds the design documents, on the branch above. #9942
+  holds the prototype, on `claude/compiled-pattern-prototype`. #9992 holds the
+  integration, on `claude/compiled-pattern-integration-m1`: milestone 1,
+  milestone 4 through its ninth corpus run, and the catch-up merge with `main`;
+  the branch `claude/compiled-pattern-m4`, on which milestone 4 was built, is
+  retired. #10016 holds Topics on the executor, on
+  `claude/compiled-pattern-topics`, and does not hold milestone 4. A change to a
+  pattern goes to `main` in a pull request of its own and not into the stack:
+  #10036 and #10050 are open, and #10054 is closed without a merge.
 - **Documents**, all under `docs/specs/compiled-pattern-language/`:
 
   | Document | Owns |
@@ -73,7 +83,7 @@ next.
   slot, which has no declared label. Not built: hashes of code and schemas,
   `$defs` for recursive types, and constraints at created and request
   targets. A comparison of template labels with the labels the runtime
-  computes exists at prototype commit `5847372a77`, under
+  computes exists at prototype commit `4ca9fe56cb`, under
   `base/pattern-compiler/compare/`: a template evaluator in TypeScript
   and a harness over the runner's emulated storage, with no server and
   no browser. It generates a scenario per module, with a distinct
@@ -112,7 +122,14 @@ next.
   elements; neither kind is compared. Outputs below the elements of a
   collection are not compared. With the events sent in the order of
   the plan, no row is looser either, and one row differs because the
-  event reaches another element. In that order `map-demo.tsx` stores
+  event reaches another element. In that order 228 write edges are
+  compared: 219 are equal and 9 tighter, 8 of those by a label an
+  earlier event left and 1 by the join of the `map` coordinator; 2
+  edges are not compared because the run stored a link, and 2 because
+  the runtime fails to read a label. The write of `askToRetire` of
+  `patterns/system/profile-picker/profile-picker.tsx` is equal in both
+  orders under the assumption of question 131, and no row of the
+  corpus is of the kind of question 138. In that order `map-demo.tsx` stores
   two links that form a cycle, and a read of the cell that holds one
   of them throws in `traverseWithSelector`
   (`runtime/runner/src/traverse.ts`) where `resolveLink` reports the
@@ -123,12 +140,149 @@ next.
   conditional rendered nothing.
   The crate accepts 333 modules and reports 389 errors. It does not
   yet emit `$defs` for a recursive type. The crate's `SPEC-NOTES.md`
-  lists the places where it found the documents ambiguous; its notes
-  through 261 are written into the documents, and notes 262 to 272
-  are not. No compared row of the corpus evaluates the label of an
+  lists the places where it found the documents ambiguous. Its notes through
+  272, notes 281 to 302, notes 307 to 320, notes 325 to 341, notes 344
+  to 363, notes 367 to 382, notes 387 to 402, notes 406 to 414,
+  notes 419 to 426, notes 432 to 443, notes 446 to 458, notes
+  461 to 474 and 478, notes 479 to 497, 499 and 502, notes 506 to
+  509, 511, 513, 517 and 520, and notes 523, 526, 527, 529, 530, 532
+  and 533 are written into the documents.
+  Notes 273 to 280, which measure cost, are written into
+  [What compiling, running, and storing cost](#what-compiling-running-and-storing-cost)
+  below, and notes 303 to 306, 321 to 324, 342 and 343, 364 to 366,
+  383 to 386, 403 to 405, 415 to 418, 427 to 431, 444 and 445, 459
+  and 460, 475 to 477, 498, 500, 501, 503 and 504, 505, 510, 512,
+  514 to 516, 518, 519, 521 and 522, and 524, 525, 528, 531, 534 and
+  535, the results of
+  the value comparison, the measurements of growth and the
+  later runs of the
+  label comparison and the cost measurement, into
+  [What the prototype's executor computes](#what-the-prototypes-executor-computes).
+  The latest prototype commit read is `3d33db2e4d`. From commit
+  `3e518147df` on the crate also emits value code and an executor runs
+  a plan with it. At `3e518147df`, in the fixtures 122 of 122 compared
+  values equal those of today's runtime, and in the corpus 4,472 of
+  4,537, over the 186 modules the executor runs. At `96f3b83a73`, with
+  the rulings on what the executor needed implemented, the figures are
+  152 of 152 in the fixtures and 4,485 of 4,539 in the corpus, over 187
+  modules. At `59055fd0c5`, with the rulings on the collections a cone lists
+  and on who places a stream implemented, they are 280 of 280 in the fixtures
+  and 4,642 of 4,735 in the corpus, over 194 modules. At `77993077e4`, with
+  a record that a handler writes into a list stored as a document of its
+  own and with the rulings on a plain value in place, a derived collection
+  passed on, a write below the root of an empty state cell, a first value,
+  the callee's default, and `[SELF]` implemented, they are 489 of 490 in the
+  fixtures and 4,641 to 4,650 of 4,735 in the corpus, over 194 modules. The
+  range is one module that draws from `Math.random`. At `e63b3d305c`,
+  with the rulings on a key that left its collection, on which
+  evaluation fails the check of a stream, on a stream a function body
+  returns, on what a `*` of a result path stands for, on the key of a
+  `flatMap` member, and on the record of a key implemented, with
+  `Math.random` seeded in both runs, and with a pattern instantiated
+  and a handler bound in a function body, they are 673 of 674 in the
+  fixtures and, over 196 modules of the corpus, 4,680 of 4,769 against
+  the saved values of today's runtime and 5,324 of 5,410 against a
+  fresh seeded run of it. That commit does not have the rulings on the
+  top-level property a failed check keeps, on the prefix match at a
+  `flatMap` result, on a collection as one nested child, on a write
+  that re-keys a plain value, on a body's copy of one, on a handle by
+  position, or on `asInstance()`. At `e4f2fb3431`, with those rulings
+  and the rulings on a `push` below an empty argument path, on the
+  place of `[SELF]` in a binding record, and on the type marker
+  `KeyedBy<T, "field">` implemented, they are 727 of 728 in the
+  fixtures and, over 196 modules of the corpus, 5,335 of 5,410 against
+  a fresh seeded run of today's runtime. At `a462df710a`, with the
+  rulings that no record lists where a stream is stored and no
+  position is checked, on a spread child, on a state path of plain
+  type, and on what a re-key moves implemented, they are 752 of 753
+  in the fixtures and, over the same 196 modules, 5,414 of 5,498
+  against a fresh seeded run, which sends 11 more events. That commit
+  forms a key with no field name and resolves it through a schema,
+  by a ruling that is withdrawn. It does not have the rulings that
+  followed: that a key names its declared fields and is resolved
+  with no schema, and that `KeyedBy` can name several fields. Nor
+  does it have the rulings after those: that the key is declared on
+  the array, with the array type `ArrayByKey`, in the place of
+  `KeyedBy` on the element type, and that the element part of such a
+  key holds the names of the fields and one salted hash of their
+  values. At `7774ba208c`, with the rulings that a key names its
+  declared fields, that it is resolved with no schema, and that the
+  declaration can name several fields implemented, they are 767 of
+  768 in the fixtures and, over the same 196 modules, 5,414 of 5,498
+  against a fresh seeded run, every figure of the corpus as at
+  `a462df710a`. That commit has the marker `KeyedBy` on the element
+  type and the plain form of the key: a string with separators and
+  an escaping of the prototype's own, which holds each field name
+  with the value of the field, with no salt and no hash. It does not
+  have the rulings that followed: `ArrayByKey` on the array, the
+  salted hash, a key that is a fabric value with no separators of
+  the design's own, the schema traversed at a link as the place a
+  reader learns the key fields from, and a reference by key to an
+  element of a plain array generated from scratch. At
+  `a4b4612b3b`, with those rulings implemented, they are 767 of 768
+  in the fixtures and, over the same 196 modules, 5,414 of 5,498
+  against a fresh seeded run, every compared value as at
+  `7774ba208c`. That commit has neither `KeyedBy` nor the plain form
+  of the key. Nothing of those rulings is compared with today's
+  runtime, which has no `ArrayByKey`. At `682b918ed1`, with the
+  rulings on what an instance of its own is given, on the key fields
+  of a `map` result, on an output inside an element body, and on the
+  record of a salted hash implemented, and with the keys, the
+  identifiers and the names of several parts in the record forms of
+  the documents, they are 799 of 800 in the fixtures and, over the
+  same 196 modules, 5,414 of 5,498 against a fresh seeded run, every
+  line of the report as at `a4b4612b3b`. At `abd965cc37`, with the
+  defects fixed that the prototype's author found among the modules
+  that were not executed, the events that were not handled and the
+  values that differed, they are 829 of 830 in the fixtures and, over
+  212 modules, 5,813 of 5,907 against a fresh seeded run. The
+  comparison of labels was run again at that commit: of 1,454 outputs
+  and 241 write edges compared, none is looser than today's or incomparable with
+  it. At `a84264daf2`, with a queue of events and a batch, a transaction of each
+  cause, the bound of ten evaluations, the error state, a stubbed effect layer,
+  and the reference forms of the ruling on question 222 and of the provisional
+  decisions P5 to P7 in the executor and the crate, they are 1,004 of 1,013 in
+  the fixtures and, over 214 modules, 6,013 of 6,107 against a fresh seeded run.
+  Of 1,462 outputs and 249 write edges compared at that commit, none is looser
+  than today's or incomparable with it. The plans of the corpus are 5,956,178
+  bytes together, where they were 9,826,792. The sizes and costs that the round
+  measured, the ones it fixed and the ones it did not, are first in [The corpus
+  at commit `a84264daf2`](#the-corpus-at-commit-a84264daf2). At
+  `e63851c1ee` the crate is unchanged and the executor marks what a write
+  reaches, keeps the keys of the positions that a write did not touch, has a
+  cone that places a collection hold a reference to it, brings an assembly up
+  to date from the change, and keeps the layout of a stored result in part
+  documents as an accounting. The fixtures are 1,004 of 1,013 and the corpus
+  6,013 of 6,107 over 214 modules, as before, and no output or write edge is
+  looser than today's. One change of a list of 10,000 elements costs 1 to 4
+  evaluations, at most 1 salted hash, 1 or 2 checks and 2 to 26 bytes put
+  into the documents, where it cost 3 to 5 evaluations, 10,000 hashes over
+  plain values, 30,000 to 70,000 checks and 238,904 bytes. The provisional
+  decisions P18 and P19 are not built. What the round measured, with the same
+  lists on today's runtime, the part documents, a keystroke in a row that has
+  state, a list that is replaced again and again, and run times beside
+  today's runtime, is in [The corpus at commit
+  `e63851c1ee`](#the-corpus-at-commit-e63851c1ee). At `3d33db2e4d` the
+  executor keeps the part documents of provisional decisions P20, P25
+  and P26 as documents beside the value that its store holds for each
+  document, and its value code does not read through them. The fixtures
+  are 1,004 of 1,013 and the corpus 6,013 of 6,107 over 214 modules, as
+  before, and no output or write edge is looser than today's. One change
+  of one row writes at most 139,217 bytes in 4 documents for rows of 23
+  bytes and 149,137 bytes in 6 documents for rows of 2,000 bytes, at
+  100,000 rows, where an append to a list of 10,000 wrote 610,081 bytes
+  under the rule that P20 replaces. P18 and P19 are not built; the
+  copies of each callee in the plans of the corpus were compared record
+  by record in their place. The crate reports the warning of P21, which
+  is withdrawn for what the count over the corpus showed. The
+  structural findings of the round are first in [The corpus at commit
+  `3d33db2e4d`](#the-corpus-at-commit-3d33db2e4d). No
+  compared row of the
+  corpus evaluates the label of an
   index: the 54 index slots of the corpus plans are read by outputs
   below the elements of a collection and by handlers with no
-  compared write edge.
+  compared write edge. Two fixtures of the prototype test the label of
+  the index and the row of question 138.
 - **Specification change:** draft pull request #91 in `commonfabric/specs`
   (branch `claude/compiled-pattern-label-templates`) carries the label
   semantics as prose, pseudocode, and Lean statements. It includes the
@@ -139,10 +293,5099 @@ next.
   one by section and chapter file only, as
   [`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
   requires.
+- **Integration:** [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
+  is the strategy for measuring the design inside the real runtime
+  (provisional decision P30), with its milestones and the first figures of
+  milestone 1.
 - **Merged branches:** `claude/pattern-language-subset-spec`,
   `claude/pattern-language-plan-labels-spec`, and
   `claude/pattern-language-builtin-inventory` are fully merged into the branch
   above and carry nothing else. New work does not go on them.
+
+## What compiling, running, and storing cost
+
+The prototype measured what the path of today costs and derived what
+the plans say of the compiled path, at prototype commit `4ca9fe56cb`
+(its notes 273 to 280). The figures do not show that the compiled path
+is faster at run time: no time of the compiled path is measured. The
+executor of
+[What the prototype's executor computes](#what-the-prototypes-executor-computes)
+computes values and was not timed. The prototype's later commits, to
+`a462df710a`, measure no cost, and the figures of this section are not
+computed again for them. At commit `7774ba208c` every command of the
+measurement was run once more over the corpus, on a machine that was
+not idle; those figures are under
+[The comparison of labels and the cost measurement at commit `7774ba208c`](#the-comparison-of-labels-and-the-cost-measurement-at-commit-7774ba208c)
+and replace none of this section. The one other later figure that
+bears on storage is the count of documents the executor stores, under
+[Documents](#documents).
+
+### What is measured and what is derived
+
+At that commit the crate emits a plan and no value code. Three kinds of
+figure follow, and each table says which a row is.
+
+- **Measured on both sides:** the time to compile.
+- **Measured for the path of today alone:** the time, the transactions,
+  and the scheduler's runs of a scenario, and what the scenario leaves
+  stored.
+- **Derived for the compiled path:** counts that
+  `execution-and-storage.md` fixes for a plan, computed from the plan's
+  records. A derived count is not a time and not a measurement.
+
+Compile time is over the 270 modules with a full plan. The run and the
+storage are over the 213 of them that the corpus comparison runs. The
+scenario of a module is the generated one of the comparison: every
+top-level input has a value, every array has two elements, and one
+event is sent to each handler whose stream the result holds. The
+machine is an Apple M3 Max with 16 cores and 128 GB, with Deno 2.9.8
+and rustc 1.93.0 under Cargo's release profile. Nothing else ran during
+a measurement, and no measurement was repeated on another day. Times
+are wall time in milliseconds.
+
+### Compile time
+
+Both pipelines were given the same program for a module: the module and
+the modules it imports by path, 1,004 files for the 270 modules, with a
+median of one file and 5.9 KB of source per module. Today's side is
+`PatternManager.compilePattern` in
+`runtime/runner/src/pattern-manager.ts`, three times in a runtime and a
+store of its own each, and once more in the same runtime, which reads
+the compile cache. The crate's side is its analysis and the JSON text
+of the plans, 20 times in one process, from source text in memory.
+
+| In one process, 270 modules | total | median | p10 | p90 | least | most |
+| --- | --- | --- | --- | --- | --- | --- |
+| crate, median of 20 | 5,104 | 0.626 | 0.0822 | 15 | 0.0387 | 1,189 |
+| today, first compile of the module | 91,115 | 151 | 96.5 | 666 | 84.9 | 5,207 |
+| today, median of the two later compiles | 87,419 | 146 | 96.3 | 657 | 82.7 | 4,892 |
+| today, again in the same runtime, from the cache | 7,644 | 18.6 | 15 | 43.1 | 13.2 | 389 |
+| today, last compile: building the program | 7,794 | 28.6 | 25.1 | 32 | 20.3 | 49.5 |
+| today, last compile: type check | 24,933 | 47.9 | 24.7 | 187 | 13.5 | 1,142 |
+| today, last compile: transformers and emit | 33,988 | 28.4 | 7.84 | 241 | 3.94 | 2,449 |
+| today, last compile: evaluating the modules | 2,130 | 2.05 | 0.827 | 10.2 | 0.513 | 355 |
+| today, last compile: compile cache | 5,996 | 11.8 | 9.26 | 38.8 | 8.08 | 285 |
+| today, last compile: the rest | 11,426 | 27.5 | 23.5 | 64.8 | 21.6 | 552 |
+
+Per module, today's later compiles take 240 times the crate's time at
+the median (p10 41, p90 1,201). The totals differ by 17 times, and by
+12 times without today's type check and evaluation. The two figures
+are far apart because three programs are most of the crate's total:
+the three that hold FabriChat's room.
+
+| The three programs with FabriChat's room | files | crate | today | ratio |
+| --- | --- | --- | --- | --- |
+| `patterns/dev/loom-chat-room-fixture/main.tsx` | 18 | 1,154 | 4,892 | 4.24 |
+| `patterns/dev/loom-overlay-fixture/main.tsx` | 18 | 1,189 | 4,763 | 4.01 |
+| `patterns/system/fabrichat/room-test-fixture.ts` | 15 | 1,102 | 3,715 | 3.37 |
+
+They take 3.4 s of the crate's 5.1 s. At the median the crate takes
+0.12 ms per KB of source, and on these three 2.3 ms per KB. A sample of
+the process on the third has 70% of its top frames in the allocator
+and in `memmove`, below `String::clone` and the functions of the
+crate's type evaluator that build the shape of a type. The reading is
+that the evaluator builds the shape of a type again at each use and
+keeps none. It was read from the sample alone and no fix was tried. So
+for the reference pattern the measured gain is 3.4 times, not
+hundreds, until that is fixed. Given the 1.5 MB bundled `guest.js` of
+`patterns/showcase/iframe-firebreak-commons` as a module, the crate had
+not finished one run after 108 s; the file is a data file and is in no
+figure here.
+
+With one process per module, timed from its start to its end:
+
+| One process per module, 270 | total | median | p10 | p90 | least | most |
+| --- | --- | --- | --- | --- | --- | --- |
+| crate, median of 5 | 6,651 | 3.58 | 2.46 | 21.6 | 2.05 | 1,336 |
+| today, one run | 381,950 | 1,101 | 960 | 2,014 | 869 | 6,870 |
+
+The ratio per module has the median 310 (p10 83, p90 515). About half
+of today's 1,101 ms is the compile and the rest is starting Deno and
+loading the runtime's modules.
+
+The comparison is not even, in both directions:
+
+- **The crate emits no value code and no source map.** Today's emit
+  produces the JavaScript that runs. An emitter of value code adds time
+  that is not in the crate's figure.
+- **The crate forms no content hash.** A plan names its schemas, bodies
+  and patterns by placeholders. Today's figure includes the content
+  identity of every module.
+- **The crate checks less than TypeScript.** Its type checker does not
+  check a generic function per instantiation, applies assignability at
+  four kinds of site, and reads no declaration file. Today's check is
+  the full semantic check of every file against the declarations of
+  `commonfabric` and the standard library.
+- **Today's evaluation of the modules has no counterpart** in the
+  crate. It is 2% of today's total.
+- **Today's figure includes storing** the source and the compiled
+  modules in the space (7%). The crate writes nothing, and its
+  in-process figure leaves out reading the files.
+- **Today's pipeline has a cache and the crate has none.** Against a
+  second compile in the same runtime the medians differ by 30 times,
+  and the crate is slower than that cache on the three large programs.
+
+### Run counts
+
+Today's side is measured: the scenario run with the runtime's own
+timing spans counted, all 213 modules in one process one after the
+other. "To settle" is from the compiled pattern to the point where the
+instance was started, the result and every kept output were read, the
+scheduler was idle, and the store had confirmed.
+
+The compiled side is derived from the plan:
+
+- **Transactions to settle: 2,** whatever the plan. This is a reading
+  of `execution-and-storage.md` and not a number it states as a count
+  for every case: §1.1 and §1.5 give one derivation transaction that
+  evaluates every demanded cone instance, those of the children in the
+  same space included, and §1.4 gives the creating transaction for an
+  instance a handler creates. For an instance created outside a
+  handler, as the scenario's is, one creating transaction is an
+  assumption (question 140).
+- **Cone instances:** one per cone and combination of element keys of
+  the collections around it (§2.1 and §2.5 there). For a collection
+  over a computed array, a state cell, or the result of an operation,
+  the plan gives no size, so one row takes those as empty and one as
+  two elements. 54 of the 213 modules have such a collection.
+- **Per event: 1 or 2 transactions** (§1.1 there): the event's, and
+  one derivation transaction behind the batch where a demanded cone
+  instance became stale.
+
+| To settle, 213 modules | total | median | p10 | p90 | least | most |
+| --- | --- | --- | --- | --- | --- | --- |
+| today, measured: milliseconds | 21,566 | 37.8 | 9.96 | 238 | 4.73 | 2,058 |
+| today, measured: transactions committed | 1,461 | 2 | 1 | 19.8 | 1 | 76 |
+| today, measured: runs of a scheduler action | 4,343 | 11 | 4 | 44.8 | 2 | 187 |
+| today, measured: calls of an authored body | 844 | 1 | 0 | 13 | 0 | 53 |
+| today, measured: CFC preparations | 2,822 | 8 | 0 | 35 | 0 | 134 |
+| today, measured: reads journaled | 674,328 | 819 | 160 | 7,057 | 58 | 107,490 |
+| compiled, derived: transactions | 426 | 2 | 2 | 2 | 2 | 2 |
+| compiled, derived: cones | 1,845 | 5 | 2 | 14.8 | 0 | 150 |
+| compiled, derived: cone instances, other collections empty | 1,708 | 4 | 2 | 15 | 0 | 147 |
+| compiled, derived: cone instances, other collections of 2 | 2,406 | 5 | 2 | 23 | 0 | 153 |
+| compiled, derived: sandboxed bodies in the plan | 724 | 1 | 0 | 9 | 0 | 37 |
+
+The median number of transactions to settle is 2 on both sides. The
+ratio of today's transactions to the derived is 1 at the median module
+(p10 0.5, p90 9.9) and 3.4 over the totals. 84 modules commit one
+transaction today, where the derived count is two, and 92 commit more
+than two; the most is 76. The ratio of today's runs of a scheduler
+action to the derived cone instances is 2.3 at the median (p10 1.4,
+p90 3.7) and 1.8 over the totals.
+
+| Per committed event, 344 events of 104 modules | total | median | p10 | p90 | least | most |
+| --- | --- | --- | --- | --- | --- | --- |
+| today, measured: milliseconds | 18,219 | 26 | 8.22 | 123 | 2.87 | 420 |
+| today, measured: transactions committed | 1,175 | 2 | 1 | 8 | 1 | 38 |
+| today, measured: runs of a scheduler action | 1,605 | 3 | 1 | 12 | 1 | 48 |
+| today, measured: reads journaled | 701,101 | 979 | 199 | 4,712 | 63 | 14,451 |
+
+Derived per event: 1 to 2 transactions, and a bound on cone
+evaluations that is 2.7 at the median module and 4.7 at the mean over
+the modules. Today's mean per committed event is 3.4 transactions and
+4.7 runs of a scheduler action. 15 further events were refused by the
+runtime and are in no row.
+
+These ratios of counts are all that can be said about run time. A
+transaction of the design is not a transaction of today: it prepares
+CFC once over everything a cause staged, where each of today's 2,822
+preparations to settle is one node's. A cone evaluation is not a run
+of a scheduler action: it is one call of emitted code with no
+scheduler step, no transaction, and no journal of its own. Neither
+difference has a measured cost.
+
+### Storage
+
+Today's side is measured: what the replica of the scenario's space
+holds after the run. The documents of the instance are its result,
+argument, internal, and computed documents, which the design replaces.
+Bytes are of the JSON of a document's value, of its meta fields, and
+of its `cfc` envelope.
+
+The compiled side is derived from the plan by
+`execution-and-storage.md` §4.1: one result and one argument document;
+one operation state document per durable operation and combination of
+element keys; none to one document per state cell, per child record
+(two for a child), and per row of a kept collection as a part (§4.5,
+§4.6, §4.10 there). The nodes of a rendered tree are split points too
+and are not counted, so the "most" row lacks the parts of a rendered
+tree above 1,024 bytes, and it counts state cells that are never
+assigned and children the scenario does not instantiate. The bound is
+loose in both directions. Label entries, by §4.3 there: one for the
+pattern's atom, then a `value` and a `shape` entry per kept output
+whose template is not a constant, and an `enumerate` entry per kept
+collection. Whether a template instantiates to an empty label depends
+on the inputs, which the derivation does not evaluate, so the table
+has the count where every label is empty and where none is. No bytes
+of values are derived. One row is an estimate from today's run and not
+a derivation: the bytes of the result with every link to a document of
+the instance replaced by what it names.
+
+| After settle, 213 modules | total | median | p10 | p90 | least | most |
+| --- | --- | --- | --- | --- | --- | --- |
+| today, measured: documents of the instance | 5,882 | 9 | 2 | 50 | 2 | 938 |
+| today, measured: bytes of their values | 7,990,374 | 5,900 | 1,286 | 31,799 | 283 | 1,705,696 |
+| today, measured: bytes of their meta fields | 2,996,753 | 4,463 | 997 | 28,152 | 924 | 478,329 |
+| today, measured: label entries | 9,735 | 3 | 0 | 130 | 0 | 825 |
+| today, measured: envelope bytes, labels by reference | 1,505,693 | 578 | 0 | 19,710 | 0 | 163,929 |
+| estimate from today's run: bytes of the result, inlined | 6,112,595 | 3,205 | 786 | 13,327 | 15 | 1,705,985 |
+| compiled, derived: documents, least | 466 | 2 | 2 | 2 | 2 | 16 |
+| compiled, derived: documents, most | 1,834 | 3 | 2 | 8 | 2 | 335 |
+| compiled, derived: rows of the stream index | 734 | 1 | 0 | 8.8 | 0 | 122 |
+| compiled, derived: label entries, every label empty | 213 | 1 | 1 | 1 | 1 | 1 |
+| compiled, derived: label entries, none empty, rows share a label | 3,512 | 11 | 1 | 35.6 | 1 | 143 |
+| compiled, derived: label entries, none empty, rows differ | 3,850 | 11 | 1 | 40 | 1 | 143 |
+
+- **Documents.** Today's documents of the instance are 2.75 times the
+  most derived at the median module (p10 1, p90 8.9), 3.2 times over
+  the totals, and 12.6 times the least derived.
+- **Bytes.** Today's values and meta fields together are 3.3 times the
+  estimate at the median (p10 1.6, p90 8.8) and 1.8 times over the
+  totals. Two modules each hold the bundle of an iframe guest, above
+  1.5 MB, in one value, which both layouts store once; without them
+  the totals differ by 2.7 times.
+- **Label entries.** Today stores 9,735, and the derived count is
+  between 213 and 3,850. Over the totals that is 2.5 times fewer
+  against the most derived. It is not fewer per module: 145 of the 213
+  modules store fewer entries today than the most derived, and 68
+  store none today, where the design stores the one entry of the
+  pattern's atom. The difference is in the modules with many entries:
+  the p90 is 130 today and 40 derived.
+
+After the events of the 108 modules that have one, today's documents
+of the instance grew by 543 and its label entries by 2,676. The design
+adds one stream document for each stream that received an event, 359
+over these modules. Both add the same other documents: a receipt per
+handling and a document per record a handler writes into an array.
+
+Per element of a `map`: 34 of the modules have a `map` over an array of
+the argument. Each was run to settle at two lengths of every such
+array, 2 and 10, and a figure is the difference divided by 8.
+
+| Per element, 34 modules | median | p10 | p90 | least | most |
+| --- | --- | --- | --- | --- | --- |
+| today, measured: documents of the instance | 5.5 | 0 | 19.8 | 0 | 80 |
+| today, measured: bytes of values | 2,290 | 16.8 | 8,739 | 0 | 18,328 |
+| today, measured: bytes of meta fields | 3,101 | 0 | 10,093 | 0 | 44,208 |
+| today, measured: label entries | 15 | 2.1 | 225 | 0 | 292 |
+| today, measured: milliseconds to settle | 18.8 | -1.83 | 86.9 | -9.83 | 194 |
+| today, measured: transactions | 0.5 | 0 | 13.9 | 0 | 38 |
+| estimate from today's run: bytes of the result, inlined | 974 | 0 | 3,810 | 0 | 5,024 |
+| compiled, derived: documents, most (a part per row) | 1 | 0 | 1 | 0 | 2 |
+| compiled, derived: label entries, rows share a label | 0 | 0 | 0 | 0 | 0 |
+| compiled, derived: label entries, rows differ | 2 | 0 | 4 | 0 | 8 |
+| compiled, derived: cone instances | 2.5 | 0 | 7.7 | 0 | 31 |
+
+A negative time is the noise of two runs. The p10 of 0 is five
+modules whose longer arrays add no document of the instance, three of
+them because the `map` is over an array below the top level of the
+argument, which the two runs do not lengthen.
+
+### What the figures support
+
+- **Compile time** is lower by two orders of magnitude at the median
+  module, and by 3.4 times on the reference pattern. The second figure
+  comes from the prototype's type evaluator and not from the design.
+  The crate does not emit code or hash, so its figure will grow.
+- **Run time is not measured.** The counts that stand in for it are
+  lower for the modules that are large today and not for the median
+  module: the median module settles in 2 transactions today and in 2
+  by the design, and 84 of 213 modules settle in one transaction
+  today. The tenth of the modules with the most commit 20 or more
+  today, against a derived 2. Per event it is 3.4 transactions at
+  the mean against 1 to 2.
+- **Storage** is lower in documents and in the modules with a `map`,
+  and not in label entries for a small module, which stores no entry
+  today and one in the design. The bytes of values are lower by an
+  estimated 1.8 times over the corpus.
+- **The scenario is small.** Every array has two elements. The costs
+  that grow with the data are per element, where the measured side is
+  5.5 documents and 15 label entries against a derived 1 at most and 0
+  to 2. The corpus totals above do not show what data of realistic
+  size would cost.
+
+### Not measured
+
+- **Any time of the compiled path.** The emitter and the executor of
+  the next section exist to compare values. The executor keeps its
+  documents in memory, forms no label and no transaction, and runs a
+  body with no sandbox, so a time of it would not be a time of the
+  design. A number needs an executor that evaluates the cones of a
+  derivation transaction against the store of today and writes the
+  kept outputs to one result document.
+- **Bytes of the compiled layout.** The inlined result is an estimate.
+- **Label entries of the compiled layout between the two bounds.**
+  Counting the compared outputs whose evaluated template is not empty
+  would give the count for the scenario. It was not done.
+- **The history.** The store keeps every revision of a document, and a
+  document of today's layout is rewritten by each run that changes it.
+  The bytes above are of the latest values.
+- **A cold compile on the server and in the browser.** Both figures
+  are of Deno on one machine.
+- **The 47 modules that need `wish` or an effect,** and the 10 whose
+  run fails.
+
+## What the prototype's executor computes
+
+At prototype commit `3e518147df` the crate emits value code beside a
+plan (`src/emit.rs`, its `emit` command), and an executor written in
+TypeScript (`exec/executor.ts`) runs the two. A comparison
+(`compare/values.ts`) runs the scenario of a module on today's runtime
+and on the executor and compares the values. These are the prototype's
+notes 281 to 306. At commit `96f3b83a73` the emitter and the executor
+implement five of the rulings that followed: the place of a slot of
+`Body.reads`, a path that a call leaves out, the first value of a state
+cell, a moved element with the keys of a derived collection, and the
+two kinds of cone with side-writes. Those are notes 307 to 320, which
+are written into the documents, and notes 321 to 324, which run the
+comparison again. At commit `59055fd0c5` the crate and the executor
+implement the rulings on the collections a cone's record lists and on
+who places a stream, and the executor has a `reduce` in the reactive
+tier, the record of a key of a list, and a cell made with `new`. Those
+are notes 325 to 341, which are written into the documents, and notes
+342 and 343, which run the comparison again. At commit `77993077e4` the
+executor stores a record that a handler writes into a list as a
+document of its own, as today's runtime does, and the crate and the
+executor implement the rulings on the identity of a plain value in
+place, on an output that passes a derived collection on, on a write
+below the root of an empty state cell, on a first value stored as a
+value, on where the callee's default is held, and on the name bound to
+`[SELF]`. Those are notes 344 to 363, which are written into the
+documents, and notes 364 to 366, which run the comparison again. At
+commit `e63b3d305c` the crate and the executor implement the rulings on
+what a key that left its collection keeps, on which evaluation fails
+the check of a stream's position, on a stream that a function body
+returns, on what a `*` of a result path stands for, on the key of an
+element that a `flatMap` contributes, and on the record of a key of a
+list. The comparison seeds `Math.random` in both runs, and the
+executor instantiates a pattern and binds a handler in a function
+body. Those are notes 367 to 382, which are written into the
+documents, and notes 383 to 386, which run the comparison again. At
+commit `e4f2fb3431` the crate and the executor implement the rulings
+on a collection among the children of a view node, on the prefix
+match of kind `element` at the result of a `flatMap`, on the
+top-level property that keeps its value where the check of a stream
+fails, on a function body's copy of a plain value, on a handle by
+position and its comparison with a reference by key, on a write that
+re-keys a plain value, on a `push` below an empty argument path, on
+the place of `[SELF]` in a binding record, on the modifier
+`asInstance()`, and on the type marker `KeyedBy<T, "field">`. Those
+are notes 387 to 402, which are written into the documents, and
+notes 403 to 405, which run the comparison again. At commit
+`a462df710a` the crate records no result path of a binding and the
+executor checks no position of a stream, and the two implement the
+rulings on a spread child, on a state path of plain type and a member
+handle read through a handle of handles, and on what a re-key moves.
+The executor forms a key with no field name and resolves it through
+the schema that the array is stored under, by a ruling that is
+withdrawn since ([Decided](#decided)). Those are notes 406 to 414,
+which are written into the documents, and notes 415 to 418, which
+explain a difference between the two forms of the comparison and run
+it again. At commit `7774ba208c` the crate and the executor implement
+the rulings that a key names its declared key fields and is resolved
+from the key alone, and that the declaration can name several fields;
+the crate reports the two diagnostics of the declaration; a re-key
+removes the instance that a moved instance of a function body
+replaces; and a fixture compares a stream after a spread with today's
+runtime. The prototype at that commit has the marker `KeyedBy` on the
+element type and the plain form of the key, which the rulings since
+replace. Those are notes 419 to 426, which are written into the
+documents, and notes 427 to 431, which run the comparison of labels
+and the cost measurement over the corpus and the comparison of values
+again. At commit `a4b4612b3b` the crate and the executor implement the rulings
+of 2026-11-17 on a key. The key is declared on the array with
+`ArrayByKey`. The element part of a key with declared fields holds the
+names and one salted hash. A key is a fabric value that the helpers of
+`base/data-model` hash and write. A reader whose type declares no key
+takes the key fields from the schema of the link it resolves. And an
+element of a plain array generated from scratch has a reference by key.
+The prototype at that commit has neither `KeyedBy` nor the plain form
+of the key. Those are notes 432 to 443, which are written into the
+documents, and notes 444 and 445, which run the fixtures and the
+comparison of values again and say what the round did not verify. At
+commit `682b918ed1` the crate and the executor implement the four
+rulings on questions 207 to 210, and most of the differences from the
+documents that the notes of the commit before listed are closed. A key,
+the key of a `flatMap` member and the salted hash have the record forms
+of the documents. A whole value is hashed as the fabric value it is. An
+identifier is the hash of a cause and holds no text of a key. And a
+name of several parts in a plan is a record. Those are notes 446 to
+458, which are written into the documents, and notes 459 and 460, which
+run the fixtures and the comparison of values again and say what the
+round did not verify. At commit `abd965cc37` the prototype's author
+has classed every module that the executor did not run at the commit
+before, every committed event that it did not handle, and every value
+that differed, and has fixed the defects of the crate and the executor
+among them. Those are notes 461 to 474, with note 478 on the size of a
+plan; what they show the documents not to decide is questions 217
+to 223. Notes 475 to 477 run the fixtures, the comparison of values and
+the comparison of labels again and say what the round did not verify. At commit
+`a84264daf2` the executor has what the documents say of a running instance and
+it did not have: a queue of events and a batch, a transaction for each cause,
+the bound on the evaluations of a cone instance, the error state, and the
+request and the completion of an effect, with answers that a test gives. Each
+statement of the documents was built and tested on a fixture, and compared with
+today's runtime where today's runtime has the behavior. Those are notes 479
+to 497. Note 499 has the reference forms of the ruling on question 222 and of
+the provisional decisions P5 to P7 as the crate writes them, notes 500 and 501
+measure sizes and costs, and note 502 lists what the prototype does where the
+documents do not decide, which is the provisional decisions P8 to P17 and
+question 247. Notes 498 and 503 run the fixtures, the comparison of values and
+the comparison of labels again, and note 504 says what the round did not verify.
+The fixtures of notes 479 to 497 hold one per-element construct, the `map` of
+`fixtures/failing.tsx`, which is over an array of plain values in place: no
+statement of those notes was tried over an array of references or over the
+result of another per-element construct. Each
+part below gives the figures of each commit, the earliest first.
+
+Notes 281 to 302 say what the executor needed that the
+documents did not give, and are written into the documents. Of the
+questions they raised, the place of a slot of `Body.reads`, a path that
+a call leaves out, the first value of a state cell, a moved element,
+a cone with side-writes, the collections a cone's record lists, and
+who places a stream in a computed value are ruled, and so is which
+default is read along a chain of places ([Decided](#decided)).
+Questions 152 to 157 are what notes 307 to 320 found the rulings to
+leave undetermined. Of them 152 to 156 are ruled, and so is question
+145: the identity of a plain value in place, where the callee's
+default is held, a write below the root of an empty state cell, a
+first value stored as a value, and the keys of a derived collection
+passed on unchanged. Questions 141, 144, 146, 147, 149 to 151, and 157 to 166
+below, and questions 81 to 84 of `execution-and-storage.md`, are open; 158 to
+163 are what those rulings leave undetermined, and 164 to 166 are what notes
+325 to 341 found the rulings on questions 141 and 144, and the pieces added to
+the executor, to leave undetermined. Of
+question 141 the member is ruled, and what it holds beside the collections is open. Of
+question 144 the placing and the check are ruled, and what the check
+covers outside the result is open. Questions 164 and 165 are ruled:
+which evaluation fails the check of a stream's position, and a stream
+that a function body returns. Questions 42, 125, 147, and 166 are ruled
+in part: what a key that left its collection keeps, what a `*` of a
+result path stands for, the key of an element that a `flatMap`
+contributes, and the record of a key of a list. Each entry says what
+stays open, and question 167 is what the ruling on 166 leaves
+undetermined in the reactive tier. Questions 168 to 173 are what notes
+344 to 363 found undetermined, and questions 149, 160, 161, and 163 are
+restated with what the prototype observed under their assumptions.
+Questions 160, 163, 164, 170, and 173 are ruled since, and so is what
+notes 368, 369, 374, and 375 asked: an event for the stream of a key
+that left its collection, what keeps its value where the check of a
+stream fails, the kind of a `*` at a `flatMap` result, and a
+collection among the children of a view node. Questions 174 to 183 are
+what those rulings, the ruling on `asInstance()`, and notes 367 to 382
+leave undetermined. Question 175 is ruled since, by the type marker
+`KeyedBy<T, "field">`, and question 178 in two of the three cases of
+a re-key. Questions 184 to 186 are what that ruling leaves
+undetermined. Questions 187 to 191 are what notes 387 to 402 found
+undetermined, and questions 160, 163, 164, 170, 173, and 178 are
+restated with what the prototype does at commit `e4f2fb3431`.
+Questions 187 and 189 to 191 are ruled since. A further ruling drops
+the listed result paths of a binding and the check of a stream's
+position ([Decided](#decided)). It settles question 188 and the
+first part of question 144, makes questions 125, 130, 164, and 182
+not applicable, and leaves questions 192 and 193. The prototype at
+commit `e4f2fb3431` has the list and the check. At commit
+`a462df710a` it has neither: its crate records no stream position,
+its executor replaces a marker by the link wherever it stores a
+value, and the comparison's harness finds a stream at the position at
+which an executor that runs beside today's run recorded storing the
+link. The parts below that
+count listed paths, kinds of a `*`, and failed checks describe the
+prototype at the commit they name, and not the design. The ruling on
+question 191 is withdrawn and replaced: a key names its declared
+fields and is resolved with no schema, and `KeyedBy` can name several
+fields, as a union of their names. That answers what note 411 asked,
+and questions 194 to 198 are what it leaves undetermined. Three
+rulings after it settle questions 194 and 197, and put the
+declaration on the array: the array type `ArrayByKey<T, "field">`
+replaces `KeyedBy` on the element type ([Decided](#decided)).
+Questions 199 to 201 are what those leave undetermined. Four later
+rulings settle questions 199 and 200: no key, identifier or stored
+string is built with separators of the design's own, a reader whose
+type declares no key learns the key fields from the schema traversed
+while the link to the array is resolved, an `asInstance()` instance
+that a re-key replaces stays in the store, and an element of a plain
+array generated from scratch has a reference by key. Questions 202 to
+205 are what those rulings and notes 419 to 426 leave undetermined,
+and entry 206 records the last of the four rulings with the owner's
+reservation. Questions 207 to 210 are what notes 432 to 443 leave
+undetermined, and entry 206 has what the reference of that ruling cost
+to build. Four more rulings settle questions 207 to 210, each in the
+part that its entry names: what an instance of its own is given for a
+plain array generated from scratch, the key that the type of a `map`
+result keeps, a reference into such an array that an element body
+computes, and the record that a salted hash is formed from. Questions
+211 to 216 are what notes 446 to 458 leave undetermined. Questions 217
+to 223 are what notes 461 to 478 leave undetermined, and questions 224
+to 238 are places where two statements of the documents conflict or where the
+documents state nothing, found by a reading for what the prototype's executor
+does not exercise. Questions 276 to 289 are what notes 479 to 504 leave
+undetermined, and those notes bear on questions 224, 225 and 247 to 275 as each
+of those entries says. The parts
+below that name `KeyedBy`, a key field declared in the element type,
+a key that holds the value of its field, or a key written as a string
+with separators describe the prototype at
+the commit they name, and not the design.
+Notes 303 to 306, 321 to 323, 342, 364 and 365, 383 and 384, 403
+and 404, 416 and 417, 429 and 430, 444, 459, 475 and 476, and 498,
+500, 501 and 503 are the results here.
+The executor was not timed. Note 428 times today's runtime and the
+crate's compile again, on a machine that was not idle.
+
+Note 324 says what the later round did not keep to and did not verify.
+The tests of the five rulings were written before the code. Two fixes
+of the executor were made from a difference in the corpus, and not
+from a test written first. One is the copy of a container read under a
+schema, which had no address, so that `equals` and `remove` did not
+find a member a handler had read through a typed handle; a test of the
+store was written after the fix. The other hands on the keys of a
+derived collection that a cone returns unchanged (question 156, since
+ruled), and
+has no test. The counts of bodies, state
+cells, and constants that notes 308 to 310 give are over all 382
+corpus patterns, the ones with an unsupported construct included. The
+rows of the tables below that say "not verified" are a reading of the
+source and of the two values.
+
+Note 343 says the same of the round of commit `59055fd0c5`. The tests of
+the two rulings, of the paths the crate lists, of the record of a key,
+and of `reduce` were written before the code. The three tests of where a
+marker of an element body is stored passed before the change, since the
+executor stored such a stream already. The fixture of the keys of a
+`flatMap` result describes what the executor did and changed no code.
+The classes of the 12 listed paths that hold no stream rest on a reading
+of the source for 7 of them and of one branch for the other 5. The
+difference of `apps/person-workbench/main.tsx` and the differences of
+`product/primitives/demo/atoms-demo.tsx` are not examined. No fresh run
+of today's runtime over the corpus was made: the executor was run again
+against the values of the earlier run, and the change to the
+comparison's harness, which resolves a result path with no `*` first, is
+exercised by the fixtures alone.
+
+Note 366 says the same of the round of commit `77993077e4`. The fixture
+of a record written into a list was red before the change, and its unit
+tests were written with the change. The tests of the reference by key
+were written after the store and before the executor was complete, and
+they found a defect: a state path that a handler declares with a data
+type was handed a handle. The unit tests of the keys of a derived
+collection passed on were written with the change, and the test that
+removes the mark shows what the mark decides. The tests of a write
+below the root of an empty state cell and of `[SELF]` describe what the
+executor did and changed no code. The test of the emitter's `equals`
+was written after the code. The counts of evaluations over the corpus
+differ by a few from those of the run of commit `59055fd0c5` before any
+change of this round, which was not examined. No fresh run of today's
+runtime over the corpus was made.
+
+Note 386 says the same of the round of commit `e63b3d305c`. The tests
+of the rulings on a key that left its collection and on the record of
+a key describe what the executor did and changed no code. The tests of
+the rulings on which evaluation fails, on a stream a body returns, on
+the kinds of a `*`, and on the key of a `flatMap` member, of the seed,
+and of the executor's part of instantiating and binding in a function
+body were written and seen to fail before the code. The test of the
+emitter's pattern identity was written in the same step as the code.
+The fresh run of today's runtime was made once, with the crate and the
+executor as they were before the instances of a function body, and the
+current ones are compared with it. That today's values are the same in
+a second fresh run is shown for the 14 modules of `showcase/` alone.
+The differences of `apps/base/person.tsx` and
+`apps/base/family-member.tsx` are not examined. The classes of note
+374 rest on a reading of the crate and have no fixture. The
+comparison's scripts are run without the type check, which
+`values-corpus.ts` does not pass.
+
+Note 405 says the same of the round of commit `e4f2fb3431`. The tests
+of the ruling on the children of a view node, in the crate and in the
+executor, were the existing tests of the flat layout, which failed
+after the change and were then rewritten. The test of the emitter's
+two factories for a view node and the test of the checker for
+`KeyedBy` were written after the code. The executor's tests of the
+rulings on a `push` below an empty argument path and on the place of
+`[SELF]` were written before the code and seen to fail by putting the
+committed executor back. Every other test of the round was written
+and seen to fail first. The comparison of labels was not run over the
+corpus with the new paths of the children; its tests on the fixtures
+pass. The cost model was not changed. The nested layout of the
+children is compared with today's runtime through the paths that the
+events take alone, since the comparison of values flattens the
+children. The limits that notes 389, 393, 394, 396, 397, and 399 name
+rest on a reading of the code where they name no test. The run of
+commit `e63b3d305c` that the corpus figures are set against was made
+again for this round in a separate worktree.
+
+Note 418 says the same of the round of commit `a462df710a`. The tests
+of the store's record of the stream links were written after the
+code, and the tests of the positions at which a reader finds a link
+before it. The tests of the rulings on a state path of plain type and
+on a spread child, three of the tests of the ruling on what a re-key
+moves, and the test of a key that a read of a whole array forms
+passed when they were written: they describe what the executor did
+and were not seen to fail. The existing tests that named a listed
+path or a failed check were rewritten or removed after the code
+changed. Every other test of the round was written and seen to fail
+first. The comparison of labels was run on one module with the
+executor beside it and not over the corpus, and the cost measurement
+was not run; both read the crate's `emit` output at this commit, and
+their tests on the fixtures pass. A stream at a member written after
+a spread, and a JSX spread child, are in no fixture that is compared
+with today's runtime. The replacement of a marker at a place other
+than the result is tested through the store's record and not for
+each place. The limits that notes 411 and 413 name rest on a reading
+of the code where they name no test.
+
+Note 431 says the same of the round of commit `7774ba208c`. Five of
+the six tests of the store for a key that names its fields were
+written and seen to fail first; the sixth, that a position that holds
+a link is keyed by its cell with or without a declared field, passed
+when it was written. The three tests of that ruling on the fixture
+were written after the store had changed and were then run on the
+store and the executor of commit `a462df710a`: two failed, and the
+third, that a handler over a plain array generated from scratch
+stores the value, passed, so it describes what the executor did. The
+test of the plan for several key fields failed first. The two tests
+of the diagnostic of a wrong declaration were written before the code
+and were not seen to fail. The executor's tests of several key fields
+failed first by not passing the type check, with no assertion
+reached. The tests of the diagnostic of a mismatch and of the removal
+of a replaced instance failed first. The test of a stream after a
+spread failed for the missing fixture and passed once the fixture
+existed, with no change to the code. The two diagnostics are tested
+on snippets alone, since no pattern of the corpus uses the marker.
+Nothing of a declared key is compared with today's runtime, which has
+none. The members of a segment of a `flatMap` are keyed with no
+declared field. A reference by key to an element of a plain array
+generated from scratch is not tested, because the executor makes
+none. The comparison of labels was not compared module by module with
+an earlier run. The limits that notes 424 and 426 name rest on a
+reading of the code where they name no test. The coordinator of this
+work ran the prototype's tests and fixtures at that commit and not
+the corpus, the comparison of labels, or the cost measurement: 468
+tests of the crate and 81 tests under Deno passed, and the fixtures
+gave 48 of 48 runs and 767 of 768 values.
+
+Note 445 says the same of the round of commit `a4b4612b3b`. The tests
+of the plan and of the rules for `ArrayByKey` were rewritten first, and
+four failed on an assertion. A fifth, that `ArrayByKey` is `T[]` for
+assignability, passed before the change, because a type that the
+checker does not know decides nothing. The test that it is an array
+type and that `KeyedBy` declares no key was written after the code and
+was not seen to fail. The code that carries key fields to a reader that
+is compiled in was written before its test; the test was then run with
+that code taken out, and failed. The tests of the store for the hashed,
+serialized key were written after the store had changed and were not
+seen to fail. The two tests of a reader whose type declares no key, at
+a link, were run with the use of the link's schema taken out, and
+failed. The tests on `fixtures/array-by-key-form.tsx` and the test of
+an `asInstance()` instance that a re-key replaces passed when they were
+written, so they describe what the executor did. The two tests of a
+reference by key into a plain array generated from scratch on the
+earlier fixtures failed first on an assertion, and those on
+`fixtures/generated-reference.tsx` were written after the code. The
+executor's tests do not pass at the first of the two commits that
+rename the fixtures, which holds them with their old content. Nothing
+of these rulings is compared with today's runtime, which has no
+`ArrayByKey`. The two diagnostics are tested on snippets alone. The
+members of a segment of a `flatMap` are keyed with no declared field.
+The limits that notes 434, 435 and 443 name rest on a reading of the
+code where they name no test. The comparison of labels and the cost
+measurement were not run again. The coordinator of this work ran the
+prototype's tests and fixtures at that commit and not the corpus: 471
+tests of the crate and 84 tests under Deno passed, and the fixtures
+gave 48 of 48 runs and 767 of 768 values.
+
+Note 460 says the same of the round of commit `682b918ed1`. The tests
+of the record forms of a key, of an output inside an element body (one
+of four), of a plain array generated from scratch given whole to an
+`asInstance()` instance, of the key fields of a `map` result, of the
+key fields carried to a reader that is compiled in, of the segment of a
+key in a path, and of the diagnostic catalog failed first on an
+assertion. The tests of the executor were rewritten for the hashed
+identifiers after the executor changed; the three tests of an
+identifier were then seen to fail against an executor that was changed
+back to a joined form for the run. The tests of the plan for the record
+names were rewritten before the crate changed and were not run before
+it. The test of a record name in the identifier of an `asInstance()`
+instance, the two tests on `fixtures/set-over-link.tsx`, the test of
+the order in which the codec writes the members of a record, three of
+the four tests of an output inside an element body, and the test of the
+result of another per-element construct given whole to an instance
+passed when they were written, so they describe what existed. The names
+of the memo have no test of their own. Not done: the secret is a string
+that the store holds and no labeled document, the crate's `unhashed:`
+identifiers stand, and the cost measurement and the comparison of
+labels were not run over the corpus. Not verified: nothing of the four
+rulings is compared with today's runtime, which has neither
+`ArrayByKey` nor `asInstance()`; where the prototype's identifiers do
+not follow the documents' form rests on a reading of the code; and the
+cost of the reads that bring an output inside an element body up to
+date was not measured. The coordinator of this work ran the prototype's
+tests and fixtures at that commit and not the corpus: 475 tests of the
+crate and 87 tests under Deno passed, and the fixtures gave 49 of 49
+runs and 799 of 800 values.
+
+Note 477 says the same of the round of commit `abd965cc37`. The table of
+what was not executed, not handled and not equal was written before any
+fix, and entered into the notes after the fixes, with a column for what
+each is now. The tests of `dataFile`, of the `const` of a block, of the
+memo checks, of the debug renderers, of the names in a schema, of the
+captured types and constants, of a built-in at module scope, of the
+computed key and the whole argument, of the method `equals`, of
+`navigateTo`, of the spread, and of a handle or `undefined` were written
+first and failed, most on an assertion and four on the error that the
+missing piece threw before the assertion. The test of the keys that the
+store keeps was written after the code and was seen to fail with the
+kept keys switched off. The executor's tests on
+`fixtures/action-constant.tsx`, the second test on
+`fixtures/shared-values.tsx` and the second test of `navigateTo` passed
+when they were written, so they describe what existed. The commit of the
+`const` of a block was made from a version of the test file that held
+its test alone, so its tree was not run as committed. Not done: the
+points of class (a) that are not fixed ([The corpus at commit
+`abd965cc37`](#the-corpus-at-commit-abd965cc37)), the limits of the
+generator and the harness, a comparison of the label run module by
+module with an earlier one, and the cost measurement. Not verified: the
+causes that the notes mark as read from the source and the two values;
+that today's runtime gives the members of every stored record in the
+order of their names, which rests on one module; the spread in the
+reactive tier against today's runtime, which runs none of its forms; and
+the times of the memo checks, which are of one run. Note 478, on the
+size of a plan, was found by the size of a file and not by a test. The
+coordinator of this work ran the prototype's tests and fixtures at that
+commit and not the corpus: 486 tests of the crate and 97 tests under
+Deno, with 384 steps, passed, and the fixtures gave 57 of 57 runs and
+829 of 830 values.
+
+Note 504 says the same of the round of commit `a84264daf2`. Written after the
+code: the tests of the bound and of the error state of a body that throws, whose
+code was in the commit of the batch, and which were then seen to fail with the
+bound set to twelve; the test of a failed value that is placed; the tests of the
+stream document; the tests of the reference in the template evaluator; and the
+growth tests, which state what was measured. The tests of the request and the
+completion were written before the code and passed on its first run, some of
+them having failed before on a missing member and not on an assertion. The
+crate's test of the request function failed on one assertion that was wrong and
+was changed, and the test of the label-flow check through a reference passed
+when it was written. One existing test had its expectation changed for the error
+state, five for the stream documents, and four of the crate for the reference
+forms. The first run of `fixtures/bound.tsx` on today's runtime did not end and
+was stopped, and one run of the corpus was stopped to change the executor. Not
+done: what [Known limits](#known-limits-of-what-exists) lists as not built; the
+storage layout beyond the stream document; the findings of the growth audit
+beyond what notes 500 and 501 measure; today's runtime on the lists of note 501;
+and a comparison of the cost measurement. Not verified: the causes that notes
+482, 498 and 503 mark as read; that the count of ten per value function and the
+count per cone instance agree on any module of the corpus; and the times of
+notes 500 and 501, which are of one run each. The coordinator of this work ran
+the prototype's tests and fixtures at that commit and not the corpus: 496 tests
+of the crate and 112 tests under Deno, with 456 steps, passed, and the fixtures
+gave 59 of 59 runs and 1,004 of 1,013 values.
+
+### What is compared, and what is not
+
+A compared value is one member of the result, or one state cell of the
+pattern's body, after the instance settled and after each event. The
+scenario of a module is the generated one of the label comparison. A
+fixture uses the scenario its label test writes, where it writes one.
+
+- **Three things are made equal before the comparison.** The children
+  of a view node are compared as one flat list. A child that is the
+  result of a pattern is compared as its tree, because the compiled
+  path holds the callee's tree in place at a child position
+  (`plan-and-label-templates.md` §1.1, question 107 here) where today's
+  run holds the result with the tree under `$UI`. A time read from the
+  clock is compared as one token. At commit `e4f2fb3431` the executor
+  stores a collection among the children of a view node as one nested
+  child, and the comparison still flattens the children on both
+  sides. So the nested layout itself is compared with today's by the
+  events alone: an event reaches its stream through the path. One
+  layout of today differs from the nested one: a `map` over an array
+  written in place runs when the pattern is built, and today's run
+  holds its elements as children of their own from the position of
+  the expression on. The case is a collection over plain values in
+  place; a `map` over a cell is stored nested today.
+- **Today's side can be a saved run.** A run saves what today's runtime
+  computed, and the executor can be run alone again on the crate's
+  current output against the saved values (`compare/values-corpus.ts`,
+  the command `again`). For the figures of commit `3e518147df` the
+  notes do not say which come from such a rerun. The corpus figures of
+  commit `96f3b83a73` over the 270 modules are such a rerun: the
+  executor alone, against the values that today's runtime computed in
+  the run of the earlier commit. Today's runtime was run again for the
+  two modules that the later commit adds, and for no other.
+- **The executor is not the design's runtime.** It instantiates no
+  label, checks no constraint, has no transaction log, and persists
+  nothing. It runs no effect: the result of an operation reads as
+  pending, and a module with an operation of kind `effect` or `wish` is
+  not run. It hands a body the whole value at a `value`, `shape` or
+  `enumeration` slot and narrows none to its class. It runs a body as
+  plain JavaScript with no sandbox and no budget, and rolls a handler
+  that throws back by restoring its documents. It makes no part
+  document and no stream document, and has one scope instance. It does
+  not instantiate a pattern or bind a handler in a function body, does
+  not evaluate a `reduce`, and has no `elementById`, `linksOf`, or
+  debug-string built-in. At commit `59055fd0c5` it evaluates a `reduce`
+  in the reactive tier, as one unit that is evaluated again as a whole,
+  has the record of a key of a list (`elementById`, with `addUnique`
+  and `removeByValue`), and constructs a cell with `new` in a function
+  body as with `of`. It still instantiates no pattern and binds no
+  handler in a function body: the artifact names a compiled pattern by
+  hash and holds no plan of a pattern from another module, and the
+  executor has one instance over one store. At commit `77993077e4` it
+  stores a record that `set`, `push` or `addUnique` writes into an
+  array as a document of its own, with a link in the array, as today's
+  runtime does. It names that document by a counter, keeps in place a
+  record that is set at one position of an array and the records of an
+  array that a body creates a cell with, and writes no default of the
+  argument into the argument document, where today's runtime writes
+  one. At commit `e63b3d305c` it instantiates a pattern in a function
+  body, as an instance of the callee's plan with documents of its own
+  in the same store, and binds a handler there, as a stream that an
+  event runs the handler for with the state the body bound. It finds
+  the callee by the identity that the factory value carries, among the
+  artifacts of the program it is given, and the crate's `Child` has no
+  `callee` (question 183). It names such an instance and such a stream
+  by the run that made it and an ordinal among all that the run made,
+  names a run of a handler by a count of the events handled, never
+  tears an instance down, and writes the argument of an instance that
+  a run names again whole; the documents name them by the site and by
+  the receipt. At commit `e4f2fb3431` it makes an instance of its own
+  for a pattern called through `asInstance()` in the reactive tier,
+  which stays when its key leaves, and finds it by a table from the
+  child and the element keys. It forms the key of a plain value from
+  a field that the element type declares with `KeyedBy`. Today's
+  runtime has neither, so the executor's tests of the two are
+  compared with nothing. It reads `spaceOf` as the
+  space it is given and has no acting principal. It does not use
+  `Cone.writes`,
+  `ConeResult.selections`, or `ConeResult.picks`: a body's side-write
+  goes through the handle the body holds. At commit `96f3b83a73` it
+  reads the write edges of a cone for one thing, to find the cone that
+  a read of a written place demands.
+- **The executor has no reader.** It evaluates every kept output and
+  then the result, where the design evaluates what is demanded. At
+  commit `96f3b83a73` it evaluates a cone with a small, fixed set of
+  write targets only where an evaluation reads or passes on a place
+  that one of its write edges names, and it evaluates each materializer
+  whose input changed after the kept outputs and the result of a wave,
+  where a write starts a further wave. The ruling has a materializer
+  run after the rest of the wave "often", and the documents promote one
+  ahead of a reader inside its envelope
+  (`scheduler-and-serving-loop.md` §7.2). The executor runs it after
+  the wave always. Three cases the executor leaves out: a handler's
+  read of a write target demands nothing; a write edge that names its
+  handle by a computed value, or whose target is a created cell or a
+  child's argument, has no root and path, and no reader is found for
+  it; and a cone of an element body whose reader is outside the body is
+  evaluated for every key of the table, in each of the three cases of a
+  per-element source, at commit `59055fd0c5` as well. At that commit
+  the executor drops the cone instances of a key that left its
+  collection, in each of the three cases, and a key that comes back has
+  new instances, which are evaluated; it keeps the state cells declared
+  under the key, as the ruling on a key that left has it
+  ([Decided](#decided)). At commit `e63b3d305c` it refuses an event
+  for the stream of a key that is away, as the ruling since has it,
+  and it has no state of an operation that is kept per key and no
+  child of an element body.
+- **`Math.random` is seeded at commit `e63b3d305c`.** The comparison
+  installs a `Math.random` before today's runtime freezes the
+  intrinsics of the realm, and both runs seed it with the index of
+  each event. The sequence starts again for each run of a handler,
+  since today's runtime can run the handler of one event more than
+  once. Two callers are kept out of the sequence: the jitter of a
+  retry's delay (`computeBackoffDelayMs` in
+  `runtime/runner/src/scheduler/backpressure.ts`), which draws from
+  the realm's own generator; and the timing statistics of the logger
+  (`TimingDataStore.record` in `base/logger/src/logger.ts`), which the
+  harness empties before each event. A handler that sends to another
+  stream is one run in the executor and two in today's runtime, and
+  the two would then draw differently; no module of the corpus run
+  shows it.
+- **The emitter departs from the documents in three ways** that the
+  results depend on. It writes one function per value a cone computes,
+  where `execution-and-storage.md` §2.1 has one per cone. A pattern
+  compiled in at a call written inside an initializer is evaluated in
+  the caller's cone, where `plan-and-label-templates.md` §1.4 makes it
+  cones of its own. And the cone the crate makes for an array written
+  in place lists no slot of what the members hold. Each is a defect of
+  the prototype.
+- **At commit `a462df710a` the harness takes the place of a stream
+  from the executor.** The plan does not say where a stream is
+  stored, so the harness runs an executor beside today's run. The
+  executor starts when today's instance has settled, and handles each
+  event that today's run committed after today's run handled it. For
+  a binding the harness takes the positions at which the executor's
+  stored result holds the link, the last element of each enclosing
+  collection first, and sends the event at the first of them at which
+  today's run holds a stream. The elements that the event is for are
+  the positions of the keys of that link in the executor's element
+  tables. That is the same over an array of references, over an array
+  of plain values in place, and over the result of another
+  per-element construct, where the link has the upstream key. Two
+  layouts of today are translated: the result of a pattern at a child
+  position, with its tree under `$UI`, and the children of a view
+  node, where a child is found by the number of children before it
+  with each nested array counted flat. Four things follow. A scenario
+  with events and no executor sends none, so the comparison of labels
+  and the cost measurement run the executor beside today's run for
+  that reason alone. A module that the executor does not run gets no
+  event in today's run. A run has an event for every binding of a
+  handler, where it had one for each binding with a listed path, and
+  the harness reports "not sent" for a binding whose stream the
+  executor's result does not hold. And a binding whose stream the
+  executor stored at a position that no listed path named gets its
+  event.
+- **The saved file holds `undefined` at commit `a462df710a`.** JSON
+  leaves out a member that holds `undefined` and writes a position of
+  an array that holds it as `null`, so the comparison made from the
+  file (`again`) compared 5 values fewer than the one made in the
+  process that ran today's runtime (`run`), and found 2 values of
+  `dev/catalog/catalog.tsx` different that `run` found equal. The
+  file holds each `undefined` as a record that stands for it at this
+  commit, and the two forms give the same figure in every row.
+
+### The fixtures
+
+19 of the 20 fixtures are run, in 23 runs. All 23 are executed, and 122
+of 122 compared values are equal. `fixtures/link-cycle.tsx` is left out:
+its handlers make two cells link to each other, and a read of the whole
+result of today's run rejects with a `LinkCycleError`. One event of
+`fixtures/handle-passed.tsx` is not handled, because its handler
+instantiates a pattern.
+
+At commit `96f3b83a73`, 22 of the 25 fixtures are run, in 27 runs, and
+152 of 152 compared values are equal. The added runs are two of
+`fixtures/callee-default.tsx` with 8 values, one of
+`fixtures/chain.tsx` with 2, and one of `fixtures/side-writes.tsx`
+with 20. Three fixtures are not compared with today's runtime:
+`link-cycle` as before; `state-first`, whose state cell has a first
+value computed from an input, which today's runtime refuses
+(`validateStaticData` in `runtime/runner/src/cell.ts`); and
+`side-write-undemanded`, in which a cone with a side-write is demanded
+by nothing and the executor does not evaluate it, a difference the
+ruling makes.
+
+`fixtures/chain.tsx` is a `map` over a `filter` over a `map`, once
+over records and once over plain values. A test of the executor runs
+it with the records given as references to cells, so its two chains
+are the case of an array of references and the case of an array of
+plain values in place, and the second and third construct of each are
+the case of the result of another per-element construct. It counts
+the evaluations of cone instances of an element body.
+
+| Step | Case | Evaluations |
+| --- | --- | ---: |
+| The instance is created: 3 records and 3 plain values | Both arrays | 16 |
+| The title behind one reference changes | Array of references | 2 |
+| `done` behind one reference changes, and the element leaves the `filter` result | Array of references | 1 |
+| One plain value is replaced in place | Array of plain values in place | 3 |
+| Both arrays are reversed | Both arrays | 0 |
+
+The 2 are the first `map` and the last for that key: the predicate of
+the `filter` read `done`, which did not change. The 3 are one cone
+instance in each body for the key that entered. On the reversal the six
+collections are assembled again, once each, and assembly is counted
+apart from evaluation. In `fixtures/index-nodes.tsx`, whose elements
+are plain values in place, a move of two of three elements evaluates
+the function that reads the index for the two moved keys: 2
+evaluations, where the executor of the earlier commit made 4. Where a
+body is permitted to evaluate a whole collection again, the executor
+keeps results per key all the same. The key of an element that a
+`flatMap` contributes (question 147) is exercised by no fixture of that
+commit.
+
+At commit `59055fd0c5`, 27 of the 30 fixtures are run, in 33 runs, and
+280 of 280 compared values are equal. The added runs are one of
+`fixtures/within.tsx` with 3 values, two of `fixtures/stream-marker.tsx`
+with 70, one of `fixtures/flat-keys.tsx` with 4, one of
+`fixtures/keyed.tsx` with 48, and one of `fixtures/reduce.tsx` with 3.
+Each of the five covers the three cases of a per-element source or says
+which it covers.
+
+- **`within`.** Each of three callbacks has a declaration that reads
+  neither the element nor the index: over an array of references, over
+  an array of plain values in place, and over the result of a `filter`.
+  Its cone has one instance per key in each, and a change of the input
+  it reads evaluates every instance.
+- **`stream-marker`.** A handler is bound per element in three bodies,
+  over the same three cases. The stored link has the key of the element
+  in each, an event for it reads that element, and without its listed
+  path each fails the check at the first element.
+- **`flat-keys`.** A `flatMap` over an array of references, whose
+  segment is an array the element holds, and one over an array of plain
+  values in place, whose segment the callback writes, each with a `map`
+  over its result, which is the case of the result of another
+  per-element construct. The cone instances of the `map` have the key of
+  the source element with the position in the segment, in both. A
+  segment behind a reference that grows evaluates the new position
+  alone, a move of the source elements evaluates nothing in either case,
+  and a plain value that enters evaluates its own segment. Two members
+  of one segment that change places are both evaluated again. By
+  ruling the key has the member in the place of the position
+  (question 147), and under it such a change of places evaluates
+  nothing.
+- **`keyed`.** The record of a key of a list, which is a list of
+  references. The record is a cell of its own, by ruling (question
+  166).
+- **`reduce`.** A fold over an array of references, one over an array of
+  plain values in place with the index, and one over the result of a
+  `map`. A step that reads an outer input is not compared, because the
+  compiler of today's runtime refuses it.
+
+At commit `77993077e4`, 32 of the 36 fixtures are run, in 39 runs, and
+489 of 490 compared values are equal. The added runs are one of
+`fixtures/list-records.tsx` with 84 values, one of
+`fixtures/value-identity.tsx` with 44, one of
+`fixtures/passes-collection.tsx` with 2, one of
+`fixtures/state-below.tsx` with 54, and two of
+`fixtures/absent-state.tsx` with 12, and `fixtures/callee-default.tsx`
+has 22 values where it had 8. `fixtures/self.tsx` is not compared,
+beside the three fixtures that were not compared before.
+
+- **`list-records`.** A handler writes records into a list with `push`
+  and with `set`, and the executor stores each as a document of its
+  own with a link in the list, as today's runtime does. The list is an
+  array of references. All 84 values are equal.
+- **`value-identity`.** A row over an array of plain values in place,
+  with each test beside the same row over an array of references. It
+  has the three handlers of question 160: one write through the
+  element's reference commits and the row loses its state, two writes
+  in turn are rejected, and one `update` commits. Over the array of
+  references all three commit and the row keeps its state. By the
+  ruling on question 160 the design re-keys the element, so the first
+  two outcomes are the prototype's and not the design's.
+- **`passes-collection`.** An output that passes the result of a
+  `filter` on, over an array of references and over an array of plain
+  values in place, each with a `map` over the output, which is the
+  case of the result of another per-element construct. Over
+  references the keys are those of the cells with the mark or without
+  it. Over plain values a `filter` that drops the first of two equal
+  values leaves the second with the count it has in the source, and
+  without the mark the count is lost.
+- **`state-below`.** A write of one member, and a `push`, below the
+  root of a state cell that has no document, in the pattern's body and
+  in an element body over an array of references, over an array of
+  plain values in place, and over the result of a `filter`. The
+  executor instantiates no label, so the label of the members taken
+  from the default is not exercised.
+- **`absent-state`.** A handler whose state path is bound to a value
+  that is nothing and whose body has an entry at a member below the
+  path. The executor places nothing at the path.
+- **`callee-default`.** One of its 22 values differs: a path of the
+  callee's result that passes on a path the caller left empty. A read
+  addressed at the path gives the callee's default in both runs.
+  Today's read of the whole result gives nothing there, and the
+  comparison reads the whole result (question 149). It is today's
+  runtime and not the design. The record is the same for a callee in
+  an element body in each of the three cases.
+- **`self`.** The name bound to `[SELF]` placed in a value, in the
+  pattern's body and in an element body over an array of references
+  and over an array of plain values in place. The executor stores a
+  link to the result.
+
+At commit `e63b3d305c`, 37 of the 41 fixtures are run, in 44 runs, and
+673 of 674 compared values are equal. The added runs are
+`fixtures/key-returns.tsx` with 72 values,
+`fixtures/stream-returned.tsx` with 16, `fixtures/star-kinds.tsx` with
+49, `fixtures/random.tsx` with 18, and `fixtures/instantiate.tsx` with
+27, and `fixtures/flat-keys.tsx` has 6 values where it had 4. The one
+value that differs is that of `callee-default`, above. The run prints
+the events the harness did not send: one, of `star-kinds`. One event
+of `handle-passed` is not handled: its handler instantiates a pattern,
+which the executor does at this commit, and then calls `navigateTo`.
+
+- **`key-returns`.** A state cell declared in the body of a `map` over
+  the result of a `filter`, once over records that a handler pushed,
+  which are references, and once over plain values in place. The keys
+  leave the result of the `filter` and enter it again. The cone
+  instances of a key are gone while it is away, no document is made or
+  deleted, and the key that returns reads what its cell held. The
+  executor's tests add a link that leaves an array of references and
+  stands in it again, a plain value that leaves an array in place and
+  is written again at another position, and the last occurrence of two
+  equal plain values. Over plain values in place today's key is the
+  position, so a value that returns at another position is the one
+  case where today's runtime would read another cell, and the
+  comparison does not have it.
+- **`stream-returned`.** A `lift` that returns the stream it is handed,
+  for a binding outside every element body and for a binding of an
+  element body over references and over plain values in place. The
+  stored link has the key of the element in each, and no path of
+  `Binding.result` names the position.
+- **`star-kinds`.** Each kind of a `*`: `every` and `element` over
+  references and over plain values in place, `inside` over an array of
+  plain values written in place, and `element` over the result of
+  another construct, with an event for each binding but one. The one
+  is of two collections spread into one array of children, which the
+  harness could not resolve with the children stored flat; by the
+  ruling since, each collection is a child position of its own.
+- **`random`.** A pattern that draws from `Math.random`, under the
+  seed.
+- **`instantiate`.** A function body that instantiates a pattern, with
+  two instances made by two events, and a `computed` that binds a handler
+  twice. An event for the second stream writes the cell, the
+  `computed` is not evaluated again, and the streams are the ones it
+  bound.
+- **`flat-keys`.** Over a source of references, a segment of plain
+  values and a segment of references that the element holds; over a
+  source of plain values in place, a segment of plain values that the
+  callback writes in an order an input chooses. Two members of one
+  segment that change places evaluate nothing in the body over the
+  result. Where the callback computes the members, the callback is
+  evaluated once per source element, and the body over the result for
+  no member. No fixture declares a state cell in a body over the
+  result.
+
+At commit `e4f2fb3431`, 39 of the 48 fixtures are run, in 46 runs, and
+727 of 728 compared values are equal. The added runs are
+`fixtures/value-copy.tsx` with 35 values and
+`fixtures/push-default.tsx` with 12, and `fixtures/star-kinds.tsx` has
+56 values where it had 49. The one value that differs is the one that
+differed at the earlier commit. Nine fixtures are not compared with
+today's runtime and are run by the executor's tests alone. Five of
+them are of this round: `member-kind`, `flat-streams` and `rekey`,
+whose rulings today's runtime does not follow, and `as-instance` and
+`keyed-by`, which today's runtime does not compile.
+
+- **`star-kinds`.** With a collection among the children stored as
+  one nested child, the harness resolves a `*` below a child position
+  in the array that the child holds, and sends an event for every
+  binding: the event for the second of two collections among the
+  children of one node, which it could not send, is sent. It sends
+  no event for a stream at a `member` position of an array value,
+  which is stored flat.
+- **`value-copy`.** Over arrays of plain values in place: a handler
+  that reads two arrays through their handles and writes each with
+  members of the other, a handler that stores one element in a cell,
+  and a handler of a row that finds its element with a handle by
+  position and `equals`. The executor stores the values, and makes no
+  document for the copy of a record.
+- **`push-default`.** A `push` below a path of the argument at which
+  nothing is stored and whose schema declares a default, with an
+  array of plain values in place and with an array whose default
+  record stays in place while the pushed record is a reference.
+- **`member-kind`.** Kind `member` in an array value with a spread,
+  after a spread over references and after one over plain values in
+  place. No path of the corpus has the kind.
+- **`flat-streams`.** A handler bound in the body of the callback of
+  a `flatMap`, over a source of references and over a source of plain
+  values in place, each with segments of plain values that the
+  callback writes. Every member of a segment holds the stream of its
+  source key, and an event for it reads the source element. A segment
+  of references holds no stream of the body in a member, so that key
+  form is tested on the match alone.
+- **`rekey`.** Over an array of plain values in place, with a body
+  over the array and one over the result of a `filter` of it: a write
+  through a reference by key keeps the state of the row, two writes
+  one after the other commit, a handler that throws moves nothing,
+  and a reference stored elsewhere under the old key, or a handle
+  that the same handler stored before its write, reads as nothing.
+  Over an array of references the two writes commit and no key
+  changes.
+- **`stream-marker`.** A marker below a conditional fails the check
+  while another subtree of the tree changed in the same write, and
+  the stored `$UI` is the earlier tree whole. The same for a marker
+  of a cone of an element body over references, over plain values in
+  place, and over the result of a `filter`.
+- **`self`.** A handler that captures the name of `[SELF]`, in the
+  pattern's body and in an element body over references and over
+  plain values in place, is handed a reference to the result cell.
+- **`as-instance`.** A pattern called through `asInstance()` in an
+  element body. Over an array of references the argument holds the
+  link to the element's cell, and a change of the element's value
+  writes no argument and changes no key. Over an array of plain
+  values in place the argument holds the value: the instance of a
+  value that left reads the value it was last given, and the same
+  value written again, at any position, has the same instance. Over
+  the result of a `filter` the instance is identified by the upstream
+  key and is the same when the `filter` drops the element and keeps
+  it again. An event for a stream of the instance is handled while
+  the key is away.
+- **`keyed-by`.** A plain array generated from scratch, where a `lift`
+  returns the whole array each time and a change of an input gives
+  every element another `stars`: each element has the key of its
+  `id`, the state cell of its row stays, and the row reads the new
+  value. The result of a `filter` and a `map` over it: the
+  `asInstance()` instance of a row is the same when its element has
+  another `stars`, leaves the result of the `filter`, and enters it
+  again. An array of plain values in place: a write through a
+  reference by key that changes another member re-keys nothing, a
+  `set` of the whole array in another order keeps each row with its
+  `id`, and two elements with one value of the field are occurrences
+  0 and 1. An array of references: the keys are those of the cells.
+
+At commit `a462df710a`, 40 of the 51 fixtures are run, in 47 runs, and
+752 of 753 compared values are equal. The added run is
+`fixtures/flat-inner.tsx` with 25 values. The one value that differs
+is the one that differed at the earlier commits. Eleven fixtures are
+not compared with today's runtime and are run by the executor's tests
+alone. Two of them are of this round, `rekey-made` and
+`spread-child`, whose rulings today's runtime does not follow.
+
+- **`flat-inner`.** A `flatMap` whose callback returns the result of
+  an inner `map` that binds a handler, twice. The binding has two
+  `element` steps, and the result of the `flatMap` has one level of
+  positions. Over an array of references, groups and parts that a
+  handler pushed, each position holds the link with the key of the
+  group's cell and the key of the part's cell. Over an array of plain
+  values in place, shelves and tags that the creator of the instance
+  wrote, each position holds the link with the key of the shelf,
+  formed from its whole value, and the key of the tag. The segment is
+  the result of another per-element construct in both. An event for a
+  position reads its group and its part, and 25 of 25 values equal
+  today's.
+- **`stream-target`**, which is run with generated events, has an
+  event for the binding `inc`, whose stream the result does not hold,
+  and the harness sends none for it.
+- **`stream-marker`, `star-kinds`, `member-kind` and
+  `stream-returned`.** No position is checked. Over an array of
+  references and over an array of plain values in place, a binding of
+  the element body is stored once for each key, at the row of that
+  key; the one stream of a binding made outside the callback is
+  stored at every element; and a member written after a spread in an
+  array value is at the position after what the spread holds. Over
+  the result of another per-element construct the link has the
+  upstream key. A marker below a conditional is stored when its
+  branch is selected, with the rest of the tree of the same
+  evaluation.
+- **`value-identity`.** Four added tests. Over an array of plain
+  values in place, a handler that declares `stop: Stop` stores a
+  link with the collection and the key of the element, and
+  `center.set(stop.position)` stores that link with `position` after
+  the key; a handle whose schema declares its items as handles gives
+  one reference by key for each member, which stays with its element
+  when the element moves. Over an array of references the cells hold
+  links to the element's cell and to `position` in it, and each
+  member handle names the position that holds the link.
+- **`rekey-made`, and three added tests of `rekey`.** Over an array of
+  plain values in place with no declared key field, with a `lift`
+  that instantiates a pattern with a state cell and one that binds a
+  handler. The instance and its state are those of the element after
+  the write, and an event for its stream is handled. Nothing moves
+  for the binding that a function body made: the body binds a handler
+  of its own under the new key, and the stream has another name. What
+  is moved replaces what is stored under the new key. Of two equal
+  elements, the second is occurrence 0 after the first is re-keyed,
+  and it has neither its own earlier state nor the first's. A `set`
+  of the whole array re-keys nothing. Over an array of references the
+  write changes no key and the instance stays.
+- **`spread-child`.** A JSX spread child is one child at its written
+  position, which holds a nested array: over an array of plain values
+  in place, over the result of a `map` whose source holds references,
+  and over an array of references. An array literal with a spread is
+  one child that holds the members and what the spread holds as the
+  positions of one nested array, and one with a hole is one child
+  whose hole is a position that holds nothing. A child written after
+  them keeps its position when a spread array changes its length.
+  Today's JSX factory flattens each of these where the tree is built.
+- **`keyed-by`.** Over an array of plain values in place, a reference
+  by key names the element after another member changed, with no
+  re-key, and the same key names no element of an array whose schema
+  declares no field. Over a plain array generated from scratch, and
+  over the result of a `filter` and a `map` over it, the keys are
+  formed from the collection's copy of the keyword and have the same
+  form. Over an array of references the key is the cell. The second
+  statement of the first case is of the ruling that is withdrawn: by
+  the ruling that replaces it, a key that names `id` resolves by that
+  field in any array.
+
+At commit `7774ba208c`, 41 of the 53 fixtures are run, in 48 runs, and
+767 of 768 compared values are equal. The added run is
+`fixtures/spread-stream.tsx` with 15 values. The one value that
+differs is the one that differed at the earlier commits. Twelve
+fixtures are not compared with today's runtime and are run by the
+executor's tests alone: the eleven of the earlier commit and
+`keyed-by-fields`, since today's runtime has no declared key.
+
+- **`spread-stream`.** Each form of a spread is written in a
+  `computed`, which today's runtime runs: an array value with a
+  spread and a stream at the member after it, twice, and a view node
+  with two JSX spread children and a stream at a child after them.
+  The arrays are plain values in place that each `computed` reads
+  whole, so no per-element construct of the plan is over them, and
+  the `map` in each is that of JavaScript. With an event for each of
+  the two streams, 15 of 15 values are equal, both events are
+  committed and handled, and the executor's result holds 3 links to
+  a stream. This is the function tier, where a view node flattens
+  the arrays it is handed in both runtimes.
+- **`member-kind` and `spread-child` stay with the executor's tests,**
+  because today's runtime runs neither where the pattern's body
+  writes the form. For an array literal with a spread of a pattern
+  value, written as a value, today's run stores 50 positions for the
+  spread operand, the two rows first and 48 that hold nothing after
+  them, and the member at position 51, where the executor stores the
+  two rows and the member at position 3. For the same literal among
+  the children of a view node, today's transformer stops with "Spread
+  traversal of opaque pattern values is not lowerable. Move this
+  expression into computed()". For a JSX spread child of a pattern
+  value, the evaluation of the pattern throws "object is not
+  iterable". So the ruling on a spread child, as one child at its
+  written position in the reactive tier, has no run of today's
+  runtime to be compared with there. The spread operand in these
+  fixtures is a pattern value; the prototype's note does not say for
+  each of the three cases of a source what today's runtime does.
+- **`keyed-by`.** The key of a declared key field names the field.
+  Over a plain array generated from scratch, with a `filter` and a
+  `map` after it, the state cells of the rows over elements whose
+  `id` are 1 and 2 have keys that name `id`, those of a body over the
+  result of a `filter` of the numbers 1 and 2 have keys of the whole
+  value, and the stream of a handler over the result of a `filter`
+  has the upstream key, which names the field. A handler over that
+  array is given the value, and what it sets stores the value and no
+  link, because the executor gives an element of such an array no
+  place; by the ruling since, the element has a reference by key.
+  Over an array of plain values in place, a handler of a row stores
+  `picked.set(repo)` as a link with the collection and the key, and
+  `owner.set(repo.owner)` as that link with `owner` after the key.
+  Readers of the two cells whose types declare no key, and a read
+  under a schema that declares another key, give the name and the
+  owner, also after the array is written whole in another order with
+  other values of both members. Over an array of references the key
+  is the cell.
+- **`keyed-by-fields`.** A key of two fields, declared as
+  `KeyedBy<Repo, "owner" | "name">`, with each row an instance of a
+  pattern called through `asInstance()` that has a state cell. Over a
+  plain array generated from scratch, with a `filter` and a `map`
+  after it: after an input gives every element another `stars` and
+  another input reverses the order, each row holds the note it was
+  given and the new `stars`, the two links of the result are those of
+  the same two instances in the other order, and the element that
+  now passes the `filter` has a third instance. Over an array of
+  plain values in place: two elements with one `name` and two `owner`
+  are two keys, a write through the reference by key to `stars`
+  re-keys nothing, a `set` of the whole array in the other order with
+  other `stars` leaves each instance with its element and its note,
+  an element with another `name` is another key, and the two
+  instances of the keys that left stay. It is not compared with
+  today's runtime.
+- **`rekey-made`,** one added test. Over an array of plain values in
+  place with no declared key, the instance that a `lift` made for a
+  key that left is in the store until a re-key moves another instance
+  to its name. After the re-key no document or declared place begins
+  with its name, the documents of the store are those of two rows,
+  and the instance that moved handles an event. Over an array of
+  references no key changes and nothing is replaced.
+
+At commit `a4b4612b3b`, 41 of the 56 fixtures are run, in 48 runs, and
+767 of 768 compared values are equal, as at the earlier commit. The one
+value that differs is the one that differed before. Fifteen fixtures
+are not compared with today's runtime and are run by the executor's
+tests alone: the twelve of the earlier commit, of which `keyed-by` and
+`keyed-by-fields` have the names `array-by-key` and
+`array-by-key-fields`, and `array-by-key-form`, `array-by-key-reader`
+and `generated-reference`. Today's runtime has no `ArrayByKey`, so
+nothing of the five fixtures of a key is compared with it.
+
+- **`array-by-key` and `array-by-key-fields`.** The two fixtures of the
+  earlier commit, with the key declared on the array. Over a plain
+  array generated from scratch, with a `filter` and a `map` after it,
+  the handler of a row stores a link with the document of the output
+  and the key, and one with a member after the key, where the executor
+  of the earlier commit stored the value. The readers of the two cells
+  read the element after the computation returns a new array in another
+  order, or with another value of a member that is no key field. Over
+  an array of references a position that holds a link has the key of
+  its cell, with or without declared key fields.
+- **`array-by-key-form`.** What a key holds. Over an array of plain
+  values in place, with a `map` over the result of a `filter`: the
+  number 7 and the string `7` in one field give two keys, and neither
+  is the key of a whole value 7, `7` or `[7]`; two keys that share the
+  value of one field of two have the names in common and another hash;
+  a field name that holds `:`, `,`, `\`, `#` or a quote, and one that
+  is `count` or `cell`, is read back from the key as it is and
+  resolves; and a reference to the element and one to a member below it
+  resolve from the key alone after the array is written whole in
+  another order. Over a plain array generated from scratch, with a
+  `filter` and a `map` after it: the same keys, which stay when an
+  input gives every element another `stars`, and the same resolution of
+  a stored reference to the element and to a member below it.
+- **`array-by-key-reader`.** A pattern `Rows` whose input is typed
+  `repos: Repo[]`, with no key, and whose body has a `map` over
+  `repos`. Compiled in and given an array of plain values in place that
+  declares the key `id`: the collection of `Rows` has
+  `keyFields: ["id"]`, and a row keeps its state cell when `stars` of
+  its element is written. Compiled in and given a plain array generated
+  from scratch, the result of a `lift` whose return type declares the
+  key: the same, for a call written as a function and as a tag.
+  Compiled in and given the result of another per-element construct, a
+  `filter` over the array in place: the collection of `Rows` names the
+  upstream collection and has no key fields of its own. Called through
+  `asInstance()` and given the array of plain values in place: the
+  argument of the instance holds a link to the array with the schema
+  that the caller reads it under, the rows are keyed by `id`, and a row
+  keeps its state when `stars` changes. Called through `asInstance()`
+  and given the plain array generated from scratch: the argument holds
+  the values and no link, and the rows are keyed by their whole values
+  (question 207). By ruling the argument holds a link to the stored
+  output with the schema of the array, and the rows are keyed by `id`;
+  the executor at this commit does not follow that ruling. The result of
+  another per-element construct given whole to an instance of its own
+  was not run.
+- **`generated-reference`.** A plain array generated from scratch with
+  no declared key, and a `map` over it. The rows hold links by key into
+  the document of the output. A stored reference names its element
+  after another element is added, and reads as nothing once an input
+  changes every element. A write through it is refused.
+- **`as-instance`,** one added test. Over an array of plain values in
+  place with no declared key, the key of one element leaves and its
+  `asInstance()` instance stays. A write through the reference by key
+  then re-keys another element to that key. The element table names the
+  instance that moved alone under the key, the documents of the store
+  are as many as before, and a link to the result of the replaced
+  instance reads what it held. Over an array of references no key
+  changes.
+
+At commit `682b918ed1`, 42 of the 58 fixtures are run, in 49 runs, and
+799 of 800 compared values are equal. The runs are the 48 of the
+earlier commit and `set-over-link`, and the one value that differs is
+the one that differed before. Sixteen fixtures are run by the
+executor's tests alone: the fifteen of the earlier commit and
+`generated-inner`.
+
+- **`set-over-link`,** which is compared with today's runtime. A
+  handler stores a link to a record of the argument in a state cell, a
+  second writes a member below the cell, and a third writes a plain
+  value to the cell with `set`. In the executor the third write
+  replaces the record that the link names, and the cell keeps the link.
+  Today's runtime does the same: it also overwrites the record that the
+  link names. The comparison runs the three events on both, and 32 of
+  32 values are equal, the members of the record after the third event
+  among them. The executor was not changed for it. The record is one of
+  the argument, stored in place and named by a path. No per-element
+  construct is in the fixture: a `set` on a cell that holds a link to
+  an element was not tried, for an array of references, for an array of
+  plain values in place, or for the result of another per-element
+  construct.
+- **`generated-inner`.** A plain array generated from scratch with a
+  declared key, which a function body of an element body returns whole,
+  once per group. The groups are an array of plain values in place. A
+  handler of an inner row stores a link with the document of the output
+  of its group and the key. After a write that no evaluation followed,
+  a read through the link reads the new value, which failed at the
+  earlier commit. After the group left its collection, the link reads
+  the last value. A handler that writes through the stored reference
+  fails with the message of a write to a computed output, and commits
+  nothing.
+- **`array-by-key-reader`,** with added cases of the pattern `Rows`
+  called through `asInstance()`. Given whole a plain array generated
+  from scratch with the declared key `id`: the argument of the instance
+  holds a link to the document of the output, with the empty path and
+  the schema `{ type: "array", keyFields }`, and no value of the array.
+  The rows are keyed by `id`, and a row keeps its state cell when an
+  input gives its element another `stars`. Given whole the result of
+  another per-element construct, which is a `filter` of that array in
+  one case and a `filter` of an array of plain values in place in the
+  other, both with the declared key `id` upstream: the argument holds
+  the values that the `filter` passes on and no link, the instance keys
+  its rows by the whole value, and a row loses its state cell when a
+  member that is no key field changes (question 212). Given whole the
+  result of a `filter` over an array of references, the argument holds
+  the links, as before.
+
+At commit `abd965cc37`, 49 of the 67 fixtures are run, in 57 runs, and
+829 of 830 compared values are equal. The runs are the 49 of the earlier
+commit and eight more: `block-const` twice, `debug-strings`,
+`action-constant`, `body-constant`, `module-policy`, `whole-argument`
+and `handle-or-undefined`. The one value that differs is the one that
+differed before, in `callee-default`. The prototype's author puts it in
+class (b) of [The corpus at commit
+`abd965cc37`](#the-corpus-at-commit-abd965cc37) on an assumption:
+`plan-and-label-templates.md` §2.5 assumes that a property that is
+absent reads the same default in a read of the whole object as in a read
+addressed at it, and today's read of the whole result gives nothing
+there. Eighteen fixtures are run by the executor's tests alone,
+`data-file` and `shared-values` among them.
+
+- **`block-const`.** A `const` of the block body of a promoted
+  `computed` that a per-element construct inside the block names: as its
+  receiver, in its callback, and in the expression of its receiver. 6 of
+  6 values equal today's. The three forms are over arrays of plain
+  values in place. An array of references and the result of another
+  per-element construct as the receiver were not tried; the code that
+  changed does not read which of the three the receiver is.
+- **`action-constant` and `body-constant`.** A name that an `action` or
+  a sandboxed body of a pattern compiled in captures, which the callee
+  declares as a handle and the call binds to a literal or leaves out. 12
+  of 12 and 2 of 2 values equal today's, on reads through the handles
+  alone. A write through such a handle is refused (question 219).
+- **`whole-argument`, `handle-or-undefined`, `module-policy` and
+  `debug-strings`.** A callee that names its whole argument, 1 of 1
+  values equal; a state path that a handler declares as a handle or
+  `undefined`, 6 of 6; a declaration of policy at module scope that uses
+  a name the executor does not have; and the debug renderers.
+- **`data-file`,** which reads a file with `dataFile` in the reactive
+  tier and in a function body, and **`shared-values`,** eleven values
+  each of which reads the two before it, whose test bounds one pass over
+  a settled instance at 12 checks of a memo entry. Both are run by the
+  executor's tests alone.
+- **`spread-child`.** One test reads the stored result document and
+  finds the links of a spread of an array of references, where it found
+  the records. Nothing of it is compared with today's runtime, which
+  runs none of these forms in a pattern body.
+
+At commit `a84264daf2`, and at commit `e63851c1ee` after it, the fixtures are
+run in 59 runs, the 57 of the earlier
+commit with `batch` and `failing`, and 1,004 of 1,013 compared values are equal.
+The 9 that differ are the one of `callee-default`, 2 of `batch` and 6 of
+`failing`. The fixtures `bound`, `effects`, `handler-effect`, `wishes` and
+`lists` have tests of the executor alone.
+
+- **`batch`.** A state cell `items`, an array of plain values in place that
+  handlers push strings onto; `count`, which reads the whole array; `total`,
+  which reads `count`; and the cone `_join`, which writes the cell `joined` from
+  `items`. With two `add` events in one batch the transactions are event, event,
+  derivation, the two event transactions evaluate nothing, and `count` and
+  `total` are each evaluated once; with each event a batch of its own, `count`
+  is evaluated twice. `compare/test/batch.test.ts` runs five batches on today's
+  runtime under its serving posture, with the events queued before its scheduler
+  takes any, and the values are equal in all five: a handler that reads `count`
+  behind two `add` events, one that reads `joined` behind one, one that writes
+  `joined` behind one, one that sends an event, and one that throws between two
+  that commit. The number of evaluations was not compared. The 2 values that
+  differ are in the run of the comparison of values, where three `add` events
+  come before `overwrite`, each a batch of its own: today's runtime runs `_join`
+  again behind the handler's write and holds `a,b,c!`, and the executor holds
+  what the handler wrote (provisional decision P9, question 277).
+- **`failing`.** A cone whose value code throws (`halved`), one that reads it
+  (`next`), one that reads it in the branch it does not select (`chosen`), a
+  `map` over an array of plain values in place one of whose elements fails
+  (`each`), a cone that writes a cell and then throws (`_try`), and a view with
+  a failed value among its children (`view`). The 6 values that differ: 4 are
+  the side-write of `_try`, which today's runtime commits and the executor
+  withdraws (question 285), and 2 are `chosen`, at which today's runtime holds
+  nothing and the executor the selected branch (question 287).
+- **`bound`.** `_ping` writes `b` from `a` and `_pong` writes `a` from `b`. The
+  first derivation transaction evaluates each ten times, the eleventh evaluation
+  of each does not run, and both take an error state. The transaction commits,
+  the side-writes of both are withdrawn, and `a` and `b` read as the constants
+  they were declared with. `sum`, which reads both cells, is evaluated five
+  times and does not fail. Today's runtime does not become idle on this fixture,
+  because it tries the cycle again behind a backoff gate (`planBudgetBackoff` in
+  `runtime/runner/src/scheduler/execution.ts`), so the fixture is not compared.
+- **`effects`, `handler-effect` and `wishes`.** An effect of the reactive tier
+  that is requested when a kept output reads its result and not otherwise, its
+  request transaction and its completion, a request that a handler makes, and a
+  `wish` that resolves from a table. None has a per-element construct.
+
+### The corpus
+
+The figures down to the heading "The corpus at commit `96f3b83a73`"
+are of commit `3e518147df`.
+
+The comparison takes the 270 modules with a full plan. Today's runtime
+runs 213 of them, the same 213 as in the cost section. The executor
+runs 186 of the 213. In 159 of the 186 every compared value is equal
+and every event that today's runtime committed is handled.
+
+| Why a module is not executed | Modules |
+| --- | ---: |
+| The emitter writes no code for a `reduce` in the reactive tier | 7 |
+| The value code throws | 6 |
+| An output that no value function computes | 4 |
+| A handler called in a function body | 2 |
+| The built-in `toIndentedDebugString` | 2 |
+| The emitter writes no code for a spread in the argument of a pattern | 1 |
+| A value that is no plain data | 1 |
+| The built-in `linksOf` | 1 |
+| The built-in `toCompactDebugString` | 1 |
+| The value code does not parse | 1 |
+| The value code names something it does not bind | 1 |
+
+The first row is the emitter's. The rows that name a built-in, a handler
+called in a function body, and a value that is no plain data are things
+the executor does not implement. The rows "the value code throws",
+"names something it does not bind", and "does not parse" were not
+examined one by one, and each counts as a defect of the prototype until
+shown otherwise.
+
+Today's runtime committed 269 events for the executed modules. The
+executor does not handle 15 of them: 9 call `elementById`, 4 instantiate
+a pattern in the handler, one writes through a handle to a constant,
+which the documents refuse (`execution-and-storage.md` §2.4), and one
+calls `increment` on a value that is no handle.
+
+Over the executed modules 4,537 values are compared. 4,472 are equal and
+65 differ, in 24 modules.
+
+| Cause of a difference | Class | Modules | Values |
+| --- | --- | ---: | ---: |
+| `dataFile(...)` at module scope, a built-in the executor does not have | Prototype defect | 6 | 7 |
+| An event the executor did not handle, and what later values show of it | Prototype defect | 4 | 15 |
+| A handler factory as a value of the result (`plan-and-label-templates.md` §3.21), which the executor does not store | Prototype defect | 1 | 5 |
+| A check today's JSX factory makes of a `$` attribute and the executor does not | Prototype defect | 1 | 2 |
+| A branch that is not selected is not evaluated (`execution-and-storage.md` §2.2), and the pattern counts its evaluations | Design difference the documents state | 1 | 5 |
+| Today's runtime writes a cell in a template literal as `[object Object]`, and the executor writes its value | Today's runtime, not the design | 1 | 5 |
+| A read of the acting principal or of an access list, which the executor does not have. Not verified | Prototype defect, not verified | 2 | 3 |
+| Not examined | Not classed | 8 | 23 |
+
+The eight modules not examined are `examples/todo-list/todo-list.tsx`,
+`showcase/card-piles/main.tsx`, `examples/map-demo/map-demo.tsx`,
+`system/agent-run/agent-run.tsx`, `dev/catalog/catalog.tsx`,
+`examples/cfc-spec-gallery/main.tsx`,
+`dev/gideon-tests/test-cell-equals.tsx`, and
+`showcase/wordsearch/wordsearch.tsx`. So 23 of the 65 differing values
+have no cause, and the causes given for the other rows come from a
+first reading of the source and the two values and are not verified.
+
+At this commit no difference is classed as a gap of the design by
+itself. The gaps this round found are in what the executor needed in
+order to compute a value at all. Each showed as a wrong value or a failed run before the emitter
+or the executor supplied what was missing. Eight are ruled
+([Decided](#decided)), and the rest are questions: 141, 144 to 147,
+and 149 to 151 below, and questions 81 to 84 of
+`execution-and-storage.md`.
+The one design difference in the table is by the documents: in
+`patterns/dev/gideon-tests/test-ifelse-both-branches.tsx` today's
+runtime evaluates both branches of an `ifElse` and the executor the
+selected one.
+
+### The corpus at commit `96f3b83a73`
+
+The crate emits a plan with no unsupported construct for 272 modules,
+two more, because a first value that is not a constant is no longer
+unsupported. The first two columns are over the same 270 modules. In
+the second the executor alone was run again, against the values that
+today's runtime computed for the first. For the third, today's runtime
+was run on the two added modules.
+
+| | `3e518147df` | `96f3b83a73` | `96f3b83a73`, 272 modules |
+| --- | ---: | ---: | ---: |
+| Modules run by today's runtime | 213 | 213 | 215 |
+| Executed | 186 | 187 | 189 |
+| Every value equal and every event handled | 159 | 161 | 161 |
+| Values compared | 4,537 | 4,539 | 4,607 |
+| Values equal | 4,472 | 4,485 | 4,527 |
+| Values that differ | 65 | 54 | 80 |
+| Modules with a difference | 24 | 22 | 23 |
+| Committed events the executor does not handle | 15 of 269 | 15 | 20 of 278 |
+| Documents the executor stored | 1,302 | 504 | 509 |
+| Of them state cells | 898 | 98 | 99 |
+
+The table "Why a module is not executed" and the table of causes above
+are not made again for the later commit. What the notes give of the
+changes:
+
+- **One module more is executed,** `dev/test/input-self/subjects.tsx`.
+  One of its two values differs: the result holds a reference to
+  itself, which the executor's read gives as nothing at the second
+  level and today's read follows (question 157).
+- **Values that differed and are equal:** 6 of
+  `examples/todo-list/todo-list.tsx`, by the moved element and by the
+  keys of a derived collection that a cone passes on unchanged
+  (question 156); 2 of `showcase/card-piles/main.tsx` and 4 of
+  `apps/contacts/contact-book.tsx`, both by the fix of the copy of a
+  container that had no address.
+- **Two values that were equal differ,** both in
+  `examples/map-demo/map-demo.tsx` after its last event. The handler of
+  that event removes an area, which it did not find before the fix of
+  the container copy. A cell that an earlier event had set to the
+  area's center then reads as nothing, because it holds a reference to
+  a position below the array (question 145; under the ruling it holds
+  a reference by key and reads as nothing all the same). The two values of the
+  module that differed after that event are equal, so the module has 4
+  values that differ, as before. No other value that was equal differs.
+- **The two added modules.** `showcase/battleship/pass-and-play/main.tsx`
+  has 32 of 32 values equal. `apps/base/contacts.tsx` has 10 of 36: two
+  of its handlers construct a cell with `new` in a function body, which
+  the executor does not do.
+- **Rulings that changed no value.** The demand of a cone with a small,
+  fixed set of write targets changed no value of the corpus.
+
+Of the 23 values in 8 modules that the earlier commit left without a
+cause, 8 are equal (`todo-list.tsx` and `card-piles`). The other 15, by
+class:
+
+| Module | Values | Class | Cause |
+| --- | ---: | --- | --- |
+| `examples/map-demo` | 4 | Design difference, ruled (question 145) | A stored reference to a member of an element that is a plain value in place, which is then removed |
+| `dev/gideon-tests/test-cell-equals` | 1 | Prototype defect under the ruling of question 145 | `equals` of a reference with an element that is a plain value in place, of which the executor holds a copy |
+| `showcase/wordsearch` | 3 | Neither | The pattern draws its seed from `Math.random`, and the two runs draw two numbers |
+| `system/agent-run` | 4 | Today's runtime, not verified | The scenario's argument holds `run.state`, and today's run reads nothing at `run` |
+| `dev/catalog/catalog` | 2 | Prototype defect, not verified | A child that is `null` in today's run holds nothing in the executor's |
+| `examples/cfc-spec-gallery` | 1 | Prototype defect, not verified | A `$cell` attribute holds a pattern's result; today's read gives no `$NAME` below it |
+
+The classes of the first two rows are those given at that commit, and
+they are wrong. Both modules fill their list with `push`. Today's
+runtime gives a record so written a document of its own and stores a
+link in the list, so both lists are arrays of references, and neither
+row is of the case of an array of plain values in place. The executor
+of that commit stored such a record in place, which is a defect of the
+prototype. Both rows are equal at commit `77993077e4`, below. Today's
+runtime does hold records in place: the records of the argument that
+an instance is created with, and of a default
+(`plan-and-label-templates.md` §1.3, "Which stored forms make which
+case").
+
+### The corpus at commit `59055fd0c5`
+
+The figures are of the executor alone, run again on the crate's output
+of this commit against the values that today's runtime computed in the
+run of commit `96f3b83a73` over the 272 modules. No fresh run of today's
+runtime was made.
+
+| | `96f3b83a73`, 272 modules | `59055fd0c5` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 189 | 194 |
+| Every value equal and every event handled | 161 | 167 |
+| Values compared | 4,607 | 4,735 |
+| Values equal | 4,527 | 4,642 |
+| Values that differ | 80 | 93 |
+| Modules with a difference | 23 | 24 |
+| Committed events the executor does not handle | 20 of 278 | 15 of 293 |
+| Evaluations that fail the check of a stream's position | not made | 0 |
+| Stored stream positions at a listed path | 440 | 683 |
+| Stored stream positions at no listed path | 18 | 3 |
+| Documents the executor stored | 509 | 535 |
+
+Over the 189 modules that were executed before, 4,529 of 4,607 values
+are equal, 2 more, and 11 events are not handled, 9 fewer. The tables
+"Why a module is not executed" and of causes are not made again for this
+commit. What the notes give of the changes:
+
+- **Five modules more are executed,** the ones with a `reduce` in the
+  reactive tier. `apps/budget-tracker/data-view.tsx`, and
+  `amount-ledger.tsx`, `budget-vs-actual.tsx` and
+  `spend-by-category.tsx` of `product/primitives/`, have every value
+  equal, 80 values. `product/primitives/demo/atoms-demo.tsx` has 33 of
+  48 equal, with 4 events not handled, each a handler of a pattern
+  compiled in whose state holds a constant where the handler expects a
+  handle. Its 15 differences were not examined. Two modules with a
+  `reduce` stop at `toIndentedDebugString`.
+- **Values that differed and are equal:** 7 of
+  `apps/topic-workbench/main.tsx`, whose events are handled with the
+  record of a key of a list.
+- **Five values that were equal differ,** all in
+  `apps/person-workbench/main.tsx`. Its handler `attachToPicked` ran to
+  its end for the first time, and it attaches a session where today's
+  run returns early because the picked card is nothing. The executor
+  holds something that is not nothing for the card. That was so before
+  and did not show, because the event failed at `elementById`. It is not
+  examined further, and counts as a defect of the prototype until shown
+  otherwise. No other value that was equal differs.
+- **Events.** Both events that failed at a cell made with `new` fail at
+  the next step, a pattern instantiated in the handler. A pattern
+  instantiated in a function body stops 6 events and a handler bound in
+  one stops 2 modules; the debug strings and `linksOf` stop 6 modules.
+- **Streams.** No evaluation fails the check of a stream's position. The
+  3 stored positions at no listed path hold the stream of a binding that
+  a `computed` makes and returns, which is allowed by ruling
+  (question 165). The 683 at a listed
+  path include the 208 positions of a stream inside a member of an
+  element, at which the earlier executor stored a record.
+- **Documents.** The 26 documents more are 5 argument and 5 result
+  documents of the added modules, 5 state cells, and 11 records of a
+  key.
+
+### The corpus at commit `77993077e4`
+
+The figures are of the executor alone, run again on the crate's output
+of this commit against the values that today's runtime computed in the
+run of commit `96f3b83a73` over the 272 modules. No fresh run of today's
+runtime was made.
+
+| | `59055fd0c5` | `77993077e4` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 194 | 194 |
+| Every value equal and every event handled | 167 | 168 or 169 |
+| Values compared | 4,735 | 4,735 |
+| Values equal | 4,642 | 4,641 to 4,650 |
+| Values that differ | 93 | 85 to 94 |
+| Modules with a difference | 24 | 22 or 23 |
+| Committed events the executor does not handle | 15 of 293 | 15 of 293 |
+| Documents the executor stored | 535 | 598 |
+
+The range is `showcase/card-piles/main.tsx` alone: 0, 6 or 9 of its 28
+values differ from one run to the next, by what `Math.random` draws.
+Without that module 85 values differ, in 22 modules. What the notes
+give of the changes:
+
+- **Ten values that differed are equal.** 4 of
+  `examples/map-demo/map-demo.tsx` and 1 of
+  `dev/gideon-tests/test-cell-equals.tsx`: both modules fill their list
+  with `push`, so their elements are cells in today's runtime, and the
+  executor stores them so. The two rows were classed as a design
+  difference and as a defect under the ruling of question 145, and
+  both were a defect of the prototype, which stored such a record in
+  place. The case is an array of references. And 5 of
+  `apps/person-workbench/main.tsx`: a handler whose body has an entry
+  at a state path and one at a member below it was handed a record
+  with the member where the path was bound to a value that is
+  nothing, and the executor places nothing there.
+- **Two values that were equal differ,** both in
+  `dev/gideon-tests/test-handler-capture-key-equals.tsx`. A handler of
+  a row finds its element with `inboxItems.key(i).equals(inboxItem)`.
+  The handle of `key(i)` names the position, the row's element is a
+  reference by key, the two are not equal in the prototype, and the
+  handler removes nothing. Today's runtime finds
+  the element, because both name the position there. By the ruling on
+  question 163 the two are equal in the design. The case is an
+  array of plain values in place; over an array of references both
+  resolve to the cell.
+- **`card-piles` varies.** Its handler reads two piles, shuffles the
+  cards, and sets both piles. In the prototype
+  the first pile then holds references by key into the second, which
+  is set next, and the cards that changed piles read as nothing.
+  Today's runtime stores copies, and by the ruling on question 163 so
+  does the design. The executor of the earlier commit
+  stored a link to the position, which read whatever card stood
+  there, and the cards of the scenario are all equal. The case is an
+  array of plain values in place.
+- **No other value changed.** The rulings on a derived collection
+  passed on, on a write below the root of an empty state cell, on a
+  first value, on the callee's default, and on `[SELF]` changed no
+  value of the corpus. No event of the run is refused for a reference
+  whose key no position holds.
+- **Documents.** The 63 documents more are the 64 documents of a
+  record that a handler wrote into a list, less one record of a key.
+
+The notes make no table over all the values that differ at this
+commit. They class the following, which earlier commits left
+unexplained or not examined. The other differences have the classes of
+the tables above.
+
+| Module | Values | Class | Cause |
+| --- | ---: | --- | --- |
+| `product/primitives/demo/atoms-demo` | 11 | Prototype defect, and a write the documents refuse | A handler of a pattern compiled in sorts `rows`, which the call writes as a literal. The crate holds `null` for each constant of it, and the handler ends early |
+| `product/primitives/demo/atoms-demo` | 4 | Prototype defect | What four events that are not handled leave: `step`, `min` and `items` are constants the crate holds as `null`, where the handler expects a handle |
+| `system/agent-run` | 4 | The scenario, not verified by a run | The generator gives `run` no value for four required members of type `unknown`, and today's read of `run` under its schema gives nothing |
+| `dev/catalog/catalog` | 2 | Prototype defect, not verified | As at commit `96f3b83a73` |
+| `examples/cfc-spec-gallery` | 1 | Prototype defect, not verified | As at commit `96f3b83a73` |
+| `dev/gideon-tests/test-handler-capture-key-equals` | 2 | Prototype, against the ruling on question 163 | A handle that names a position compared with a reference by key |
+| `showcase/card-piles` | 0, 6 or 9 | Prototype, against the ruling on question 163 | A handler that moves plain values between two arrays |
+
+With the crate's constants right, the first row would still differ:
+the handler writes through a handle to a constant of the call, which
+the compiled path refuses (`execution-and-storage.md` §2.4), and
+today's runtime writes the callee's argument document. The rows of
+`agent-run`, `catalog` and `cfc-spec-gallery` rest on a reading of the
+source and of the two values. The last two rows are of the case of an
+array of plain values in place, and neither arises over an array of
+references.
+
+### The corpus at commit `e63b3d305c`
+
+Two runs, both of the executor alone on the crate's output of this
+commit. The first is against the values that today's runtime computed
+in the run of commit `96f3b83a73`, with the line of
+`showcase/card-piles/main.tsx` from a seeded run of today's runtime in
+its place. The second is against a fresh seeded run of today's runtime
+over all 272 modules, which sends more events: with the kinds of a `*`
+the harness resolves the stream of more bindings, most of them through
+a `*` of kind `inside`. Each run gives the same file byte for byte
+when it is repeated.
+
+| | `77993077e4` | `e63b3d305c`, saved values | `e63b3d305c`, fresh run |
+| --- | ---: | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 | 215 |
+| Executed | 194 | 196 | 196 |
+| Every value equal and every event handled | 168 or 169 | 168 | 169 |
+| Values compared | 4,735 | 4,769 | 5,410 |
+| Values equal | 4,641 to 4,650 | 4,680 | 5,324 |
+| Values that differ | 85 to 94 | 89 | 86 |
+| Modules with a difference | 22 or 23 | 25 | 24 |
+| Committed events the executor does not handle | 15 of 293 | 10 of 295 | 10 of 475 |
+| Evaluations that fail the check of a marker | 0 | 3 | 3 |
+| Stored stream positions at no listed path | 3 | 31 | 31 |
+| Documents the executor stored | 598 | 615 | 793 |
+
+With the rulings applied and before the instances of a function body,
+the first run had 4,641 of 4,735 values equal, 94 that differ in 23
+modules, 168 modules fully equal, 15 of 293 events not handled, and
+598 documents: the figures of the earlier commit with `card-piles` at
+its 9 differences. No value that was equal differs for a ruling. What
+the notes give of the changes against that, in the first run:
+
+- **`card-piles` is fixed by the seed, at 9 of 28.** With the seed the
+  module has the same values in three runs of today's runtime, alone
+  and in one process with 13 other modules, and 9 of its 28 values
+  differ in every run. The cause is the prototype's reference by key
+  where a handler moves plain values between two arrays. By the ruling
+  since, such a handler holds copies, and the design stores what
+  today's runtime stores (question 163). The case is an array of plain
+  values in place.
+- **`apps/base/contacts.tsx`** has 17 differences where it had 26,
+  with its 4 events handled.
+- **`apps/base/person.tsx` and `apps/base/family-member.tsx`** are
+  executed for the first time, with 2 of 18 and 2 of 16 values that
+  differ, at a child of the tree that today's run holds as nothing.
+  They are the 2 modules more with a difference, and they are not
+  examined.
+- **`dev/self-reference-test`** has its event handled, and its 2
+  differences still.
+- **Events.** Of the 6 events that failed with a pattern called in a
+  function body, 3 are handled and 3 fail at `navigateTo` in the
+  handler, which requests an effect.
+- **Evaluations that fail the check.** The 3 are of
+  `apps/base/contacts.tsx`: a promoted `computed` with a block body
+  returns a tree that holds the stream of `openInNewView`, value code
+  places the marker, and the crate lists no path for the binding. It
+  is a defect of the crate's list, which the check found. Over the
+  scenarios of the earlier commit no evaluation fails.
+- **Stored stream positions at no listed path.** 9 are of a stream
+  that a function body returns, where the earlier commit had 3: the 6
+  more are in `examples/cfc-spec-gallery/main.tsx` and held a record
+  in the place of the stream before. 22 are in `person.tsx`,
+  `family-member.tsx`, `contacts.tsx` and `dev/self-reference-test`:
+  the streams of bindings a function body made, and those of bindings
+  of an instance a function body made, which the count reads against
+  the plan of the instance it started with.
+- **Documents.** The 17 documents more are 5 argument and 5 result
+  documents, of the 2 modules and of 3 instances, and 7 cells and
+  records of theirs.
+- **The fresh run.** `showcase/wordsearch/wordsearch.tsx`, which draws
+  from `Math.random` as well, has no difference where it had 3, which
+  is the seed. 7 modules send more events than before, 180 more
+  committed in all, with every value of theirs equal.
+
+19 modules that today's runtime runs are not executed: 6 whose value
+code throws, 4 at an output that no value function computes, 5 at a
+debug string, and one each at `linksOf`, at a spread in the argument
+of a pattern compiled in, at value code that does not parse, and at a
+name value code does not bind. The crate's `null` constants for the
+literal arguments of a call of a pattern compiled in
+(`product/primitives/demo/atoms-demo.tsx`) are as they were.
+
+### The corpus at commit `e4f2fb3431`
+
+The figures of this section are from the prototype author's run, as
+the prototype's note 404 and the two reports of that run give them.
+They were not computed again for this plan. The run is a fresh seeded
+run of today's runtime over all 272 modules (`values-corpus.ts run`),
+followed by the executor alone on the file of that run
+(`values-corpus.ts again`), which is the form of the fresh-run column
+of the earlier commit. The fresh run was made with the crate of the
+commit before the notes and with an executor that had a defect, fixed
+since (below), and `again` with the executor of this commit. The
+baseline is the fresh run of commit `e63b3d305c`.
+
+| | `e63b3d305c`, fresh run | `e4f2fb3431` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 196 | 196 |
+| Every value equal and every event handled | 169 | 171 |
+| Values compared | 5,410 | 5,410 |
+| Values equal | 5,324 | 5,335 |
+| Values that differ | 86 | 75 |
+| Modules with a difference | 24 | 22 |
+| Committed events the executor does not handle | 10 of 475 | 10 of 475 |
+| Evaluations that fail the check of a marker | 3 | 0 |
+| Stored stream positions at no listed path | 31 | 31 |
+| Documents the executor stored | 793 | 793 |
+
+Three modules have another outcome than at the baseline, and each is
+better.
+
+- **`showcase/card-piles/main.tsx`** is fully equal, 28 of 28 values
+  where 9 differed. Its handler reads two piles through their handles
+  and sets both, and by the ruling on a function body's copy the
+  executor stores the values. The case is an array of plain values in
+  place.
+- **`dev/gideon-tests/test-handler-capture-key-equals.tsx`** is fully
+  equal, 4 of 4 values where 2 differed. The handler of a row finds
+  its element with `inboxItems.key(i).equals(inboxItem)`, and by the
+  ruling on the comparison a handle by position is equal to the
+  reference by key of the element that stands there. The case is an
+  array of plain values in place.
+- **`apps/base/contacts.tsx`** has no evaluation that fails the check
+  of a marker, where it had 3: the crate lists a path for a stream in
+  the tree that a promoted `computed` returns. Its 17 differences are
+  as they were.
+
+No module is worse: none has a value that differs where it was equal,
+an event that is not handled where it was, or another reason for not
+being executed. The prototype's author read that from a second fresh
+run, of the crate and the executor at commit `e63b3d305c`, set module
+by module against this one.
+
+- **Events.** The 10 that are not handled are the 10 of the baseline:
+  3 call a debug-string built-in in a function body, 4 are of
+  `product/primitives/demo/atoms-demo.tsx` (below), and one each
+  writes through a handle to a value the instance holds no address
+  for, reads an output that no value function computes, and calls
+  `increment` on a value that is no handle.
+- **Modules not executed.** The 19 are the 19 of the baseline.
+- **`product/primitives/demo/atoms-demo.tsx`.** A state path of a
+  binding of a pattern compiled in, bound to a name whose property
+  the call writes as a literal, holds the literal as its constant at
+  this commit. The module's 4 events are still not handled and its 15
+  differences are as they were, for another cause: its handlers are
+  `action`s that capture `step`, `min` and `items`, the slot of a
+  captured name has the schema of the place and not the handle type
+  that the callee declares, and the handler is handed the value where
+  it calls `step.get()`. That defect of the prototype is not fixed.
+- **A defect of the executor that the run found.** With a declared
+  key, a reader of an element that has no place depends on what the
+  element of its key holds. The executor checked that dependency in
+  the context of whoever checked the entry, and the fold of a
+  `reduce` checks its steps outside the collection, so the fold was
+  evaluated again at every settling: `atoms-demo.tsx` had 319
+  assemblies where it had 14, with the same values. The dependency
+  finds the element in the table of its collection by the key at
+  this commit. The elements concerned are plain values with no
+  place: those of a plain array generated from scratch and of an
+  array written in place in a pattern body.
+- **What the executor counted.** 4,153 evaluations, 1,122 of them of
+  a cone instance of an element body, and 538 assemblies, with every
+  one of the 518 writes of a handler covered by a write edge or an
+  envelope.
+- **Documents.** The 793 are 199 argument and 199 result documents,
+  281 state cells, 34 cells that a function body created, 68 records
+  that a handler wrote into a list, and 12 records of a key of a
+  list.
+- **The two forms of the comparison disagree, and that is not
+  examined.** `run` compares in the process that ran today's runtime,
+  and `again` compares with the values as the file holds them. For
+  this run `run` has 5,340 of 5,415 values equal, and for the run of
+  commit `e63b3d305c` 5,329 of 5,415, where `again` has 5,335 of
+  5,410: 5 compared values more in `run`, and 5 more equal. The
+  modules that differ between the two forms are
+  `dev/catalog/catalog.tsx`,
+  `dev/catalog/stories/cf-code-editor-story.tsx`,
+  `dev/self-reference-test/self-reference-test.tsx` and
+  `system/profile-create/profile-create.tsx`, and
+  `showcase/battleship/multiplayer/room.tsx` is not executed for
+  another reason in each form. The figures of the table are those of
+  `again`, as at the earlier commit.
+
+### The corpus at commit `a462df710a`
+
+The figures of this section are from the prototype author's run, as
+the prototype's note 417 and the two reports of that run give them.
+They were not computed again for this plan; the coordinator of this
+work ran the prototype's tests and fixtures again and not the corpus.
+The run is a fresh seeded run of today's runtime over all 272 modules
+(`values-corpus.ts run`), with the crate and the executor of this
+commit, followed by the executor alone on the file of that run
+(`values-corpus.ts again`). The two forms give the same figure in
+every row. The baseline is the `again` form of the run of commit
+`e4f2fb3431`; the `run` form of that run had 5,415 values compared and
+5,340 equal.
+
+| | `e4f2fb3431`, `again` | `a462df710a` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 196 | 196 |
+| Every value equal and every event handled | 171 | 171 |
+| Values compared | 5,410 | 5,498 |
+| Values equal | 5,335 | 5,414 |
+| Values that differ | 75 | 84 |
+| Modules with a difference | 22 | 22 |
+| Committed events the executor does not handle | 10 of 475 | 10 of 486 |
+| Positions of the results that hold a stream | 721 | 726 |
+| Documents the executor stored | 793 | 802 |
+
+Against the `run` form at commit `e4f2fb3431`, read module by module,
+four modules have another outcome. In each an event is sent for a
+binding that had no listed path and whose stream the executor's
+result holds.
+
+- **`apps/base/family-member.tsx`** has 5 committed events where it
+  had 1, and 42 of 48 values equal where it had 14 of 16. Its 6
+  differences are the 2 it had, at one position of the tree, read
+  again after each of the 4 added events.
+- **`apps/base/person.tsx`** has 6 committed events where it had 1,
+  and 56 of 63 values equal where it had 16 of 18. Its 7 differences
+  are the 2 it had, at one position, read again after each of the 5
+  added events.
+- **`dev/gideon-tests/test-pattern-composition-index-based.tsx` and
+  `dev/gideon-tests/test-pattern-composition-shared-cells.tsx`** have
+  3 committed events each where each had 2, and 12 of 12 values equal
+  where each had 9 of 9. The third event of each, of
+  `removeItemByIndex` and of `removeItem`, was not sent before.
+
+That is 11 more committed events, 83 more values compared, 74 more
+equal, and 9 more that differ. The 9 are differences that the modules
+had, read again after the added events, and no new difference.
+
+- **Against the `again` form of the earlier commit,** four more
+  modules have other figures, by the form of the file alone:
+  `dev/catalog/catalog.tsx` has 8 of 8 values equal where `again` had
+  6 of 8, `dev/catalog/stories/cf-code-editor-story.tsx` 22 of 22
+  where it had 20 of 20,
+  `dev/self-reference-test/self-reference-test.tsx` 7 of 10 where it
+  had 7 of 9, and `system/profile-create/profile-create.tsx` 17 of 18
+  where it had 16 of 16.
+- **No module is worse:** none has a value that differs at a position
+  where it was equal, an event that is not sent or not handled where
+  it was, or another reason for not being executed.
+- **The rulings on a spread child, on a state path of plain type, on
+  what a re-key moves, and on the key changed nothing in the corpus.**
+  A run of the crate and the executor at the commit that drops the
+  listed result paths alone has every module with the figures of the
+  final run.
+- **Events.** The 10 that are not handled are the 10 of the earlier
+  commits.
+- **Modules not executed.** The 19 are the 19 of the earlier commits.
+  The one difference between `run` and `again` is the reason for
+  which `showcase/battleship/multiplayer/room.tsx` is not executed:
+  an output that no value function computes in `run`, and a name
+  that value code does not bind in `again`. The executor alone, in a
+  process in which today's runtime did not run, gives the reason of
+  `again` for the argument as generated and for the argument read
+  back from JSON, so the difference is in the state of the process
+  in which today's runtime ran and not in the file. That is not
+  examined further.
+- **What the executor counted.** 4,200 evaluations, 1,126 of them of
+  a cone instance of an element body, and 544 assemblies, with every
+  write of a handler covered by a write edge or an envelope.
+- **Documents.** Of the 802, 290 are state cells, where the run of
+  the earlier commit had 281.
+- **No plan of the corpus** has a child with `asInstance` or a
+  collection with `keyField`.
+
+### The corpus at commit `7774ba208c`
+
+The figures of this section are from the prototype author's run, as
+the prototype's note 430 gives them. They were not computed again for
+this plan; the coordinator of this work ran the prototype's tests and
+fixtures again and not the corpus. The run is a fresh seeded run of
+today's runtime over all 272 modules (`values-corpus.ts run`), with
+the crate and the executor of this commit, followed by the executor
+alone on the file of that run (`values-corpus.ts again`). The report
+of each command is, line for line, the report of the same command at
+commit `a462df710a`.
+
+| | `a462df710a` | `7774ba208c` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 196 | 196 |
+| Every value equal and every event handled | 171 | 171 |
+| Values compared | 5,498 | 5,498 |
+| Values equal | 5,414 | 5,414 |
+| Values that differ | 84 | 84 |
+| Modules with a difference | 22 | 22 |
+| Committed events the executor does not handle | 10 of 486 | 10 of 486 |
+| Positions of the results that hold a stream | 726 | 726 |
+| Documents the executor stored | 802 | 802 |
+
+Every figure is identical to that of commit `a462df710a`. The
+prototype's author read the two results files module by module, on
+every member of the comparison: the values compared and equal, each
+difference with its path and both values, the events that are not
+handled and not sent, the reason for not being executed, the
+executor's counts, its documents by kind, and the stored streams.
+
+- **One module has another record, `apps/base/contacts.tsx`,** and it
+  is better or worse in no figure. It has 17 differences in both
+  runs, and three of them, those of `$UI` after the first three
+  events, name another first path. The prototype's author traced that
+  to today's run and not to the crate or the executor. Today's run
+  stores the records of the rows of that `map`, which is over an
+  array of references, with their members in another order in the
+  runs of this round, `children` before `props` where the earlier run
+  had `props` first. The row differs at its `style` and at a child,
+  and the comparison names the first of the two that it reads. The
+  values that today's run recorded are the same in both files once
+  the members are put in one order, and a run of that module with the
+  executor of `a462df710a` gives the new order too. Why today's run
+  gives another order of the members was not examined.
+- **The executor alone on the earlier file** (`values-corpus.ts again`
+  with the crate and the executor of this commit, on the results file
+  of the run at `a462df710a`) gives every module the record it had
+  there, with no difference in any member.
+- **The rulings on a key that names its fields and on several key
+  fields, the two diagnostics, and the removal of a replaced instance
+  changed nothing in the corpus.** No plan of the corpus has a
+  collection with `keyFields` or a child with `asInstance`, and no
+  type of the corpus uses `KeyedBy`.
+- **Events and modules not executed** are those of the earlier
+  commits. `run` and `again` differ in the reason for which
+  `showcase/battleship/multiplayer/room.tsx` is not executed, as at
+  commit `a462df710a`.
+- **Two runs.** The first run of this round was made while the
+  comparison of labels ran in a second process, and a second run was
+  made alone. Both have the same report and the same record for every
+  module.
+
+### The comparison of labels and the cost measurement at commit `7774ba208c`
+
+Both were run once over the corpus at this commit, with the executor
+beside today's run so that the harness finds each stream (the
+prototype's notes 427 and 428). The figures are the prototype
+author's and were not computed again for this plan. In each table the
+left column is the last figure this plan held, which is of an earlier
+state of the corpus, the crate and the harness. The two columns are
+therefore no comparison module by module, none was made, and what
+each difference between the columns comes from was not examined.
+
+**The comparison of labels** (`compare/corpus.ts run` and `report`),
+in the default order of the events: 272 modules attempted and 215
+run, with 33 that need `wish`, 14 that request an effect, and 10
+whose run fails on a refusal of Contextual Flow Control. The left
+column is of prototype commit `4ca9fe56cb`
+([Where the work is](#where-the-work-is)).
+
+| | `4ca9fe56cb` | `7774ba208c` |
+| --- | ---: | ---: |
+| Outputs compared | 1,388, 125 bounds | 1,453, 156 bounds |
+| With the atom of a kept output: tighter | 1,267 | 1,330 |
+| With it: the atom names the pattern | 121 | 123 |
+| With it: looser, incomparable | 0, 0 | 0, 0 |
+| Write edges compared | 231, 1 bound | 224, 1 bound |
+| Equal | 219 | 214 |
+| Tighter | 12 | 10 |
+| Looser, incomparable | 0, 0 | 0, 0 |
+| Bindings of a handler: no step, `site`, `element` | 266, 314, 71 | 274, 314, 74 |
+| Events committed | 344 | 486 |
+| Events refused | 15 | 49 |
+| Bindings that got no event | 18 | 127 |
+
+No row is looser or incomparable. Of the 10 tighter write edges, 8
+are of handlers bound in no element body and 2 of handlers of an
+element body, by the join of the `map` coordinator's transaction. The
+127 bindings with no event are those whose stream the executor's
+result does not hold: 64 bound in no element body, 35 in a pattern
+compiled in, and 28 in an element body. The 49 refused events are in
+10 modules, 37 of them for a missing input of the trusted-event
+policy. No results file of this comparison at commit `a462df710a`
+exists. The plan does not tell an element body over an array of
+references from one over an array of plain values in place, so the
+counts of bindings with an `element` step are of both, and of bodies
+over the result of another per-element construct.
+
+**The cost measurement.** Every command of `compare/cost.ts` ran once
+over the corpus, and `compare/cost-report.ts` printed its tables:
+`run` (179 s), `scale` (48 s), `closures`, and the crate's `time`,
+`compile` and `processes`. The left column is of
+[What compiling, running, and storing cost](#what-compiling-running-and-storing-cost),
+at 270 modules compiled and 213 run. Times are wall time in
+milliseconds, totals over the modules.
+
+| | `4ca9fe56cb` | `7774ba208c` |
+| --- | ---: | ---: |
+| Modules compiled, and run | 270, 213 | 272, 215 |
+| Compile in one process: the crate, median of 20 | 5,104 | 4,833 |
+| Compile in one process: today, first compile | 91,115 | 102,945 |
+| Compile, one process per module: the crate | 6,651 | 7,010 |
+| Compile, one process per module: today | 381,950 | 436,953 |
+| To settle, today: milliseconds | 21,566 | 17,520 |
+| To settle, today: transactions committed | 1,461 | 1,480 |
+| To settle, today: runs of an action | 4,343 | 4,281 |
+| To settle, derived for the compiled path: transactions | 426 | 430 |
+| Committed events, and the modules that have one | 344, 104 | 486, 96 |
+| Per committed event, today: milliseconds, median | 26 | 57.3 |
+| Per committed event, today: transactions | 1,175 | 1,221 |
+| Per committed event, today: runs of an action | 1,605 | 1,609 |
+
+After the instance settled, today's run stored 5,926 documents of the
+instances and 9,848 label entries for the 215 modules. The derived
+count for the compiled path is 470 documents at least and 1,700 at
+most, with 215 label entries where every label is empty and 3,297 at
+most. The median ratio of today's later compiles to the crate's, per
+module, is 262.
+
+- **The times were taken on a machine that was not idle.** A session
+  that edits the documents worked in another tree of the repository
+  at the same time. So the times are no repeat of the earlier
+  measurement, and no conclusion about a change of a time is drawn
+  from them.
+- **The events are 486,** the number that the comparison of values
+  commits.
+- **`cost.ts` gives the executor no artifact for a pattern that a
+  function body instantiates,** so a module with such a call is run
+  beside an executor that cannot make the instance.
+- **No time of the compiled path is measured,** as before.
+
+### The corpus at commit `a4b4612b3b`
+
+The figures of this section are from the prototype author's run, as the
+prototype's note 444 gives them and as the report of the run has them.
+They were not computed again for this plan; the coordinator of this
+work ran the prototype's tests and fixtures again and not the corpus.
+The run is a fresh seeded run of today's runtime over all 272 modules
+(`values-corpus.ts run`), with the crate and the executor of this
+commit. Every line of the report that is about a compared value or an
+event is that of commit `7774ba208c`. Four counts of the executor
+differ.
+
+| | `7774ba208c` | `a4b4612b3b` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 196 | 196 |
+| Every value equal and every event handled | 171 | 171 |
+| Values compared | 5,498 | 5,498 |
+| Values equal | 5,414 | 5,414 |
+| Values that differ | 84 | 84 |
+| Modules with a difference | 22 | 22 |
+| Committed events the executor does not handle | 10 of 486 | 10 of 486 |
+| Positions of the results that hold a stream | 726 | 726 |
+| Evaluations the executor counted | 4,200 | 4,202 |
+| Assemblies the executor counted | 544 | 546 |
+| Evaluations counted as stale by their own write | 6 | 34 |
+| Documents the executor stored | 802 | 814 |
+
+The prototype's author read the results file module by module against
+that of the run at `7774ba208c`. Of the 272 records, 255 are the same
+in every member, and 17 modules have another record.
+
+- **Ten modules differ in what the executor counted and stored, and in
+  no value.** They are `dev/catalog/catalog.tsx`,
+  `dev/catalog/ui/sidebar/sidebar.tsx`,
+  `dev/experimental/folksonomy-aggregator.tsx`,
+  `dev/gideon-tests/test-pattern-composition-index-based.tsx`,
+  `dev/gideon-tests/test-pattern-composition-shared-cells.tsx`,
+  `dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx`,
+  `dev/scope-bug-ct1597-reduce/main.tsx`,
+  `showcase/battleship/pass-and-play/main.tsx`,
+  `showcase/wordsearch/play.tsx` and
+  `showcase/wordsearch/wordsearch.tsx`. Each has a `map` over a plain
+  array generated from scratch, what a `computed` or a `lift` returns
+  whole. Each has one or two documents of an output, 12 in all, and a
+  higher count of evaluations stale by their own write.
+  `showcase/wordsearch/play.tsx` has two more evaluations and two more
+  assemblies.
+- **Those ten are the whole effect of the ruling on a reference by key
+  into a plain array generated from scratch.** The same ten, with the
+  same records, differ where the executor is run alone
+  (`values-corpus.ts again`) on the results file of `7774ba208c` after
+  that ruling was built. None differs where it is run that way before
+  it, with the other rulings of this round in place.
+- **The count of evaluations stale by their own write is disturbed, and
+  nothing is evaluated again for it.** The counter counts an evaluation
+  that wrote a position it had read. The element table of a collection
+  over a plain array generated from scratch stores the document of the
+  output and reads it in one evaluation, so each such table is counted
+  once (the prototype's note 442).
+- **Eight modules differ in what today's runtime recorded,** at a value
+  that holds the time of the run: `apps/contacts/contact-book.tsx`,
+  `apps/topic-workbench/main.tsx`,
+  `dev/gideon-tests/test-cell-equals.tsx`,
+  `dev/gideon-tests/test-cross-piece-server.tsx`,
+  `dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx`, which is
+  also one of the ten, `dev/test/autosave-test.tsx`,
+  `examples/scoped-group-chat/main-plain-inputs.tsx` and
+  `system/self/self.tsx`. The comparison of each is the same.
+- **Nothing of the rulings of this round is compared with today's
+  runtime.** No key is in a results file, so the written form of a key
+  changes no record. No type of the corpus uses `ArrayByKey`, and no
+  plan of the corpus has `keyFields`. The ten modules above are over an
+  array with no declared key, and the documents of an output that they
+  store are in no compared value.
+- **Events and modules not executed** are those of the earlier commits.
+  `run` and `again` differ in the reason for which
+  `showcase/battleship/multiplayer/room.tsx` is not executed, as
+  before.
+- **The comparison of labels and the cost measurement were not run
+  again.** Their figures stay those of commit `7774ba208c`, above.
+
+### The corpus at commit `682b918ed1`
+
+The figures of this section are from the prototype author's run, as the
+prototype's note 459 gives them and as the report of the run has them.
+They were not computed again for this plan; the coordinator of this
+work ran the prototype's tests and fixtures again and not the corpus.
+The run is a fresh seeded run of today's runtime over all 272 modules
+(`values-corpus.ts run`), with the crate and the executor of this
+commit. Every line of the report is that of commit `a4b4612b3b`.
+
+| | `a4b4612b3b` | `682b918ed1` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 196 | 196 |
+| Every value equal and every event handled | 171 | 171 |
+| Values compared | 5,498 | 5,498 |
+| Values equal | 5,414 | 5,414 |
+| Values that differ | 84 | 84 |
+| Modules with a difference | 22 | 22 |
+| Committed events the executor does not handle | 10 of 486 | 10 of 486 |
+| Positions of the results that hold a stream | 726 | 726 |
+| Evaluations the executor counted | 4,202 | 4,202 |
+| Assemblies the executor counted | 546 | 546 |
+| Evaluations counted as stale by their own write | 34 | 34 |
+| Documents the executor stored | 814 | 814 |
+
+The prototype's author read the results file module by module against
+that of the run at `a4b4612b3b`. Of the 272 records, 264 are the same
+in every member, and 8 modules have another record.
+
+- **The eight modules differ in what today's runtime recorded alone,**
+  at a value that holds the time of the run, and the comparison of each
+  is the same: `apps/contacts/contact-book.tsx`,
+  `apps/topic-workbench/main.tsx`,
+  `dev/gideon-tests/test-cell-equals.tsx`,
+  `dev/gideon-tests/test-cross-piece-server.tsx`,
+  `dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx`,
+  `dev/test/autosave-test.tsx`,
+  `examples/scoped-group-chat/main-plain-inputs.tsx` and
+  `system/self/self.tsx`. They are the eight of the earlier commit.
+- **Where the executor is run alone** on the results file of that run
+  (`values-corpus.ts again`), 272 of 272 records are the same.
+- **Two records hold a name of several parts,** in
+  `dev/scope-bug-ct1597-reduce/main.tsx` and
+  `examples/group-chat-room/group-chat-room.tsx`. The name is written
+  as the text of the codec for its record, where the earlier file has
+  the name, `#` and the ordinal. The comparison of the two files read
+  both as one form.
+- **Nothing of this round is in a compared value.** No key and no
+  identifier is in a results file, so their record forms change no
+  record. No type of the corpus uses `ArrayByKey`, and no module calls
+  a pattern through `asInstance()`. So the rulings on a plain array
+  generated from scratch that is given whole to an instance of its own,
+  on the key fields of the result of a `map` over an array with a
+  declared key, and on a plain array generated from scratch inside an
+  element body change no record.
+- **Events and modules not executed** are those of the earlier commits.
+- **The comparison of labels and the cost measurement were not run
+  again.** Their figures stay those of commit `7774ba208c`, above.
+
+### The corpus at commit `abd965cc37`
+
+The figures of this section are from the prototype author's run, as the
+prototype's notes 475 and 476 give them. They were not computed again
+for this plan; the coordinator of this work ran the prototype's tests
+and fixtures again and not the corpus. The run is a fresh seeded run of
+today's runtime over all 272 modules (`values-corpus.ts run`), with the
+crate and the executor of this commit. Before it, the prototype's author
+took every module that the executor did not run at commit `682b918ed1`,
+every committed event that it did not handle, and every value that
+differed, and put each in one of five classes: (a) a defect or a missing
+piece of the crate or the executor; (b) a behavior of today's runtime
+that the design deliberately does not have; (c) a behavior of today's
+runtime that the documents do not decide; (d) a limit of the comparison;
+(e) not determined. The classes were written down before any fix (notes
+461 to 464). The defects of class (a) were then fixed, except those that
+the last item below lists.
+
+| | `682b918ed1` | `abd965cc37` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 196 | 212 |
+| Every value equal and every event handled | 171 | 191 |
+| Values compared | 5,498 | 5,907 |
+| Values equal | 5,414 | 5,813 |
+| Values that differ | 84 | 94 |
+| Modules with a difference | 22 | 21 |
+| Committed events the executor does not handle | 10 of 486 | 3 of 531 |
+| Positions of the results that hold a stream | 726 | 894 |
+| Evaluations the executor counted | 4,202 | 7,090 |
+| Documents the executor stored | 814 | 887 |
+
+The notes give no count of assemblies and none of evaluations stale by
+their own write for this commit. `values-corpus.ts again` on the results
+file of the run gives the same report and the same record of the
+comparison for each of the 272 modules. The prototype's author read the
+results file module by module against that of the run at `682b918ed1`:
+31 modules have another outcome and 241 the same. No module has a value
+that differs at a position where it was equal before, an event that is
+not handled where it was, or is no longer executed.
+
+- **What was classed at commit `682b918ed1`.** The 19 modules that were
+  not executed are all class (a). Of the 10 events that were not
+  handled, 7 are class (a), 2 are class (a) and, with the defect fixed,
+  class (b), and 1 is class (b). Of the 84 values that differed, 18 are
+  class (a) alone, 30 are class (a) with (d), 19 are class (b), 10 are
+  class (c), and 7 are class (d) alone. None is class (e).
+- **Sixteen modules are executed where they were not.** Five needed the
+  debug renderers, five a value function for a `const` of the block body
+  of a promoted `computed`, two a name of `commonfabric/cfc` at module
+  scope, and one each the method form of `equals`, a handle for a
+  captured name that the call leaves out, `dataFile`, and a computed key
+  that is a string literal ([What the run conformed
+  to](#what-the-run-conformed-to)). Ten of them have every value equal.
+  Six have values that differ: `apps/budget-tracker/confidential.tsx`
+  and `main.tsx` (13 of 20 equal each),
+  `apps/budget-tracker/expense-form.tsx` (79 of 80),
+  `dev/gideon-tests/test-idempotent-side-effects.tsx` (15 of 22),
+  `dev/gideon-tests/test-record-key-set-56.tsx` (29 of 35), and
+  `showcase/battleship/multiplayer/room.tsx` (4 of 5).
+- **Fifteen more modules have another outcome.** Three have every event
+  handled where one was not: `apps/contacts/contact-book.tsx` and
+  `showcase/battleship/multiplayer/repro-minimal.tsx`, for `navigateTo`
+  in a handler, and `showcase/battleship/pass-and-play/main.tsx`. Seven
+  are fully equal where a value differed: six modules that read a file
+  with `dataFile`, and `system/fabrichat/adapter.tsx`. Two have fewer
+  differences: `apps/base/contacts.tsx`, 11 where it had 17, and
+  `product/primitives/demo/atoms-demo.tsx`, 11 where it had 15, with one
+  event not handled where it had four. Three have the same counts with
+  another record: `apps/base/person.tsx`, `apps/base/family-member.tsx`,
+  and `examples/ui-variants/ui-variants-host.tsx`.
+- **Three modules are not executed.** In
+  `apps/weekly-calendar/event.tsx` and
+  `dev/test/silent-computed-crash.tsx` a body of the pattern throws. The
+  design gives the failed cone an error state and commits the rest
+  (`plan-and-label-templates.md` §5.2), and the executor has no error
+  state. `system/profile-picker/profile-picker.tsx` calls `linksOf`,
+  which the executor does not have.
+- **Three committed events are not handled,** and each is a write
+  through a handle to a constant, which `execution-and-storage.md` §2.4
+  refuses. `clearCompleted` of `product/primitives/demo/atoms-demo.tsx`
+  writes `items`, a literal of the call. `boundIncrement` and
+  `decrement` of `examples/ui-variants/ui-variants-host.tsx` write
+  `value`, a path that the call leaves out (question 219). Today the
+  callee of each is an instance with an argument document, and the write
+  lands there.
+- **The 94 values that differ, in 21 modules, by class:** 8 are class
+  (a) alone, 24 are class (a) with (d), 34 are class (b), 16 are class
+  (c), and 12 are class (d) alone.
+- **Class (b), 34 values: what the design deliberately does not do.** 15
+  are in the three `budget-tracker` modules, where a handler of a row
+  over an array of plain values in place compares its element, a
+  reference by key, with the copies that `budgets.get()` returns, finds
+  none equal and removes nothing (question 220). 11 are in `atoms-demo`,
+  after `sortByColumn` writes `rows`, a literal of the call, and is
+  refused; `language-subset.md` reports such a call with
+  `binding:write-to-computed`, and the crate does not report it for a
+  write that an `action` makes. 2 are what the refused write of
+  `ui-variants-host` leaves. 5 are in
+  `dev/gideon-tests/test-ifelse-both-branches.tsx`, which counts its
+  evaluations: a branch that is not selected is not evaluated
+  (`execution-and-storage.md` §2.2), and today's runtime evaluates both.
+  1 is in `examples/scoped-group-chat/main-plain-inputs.tsx`, where a
+  row over the messages of the per-session room, an array of plain
+  values in place, reads the per-user `name`. Today's runtime resolves
+  that read to `undefined`. The design evaluates the cone instance in
+  the narrowest scope of what it reads (`execution-and-storage.md`
+  §1.8); the executor has no scopes and reads the name.
+- **Class (c), 16 values: what the documents do not decide.** 7 are of a
+  promoted `computed` whose body computes another value as a function
+  body (question 217), 6 of the order of the members of a stored record
+  (question 218), and 3 of a read through the name bound to `[SELF]`
+  (question 157).
+- **Class (a), 32 values: defects and missing pieces that are not
+  fixed.** 24 are class (a) with (d), in `apps/base/contacts.tsx` (11),
+  `person.tsx` (7) and `family-member.tsx` (6): the crate's schema of a
+  type that refers to itself has `{}` at the reference, the generator
+  gives a text there, today's read under its schema gives nothing, and
+  the executor validates no read against its schema and reads the data.
+  The cause is read from the source for `contacts.tsx`. 5 are in
+  `examples/array-in-cell-with-remove-editable`, whose result holds a
+  handler factory that is not bound: the executor stores nothing for a
+  function, and today's runtime a record with `$implRef`. 2 are a debug
+  string of an `unknown[]` in `test-idempotent-side-effects.tsx`:
+  `language-subset.md` §7.8 has a position of type `unknown` as a
+  reference that is not read, and the executor reads the content. 1 is
+  the count of a `computed` that writes a cell it reads, in the same
+  module: the executor evaluates such a cone once.
+- **Class (d), 12 values alone: limits of the comparison.** The
+  generator gives no value for a required member of type `unknown` and a
+  text for one of type `FabricBytes`: `system/agent-run/agent-run.tsx`
+  (4), `system/profile-create/profile-create.tsx` (1) and
+  `battleship/multiplayer/room.tsx` (1). The harness demands no path
+  below a `$cell` attribute: `examples/cfc-spec-gallery/main.tsx` (1).
+  And it reads a state cell under today's schema:
+  `dev/self-reference-test/self-reference-test.tsx` (1) and
+  `test-idempotent-side-effects.tsx` (4).
+- **Not verified.** The causes that the notes mark as read from the
+  source and the two values, in `budget-tracker/confidential.tsx` and
+  `main.tsx`, `contacts.tsx`, `agent-run` and `profile-create`.
+
+**The comparison of labels** (`compare/corpus.ts run` and `report`) was
+run again at this commit, in the default order of the events, with the
+executor beside today's run (note 476). The left column is the last run
+before it ([The comparison of labels and the cost measurement at commit
+`7774ba208c`](#the-comparison-of-labels-and-the-cost-measurement-at-commit-7774ba208c)).
+
+| | `7774ba208c` | `abd965cc37` |
+| --- | ---: | ---: |
+| Modules run | 215 | 215 |
+| Outputs compared | 1,453, 156 bounds | 1,454, 156 bounds |
+| With the atom of a kept output: tighter | 1,330 | 1,331 |
+| With it: the atom names the pattern | 123 | 123 |
+| With it: looser, incomparable | 0, 0 | 0, 0 |
+| Write edges compared | 224, 1 bound | 241, 1 bound |
+| Equal | 214 | 229 |
+| Tighter | 10 | 12 |
+| Looser, incomparable | 0, 0 | 0, 0 |
+| Events committed | 486 | 531 |
+| Events refused | 49 in 10 modules | 50 in 11 modules |
+| Bindings that got no event | 127 | 81 |
+
+No output and no write edge is looser than today's or incomparable with
+it. Of the 12 tighter write edges, 9 are of handlers bound in no element
+body and 3 of handlers of an element body, 2 of those by the join of the
+`map` coordinator's transaction. The one more event that is refused is
+`fireShot` of `showcase/battleship/multiplayer/room.tsx`, whose handler
+throws in today's runtime on the generated state. No results file of the
+run at commit `7774ba208c` exists, so the two columns were not compared
+module by module. The plan does not tell an element body over an array
+of references from one over an array of plain values in place, so the 3
+write edges of an element body are of both, and of bodies over the
+result of another per-element construct. The cost measurement was not
+run again; its figures stay those of commit `7774ba208c`.
+
+### The corpus at commit `a84264daf2`
+
+The figures of this section are from the prototype author's runs, as the
+prototype's notes 498 to 503 give them. They were not computed again for this
+plan; the coordinator of this work ran the prototype's tests and fixtures again
+and not the corpus. Each figure is of one run on a machine that also ran the
+corpus comparison at times: the counts are exact and the times are not.
+
+#### First: the growth that was measured, what is fixed and what is not
+
+The owner asked that a size or a cost which follows the number of paths, or
+grows faster than linearly in the source or in the data, be looked for and
+reported prominently. This round measured the following (notes 500 and 501). The
+first table is what was fixed. A representation changed in each and no meaning
+did.
+
+| What grew | Before | After | Fixed by |
+| --- | ---: | ---: | --- |
+| The plan of a chain of 25 values, each reading the two before it | 27,897,914 bytes | 14,397 bytes, 2.1 times the plan of a chain of 12 | The ruling on question 222 (Z58): a template names another output |
+| The plans of the corpus together | 9,826,792 bytes | 6,410,715 with the ruling, 5,956,178 with P6 | The ruling and P5, then P6 |
+| The plan of `system/home/home.tsx`, the largest | 1,897,836 bytes | 377,176 bytes | The same. The largest is then `dev/factory-outputs/lot-with-coordinator-demo/main.tsx`, 561,499 bytes |
+| The template of a chain of `&&`, `\|\|` or `??` operands computed in one cone | 11,128 bytes for 4 operands, 165,732 for 8, 3,262,474 for 12, 63,119,254 for 16 | 12,701 for 12, 16,165 for 16, 19,629 for 20 | P6: a template that stands at more than one position is an entry of `Plan.templates` |
+| The templates of the write edges of a handler with `R` reads and `W` writes | 1,280 bytes at 4 and 4, 4,864 at 8 and 8, 18,944 at 16 and 16 | One reference for each edge | P6 |
+| The schema of a type that each level of nesting uses twice | Doubles with each level | Written once under `$defs` | P7 |
+| Forming the keys of an array after every evaluation (`fixtures/scale.tsx`, 200 rows and 200 groups of five) | 203,335 key formations and 8.1 s for a settle | 802 and 0.12 s | The executor's store: the keys stand until a document that forming them read is written |
+| Resolving a reference by key by a scan of the keys of its array (10,000 plain values in place) | 4.8 s for a settle and 5 to 11 s for one change, with counts that are linear | Not timed again | The executor's store: an index from a key to its position for each list of keys it formed |
+
+Three things about the first table. While the crate built a plan with the
+copies, a chain of twenty `??` operands took 3.6 s and would have written about
+1.2 GB, so the crate holds the operands of a `select` and the template of a
+value that has no output by reference while it builds, and the plan is never
+built with the copies. The crate still writes two templates in place: that of a
+constructed value read whole, which is the join of its entries and the template
+of no output, and one whose root is changed for the child of a `pick`. And P7
+reaches the schema documents: the schemas that the prototype's plan holds in
+place, the event schema of a binding and the schema of an output, are not
+changed, and the crate still cuts a type at a depth of twelve. One run of the
+crate over the corpus took 3.7 s before the round and 2.5 to 2.9 s after it; the
+front end and footprint analysis were not timed apart.
+
+What was measured and is not fixed:
+
+- **A pattern that is compiled in is copied for each site that calls it, and
+  doubles with each level.** With two sites per level:
+
+  | Levels | 1 | 2 | 3 | 4 | 5 | 6 |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | Bytes of the plan | 3,193 | 7,746 | 16,961 | 35,665 | 73,936 | 152,575 |
+  | Cones | 5 | 13 | 29 | 61 | 125 | 253 |
+
+  The value code doubles as well, and the source grows by 148 bytes per level.
+  With one site per level the plan is linear. P6 does not help, because the
+  copies differ in their slot indexes. The provisional decision P18 writes such
+  a pattern once (question 247); the prototype does not have it.
+- **The result document is written whole, so the bytes written for one change
+  follow the length of the list.** The table below has it: 22,879 to 22,924
+  bytes for a change of a list of 1,000 and 238,879 to 238,925 for one of
+  10,000, whatever the change.
+  Over the corpus the transactions of the executed modules wrote 42,479 bytes in
+  214 creations, 120,422 bytes in 570 events, and 31,642,734 bytes in 755
+  derivations. 14,970,456 of the last are those of
+  `examples/cfc-trusted-component-examples/main.tsx`, whose result document of
+  about 140,000 bytes is written whole behind each of its events. The executor
+  has no patch and writes a document whole. The assembled collection and the
+  result are values of the whole list (question 259).
+- **Every array write over plain values forms the key of every position, with or
+  without a declared key.** One salted hash for each position, for an append, an
+  edit of one field and a removal alike. With a declared key the edit changes no
+  key, and the hashes are spent all the same, because the executor keeps no hash
+  for a position that a write did not touch. Over an array of references no hash
+  is formed (question 256).
+- **The checks of memo entries follow the list: 3 `N` to 7 `N` for one change.**
+  The executor finds what is stale by checking each entry that is demanded,
+  where the documents have the scheduler mark what a write reaches (question
+  271).
+- **The time of one change grows 20 to 35 times for 10 times the list,** with
+  counts that grow 10 times. Something in the executor is still more than
+  linear, and it was not found ([Open, and not needing the
+  owner](#open-and-not-needing-the-owner)).
+- **Many handlers that capture the same values are linear in the source, with a
+  large factor.** 10 and 20 handlers over 5 cells are plans of 24,856 and 48,966
+  bytes. The plan is about twenty times the source, most of it slots: each
+  handler has a slot of its own for each name it captures.
+
+One change of a list, at three lengths (`compare/growth.ts` on
+`fixtures/lists.tsx`: one `map` over the list, and for the fourth case a `map`
+over the result of a `filter`). Each change is a write to the argument by a
+writer outside the instance, and the counts are of the derivation transaction
+that follows. The case of each row is in its first column: over an array of
+references, over an array of plain values in place with no declared key and with
+`ArrayByKey`, and over the result of another per-element construct.
+
+| Case | Length | Change | Evaluations | Salted hashes | Checks | Bytes written | Milliseconds |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| References | 100 | settle | 102 | 0 | 203 | 15,680 | 8 |
+| References | 1,000 | settle | 1,002 | 0 | 2,003 | 161,480 | 29 |
+| References | 1,000 | append | 3 | 0 | 3,007 | 22,924 | 26 |
+| References | 1,000 | edit one field | 3 | 0 | 3,005 | 22,904 | 19 |
+| References | 1,000 | remove first | 2 | 0 | 3,002 | 22,879 | 19 |
+| References | 10,000 | settle | 10,002 | 0 | 20,003 | 1,664,480 | 651 |
+| References | 10,000 | append | 3 | 0 | 30,007 | 238,925 | 927 |
+| References | 10,000 | edit one field | 3 | 0 | 30,005 | 238,904 | 971 |
+| References | 10,000 | remove first | 2 | 0 | 30,002 | 238,879 | 967 |
+| Plain values, no key | 100 | settle | 102 | 100 | 203 | 6,191 | 9 |
+| Plain values, no key | 1,000 | settle | 1,002 | 1,000 | 2,003 | 64,691 | 60 |
+| Plain values, no key | 1,000 | append | 3 | 1,001 | 3,007 | 22,924 | 58 |
+| Plain values, no key | 1,000 | edit one field | 3 | 1,000 | 3,004 | 22,904 | 66 |
+| Plain values, no key | 1,000 | remove first | 2 | 999 | 3,002 | 22,879 | 60 |
+| Plain values, no key | 10,000 | settle | 10,002 | 10,000 | 20,003 | 676,691 | 1,019 |
+| Plain values, no key | 10,000 | append | 3 | 10,001 | 30,007 | 238,925 | 1,264 |
+| Plain values, no key | 10,000 | edit one field | 3 | 10,000 | 30,004 | 238,904 | 1,163 |
+| Plain values, no key | 10,000 | remove first | 2 | 9,999 | 30,002 | 238,879 | 1,219 |
+| Plain values, `ArrayByKey` | 100 | settle | 102 | 100 | 203 | 6,191 | 7 |
+| Plain values, `ArrayByKey` | 1,000 | settle | 1,002 | 1,000 | 2,003 | 64,691 | 70 |
+| Plain values, `ArrayByKey` | 1,000 | append | 3 | 1,001 | 3,007 | 22,924 | 67 |
+| Plain values, `ArrayByKey` | 1,000 | edit one field | 3 | 1,000 | 3,005 | 22,904 | 64 |
+| Plain values, `ArrayByKey` | 1,000 | remove first | 2 | 999 | 3,002 | 22,879 | 65 |
+| Plain values, `ArrayByKey` | 10,000 | settle | 10,002 | 10,000 | 20,003 | 676,691 | 1,086 |
+| Plain values, `ArrayByKey` | 10,000 | append | 3 | 10,001 | 30,007 | 238,925 | 1,423 |
+| Plain values, `ArrayByKey` | 10,000 | edit one field | 3 | 10,000 | 30,005 | 238,904 | 1,405 |
+| Plain values, `ArrayByKey` | 10,000 | remove first | 2 | 9,999 | 30,002 | 238,879 | 1,549 |
+| Result of a `filter` | 100 | settle | 203 | 100 | 405 | 6,191 | 9 |
+| Result of a `filter` | 1,000 | settle | 2,003 | 1,000 | 4,005 | 64,691 | 100 |
+| Result of a `filter` | 1,000 | append | 5 | 1,001 | 7,014 | 22,924 | 112 |
+| Result of a `filter` | 1,000 | edit one field | 5 | 1,000 | 7,007 | 22,904 | 107 |
+| Result of a `filter` | 1,000 | remove first | 3 | 999 | 7,002 | 22,879 | 104 |
+| Result of a `filter` | 10,000 | settle | 20,003 | 10,000 | 40,005 | 676,691 | 1,767 |
+| Result of a `filter` | 10,000 | append | 5 | 10,001 | 70,014 | 238,925 | 2,753 |
+| Result of a `filter` | 10,000 | edit one field | 5 | 10,000 | 70,007 | 238,904 | 2,675 |
+| Result of a `filter` | 10,000 | remove first | 3 | 9,999 | 70,002 | 238,879 | 2,591 |
+
+What the table shows. The evaluations of a change are 2 to 5 at every length:
+the element, the assembly and the result. That part follows the change.
+Everything else follows the list: the bytes written, the salted hashes over
+plain values, and the checks. An index from a write to its readers, and a key
+kept for each position that a write did not touch, are changes of the executor
+alone, and were not made. Today's runtime was not measured on these lists. The
+fourth case is a `map` over the result of a `filter` over plain values in place;
+a `map` over the result of a `filter` over an array of references, and a chain
+of more than two constructs, were not measured.
+
+Which questions on growth the round bears on: 222 and 245 to 247, 256, 257, 259,
+271 and 274. Each of those entries has the measurement and says whether the
+finding is confirmed, refuted or unchanged. The round measured nothing for
+questions 248 to 255, 258, 260 to 270, 272, 273 and 275, which are unchanged.
+
+#### The comparison of values
+
+A seeded run of today's runtime over the 272 modules (`values-corpus.ts run`),
+beside that of commit `abd965cc37`:
+
+| | `abd965cc37` | `a84264daf2` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 212 | 214 |
+| Every value equal and every event handled | 191 | 193 |
+| Values compared | 5,907 | 6,107 |
+| Values equal | 5,813 | 6,013 |
+| Values that differ | 94 | 94 |
+| Modules with a difference | 21 | 21 |
+| Committed events the executor does not handle | 3 of 531 | 3 of 541 |
+| Evaluations the executor counted | 7,090 | 7,118 |
+| Positions of the results that hold a stream | 894 | 909 |
+| Documents the executor stored | 887 | 1,444 |
+
+Two modules have another outcome, and 270 the same:
+`apps/weekly-calendar/event.tsx` is executed with 198 of 198 values equal and
+`dev/test/silent-computed-crash.tsx` with 2 of 2, where the value code threw and
+the executor had no error state. The comparison reads an error state as nothing,
+which is what today's runtime stores. The one module that is not executed is
+`system/profile-picker/profile-picker.tsx`, for `linksOf`. Of the 557 documents
+more, 552 are the stream documents, which the executor makes from the first
+event of a stream, and 5 are of the two modules. Six cones took an error state:
+three of `apps/base/contacts.tsx`, behind an event, on data that does not match
+its type, two of `event.tsx` and one of `silent-computed-crash.tsx`. The first
+run counted `showcase/wordsearch/play.tsx` with one event not handled, because
+the executor took a `RangeError` that the handler throws for a stack that ran
+out; that was corrected, and the figures are those of `values-corpus.ts again`
+on the file of the run.
+
+**The 47 modules that need `wish` or request an effect** were left out of every
+comparison before. `values-corpus.ts alone` runs them on the executor with
+stubbed answers: a request for JSON gets an empty record, a `navigateTo` is
+done, every other request fails with one text, no `wish` has a target, and the
+clock holds the time of the run. 44 are executed and 3 are not (a computed key
+in a binding, an element construct with no function, and the built-in
+`spaceDeleted`). 13 of 106 events are not handled, 9 of them for a built-in or a
+pattern called in a function body that the executor does not have. 32 requests
+left and were answered. 5 cones took an error state, each where a body calls a
+method of something that holds nothing, which by a reading of three of the four
+modules is the result of a `wish`.
+
+`values-corpus.ts stubbed` runs the same modules on today's runtime as well,
+with `fetch` replaced by a function that answers the same. Today's runtime runs
+45 and fails 2 on a refused commit. 42 are executed, 16 have every value equal
+and every event handled, 1,484 of 1,584 values are equal, and 4 of 94 committed
+events are not handled. The two sides are not stubbed equally except for the
+fetch of JSON from an address outside `/api/`. Of the 100 values that differ, in
+25 modules, by a reading of the two values that was not verified one by one: 56
+in 12 modules are answers that the two sides were not given equally (the text of
+a language-model failure, a fetch that had not come back when today's values
+were read, `fetchProgram`, `sqliteQuery`, `agent`); 10 in 6 are what `wish` does
+today and the executor does not build, the profile sidecar and the search; 17 in
+3 are a time or a generated value; and 17 in 3 are not determined.
+
+#### The comparison of labels
+
+`compare/corpus.ts`, beside the run at commit `abd965cc37`:
+
+| | `abd965cc37` | `a84264daf2` |
+| --- | ---: | ---: |
+| Outputs compared | 1,454, 156 bounds | 1,462, 148 bounds |
+| With the atom of a kept output: tighter | 1,331 | 1,332 |
+| With it: the atom names the pattern | 123 | 130 |
+| With it: looser, incomparable | 0, 0 | 0, 0 |
+| Write edges compared | 241 | 249 |
+| Equal | 229 | 237 |
+| Tighter | 12 | 12 |
+| Looser, incomparable | 0, 0 | 0, 0 |
+
+No output and no write edge is looser than today's or incomparable with it. The
+8 write edges more are of events that are sent at this commit, since the
+executor's result holds more streams. With the ruling on question 222 alone the
+outputs were as at `abd965cc37`, row for row. With P6, 8 rows that were bounds
+are compared, each in the category it had as a bound: the harness finds the
+branch of a `select` from the stored value where the template of the output is
+that `select`, which it tested by the identity of the node, and with one shared
+node the test holds for every output that names it. No row changed its category.
+P7 changed nothing. The template evaluator of the harness forms the label of a
+named output and of a shared template once for the element bindings and the
+position it is read at, in one evaluation. It keeps no memo across evaluations,
+so a label is formed once per evaluation of a template and not once per
+transaction. The cost measurement was not run again.
+
+
+### The corpus at commit `e63851c1ee`
+
+The figures of this section are from the prototype author's runs, as the
+prototype's notes 505 to 522 and the author's report of the round give them.
+The coordinator of this work ran, at that commit, the tests of the crate (496
+pass), the tests under Deno (116 tests with 477 steps pass) and the fixtures
+(59 of 59 runs, 1,004 of 1,013 values equal), and not the corpus, the
+measurements of growth or the times. No file of the crate changed in the
+round: every change is in the executor and in the measurement scripts. Each
+time is of one run, or the median or mean that its table names, on one
+machine: the counts are exact and the times are not.
+
+Four cases are measured, and each figure below names its case: a `map` over
+an array of references; a `map` over an array of plain values in place with
+no declared key; the same with a key declared by `ArrayByKey`; and a `map`
+over the result of a `filter` of plain values in place. Nothing in this
+section was measured over a plain array generated from scratch, over a
+`flatMap`, or over the result of a `filter` of an array of references.
+
+#### First: the growth that was measured, what is fixed and what is not
+
+**One change of a list, before and after.** The lists are those of
+`fixtures/lists.tsx` (`compare/growth.ts`). A change is made by a writer
+outside the instance: an edit is a write of one member, and an append, a
+prepend and a removal are a `splice` of the array. The counts are of the
+derivation transaction that follows. "Before" is the table of [The corpus at
+commit `a84264daf2`](#the-corpus-at-commit-a84264daf2), where the bytes are
+those of the result document written whole and the time is of one change.
+"After" is this commit, where the bytes are those put into the documents and
+the time is the mean of 40 later changes of the same kind on one instance.
+The counts after are the same at 100, 1,000 and 10,000 elements.
+
+| Case | Change | Evaluations, before and after | Salted hashes at 1,000 / 10,000 before, and after | Checks at 1,000 / 10,000 before, and after | Bytes at 1,000 / 10,000 before, and after | Milliseconds at 1,000 / 10,000 before | Milliseconds at 100 / 1,000 / 10,000 after |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| References | append | 3, 2 | 0 / 0, 0 | 3,007 / 30,007, 1 | 22,924 / 238,925, 24 to 26 | 26 / 927 | 0.037 / 0.033 / 0.081 |
+| References | edit one field | 3, 2 | 0 / 0, 0 | 3,005 / 30,005, 2 | 22,904 / 238,904, 14 | 19 / 971 | 0.020 / 0.018 / 0.023 |
+| References | remove first | 2, 1 | 0 / 0, 0 | 3,002 / 30,002, 1 | 22,879 / 238,879, 2 | 19 / 967 | 0.015 / 0.020 / 0.122 |
+| Plain values, no key | append | 3, 2 | 1,001 / 10,001, 1 | 3,007 / 30,007, 1 | 22,924 / 238,925, 24 to 26 | 58 / 1,264 | 0.058 / 0.065 / 0.100 |
+| Plain values, no key | edit one field | 3, 2 | 1,000 / 10,000, 1 | 3,004 / 30,004, 1 | 22,904 / 238,904, 26 | 66 / 1,163 | 0.098 / 0.054 / 0.056 |
+| Plain values, no key | remove first | 2, 1 | 999 / 9,999, 0 | 3,002 / 30,002, 1 | 22,879 / 238,879, 2 | 60 / 1,219 | 0.016 / 0.020 / 0.132 |
+| Plain values, `ArrayByKey` | append | 3, 2 | 1,001 / 10,001, 1 | 3,007 / 30,007, 1 | 22,924 / 238,925, 24 to 26 | 67 / 1,423 | 0.061 / 0.104 / 0.115 |
+| Plain values, `ArrayByKey` | edit one field | 3, 2 | 1,000 / 10,000, 1 | 3,005 / 30,005, 2 | 22,904 / 238,904, 14 | 64 / 1,405 | 0.058 / 0.055 / 0.058 |
+| Plain values, `ArrayByKey` | remove first | 2, 1 | 999 / 9,999, 0 | 3,002 / 30,002, 1 | 22,879 / 238,879, 2 | 65 / 1,549 | 0.012 / 0.019 / 0.093 |
+| Result of a `filter` | append | 5, 4 | 1,001 / 10,001, 1 | 7,014 / 70,014, 2 | 22,924 / 238,925, 24 to 26 | 112 / 2,753 | 0.112 / 0.085 / 0.382 |
+| Result of a `filter` | edit one field | 5, 4 | 1,000 / 10,000, 1 | 7,007 / 70,007, 2 | 22,904 / 238,904, 26 | 107 / 2,675 | 0.111 / 0.112 / 0.324 |
+| Result of a `filter` | remove first | 3, 2 | 999 / 9,999, 0 | 7,002 / 70,002, 2 | 22,879 / 238,879, 2 | 104 / 2,591 | 0.013 / 0.039 / 0.366 |
+
+Every row at this commit, with the time of the first change after an instance
+settled (the median of 7 instances), which builds once an index from a key to
+its position and so follows the length:
+
+| Case | Change | Evaluations | Salted hashes | Checks | Bytes put into the documents, at 100 / 1,000 / 10,000 | First change, ms, at 100 / 1,000 / 10,000 | Later, ms, at 100 | at 1,000 | at 10,000 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| References | settle | 102 / 1,002 / 10,002 | 0 / 0 / 0 | 0 | 15,680 / 161,480 / 1,664,480 | 9.1 / 14.9 / 165.5 | | | |
+| References | append | 2 | 0 | 1 | 24 / 25 / 26 | 0.13 / 0.11 / 0.32 | 0.037 | 0.033 | 0.081 |
+| References | append, array written whole | 2 | 0 | 1 | 24 / 25 / 26 | 0.21 / 0.84 / 11.31 | 0.223 | 0.851 | 9.111 |
+| References | prepend | 2 | 0 | 1 | 24 / 25 / 26 | 0.06 / 0.12 / 0.70 | 0.064 | 0.095 | 0.389 |
+| References | edit one field | 2 | 0 | 2 | 14 / 14 / 14 | 0.05 / 0.07 / 0.12 | 0.020 | 0.018 | 0.023 |
+| References | remove first | 1 | 0 | 1 | 2 / 2 / 2 | 0.04 / 0.07 / 0.23 | 0.015 | 0.020 | 0.122 |
+| References | remove last | 1 | 0 | 1 | 2 / 2 / 2 | 0.03 / 0.05 / 0.12 | 0.013 | 0.012 | 0.017 |
+| Plain values, no key | settle | 102 / 1,002 / 10,002 | 100 / 1,000 / 10,000 | 0 | 6,191 / 64,691 / 676,691 | 8.2 / 44.7 / 420.4 | | | |
+| Plain values, no key | append | 2 | 1 | 1 | 24 / 25 / 26 | 0.11 / 0.20 / 0.90 | 0.058 | 0.065 | 0.100 |
+| Plain values, no key | append, array written whole | 2 | 1 | 1 | 24 / 25 / 26 | 0.17 / 0.52 / 6.11 | 0.157 | 0.483 | 4.266 |
+| Plain values, no key | prepend | 2 | 1 | 1 | 24 / 25 / 26 | 0.10 / 0.24 / 1.59 | 0.104 | 0.152 | 0.673 |
+| Plain values, no key | edit one field | 2 | 1 | 1 | 26 / 26 / 26 | 0.10 / 0.15 / 0.38 | 0.098 | 0.054 | 0.056 |
+| Plain values, no key | remove first | 1 | 0 | 1 | 2 / 2 / 2 | 0.04 / 0.07 / 0.21 | 0.016 | 0.020 | 0.132 |
+| Plain values, no key | remove last | 1 | 0 | 1 | 2 / 2 / 2 | 0.03 / 0.06 / 0.10 | 0.014 | 0.012 | 0.016 |
+| Plain values, `ArrayByKey` | settle | 102 / 1,002 / 10,002 | 100 / 1,000 / 10,000 | 0 | 6,191 / 64,691 / 676,691 | 5.0 / 51.4 / 470.0 | | | |
+| Plain values, `ArrayByKey` | append | 2 | 1 | 1 | 24 / 25 / 26 | 0.09 / 0.15 / 1.37 | 0.061 | 0.104 | 0.115 |
+| Plain values, `ArrayByKey` | append, array written whole | 2 | 1 | 1 | 24 / 25 / 26 | 0.14 / 0.51 / 6.02 | 0.104 | 0.453 | 4.514 |
+| Plain values, `ArrayByKey` | prepend | 2 | 1 | 1 | 24 / 25 / 26 | 0.09 / 0.19 / 1.43 | 0.060 | 0.096 | 0.616 |
+| Plain values, `ArrayByKey` | edit one field | 2 | 1 | 2 | 14 / 14 / 14 | 0.11 / 0.14 / 0.81 | 0.058 | 0.055 | 0.058 |
+| Plain values, `ArrayByKey` | remove first | 1 | 0 | 1 | 2 / 2 / 2 | 0.03 / 0.06 / 0.18 | 0.012 | 0.019 | 0.093 |
+| Plain values, `ArrayByKey` | remove last | 1 | 0 | 1 | 2 / 2 / 2 | 0.02 / 0.05 / 0.08 | 0.010 | 0.012 | 0.014 |
+| Result of a `filter` | settle | 203 / 2,003 / 20,003 | 100 / 1,000 / 10,000 | 0 | 6,191 / 64,691 / 676,691 | 6.8 / 49.7 / 557.0 | | | |
+| Result of a `filter` | append | 4 | 1 | 2 | 24 / 25 / 26 | 0.11 / 0.18 / 1.32 | 0.112 | 0.085 | 0.382 |
+| Result of a `filter` | append, array written whole | 4 | 1 | 2 | 24 / 25 / 26 | 0.13 / 0.56 / 5.71 | 0.154 | 0.464 | 3.909 |
+| Result of a `filter` | prepend | 4 | 1 | 2 | 24 / 25 / 26 | 0.09 / 0.26 / 3.25 | 0.116 | 0.179 | 0.964 |
+| Result of a `filter` | edit one field | 4 | 1 | 2 | 26 / 26 / 26 | 0.09 / 0.21 / 1.31 | 0.111 | 0.112 | 0.324 |
+| Result of a `filter` | remove first | 2 | 0 | 2 | 2 / 2 / 2 | 0.03 / 0.10 / 0.40 | 0.013 | 0.039 | 0.366 |
+| Result of a `filter` | remove last | 2 | 0 | 2 | 2 / 2 / 2 | 0.03 / 0.08 / 0.38 | 0.012 | 0.029 | 0.280 |
+
+The time of a later change at 10,000 elements, against that at 100: 0.6 to
+2.2 times for an append, an edit and a removal of the last element over a
+stored array, which is the first three cases; 2.9 and 3.4 times for an edit
+and an append over the result of a `filter`; 6 to 10 times for a prepend and
+a removal of the first element, which give every later position another
+number (question 260); and 23 to 28 times for a removal over the result of a
+`filter`, whose kept list the executor forms again when its membership
+changes. An append that writes the array whole, as a `set` of a new array
+does, has the same counts and a time that follows the length, 25 to 43
+times: the store compares the entries of the old and the new array to keep
+their keys, and the write itself is the length of the list.
+
+**What was changed, and whose each cause was.**
+
+| What followed the list | Cause | Whose | What was done |
+| --- | --- | --- | --- |
+| The time of one change, 20 to 35 times for 10 times the list (note 505) | The element of a key was found by a scan of the element table, once for each element when an assembly was evaluated and once more when its memo entry was compared: the length times the length. 35% of 1,259 ms for one edit at 10,000 | The executor's | An index from a key to its element. The cause that the earlier section left open is found |
+| The checks of memo entries, 3 `N` to 7 `N` (note 506; question 271) | Each pull compared every demanded entry with what it had read | The executor's: the documents have the scheduler mark what a write reaches | Each entry is registered as a reader of the positions it read, and a write marks its readers. 1 or 2 checks per change |
+| The same, for a reader through a reference by key into an array of plain values in place (note 506) | Such a reader has no address of its own, so marking by the path of the write marks every reader through a key of the array | The documents did not say how a write is mapped to a key | The store reports the keys that a write touched. Provisional decision P24 |
+| The salted hashes, one for each position at every write (note 507; question 256) | The key of every position was formed again | The wording of `execution-and-storage.md` §2.5, step 2, and of `scheduler-and-serving-loop.md` §3.2, which states an algorithm | The key of a position that a write did not touch is kept. Provisional decision P23 |
+| The evaluations of the enclosing cone and of `result`, and the result written whole (note 508; question 259) | Three rules of the documents make the cone that holds the collection stale for a change of one row, against the worked example of `execution-and-storage.md` §10.1 | The documents', which conflict with themselves | A cone that places a collection holds a reference to it, and the rows are stored by the collection. Provisional decision P22 |
+| The assembly: an element record made and an entry pulled for every position (note 509) | The assembly was formed whole at each change | The wording "rebuilds the table" | The splices of the source are applied to the table and to the result. Part of P23 |
+| A copy of each document that a transaction writes (note 510) | The executor copied a document before the first write to it | The executor's | A transaction keeps what each change replaced |
+
+**The same changes as the documents word them.** With the option
+`keys: "formed"` the keys of an array are dropped at each write to it and
+formed whole when they are next asked for, and with `assembly: "formed"`
+every assembly is formed whole. Both give the same result as the default
+(`exec/test/growth.test.ts`). At 10,000 elements:
+
+| Case | Change | Salted hashes | Checks | Milliseconds |
+| --- | --- | ---: | ---: | ---: |
+| References | append | 0 | 1 | 32.6 |
+| References | append, array written whole | 0 | 1 | 38.2 |
+| References | prepend | 0 | 1 | 34.8 |
+| References | edit one field | 0 | 2 | 32.0 |
+| References | remove first | 0 | 1 | 33.7 |
+| References | remove last | 0 | 1 | 33.8 |
+| Plain values, no key | append | 10,001 | 10,001 | 178.3 |
+| Plain values, no key | append, array written whole | 10,001 | 10,001 | 185.1 |
+| Plain values, no key | prepend | 10,001 | 10,001 | 180.6 |
+| Plain values, no key | edit one field | 10,000 | 10,000 | 176.2 |
+| Plain values, no key | remove first | 9,999 | 10,000 | 173.7 |
+| Plain values, no key | remove last | 9,999 | 10,000 | 176.0 |
+| Plain values, `ArrayByKey` | append | 10,001 | 10,001 | 218.8 |
+| Plain values, `ArrayByKey` | append, array written whole | 10,001 | 10,001 | 231.1 |
+| Plain values, `ArrayByKey` | prepend | 10,001 | 10,001 | 245.3 |
+| Plain values, `ArrayByKey` | edit one field | 10,000 | 10,001 | 221.0 |
+| Plain values, `ArrayByKey` | remove first | 9,999 | 10,000 | 226.8 |
+| Plain values, `ArrayByKey` | remove last | 9,999 | 10,000 | 232.2 |
+| Result of a `filter` | append | 10,001 | 20,002 | 320.5 |
+| Result of a `filter` | append, array written whole | 10,001 | 20,002 | 311.7 |
+| Result of a `filter` | prepend | 10,001 | 20,002 | 319.8 |
+| Result of a `filter` | edit one field | 10,000 | 20,000 | 308.9 |
+| Result of a `filter` | remove first | 9,999 | 20,000 | 299.1 |
+| Result of a `filter` | remove last | 9,999 | 20,000 | 281.0 |
+
+So with the reading that provisional decision P23 sets aside, one change of
+a list of 10,000 plain values in place costs 10,000 salted hashes and 10,000
+to 20,000 checks, and 174 to 321 ms, where it costs at most 1 hash, 1 or 2
+checks and 0.06 to 0.4 ms with the keys kept and the assembly applied.
+
+**Today's runtime on the same lists** (`compare/growth-today.ts`, note 514).
+Today's runtime has no `ArrayByKey`, and it keys a plain value in place by
+its position. A change is a write to the argument cell in a transaction of
+its own: `push` for an append, a `set` of one member for the edit, and for a
+prepend and a removal a `set` of the array, as a handler writes it. The
+counts are of everything up to the next time the runtime is idle with the
+result read: the runs of a scheduler action, the commits, the documents that
+those commits changed, and the bytes of those documents, each whole. One run
+for each row.
+
+| Case | Length | Change | Actions | Commits | Documents changed | Bytes of those documents | Milliseconds |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| References | 100 | settle | 4 | 2 | 310 | 170,688 | 183.33 |
+| References | 100 | append | 3 | 2 | 5 | 19,862 | 27.23 |
+| References | 100 | prepend | 3 | 2 | 5 | 28,162 | 40.2 |
+| References | 100 | edit one field | 1 | 1 | 1 | 51 | 7.35 |
+| References | 100 | remove first | 3 | 2 | 2 | 26,225 | 37.17 |
+| References | 100 | remove last | 3 | 2 | 2 | 18,008 | 22.6 |
+| References | 1,000 | settle | 4 | 2 | 3,010 | 1,680,888 | 1011.23 |
+| References | 1,000 | append | 3 | 2 | 5 | 178,264 | 143.07 |
+| References | 1,000 | prepend | 3 | 2 | 5 | 261,264 | 302.16 |
+| References | 1,000 | edit one field | 1 | 1 | 1 | 51 | 40.92 |
+| References | 1,000 | remove first | 3 | 2 | 2 | 259,325 | 263.5 |
+| References | 1,000 | remove last | 3 | 2 | 2 | 176,408 | 169.58 |
+| Plain values in place, keyed by position | 100 | settle | 4 | 2 | 210 | 169,478 | 78.12 |
+| Plain values in place, keyed by position | 100 | append | 3 | 2 | 5 | 15,042 | 16.62 |
+| Plain values in place, keyed by position | 100 | prepend | 3 | 2 | 205 | 174,452 | 97.29 |
+| Plain values in place, keyed by position | 100 | edit one field | 2 | 1 | 1 | 4,281 | 9.87 |
+| Plain values in place, keyed by position | 100 | remove first | 3 | 2 | 198 | 170,778 | 98.74 |
+| Plain values in place, keyed by position | 100 | remove last | 3 | 2 | 2 | 13,236 | 16.07 |
+| Plain values in place, keyed by position | 1,000 | settle | 4 | 2 | 2,010 | 1,669,778 | 830.48 |
+| Plain values in place, keyed by position | 1,000 | append | 3 | 2 | 5 | 132,044 | 120.45 |
+| Plain values in place, keyed by position | 1,000 | prepend | 2 | 1 | 2 | 184,328 | 1022.69 |
+| Plain values in place, keyed by position | 1,000 | edit one field | 2 | 1 | 1 | 42,081 | 74.74 |
+| Plain values in place, keyed by position | 1,000 | remove first | 2 | 1 | 1 | 184,005 | 934.11 |
+| Plain values in place, keyed by position | 1,000 | remove last | 3 | 2 | 2 | 130,234 | 120.77 |
+| Result of a `filter` | 100 | settle | 108 | 105 | 514 | 418,176 | 259.08 |
+| Result of a `filter` | 100 | append | 6 | 5 | 9 | 34,926 | 46.98 |
+| Result of a `filter` | 100 | prepend | 210 | 110 | 511 | 415,600 | 434.83 |
+| Result of a `filter` | 100 | edit one field | 2 | 1 | 1 | 4,281 | 17.33 |
+| Result of a `filter` | 100 | remove first | 205 | 105 | 595 | 416,109 | 390.48 |
+| Result of a `filter` | 100 | remove last | 5 | 4 | 4 | 30,917 | 37.54 |
+| Result of a `filter` | 1,000 | settle | 1,008 | 1,005 | 5,014 | 4,149,576 | 2537.24 |
+| Result of a `filter` | 1,000 | append | 6 | 5 | 9 | 308,528 | 365.69 |
+| Result of a `filter` | 1,000 | prepend | 1,003 | 903 | 904 | 434,182 | 4370.35 |
+| Result of a `filter` | 1,000 | edit one field | 2 | 1 | 1 | 42,081 | 149.25 |
+| Result of a `filter` | 1,000 | remove first | 1,003 | 1,001 | 1,001 | 461,005 | 2574.5 |
+| Result of a `filter` | 1,000 | remove last | 5 | 4 | 4 | 304,514 | 297.19 |
+
+Today's runtime runs 1 to 3 actions for an append or an edit at every length
+over an array of references and over an array of plain values in place, as
+the executor evaluates 2 cone instances. A prepend or a removal of the first
+element over plain values in place, keyed by position, runs an action and
+changes documents for every element behind it, and over the result of a
+`filter` every element is run again. The time of every change follows the
+length: over plain values in place an edit takes 9.9 ms at 100 elements and
+74.7 ms at 1,000. At 10,000 elements the first settle of today's runtime had
+not ended after 100 seconds, where it took 1.0 s at 1,000, and the run was
+stopped; the executor settles the same list of plain values in place in 8,
+45 and 420 ms at 100, 1,000 and 10,000. At 1,000 plain values in place the
+prepend and the removal of the first element logged
+`Link resolution iteration limit reached` in today's runtime, so those two
+rows are of a run that failed. The two sides do not measure the same thing:
+today's runtime checks labels, commits to a store with a journal, and
+schedules, and the executor does none of the three.
+
+**What still follows the list in the executor.**
+
+- An insertion or a removal that is not at the end gives every later position
+  another number: one number for each later key, with a small constant
+  (question 260).
+- A `filter` whose membership changed forms its kept list again.
+- A `flatMap`, a `some`, an `every`, a `find`, a `findIndex`, a `filter` whose
+  body returns a record, and every construct over a plain array generated
+  from scratch form their assembly whole at each change.
+- A memo entry that called `equals`, that demanded a cone with a static
+  side-write, or that read through a key into the document of a computed
+  output, and every entry that used one, is compared at every pull, and an
+  instance with such an entry is visited by every derivation transaction
+  (question 294). Over a plain array generated from scratch the checks of a
+  change therefore follow the list as before.
+- A `set` of a whole new array, by the length of the array.
+- The first change after an instance settled, which builds the index from a
+  key to its position.
+
+**The documents of a stored result** (note 513; questions 229 and 264). The
+executor keeps the layout of `execution-and-storage.md` §4.10 as an
+accounting beside one document that every read goes to: which split points
+are parts, the bytes of each, and the documents of the layout that each
+transaction wrote. The rule on size is the one that the section had before
+provisional decision P20, under the assumption of question 229. The list is
+the `map` over an array of plain values in place, with a declared key and
+with none; a row is 23 bytes and a storage link 61. "Bytes of those
+documents" is what the documents written hold when the transaction ends, and
+"Bytes put into them" what the changes of the transaction wrote. No label
+entry and no provenance record is in any size.
+
+| Key | Rows | Change | Documents written | Bytes of those documents | Bytes put into them | Parts created | Parts deleted |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| `ArrayByKey` | 100 | settle (2 documents) | 2 | 2,260 | 4,451 | 1 | 0 |
+|  |  | edit one field | 1 | 2,195 | 14 | 0 | 0 |
+|  |  | append | 1 | 2,211 | 19 | 0 | 0 |
+|  |  | remove first | 1 | 2,170 | 0 | 0 | 0 |
+| `ArrayByKey` | 1,000 | settle (2 documents) | 2 | 22,960 | 45,851 | 1 | 0 |
+|  |  | edit one field | 1 | 22,895 | 14 | 0 | 0 |
+|  |  | append | 1 | 22,911 | 19 | 0 | 0 |
+|  |  | remove first | 1 | 22,870 | 0 | 0 | 0 |
+| `ArrayByKey` | 2,000 | settle (2 documents) | 2 | 46,960 | 93,851 | 1 | 0 |
+|  |  | edit one field | 1 | 46,895 | 14 | 0 | 0 |
+|  |  | append | 1 | 46,911 | 19 | 0 | 0 |
+|  |  | remove first | 1 | 46,870 | 0 | 0 | 0 |
+| `ArrayByKey` | 3,000 | settle (3,002 documents) | 3,002 | 250,960 | 389,741 | 3,001 | 0 |
+|  |  | edit one field | 1 | 24 | 14 | 0 | 0 |
+|  |  | append | 2 | 183,081 | 98 | 1 | 0 |
+|  |  | remove first | 1 | 182,940 | 0 | 0 | 1 |
+| `ArrayByKey` | 10,000 | settle (10,002 documents) | 10,002 | 838,960 | 1,306,741 | 10,001 | 0 |
+|  |  | edit one field | 1 | 24 | 14 | 0 | 0 |
+|  |  | append | 2 | 610,081 | 98 | 1 | 0 |
+|  |  | remove first | 1 | 609,940 | 0 | 0 | 1 |
+| no declared key | 100 | settle (2 documents) | 2 | 2,260 | 4,451 | 1 | 0 |
+|  |  | edit one field | 1 | 2,195 | 24 | 0 | 0 |
+|  |  | append | 1 | 2,211 | 19 | 0 | 0 |
+|  |  | remove first | 1 | 2,170 | 0 | 0 | 0 |
+| no declared key | 1,000 | settle (2 documents) | 2 | 22,960 | 45,851 | 1 | 0 |
+|  |  | edit one field | 1 | 22,895 | 24 | 0 | 0 |
+|  |  | append | 1 | 22,911 | 19 | 0 | 0 |
+|  |  | remove first | 1 | 22,870 | 0 | 0 | 0 |
+| no declared key | 2,000 | settle (2 documents) | 2 | 46,960 | 93,851 | 1 | 0 |
+|  |  | edit one field | 1 | 46,895 | 24 | 0 | 0 |
+|  |  | append | 1 | 46,911 | 19 | 0 | 0 |
+|  |  | remove first | 1 | 46,870 | 0 | 0 | 0 |
+| no declared key | 3,000 | settle (3,002 documents) | 3,002 | 250,960 | 389,741 | 3,001 | 0 |
+|  |  | edit one field | 2 | 183,025 | 108 | 1 | 1 |
+|  |  | append | 2 | 183,081 | 98 | 1 | 0 |
+|  |  | remove first | 1 | 182,940 | 0 | 0 | 1 |
+| no declared key | 10,000 | settle (10,002 documents) | 10,002 | 838,960 | 1,306,741 | 10,001 | 0 |
+|  |  | edit one field | 2 | 610,025 | 108 | 1 | 1 |
+|  |  | append | 2 | 610,081 | 98 | 1 | 0 |
+|  |  | remove first | 1 | 609,940 | 0 | 0 | 1 |
+
+The bytes put into the documents follow the change. The bytes of the
+documents written do not, by three rules of that section.
+
+- **A list of small rows is one document until it passes 65,536 bytes.** The
+  array of 2,000 rows is one part of 46,960 bytes, and an edit of one row
+  puts 14 or 24 bytes into it. Whether that is a cost depends on whether
+  storage takes a patch below a path of a document, which no document says
+  (question 290).
+- **Crossing the size makes every row a part in one transaction, and the
+  array is then larger than before.** A list of 2,600 rows that 200 more are
+  appended to creates 2,800 part documents in that transaction. A row of 23
+  bytes is replaced in the array by a storage link of 61 bytes, so the array
+  grows from about 61,000 bytes to about 171,000, exceeds the maximum, and has
+  no split point left. At 10,000 rows it is 610,000 bytes, and each append
+  and each removal writes it: 98 bytes put in and 610,081 bytes of documents
+  written. A reader of the whole list loads every part.
+- **An edit of a plain value with no declared key renames the part of its
+  row.** The identifier of a part holds the key of the row, and the edit gives
+  the row another key. So the edit deletes one part document, creates one,
+  and writes the array for the new link: at 10,000 rows 2 documents, of which
+  one is the array of 610,000 bytes. With a declared key it writes one
+  document of 24 bytes.
+
+Provisional decision P20 replaces the rule: a row is a part only from a
+minimum size on, and a long array is stored in chunks.
+`execution-and-storage.md` §4.10 has the sizes that the new rule gives for
+this list, derived and not measured. Not measured in either: the label
+entries and provenance records that the section counts in a size and repeats
+in each part, the bytes that the rule encodes where sizes are measured from
+the documents, and a list that shrinks.
+
+**A keystroke in a row that has state** (note 515; question 254).
+`compare/rekey-cost.ts keystrokes`, on `fixtures/rows-state.tsx`: each row
+has a state cell, a handler binding with a stream, a `lift` in the body, and
+an instance called through `asInstance()`. A keystroke is an event for the
+handler `rename` of one row, which writes the `title` of its element through
+the reference to the element. The figures are the mean of 20 keystrokes in
+one row.
+
+| Case | Rows | Documents written | Places moved | Stream documents added | Bytes put into the documents | Part documents created and deleted | Salted hashes | Evaluations | Milliseconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Plain values in place, no declared key | 100 | 3 | 1 | 1 | 609.5 | 0 and 0 | 1 | 3 | 0.459 |
+| Plain values in place, no declared key | 1,000 | 3 | 1 | 1 | 610.5 | 0 and 0.05 | 1 | 3 | 0.686 |
+| Plain values in place, no declared key | 10,000 | 3 | 1 | 1 | 611.5 | 1 and 1 | 1 | 3 | 5.395 |
+| Plain values in place, `ArrayByKey` | 100 | 3 | 0 | 0.05 | 80.5 | 0 and 0 | 1 | 3 | 0.244 |
+| Plain values in place, `ArrayByKey` | 1,000 | 3 | 0 | 0.05 | 81.5 | 0 and 0 | 1 | 3 | 0.343 |
+| Plain values in place, `ArrayByKey` | 10,000 | 3 | 0 | 0.05 | 82.5 | 0 and 0 | 1 | 3 | 0.429 |
+| References | 100 | 2 | 0 | 0.05 | 25 | 0 and 0 | 0 | 2 | 0.074 |
+| References | 1,000 | 2 | 0 | 0.05 | 25 | 0 and 0 | 0 | 2 | 0.071 |
+| References | 10,000 | 2 | 0 | 0.05 | 25 | 0 and 0 | 0 | 2 | 0.131 |
+
+- **Over an array of plain values in place with no declared key** each
+  keystroke gives the element another key, by the ruling that a plain value
+  edited in place is a new element. The executor moves the place of the
+  row's state cell to the new key, re-keys the instance of the row, forms 1
+  salted hash, evaluates 3 cone instances, and writes 3 documents: the
+  argument, the argument of the row's instance, and the result. The state
+  cell has no document in this fixture, since nothing wrote it; a cell that
+  was written would be one document moved for each keystroke. The row is
+  stored again whole, about 610 bytes, because the links to its streams and
+  to its state cell hold the key. And each keystroke leaves one more
+  document: the event of the next keystroke is for the stream of the new
+  key, and a stream has a document from its first event, so 20 keystrokes
+  leave 20 stream documents (question 295). Where the rows are parts, each
+  keystroke deletes the part of the row and creates one under the new key.
+  The counts are the same at 100, 1,000 and 10,000 rows.
+- **With `ArrayByKey`** no key changes: 3 documents written, 81 bytes,
+  nothing moved, and one stream document for all 20 keystrokes. One salted
+  hash is formed, of the key fields, to find that the key is the same.
+- **Over an array of references** the write is to the cell of the element: 2
+  documents, 25 bytes, no hash.
+- **Today's runtime,** on the same pattern with the child called in the body,
+  since it has no `asInstance()`, over plain values in place keyed by
+  position: 4 runs of an action, 2 commits and 3 documents changed for each
+  keystroke at 100 and at 1,000 rows, and nothing moves. Its time for a
+  keystroke is 60 ms at 100 rows and 579 ms at 1,000. It was not measured at
+  10,000.
+- **The time of the executor** for a keystroke with no declared key follows
+  the number of rows, 0.46 ms at 100 and 5.4 ms at 10,000, because it finds
+  what is stored under the old key by passing over the state cells and the
+  instances of the pattern. That is the executor's, and an index by key
+  would end it.
+
+**A list that is replaced again and again** (note 516; question 255).
+`compare/rekey-cost.ts polled 100 100`, on the same fixture: a writer outside
+the instance replaces all 100 elements with new values, 100 times. The
+documents that the executor holds:
+
+| Case | Start | After 1 round | After 10 | After 100 |
+| --- | ---: | ---: | ---: | ---: |
+| Plain values in place, no declared key | 202 | 402 | 2,202 | 20,202 |
+| Plain values in place, `ArrayByKey` | 202 | 202 | 202 | 202 |
+| References | 202 | 202 | 202 | 202 |
+
+With no declared key each round makes 100 keys, and 100 instances with an
+argument and a result document each, which stay when their keys leave, by the
+ruling that the removal of an element deletes nothing stored under its key
+and the ruling that an instance called through `asInstance()` is not torn
+down: 10,100 instances after 100 rounds. No state cell was written and no
+row received an event in this run; a row that was used would leave its state
+cell documents and its stream documents as well. With a declared key, and
+over an array of references, where the write is to the cell of each element,
+nothing is added.
+
+The costs of the last two measurements follow from owner rulings and no
+change of the executor removes them. Provisional decision P21 adds a
+compile-time warning, and questions 254 and 255 carry the measurements with
+the coordinator's recommendation.
+
+**Measured and not fixed, in the size of a plan.**
+
+- **A pattern that is compiled in is still written out at every call site**
+  (note 517; question 247). Provisional decisions P18 and P19 are not built.
+  With two sites per level the plans are 3,175, 7,632, 16,652, 34,975, 72,491
+  and 149,595 bytes for 1 to 6 levels at this commit. From the written-out
+  plans the prototype's author estimates what P18 would give
+  (`compare/sites.ts`, with 200 bytes taken for a call-site record): 3,055,
+  5,365, 7,979, 11,101, 15,291 and 21,445 bytes. The estimate still grows by
+  more at each level, because it keeps the `within` of the deepest copy,
+  which holds the whole chain of sites, and the plan's one template table.
+  Over the 382 plans of the corpus, 5,956,178 bytes, there are 364 copies of
+  282 callees that hold 1,691,163 bytes, and the estimate is 5,870,726
+  bytes, 1.4% less: a pattern is seldom compiled in at more than one site
+  in the corpus. Of the 82 pairs of copies of one callee in those plans, 44
+  are equal but for the numbers in them and 38 differ, 33 of those in how
+  many records they have (question 289).
+- **A `Body` record per use** (note 518; question 248). One `lift` with `R`
+  reads called at `U` places: `Plan.bodies` is 2,006 bytes for `R` 10 and
+  `U` 5, 8,052 for 10 and 20, 5,756 for 40 and 5, and 23,052 for 40 and 20,
+  which is the product. The slots do not grow with `U`.
+- **`within` repeats the chain** (question 250). With one call site per level
+  the `within` members of a plan are 89 bytes at 3 levels and 302 at 6. With
+  two sites per level they are 36, 212, 788, 2,388, 6,484 and 16,468 bytes
+  for 1 to 6 levels.
+- **Entries per position of a type written out** (question 252). For a type
+  that each level uses twice, to a depth of 10, with a handle at the bottom,
+  and one `lift` that reads a value of the type whole, the plan has 1 slot
+  and 1,136 bytes at every depth. `footprint-analysis.md` §2.2 has one
+  `identity` entry for each such position, 1,024 at depth 10, and the crate
+  records the read as one `value` entry. The growth is not measured, and the
+  crate does not conform to that section there.
+
+**Which questions on growth the round bears on:** 229, 247, 248, 250, 252,
+254 to 257, 259, 260, 264 and 271. Each of those entries has the measurement
+and says whether the finding is confirmed, refuted, fixed or unchanged. Not
+measured: questions 249, 251, the callee analyzed per call of question 252,
+and 253, which needs labels at run time; and questions 258, 261 to 263, 265
+to 270 and 272 to 275.
+
+#### Run times: the executor beside today's runtime
+
+The method (note 519), for each module of the corpus that today's runtime
+runs in the comparison, on the scenario of `compare/generate.ts`:
+
+- **Compile, crate:** the median of 20 runs, in one process, of the crate's
+  analysis of the files of the module's program and the plans as JSON text
+  (the `time` command). It does not include writing the value code or
+  starting a process.
+- **Compile, today:** `cost.ts compile`, the first compile of the module in a
+  new runtime, one run, measured earlier on the same day at an earlier commit
+  of the prototype's branch; today's compiler is not changed by that branch.
+- **Settle, executor:** from the artifact, read and parsed, to the settled
+  instance: the evaluation of the module texts with `new Function`, the
+  creation, and the first derivation transaction. One run, in the process
+  that ran every module before it (`values-corpus.ts again` with
+  `PATTERN_COMPILER_MEASURE=patches`).
+- **Settle, today:** `cost.ts run`: from the compiled pattern to every kept
+  output read and the runtime idle, one run.
+- **Per event:** the mean over the events of the scenario that today's run
+  committed, with their number in parentheses. For the executor an event is
+  the event's transaction and the derivation transaction behind it. For
+  today's runtime it is the time from the send to the runtime idle with each
+  kept output read, and it includes the reads of labels that the harness of
+  the comparison makes between events.
+
+All on one machine, under macOS, which ran the measurement and nothing else
+of this work at the time; other processes of the machine were not
+controlled. All figures are milliseconds. A module with no figure per event
+has no event in its scenario.
+
+| Module | Source bytes | Compile, crate | Compile, today | Settle, executor | Settle, today | Per event, executor (events) | Per event, today (events) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `examples/pattern-index/pattern-index.tsx` | 505 | 0.05 | 109 | 0.10 | 8.67 | | |
+| `dev/catalog/stories/cf-heading-story.tsx` | 1,054 | 0.03 | 121 | 0.10 | 5.70 | | |
+| `examples/cfc-input-cell-demo/briefing.tsx` | 1,325 | 0.08 | 115 | 0.12 | 11.1 | | |
+| `dev/catalog/stories/cf-field-story.tsx` | 1,510 | 0.04 | 96.3 | 0.13 | 5.04 | | |
+| `dev/catalog/stories/cf-tabs-story.tsx` | 1,624 | 0.04 | 114 | 0.14 | 6.53 | | |
+| `examples/phonetic-speller/phonetic-speller.tsx` | 2,263 | 0.12 | 138 | 0.55 | 12.1 | | |
+| `apps/project-list/main.tsx` | 2,556 | 0.34 | 139 | 0.48 | 42.5 | 0.14 (3) | 20.2 (3) |
+| `system/cfc/trusted-surfaces/fact-check-gate.tsx` | 3,016 | 0.15 | 99.7 | 0.18 | 14.3 | 0.03 (1) | 6.33 (1) |
+| `dev/gideon-tests/test-onclick-ifelse-simple-cell-working.tsx` | 3,270 | 0.11 | 99.4 | 0.15 | 34.5 | 0.03 (1) | 7.71 (1) |
+| `system/cfc/trusted-surfaces/recipient-confirm.tsx` | 3,631 | 0.18 | 89.8 | 0.18 | 82.5 | 0.03 (1) | 11.2 (1) |
+| `examples/multi-option-selection/multi-option-selection.tsx` | 4,041 | 0.17 | 212 | 0.42 | 31.4 | | |
+| `examples/router/main.tsx` | 5,128 | 0.80 | 184 | 0.58 | 26.1 | | |
+| `dev/catalog/stories/cf-render-story.tsx` | 5,874 | 0.22 | 182 | 0.60 | 49.1 | | |
+| `dev/catalog/stories/cf-textarea-story.tsx` | 7,272 | 0.40 | 697 | 0.24 | 15.2 | | |
+| `examples/cfc-render-policy-demo/main.tsx` | 7,675 | 0.78 | 193 | 0.76 | 44.4 | 0.25 (2) | 16.3 (2) |
+| `dev/catalog/stories/cf-calendar-story.tsx` | 8,554 | 0.58 | 226 | 0.68 | 38.2 | | |
+| `dev/catalog/stories/cf-svg-story.tsx` | 9,376 | 0.44 | 184 | 0.46 | 16.7 | | |
+| `apps/book-recommendations/view.tsx` | 10,647 | 2.51 | 228 | 0.91 | 48.3 | | |
+| `dev/catalog/stories/cf-vstack-story.tsx` | 12,657 | 0.53 | 311 | 0.47 | 42.6 | | |
+| `apps/recommend-a-book/views.tsx` | 15,542 | 2.33 | 315 | 0.61 | 64.4 | 0.05 (2) | 9.42 (2) |
+| `showcase/battleship/pass-and-play/main.tsx` | 25,874 | 5.96 | 308 | 3.02 | 87.6 | 7.64 (4) | 5.64 (4) |
+| `system/shared-space/shared-space-collection.tsx` | 49,974 | 27.6 | 546 | 0.67 | 109 | | |
+| `system/fabrichat/adapter.tsx` | 119,743 | 20.6 | 877 | 0.53 | 41.9 | | |
+| `apps/work-snapshot/main.tsx` | 150,468 | 50.1 | 1,160 | 1.92 | 155 | 0.43 (2) | 34.8 (2) |
+| `system/fabrichat/room-test-fixture.ts` | 481,259 | 640 | 3,241 | 0.11 | 16.9 | | |
+
+Over the 214 modules that have every figure: compile 1,357 ms by the crate
+and 64,480 ms today; to the settled result 318 ms by the executor and 14,210
+ms today; 541 events in 1,587 ms by the executor and in 43,690 ms today. In
+one listed module the executor is slower per event than today's runtime,
+`showcase/battleship/pass-and-play/main.tsx`, 7.64 against 5.64 ms; that was
+not investigated.
+
+`system/home/home.tsx` is not in the table because it is not executed: the
+crate lists four constructs of it that it does not emit, the first a call
+form in the reactive tier. Of `system/fabrichat/`, `adapter.tsx` and
+`room-test-fixture.ts` are in the table; `placement.tsx` is not executed,
+for the built-in `spaceDeleted`; `message-row.tsx` has `resolveAsCell` in
+the reactive tier, which the crate does not emit; and the crate emits no
+plan for the other modules of the directory.
+
+**What this comparison can show, and what it cannot.** It shows that value
+code driven by a plan settles the corpus modules and handles their events in
+times of the order of a millisecond, in an executor that was written to be
+read and not to be fast. It does not show how a compiled runtime would
+compare with today's. The executor instantiates no label and checks no
+constraint, where today's runtime prepares a commit with the CFC checks for
+every transaction. It has no storage transaction: its documents are
+JavaScript values in one process, with no journal of reads, no commit, no
+encoding, and no notification of a subscriber. It has no scheduler across
+instances, no network, and no sandbox for a function body, which today's
+runtime runs under SES. Today's times include the harness of the comparison.
+Each figure is of one run. The compile times compare the crate's front end
+and plan emission with today's whole compile, which also type-checks with
+the TypeScript compiler and bundles.
+
+#### The comparison of values and of labels
+
+`values-fixtures.ts` runs 59 runs, and 1,004 of 1,013 compared values are
+equal, with the same 9 that differ as at commit `a84264daf2`. A seeded run of
+today's runtime over the 272 modules (`values-corpus.ts run`), beside that
+commit:
+
+| | `a84264daf2` | `e63851c1ee` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 214 | 214 |
+| Every value equal and every event handled | 193 | 193 |
+| Values compared | 6,107 | 6,107 |
+| Values equal | 6,013 | 6,013 |
+| Values that differ | 94 | 94 |
+| Modules with a difference | 21 | 21 |
+| Committed events the executor does not handle | 3 of 541 | 3 of 541 |
+| Evaluations the executor counted | 7,118 | 6,673 |
+| Positions of the results that hold a stream | 909 | 909 |
+| Documents the executor stored | 1,444 | 1,444 |
+
+No module has another outcome. The 445 evaluations fewer are those of the
+cones that placed a collection (provisional decision P22). The 47 modules
+that need `wish` or request an effect, with stubbed answers
+(`values-corpus.ts stubbed`): 45 run by today's runtime, 42 executed, 16 with
+every value equal and every event handled, 1,484 of 1,584 values equal, and 4
+of 94 committed events not handled, each figure as before. Two of those
+modules, `dev/loom-chat-room-fixture/main.tsx` and
+`dev/loom-overlay-fixture/main.tsx`, store one document of kind `output`
+fewer, 10,289 documents in all for 10,291. By a reading that was not
+verified, an output whose value is the assembled result of a construct was
+stored in a document of its own where a function body of its cone gave it to
+an instance, and is given as the values at this commit. On the executor alone
+(`values-corpus.ts alone`): 44 executed, 3 not, and 13 of 106 events not
+handled, as before. The first such run after the reference to a collection
+was built had one event more not handled, in `apps/cozy-poll/main.tsx`: a
+row that left and entered its collection in one change was stored with a
+mark in the place of the rows of the collection inside it. That was
+corrected, and a test has the case; the test was written after the
+correction and was not seen to fail.
+
+The comparison of labels over the corpus (`compare/corpus.ts`): 1,462 outputs
+compared and 148 bounds, 1,332 tighter and 130 whose atom names the pattern,
+none looser or incomparable; 249 write edges compared, 237 equal and 12
+tighter. The report is the same text as that of commit `a84264daf2`, line for
+line: the crate is not changed, and the harness reads the executor's streams
+alone.
+
+Which commit each run was made on: the seeded run with today's runtime, the
+stubbed run and the label run used the executor of commit `9e16d9e054` with
+the first of the two later performance changes. The replay of the seeded run
+on the executor alone, the run of the 47 modules on the executor alone, the
+fixtures, and every measurement of growth and of the keystroke were repeated
+on the final code and give the same figures. The runs with today's runtime
+were not repeated after the last two commits, which change the renumbering
+of positions in an assembly and the accounting of the layout.
+
+**What the round's author did not keep or verify** (note 522). Most tests
+were written after the code or after the measurement they bound: those of
+one change of a list, those of the layout, of which two failed first and led
+to changes, and those of the keystroke and of the polled list, which passed
+when they were written. Marking, the kept keys, the journal, the reference
+to a collection and the applied assembly were written with the existing
+tests, the fixtures and the corpus comparison as their check, and no test of
+their own first. Three tests that stated the earlier behavior were replaced.
+Not verified: that marking is exact for every plan beyond what the fixtures,
+the executor's tests and the corpus exercise; the times; and that today's
+figures are free of the harness.
+
+
+### The corpus at commit `3d33db2e4d`
+
+The figures of this section are from the prototype author's runs, as the
+prototype's notes 523 to 535 and the author's report of the round give them.
+The coordinator of this work ran, at that commit, the tests of the crate (497
+pass and 1 is ignored, the test of the size of a plan under P18), the tests
+under Deno (119 tests with 509 steps pass) and the fixtures (59 of 59 runs,
+1,004 of 1,013 values equal), and not the corpus, the measurements of the
+part documents or the times. Each time is the mean of 20 changes on one
+instance in one run, on one machine: the counts are exact and the times are
+not.
+
+Four cases are measured, and each figure below names its case: a `map` over
+an array of references; a `map` over an array of plain values in place with
+no declared key; the same with a key declared by `ArrayByKey`; and a `map`
+over the result of a `filter` of plain values in place. Nothing in this
+section was measured over a plain array generated from scratch, over a
+`flatMap`, or over the result of a `filter` of an array of references.
+
+The round built provisional decisions P20, P25 and P26 as documents
+(`exec/parts.ts`): for every document of the executor's store, the documents
+that it is stored in, kept change by change beside the one value that the
+store holds, with a reader outside the executor that reads every document of
+an instance back from them after each change and compares. Value code does
+not read through them. It did not build P18 and P19. It built the warning of
+P21 in the crate.
+
+#### First: the structural findings
+
+Nine, in the order of the round's report. "Bytes" are those of the documents
+that one change writes, each whole. "Patch" is what the writer and the
+derivation put into them.
+
+1. **A record with many members is not stored in chunks, and its document
+   follows the data.** A gap in P20 and P26, which speak of arrays alone; not
+   fixed in the prototype. `fixtures/rows-state.tsx`, as a `map` over an
+   array of references, holds its elements in a record `pool` of the
+   argument. One keystroke in one row writes 68,456 bytes of part documents
+   at 100 rows, 109,141 at 1,000 and 572,774 at 10,000, for a patch of 25
+   bytes: the document that holds the record is written whole. Every map
+   that is keyed by an identifier has this shape. It is the one measured
+   size that still follows the length. Provisional decision P27 stores such
+   a record in chunks (question 297).
+2. **With chunks, an edit of one row of 23 bytes writes its chunk whole.** A
+   consequence of P20 where a document is written whole; measured, not
+   fixed. Over an array of plain values in place with `ArrayByKey`, at
+   10,000 rows, an edit writes 2 documents and 122,242 bytes for a patch of
+   24 bytes, and an append 4 documents and 123,166 bytes for a patch of 71.
+   The rule that P20 replaces wrote 24 bytes for that edit and 610,081 for
+   the append. The table by the size of a chunk and the balance are below.
+   What today's storage does with such a write was read in source after the
+   round, and is in question 290, point (a): the writer sends the patch, the
+   server stores the patch and every tenth time the document, and each
+   subscriber receives the document.
+3. **The key in the identifier of a part is not defined for a source
+   array.** A conflict between P26 and `execution-and-storage.md` §4.10 as
+   it was; worked around, with the alternative measured. A row of an
+   argument array has a key only for a reader, by the reader's declared key
+   fields (by ruling); the store has one list of keys for each set of key
+   fields and none before the first reader. With rows of 2,000 bytes at
+   10,000 rows: with `ArrayByKey`, the first edit after a reader formed keys
+   renames the part, 3 documents and 65,977 bytes, against 2 documents and
+   3,976 bytes with an identifier that the array mints; with no declared
+   key every edit renames it, 5 documents and 128,748 bytes with 2 parts
+   deleted and 2 created, against 4 documents and 66,747 bytes minted, where
+   the 2 that remain are the row of the result, which leaves and enters
+   under its new key. Provisional decision P28 takes the minted identifier
+   (question 298).
+4. **A reference by key has no way to its chunk.** A gap in P20, which has a
+   reference by key "resolved through chunks"; not built. A chunk is found
+   by position, and the position of a key needs the keys of the array,
+   which the executor keeps in memory. From the documents alone it is a
+   read of every chunk and a salted hash of every row, once for each set of
+   key fields. `push`, `set` and a `splice` do not conflict with P26: a
+   `push` and a `splice` write one chunk and the lists above it, and a
+   `set` of the whole array is compared with what is stored. Provisional
+   decision P29, an index for an array that declares key fields, is
+   withdrawn, and question 299 is open with no provisional decision.
+5. **A position with no number in the chunk lists.** P20 as it was first
+   stated; resolved by P25, which is what the prototype builds by default.
+   With no numbers the row at position 50,000 of 100,000 is read through 20
+   documents; with them, through 2. The price is that every insertion and
+   removal writes one list for each level, and the list of the first level
+   is in the document that holds the array, so an insertion writes 4
+   documents where it would write 2.
+6. **Rows that are inserted one at a time at one end leave every chunk half
+   full.** A consequence of the split in two; measured, not fixed. 40,000
+   rows of 23 bytes, one insertion in each transaction: appended, or
+   prepended, they stand in 55 chunks where 28 would hold them; inserted at
+   random positions, in 32. After nine tenths are removed at random, 8 or 9
+   chunks stand where 3 would hold the rows, the smallest of 12,867 bytes.
+   The number of chunks stays within about three times the least, and no
+   run of small chunks is left.
+7. **Under P18 the plan still doubles with each level.** Not built. Two call
+   sites for each level, at a depth of 1 to 6: plans of 2,261, 5,118,
+   11,134, 23,637, 49,512 and 103,508 bytes. That is the fixture of the
+   ignored test.
+8. **Two call sites with one name in one body have the same `site` step.** A
+   defect of the crate against `plan-and-label-templates.md` §1.3; found,
+   not fixed. Three tags `<SelectControl>` in one body each get the step
+   `{ site: "SelectControl" }` with no ordinal. 17 of the 382 plans of the
+   corpus have two such sites. A state cell of such a callee has one
+   identifier at both sites. No compared value shows it, because no such
+   callee of the runs holds a state cell that a compared value reads.
+9. **The time of a prepend and of a removal of the first row follows the
+   length:** 8 ms at 100,000 rows against 0.6 ms for an append. It is the
+   executor's renumbering of positions (question 260), as in the round
+   before, and no cost of the layout.
+
+Bounded at this commit, with tests: the bytes of the documents that one
+change writes. At 100,000 rows they are at most 139,217 bytes in 4 documents
+for rows of 23 bytes and 149,137 bytes in 6 documents for rows of 2,000
+bytes. One row is read through 2 or 3 documents, and the first 20 rows
+through 2, or through 22 where each row is a part.
+
+#### One change of a list in part documents
+
+The layout is the default of the round: `PART_MIN_BYTES` 1,024, with a part
+stored in place again under 512; `DOCUMENT_MAX_BYTES` 65,536; the numbers in
+the chunk lists (P25); and the identifier of a part by the key of the reader
+that declares the most key fields. Rows of 23 bytes are those of
+`fixtures/lists.tsx`, 45 bytes as JSON. Rows of 2,000 bytes have a title of
+1,960 characters, so each row of the argument and of the result is a part.
+The case is a `map` over an array of plain values in place with
+`ArrayByKey`. Each line is the first change of its kind on a settled
+instance, and the time is the mean of 20 further changes
+(`compare/parts-growth.ts`).
+
+| Rows of | Length | Change | Documents | Bytes | Patch | Documents read for one row | For 20 rows | Documents in all | ms |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 23 bytes | 100 | append | 2 | 6,256 | 65 | 1 | 1 | 2 | 0.06 |
+| 23 bytes | 100 | edit one field | 2 | 6,199 | 24 | 1 | 1 | 2 | 0.06 |
+| 23 bytes | 1,000 | append | 2 | 64,759 | 65 | 1 | 1 | 2 | |
+| 23 bytes | 1,000 | edit one field | 2 | 64,697 | 24 | 1 | 1 | 2 | |
+| 23 bytes | 10,000 | append | 4 | 123,166 | 71 | 2 | 2 | 13 | 0.14 |
+| 23 bytes | 10,000 | prepend | 4 | 123,208 | 71 | 2 | 2 | 13 | 0.71 |
+| 23 bytes | 10,000 | edit one field | 2 | 122,242 | 24 | 2 | 2 | 13 | 0.06 |
+| 23 bytes | 10,000 | remove first | 4 | 123,078 | 2 | 2 | 2 | 13 | 0.10 |
+| 23 bytes | 10,000 | remove last | 4 | 123,027 | 2 | 2 | 2 | 13 | 0.02 |
+| 23 bytes | 100,000 | append | 4 | 139,217 | 74 | 2 | 2 | 112 | 0.57 |
+| 23 bytes | 100,000 | prepend | 4 | 139,203 | 74 | 2 | 2 | 112 | 8.22 |
+| 23 bytes | 100,000 | edit one field | 2 | 130,916 | 24 | 2 | 2 | 110 | 0.37 |
+| 23 bytes | 100,000 | remove first | 4 | 139,070 | 2 | 2 | 2 | 110 | 1.43 |
+| 23 bytes | 100,000 | remove last | 4 | 139,072 | 2 | 2 | 2 | 110 | 0.18 |
+| 2,000 bytes | 100 | append | 4 | 16,520 | 3,977 | 2 | 21 | 244 | 0.11 |
+| 2,000 bytes | 100 | edit one field | 3 | 10,185 | 3,930 | 2 | 21 | 202 | 0.08 |
+| 2,000 bytes | 10,000 | append | 6 | 129,644 | 3,979 | 3 | 22 | 20,064 | 0.11 |
+| 2,000 bytes | 10,000 | prepend | 6 | 129,644 | 3,979 | 3 | 22 | 20,064 | 0.85 |
+| 2,000 bytes | 10,000 | edit one field | 3 | 65,977 | 3,930 | 3 | 22 | 20,022 | 0.16 |
+| 2,000 bytes | 10,000 | remove first | 4 | 125,417 | 2 | 3 | 22 | 19,980 | 0.24 |
+| 2,000 bytes | 100,000 | append | 6 | 149,137 | 3,980 | 3 | 22 | 200,236 | 0.35 |
+| 2,000 bytes | 100,000 | prepend | 6 | 149,137 | 3,980 | 3 | 22 | 200,236 | 8.15 |
+| 2,000 bytes | 100,000 | edit one field | 3 | 69,202 | 3,930 | 3 | 22 | 200,192 | 0.22 |
+| 2,000 bytes | 100,000 | remove first | 4 | 144,911 | 2 | 3 | 22 | 200,150 | 1.57 |
+| 2,000 bytes | 100,000 | remove last | 4 | 144,911 | 2 | 3 | 22 | 200,150 | 0.14 |
+
+The edit of a row of 2,000 bytes writes 3 documents because the part of the
+argument's row is renamed (finding 3). The other cases differ from this one
+in the edit alone:
+
+| Case | Rows of | Edit at 10,000: documents, bytes | Edit at 100,000: documents, bytes | Why |
+| --- | --- | ---: | ---: | --- |
+| Plain values in place, no declared key; and the result of a `filter` of them | 23 bytes | 3, 122,556 | 3, 133,814 | One document more, the one that holds the result's list: the row leaves and enters under another key |
+| The same | 2,000 bytes | 5, 128,748 | 5, 141,657 | 2 parts deleted and 2 created |
+| Array of references | 23 bytes | 2, 48,048 | 2, 51,048 | The element is a document of its own; the edit writes it and the chunk of the result |
+| Array of references | 2,000 bytes | 2, 3,976 | | The row of the result is a part |
+
+An append over an array of references creates the cell: 5 documents, 106,046
+bytes at 10,000 rows and 124,578 at 100,000, with 10,014 and 100,114
+documents in all. Over the result of a `filter` a change takes 3 to 14 ms at
+100,000 rows, which is the kept list of the `filter` that the executor forms
+again, as in the round before.
+
+**A keystroke in a row that has state, and a polled list, in part
+documents** (note 528; `compare/rekey-cost.ts`, `fixtures/rows-state.tsx`).
+Part documents written for each keystroke and their bytes, the mean of 20:
+
+| Case | At 100 rows | At 1,000 | At 10,000 | Patch |
+| --- | ---: | ---: | ---: | ---: |
+| Plain values in place, no declared key | 5, 57,491 | 6, 101,950 | 6.1, 106,995 | 610; one part created for each keystroke |
+| Plain values in place, `ArrayByKey` | 5, 64,243 | 5, 102,143 | 5, 128,349 | 81 |
+| Array of references | 4, 68,456 | 4, 109,141 | 4, 572,774 | 25; the last by the record of finding 1 |
+
+A row of this fixture's result is about 600 bytes, under `PART_MIN_BYTES`,
+and stays in its chunk, so 100 rows are one document of 60,000 bytes that
+each keystroke writes. A list of 100 records that is replaced 100 times
+holds as many part documents as the store holds documents: 202 at the start
+and 20,202 at the end with no declared key, and 202 throughout with
+`ArrayByKey` and over an array of references. The layout adds nothing to
+question 255 and removes nothing.
+
+#### The size of a chunk, and the balance
+
+Over an array of plain values in place with `ArrayByKey`, 10,000 rows of 23
+bytes, by `DOCUMENT_MAX_BYTES` (`--max`), and with every row a part
+(`--min=16`):
+
+| Maximum | Rows are | Edit: documents, bytes | Append: documents, bytes | Documents read for one row, for 20 | Documents in all |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 65,536 | in the chunk | 2, 122,242 | 4, 123,166 | 2, 2 | 13 |
+| 16,384 | in the chunk | 2, 32,134 | 4, 35,372 | 2, 2 | 44 |
+| 4,096 | in the chunk | 2, 8,130 | 7, 14,794 | 3, 3 | 173 |
+| 1,024 | in the chunk | 2, 2,026 | 12, 6,222 | 4, 4 | 721 |
+| 65,536 | parts | 3, 62,071 | 6, 125,736 | 3, 22 | 20,022 |
+| 4,096 | parts | 3, 4,163 | 10, 16,556 | 4, 23 | 20,312 |
+
+With rows of 2,000 bytes, which are parts at each maximum, an edit writes
+65,977, 20,283, 8,069 and 7,043 bytes at a maximum of 65,536, 16,384, 4,096
+and 1,024, and an append 129,644, 42,436, 20,464 and 10,740.
+
+**The balance.** An edit writes one chunk of the argument and one of the
+result, so it costs about twice the maximum, at any length. An insertion
+writes those and one list for each level, and the list of the first level
+holds `N * s / C` links of about 75 bytes for `N` rows of `s` bytes in
+chunks of `C` bytes. A chunk and its list are of one size at
+
+```text
+C = sqrt(75 * N * s)
+```
+
+which is about 5,900 bytes for 10,000 rows of 45 bytes of JSON, 18,600 for
+100,000 and 59,000 for a million. So 65,536 is balanced for a million small
+rows and is about ten times what a list of 10,000 needs. A maximum of 4,096
+writes 8,130 bytes for an edit and 14,794 for an append at 10,000 rows, with
+173 documents where 13 stand and 3 reads for a row where 2 are made. A
+smaller chunk pays for itself in splits: at 1,024 an append writes 12
+documents. Where every figure is its patch, 2 to 74 bytes for a row of 23
+bytes, the larger chunk is the better one, since it is fewer documents and
+fewer reads. A maximum that follows the size of the array, near the balance,
+would bound an insertion at about three chunks of that size at every length;
+it is not what P20 states and is not built. Which of the two a store charges
+for is question 290, point (a), with what the source shows.
+
+#### A pattern compiled in, written once: the copies of one callee compared
+
+P18 is not built: the crate writes a callee out at every call
+(`inline_pattern` and `inline_argument` in `src/plan.rs`). In its place the
+round made the comparison that question 289 left open, on the plans that the
+crate emits for the corpus (`emit --corpus`): 382 plans, 124 with a call
+site, 324 chains of sites, 263 of depth 1 and 61 of depth 2. Two chains of
+one plan are taken as copies of one callee where their cones are written at
+the same places of the source. Each copy is compared with the first copy of
+its callee, cone by cone in the order of the plan: the slots of `Cone.slots`
+by root kind, path and class, the edges into the cone by kind, the write
+edges by target and path, the outputs by path, and each template with its
+`shared` nodes written in place and its indexes left out. That is 53 pairs;
+the 82 pairs of the round before were every pair of copies. The scripts are
+not in the tree.
+
+| Pairs | What differs | Whether one callee record holds it |
+| ---: | --- | --- |
+| 16 | Indexes alone | Yes |
+| 2 | Another path of the caller's argument (`dev/experimental/folksonomy-demo.tsx`: `tags` bound to `itemATags` at one site and to `itemBTags` at another) | Yes: an argument slot, and the binding of the site |
+| 1 | A slot at one site and an output at the other (the same module: `scope` bound to a computed value at `tagsA` and to a state cell at `tagsC`, so the cone has an edge and an `output` node at one site and a slot at the other) | Yes, by "What an argument slot stands for in a rule" of `plan-and-label-templates.md` §1.1. Which of `Cone.slots` and the incoming edges an instance has is decided at binding |
+| 19 | Paths below a path that the callee passes on, 18 in the outputs and 1 in the write edges (`examples/suggestion-test/suggestion-test.tsx`: `context: {}` gives one write edge at `context`, and `context: { content, value }` two, at `context/content` and `context/value`; `dev/catalog/stories/kitchen-sink-story.tsx`: a callee that places its `children` has an output for each child that the call wrote, 5 at one site and 1 at another) | Only with a rule that the document did not state: a write edge or an output of a callee whose template is an argument slot stands, at a site that binds the path by a literal, for one entry for each entry of the literal |
+| 16 | The number of cones | No difference of the callee: the defect of finding 8 makes one chain of several sites |
+
+So on the corpus one callee record with the binding of each site gives the
+records of the written-out form, with that one rule added, and "A callee
+record depends on nothing of its call sites" holds. P18 is amended by the
+rule. What the comparison does not show is that values, identifiers and
+stored documents are preserved, which needs the build.
+
+The points of question 289 from the written-out plans alone (note 530): the
+stream of a binding as what a site binds a path to is confirmed (of the
+state paths of the bindings of callee copies, 1,443 are bound to a slot, 282
+to a constant, 49 to an output, 140 to the stream of a binding of the same
+copy, and 8 to the stream of a binding of the caller, the first in
+`apps/lunch-poll/main.tsx`; none is the result of the instance). Where the
+callee's result is held is not determined: 100 of the 3,867 outputs of
+callee copies are kept, and whether each stands at a place that
+`CallSite.result` would list was not examined. A construct of the callee
+over an argument that is a collection is not determined: the collections of
+callee copies have as their source an output 133 times, a slot 32 times and
+a collection 10 times, and the 10 were not examined. On the order of the
+cones, type parameters, whether a callee record is the plan of its pattern,
+and what `Cone.code` keys, the written-out plans say nothing.
+
+**P19.** `src/flow.rs` is not changed. Over the corpus the written-out form
+reports one label-flow diagnostic, `cfc-flow:ui-contract` in
+`system/fabrichat/room.tsx`, and none of the four that P19 makes modular.
+So P19 can lose no report of the corpus. Whether the check of a site's
+binding adds one is not known.
+
+#### The warning of P21, counted
+
+The crate reports `array-by-key:state-without-key` from the plan
+(`state_without_key` in `src/plan.rs`), by the decision as revised: for a
+`map`, a `filter` or a `flatMap` whose body holds a state cell, a handler
+binding, an operation or a child instance, where neither the construct's
+array nor the array that a chain of constructs starts at declares a key, and
+where the body reads a member of the element. Over the corpus: 168 reports
+in 80 of the 286 modules that are accepted with a pattern, each at a `map`;
+163 of the bodies hold a handler binding, 10 an operation, 4 a state cell
+and 2 a child instance. With a `lift` or a `computed` counted, as the
+decision first had it, 222 reports in 95 modules. The type of an array does
+not say whether it holds plain values in place or references, so the warning
+is reported for both, and most lists of the corpus are filled by `push` of a
+record through a handle, which stores a reference. Most of the 168 are
+therefore of arrays that hold references at run time, where the cost that
+the warning names does not arise. P21 is withdrawn as a warning of the
+compiler and replaced by a report of the runtime (question 291).
+
+#### The comparison of values and of labels
+
+`values-fixtures.ts`: 59 of 59 runs, 1,004 of 1,013 values equal, as before.
+The seeded run of today's runtime over the 272 modules (`values-corpus.ts
+run`): 215 run by today's runtime, 214 executed, 193 with every value equal
+and every event handled, 6,013 of 6,107 values equal, 94 that differ in 21
+modules, 3 of 541 committed events not handled, and 6,673 evaluations. Its
+report is the text of the round before, line for line. On the executor alone
+(`alone`) the text is the same but for one figure: the derivation
+transactions wrote 1,198,803 bytes where they wrote 1,198,808; the cause was
+not looked for. The comparison of labels (`compare/corpus.ts`): 1,462
+outputs and 148 bounds, 1,332 tighter, 130 whose atom names the pattern,
+none looser or incomparable; 249 write edges, 237 equal and 12 tighter; the
+same text as before. The part documents change no value: they are written
+beside the documents.
+
+**The comparison with stubbed effects is not deterministic.** For the 47
+modules that need `wish` or request an effect (`stubbed`), the run at commit
+`90b5ce25fc`, the last that changes a source file, gives the figures of the
+round before: 45 run, 42 executed, 16 with every value equal, 1,484 of 1,584
+values equal, and 4 of 94 events not handled. The run at `3d33db2e4d`, which
+changes two Markdown files alone, gives 15 with every value equal, 1,482 of
+1,584, and 26 modules with a difference where 25 had one. The module that
+changed is `examples/reactive-now/reactive-now.tsx`: "0s ago" in the
+executor against "1s ago" in today's runtime at one event. That value
+depends on the wall clock between the two sides of the comparison, so two
+runs of this comparison on one source can differ, and a difference in that
+module is no finding.
+
+**What the round's author did not keep or verify** (note 535). The tests of
+`exec/test/parts.test.ts` were seen to fail against a class with no
+behavior before the layout was written. The first two tests of the executor
+through part documents were written after the line they test and were seen
+to fail with that line removed. Not done: P18 and P19 as a build; the reads
+of value code through the part documents; a split point for a record; an
+index from a key to its chunk; the marking over a plain array generated
+from scratch; the kept list of a `filter`; the event time of
+`showcase/battleship/pass-and-play/main.tsx`; the `identity` entries of a
+whole read; and questions 249, 251 and 253. Not verified: the times; the
+layout under a failed transaction, whose changes are applied and undone in
+the part documents as in the store, with no test of its own; and a part
+document or a chunk under concurrent writers, which the executor does not
+have. The author stopped a measurement run three times to change it, once
+by the name of the script and not by its process number, and every figure
+here is from the last run on the final source.
+
+
+### What the run conformed to
+
+The executor counted where its run kept to the plan.
+
+- **Reads of another cone's output.** Every one was over an edge of
+  `Plan.edges`.
+- **Writes of a handler.** All 291 were covered by a write edge or an
+  envelope of the handler's body.
+- **Reads of a slot the reading cone does not list.** 165, of which 141
+  are in two modules that hold an array of pattern results, and 29 reads
+  by root and path. Statically the emitter found 76 reads over the 361
+  corpus patterns that no slot of the reading cone names, 55 of them of
+  the result of an operation, which the comparison does not run. The
+  reads in the two modules are of the third departure above.
+- **Streams.** Of the positions at which a stored result holds a
+  stream, 431 are named by a path of `Binding.result` and 18 by none.
+  Of the listed paths without `*`, 315 hold the stream and 12 do not.
+  13 of the 18 are of a binding for which the crate listed no path: 6
+  of a member written after a spread among the children of a view
+  node, and 7 of a stream inside a value that the elements of a
+  collection hold. 2 hold a stream that is an input of the pattern,
+  and 3 the stream of a binding that a function body makes and
+  returns. A further 208 positions, of a stream inside a member of an
+  element read as `example[UI]`, were in no count, because that run
+  stored a record in the place of the stream. Each of the 12 is below
+  a conditional whose other branch is selected when the run ends: 4
+  held the stream at an earlier point of the run and 8 at no point, by
+  a reading of the source that covers one branch alone for 5 of them.
+  By ruling the value code places a stream and the runtime
+  checks the position against `Binding.result`, so the listed paths
+  have to be complete: the 13 and the 208 are positions the compiler
+  owes a path for, and an evaluation that stored one of them fails.
+  The 2 are no binding's stream, are passed on as any input is, and
+  are not checked. The 3 are allowed and not checked, by ruling
+  (question 165).
+- **A cone that writes a cell it reads.** 6 evaluations wrote a
+  position they had read. The executor evaluates such a cone instance
+  once, as the prototype observed today's runtime to do. By
+  `execution-and-storage.md` §2.7 such a cone instance is stale again
+  by its own write, and one that does not settle ends in the error
+  state at the bound of ten evaluations. That is a difference from
+  today that the corpus has, and it was not run.
+- **What the plan lacked.** 38 of the 446 cones of an element body list
+  no slot of root `element` or `index`; by ruling the record of a cone
+  lists the collections it is written in, and such a cone has an
+  instance per element key as every other cone of the body has. 355
+  uses of a
+  body that is no handler have 1,093 slots whose place in the argument
+  the crate's plan does not give; by ruling each entry of `Body.reads`
+  holds it. Of 1,399 state cells with a function for their first
+  value, 3 read a slot, through no cone; by ruling such a first value
+  is computed by a cone and written through a write edge. 200
+  state entries of bindings hold `null` for a constant that is not a
+  literal written at the binding, which is a defect of the crate.
+
+The plan of commit `96f3b83a73` has more of what was lacking. The
+counts are over all 382 corpus patterns, the ones with an
+unsupported construct included.
+
+- **The place of a slot.** The corpus plans have 6,179 entries of
+  `Body.reads`, each with its place, 1,314 of them in the 602 uses of a
+  body that is no handler. The executor builds the slot part of an
+  argument from the plan alone. Two inputs of a use bound to one place
+  give two entries with one slot, and an entry whose place holds `*` is
+  not placed by the executor: the container is given whole by the
+  entry at the container's own path.
+- **A path a call leaves out.** The corpus has 72 names declared with a
+  default of the callee, for a path the call leaves out or writes a
+  constant at. Of the 410 state entries of bindings that hold a
+  constant, 144 hold `null`, where the earlier commit had 200. Value
+  code of a callee reads a slot with the callee's default at 49 reads,
+  and passes a sandboxed body a list of places with their defaults in
+  27 uses of a body, where the ruling has the entry of `Body.reads`
+  hold the default (question 152). The crate applies the default to a
+  name the callee's parameter destructures and where the call writes
+  its argument as a record, and in no other form; both limits are the
+  prototype's.
+- **The first value of a state cell.** Of 1,496 state cells, 1,473 have
+  a constant first value, 15 have none, and 8 have one that is not a
+  constant. None of the 8 reads a slot or an output of another cone:
+  the value is a call, a record written in the pattern body, or a
+  member of a module constant, which the crate does not evaluate.
+  Where the declaration writes no type argument, the schema the crate
+  gives the cell is the default alone, a limit of the crate.
+- **The kind of a cone with side-writes.** Of the 3,717 cones, 14 have
+  a small, fixed set of write targets, 13 of them a state cell and 1
+  the cell of a handle at a slot, and 33 are materializers, each a
+  `lift` that creates a cell under a cause computed from data and
+  gives it a value. The 187 executed modules have 6 and 19 of them.
+  The writes that expression code makes, a stored request and a first
+  value, are not counted. The crate's plan holds the kind as a member
+  of the cone and holds a materializer's body in a cone. The documents
+  have neither: the kind is read from `Cone.writes` and
+  `Plan.operations`, and a materializer is in no cone
+  (`plan-and-label-templates.md` §3.11).
+- **Streams.** The result holds a stream at 425 positions that a listed
+  path names, where the earlier commit had 431, and at 18 that none
+  names. The 6 fewer are in three modules,
+  `apps/contacts/contact-book.tsx`, `examples/map-demo/map-demo.tsx`
+  and `examples/todo-list/todo-list.tsx`, 2 each: the fix of the
+  container copy made a handler's `remove` find its element, the list
+  has one row fewer when the run ends, and a row holds the stream of
+  its binding at two positions. The listed paths that hold the stream
+  were 315 before and after.
+
+At commit `59055fd0c5` the plan and the run have the following. The
+counts of plans are over all 382 corpus patterns.
+
+- **The collections a cone lists.** `Cone.within` is a member of the
+  crate's record, with the `element` step of each element body around
+  the cone's code, outermost first, and the `site` step of each pattern
+  compiled in. Of the 3,717 cones, 576 have an `element` step, 60 of
+  those list no slot of root `element` or `index`, and 1,336 have a
+  `site` step. The record is the same over an array of references, over
+  an array of plain values in place, and over the result of another
+  per-element construct, where the cone names its own collection and not
+  the upstream one. The executor takes from the `element` steps which
+  instances of a cone exist.
+- **Streams.** The executor gives value code an inert marker, writes the
+  link in its place, and checks the positions of the result against
+  `Binding.result`. With the crate as it was, 12 evaluations in 8
+  modules failed the check. The crate lists a path for a member written
+  after a spread, in the children of a view node and in an array
+  literal, and for a stream inside a member of an element, over an array
+  of plain values in place and over the result of another per-element
+  construct; over an array of references the plan knows no stream inside
+  an element. 1,142 of the 1,355 bindings of a handler have a `result`
+  member, where 823 had one, and they list 1,420 paths, where they
+  listed 1,012. Of the 202 bindings of an element body, 181 have a path,
+  where 127 had one. No evaluation of the corpus run fails the check.
+  The crate still evaluates `x[UI]` as a chosen child, which is a defect
+  of the prototype: the key is static.
+- **`reduce`.** The 9 `reduce` operations of the corpus are all
+  registered with a function for the initial value and one for the step.
+  The fold is not kept per key, so one changed element evaluates every
+  step.
+
+At commit `77993077e4` the plan and the run have the following, over
+the corpus.
+
+- **A record written into a list.** 64 documents of a record that a
+  handler wrote into a list exist after the scenarios. Each such list
+  is an array of references.
+- **A reference by key.** A reference to an element that is a plain
+  value in place holds the key at the array and the path below the
+  element, and the store finds the position that holds the key at
+  each read and each write. The key holds the value with no salt, a
+  limit of the prototype. An element of a `map` or `flatMap` result
+  whose body computes a value is passed on as that value, because the
+  executor stores no assembled result at an address of its own
+  (question 161). Value code calls the host's `equals` with each
+  operand as the reference it is, at 18 calls (question 171).
+- **A derived collection passed on.** 27 outputs in 15 modules have
+  the mark `Output.passesCollection`. A `computed` with a block body
+  that returns the result, and a result path of a sandboxed body that
+  passes its input on, have no mark; both are limits of the
+  prototype. The mark is the same whether the upstream source holds
+  references or plain values in place, since the plan does not say
+  which.
+- **The callee's default.** 51 entries of `Body.reads`, in 9 modules,
+  hold a default, and 78 entries of `Binding.state` hold one (question
+  158). Value code of a callee hands the host a reference with the
+  callee's default 42 times (question 169). Where code of the caller
+  names a path of the callee's result that passes the path on, the
+  crate writes a read of the caller's slot with no default, which is
+  a defect of the crate.
+- **A first value.** A member of handle type of a first value that is
+  not a constant is stored as a value, where
+  `execution-and-storage.md` §4.1 assumes a link (question 155): a
+  limit of the prototype.
+
+At commit `e63b3d305c` the plan and the run have the following. The
+counts of plans are over all 382 corpus patterns.
+
+- **The kinds of a `*`.** An entry of `Binding.result` is a path with
+  one kind for each `*`. Of the 1,420 listed paths, 448 have a `*`,
+  and their 476 `*` are 215 `inside`, 207 `element`, 51 `member` and 3
+  `every`. In every path with a `*` the number of `element` kinds is
+  the number of `element` steps of the binding. The kinds are the same
+  whether the collection is over references or over plain values in
+  place, since the plan does not say which. The crate counts a child
+  written after a collection among the children of a view node as
+  kind `member`, with the children stored flat; by the ruling since,
+  such a child has a static position and no `*`, so the 51 are an
+  upper bound on kind `member`. The executor accepts a marker by the
+  kind, from the origin it keeps for each position of an array it
+  assembled.
+- **Where the kind is not determined or not right.** The crate states
+  `element` at the result of a `flatMap` for a binding of the upstream
+  body, and the executor compares the upstream key with the composed
+  one and would refuse; by the ruling since, the match is a prefix. No
+  pattern of the corpus has the case. The crate records the streams of
+  what a callback returns for a `map` alone, so a stream inside an
+  element that a `filter` passes on has no listed path: a defect of
+  the crate, with no case in the corpus run. An array assembled from
+  entries that is spread into another keeps, for each position, the
+  kind it has in the inner array (question 182).
+- **Which output keeps its value.** Where a marker fails the check,
+  the executor puts back the stored value at the kept entry of
+  `Plan.outputs` with the longest path at or above the position, for
+  a cone of an element body the row alone, and leaves a position that
+  no entry is above as it was. By the ruling since, the unit is the
+  top-level property of the result. The stored value that is put back
+  is the one at the same position, so where the element moved in the
+  evaluation that fails, the row keeps what another key had stored
+  there: a limit of the prototype, which stores a result by position.
+- **A stream handed to a body.** The crate records nothing for a
+  stream bound to a formal of a body, so `Body.computed` has no entry
+  that says the position holds a stream (question 179). The executor
+  hands the body a handle to the stream wherever a marker is in the
+  computed argument.
+- **The key of a `flatMap` member.** The member part is formed by the
+  rule for any array, with the count among the members of the one
+  segment, after the source key. A member that is a plain value in
+  place of a stored array that the callback passed on is named by
+  that array and its key in it (question 180). A segment that is the
+  assembled result of another per-element construct has the keys of
+  that result, with no test. A member the callback computes has no
+  address and is passed on as its value.
+- **The record of a key.** The plan holds no record that names the
+  record of a key: the body has a write edge and an envelope with
+  target `handle` at `*` below the list, and the executor uses the
+  path for a count alone (question 181).
+- **The identity of a pattern in value code.** The marker of each
+  `pattern(...)` in the text of a module holds the identity of the
+  pattern, the entry that the pattern's own `Plan.patterns` begins
+  with, and an artifact holds the text of every module its code
+  imports. The output of the crate for one file holds the artifacts
+  of that file alone, so a callee from another file is found only in
+  the output for the corpus.
+
+At commit `e4f2fb3431` the plan and the run have the following. The
+counts of plans are over all 382 corpus patterns, and the counts of
+the run are from the prototype author's corpus run.
+
+- **The children of a view node.** The crate gives each child one
+  position, counted over the children as written, and a child that is
+  a collection is the value of that collection at its position. The
+  paths of `Binding.result` through it are `children/<n>/*`, and a
+  child written after it has an index of its own. The entry of a
+  rendered tree at `children/<n>` is the membership of the
+  collection, and the entries of an element are those of the
+  collection's own outputs, so the tree has no entry at `children/*`.
+  The record is the same over an array of references and over an
+  array of plain values in place, which the plan does not tell apart,
+  and over the result of another per-element construct. The crate
+  makes one child of a spread child, of an array literal among the
+  children that itself has a spread or a hole, and of an expression
+  of array type that is no collection (question 187). In the reactive
+  tier value code writes each child as written, with the members of
+  an array literal that has no spread as children of their own; a
+  view node that a function body builds is written with a factory
+  that flattens the arrays the body hands it, as today's `h` does
+  with real arrays. The executor stores the children as given.
+- **The kinds of a `*`.** 1,143 of the 1,355 bindings of a handler
+  have a `result` member and list 1,421 paths, and 181 of the 202
+  bindings of an element body have one. 411 paths have a `*`, where
+  448 of 1,420 had one, and their 425 `*` are 215 `inside`, 207
+  `element` and 3 `every`. No path of the corpus has kind `member`:
+  the 51 of the earlier commit were all children written after a
+  collection. The kind stays for an array value with a spread, which
+  a fixture has. In the run, 690 stored positions hold a stream at a
+  listed path and 31 at none; a listed path without `*` holds the
+  stream at 344 and holds none at 13, where the run of commit
+  `e63b3d305c` had 339 and 12, since a child written after a
+  collection has such a path.
+- **Kind `element` at the result of a `flatMap`.** The crate lists a
+  path for a binding of the callback's body, with a `*` of kind
+  `element` at the result, and leaves the position in a segment that
+  the callback writes as an array literal out of the path. The
+  executor accepts a position whose key is the key of the marker or
+  begins with that key and the separator. Where the callback returns
+  the result of an inner `map` whose body binds the handler, the
+  crate lists `*/*` with two kinds `element`, which no position of
+  the stored result has (question 188).
+- **Which property keeps its value.** For each marker at a position
+  that no listed path covers, the executor leaves the top-level
+  property of the result as it was stored and stores every other
+  property. It records the property, the binding and the position,
+  and the next evaluation that stores the property clears the
+  record, as `execution-and-storage.md` §2.2 assumes. It keeps the
+  memo entry as before. No evaluation of the corpus run fails the
+  check.
+- **A function body's copy.** A read through a handle, with `get` or
+  `sample`, gives a plain value in place as a copy that carries no
+  address. Writing it to a cell stores the value, and writing it into
+  an array stores it in place; the executor makes no document for
+  the copy of a record, where it makes one for a record the body
+  wrote. A member of the copy that is a link is the value of its cell
+  and carries that cell's address, so over an array of references a
+  body moves links as before. `remove`, `removeAll` and `addUnique`
+  find a member by the position that a reference names, and a copy by
+  its value. Whether today's runtime keeps such a copy in place or
+  gives it a document was not measured; the values are the same
+  either way. A handler bound in an element body whose state declares
+  a data type for its element is handed a stand-in that carries the
+  reference by key (question 189).
+- **A handle by position and `equals`.** A handle from `key(i)` names
+  the position, at the call and when stored, in each of the three
+  cases. The executor resolves each operand of `equals` to the
+  position it names at that time and compares there. It records the
+  links each reference crossed and the outcome, and no position, so a
+  move evaluates nothing for a comparison of two references by key.
+  What the comparison gives where the parent cannot be read does not
+  arise, since the executor reads every document (question 174). A
+  read through a handle whose type declares the members as handles
+  gives a handle by key for a member that is a plain value in place
+  (question 189).
+- **A re-key.** The executor records, for each key that the path of
+  a write crossed, the key that the position holds after the write
+  where it is another one. Until the transaction ends it finds a
+  changed key under the key the element has now. When the handler
+  returns, or at the next settling for a write from outside a
+  handler, it moves the state cells of the old key to the new key,
+  in the body over the array and in the bodies over the results of
+  the constructs applied to it, drops the cone instances of the old
+  key, and re-keys an `asInstance()` instance. A handler that throws
+  moves nothing. Question 190 has the four things that the ruling
+  does not name. The case is an array of plain values in place.
+- **A `push` below an empty argument path** starts from the default
+  nearest the end of the links that the handle resolves through, or
+  from that of the handle's declared type. The executor does it for
+  `push` alone: a `set` of one member below an empty path of the
+  argument starts from an empty record, where the ruling on a write
+  below the root of a cell covers any write. No case of it is in the
+  corpus run that was examined.
+- **The place of `[SELF]`.** The state entry of a binding that
+  captures the name has `place: { result: true }`, the capture `link`
+  and the template `const`. The crate knows the name by its spelling
+  in the pattern being planned and not by its scope, and gives a
+  pattern compiled in the result of the enclosing instance for its
+  own `[SELF]`. No state entry of the corpus plans has the place.
+- **`asInstance()` in the plan.** The checker accepts the modifier
+  where it accepts `asScope` and `inSpace`. The crate records a call
+  whose callee it can see as an entry of `Plan.children` with
+  `callee: { compiled }`, `asInstance: true`, `name` and the `within`
+  of the site, one write edge with target `argument` for each path
+  of the argument, and a slot of root `child` for each read of the
+  result. Nothing of the callee is in the enclosing plan. The record
+  has the same form in each of the three cases and outside an
+  element body (question 177). The hash is a placeholder; the record
+  has no `argumentSchema` and no `resultSchema`; `name` is the name
+  of the enclosing construct, so two calls in one body are told apart
+  by their index; a call that composes the modifier with `asScope` or
+  `inSpace` is recorded with neither scope nor space; and a call
+  through the modifier of a factory value is reported as
+  unsupported. No pattern of the corpus calls the modifier, and no
+  plan of the corpus has such a child.
+- **`asInstance()` in the executor.** A read of a slot of root
+  `child` evaluates the argument for the element keys of the reading
+  cone instance, makes the instance of the callee's plan where none
+  exists for the child and those keys, writes the argument where it
+  changed, and gives the reader the reference to the result document.
+  When the key leaves, the memo entry of that evaluation is dropped
+  and nothing is written. An event for a stream of the instance is
+  routed by the name of the instance and handled whether or not the
+  key is in the collection. For a binding of an element body with no
+  modifier the executor refuses an event whose key no element table
+  holds; before, an event sent through a stored link to such a stream
+  ran the handler with no element, a defect of the executor. The
+  identity is a table from the child and the keys to the instance,
+  and the documents are named with the key the instance was made
+  under (question 178). Nothing removes an instance.
+- **`KeyedBy` in the plan.** The checker reads `KeyedBy<T, "field">`
+  as `T` with an annotation, so for assignability it is `T`. The
+  schema of the items has the keyword `keyField`, and the record of a
+  collection has `keyField` where its source is a slot or an output
+  and none where its source is another collection. The crate does not
+  check that the field is a required property of type `string` or
+  `number`, and accepts the marker on an array that holds references
+  (question 186). No type of the corpus uses the marker, and no
+  collection of the corpus plans has `keyField`.
+- **`KeyedBy` in the executor.** The element part of the key of a
+  plain value that holds the field is the name of the field and the
+  canonical form of the field's value, with the occurrence count
+  after it; an element that lacks the field is keyed by its whole
+  value, and a position that holds a link by its cell. The key names
+  its field, so a reference by key is resolved with no schema
+  (question 191). An element of a plain array generated from scratch
+  has no place, so a reader depends on what the element of its key
+  holds at the path it reads. The key holds the value with no salt
+  and no hash. A reference by key that a read outside the element
+  table makes, for a container that a cone passes on, is formed from
+  the whole value also where the array declares a field, and the
+  members of a segment of a `flatMap` are keyed with no declared
+  field: both are limits of the prototype. A write to the key field
+  itself re-keys the element, by a reading of the code with no test
+  (question 184).
+- **A literal argument of a call of a pattern compiled in.** Of the
+  410 state entries of the corpus plans that hold a constant, 142
+  hold `null`, where 144 did.
+
+At commit `a462df710a` the plan and the run have the following. The
+counts of plans are over all 382 corpus patterns, and the counts of
+the run are from the prototype author's corpus run.
+
+- **No result path in the plan.** The crate records no stream
+  position: the paths, the kinds `element`, `every`, `member` and
+  `inside`, the order of the members of the returned record, and the
+  count of the bindings of an element body with no path are gone. A
+  binding has `handler`, `state`, `name`, `within` and `eventSchema`.
+  Of the 1,355 bindings of a handler, 202 are in an element body.
+  `Binding.within` has one `element` step for each enclosing
+  collection, and the `site` step after the `element` step for a
+  pattern compiled in at a tag of an element body. Value code writes
+  an array literal with a spread as an array literal, with the
+  members of each spread operand read through a function that gives
+  none for an operand that holds nothing. The record is the same over
+  an array of references and over an array of plain values in place,
+  which the plan does not tell apart, and over the result of another
+  per-element construct.
+- **No position is checked.** The executor stores a value with each
+  marker replaced by the link to the stream of the marker's binding,
+  for the element keys of the cone instance that called
+  `host.stream`, wherever the marker is. Nothing keeps a stored value
+  in place of a new one, and no evaluation fails for where a stream
+  is. The replacement is made by the one function that stores a
+  value, so it is the same for the result, for a state cell, for the
+  argument of an `asInstance()` instance, and for what a handler
+  writes; the tests have it for the result. The store records the
+  position of each link to a stream that it stores, by document, and
+  drops the record of a position that another value is stored at. In
+  the run, 726 positions of the results hold a stream. Over an array
+  of references and over an array of plain values in place, a binding
+  of the element body is stored once for each key, at the row of that
+  key, and the one stream of a binding made outside the callback at
+  every element. Over the result of another per-element construct the
+  link has the upstream key. In an array of plain values that is
+  written in place in the pattern body, the element that holds the
+  stream of a binding of a pattern compiled in holds the link inside
+  its value.
+- **A `flatMap` whose callback returns an inner `map` that binds a
+  handler** needed no change of the executor beyond the removal of
+  the check. Each position of the one level of the result holds the
+  link with the key of the outer element and the key of the inner
+  one, over a source of references and over a source of plain values
+  in place, with a segment that is the result of another per-element
+  construct in both.
+- **The two points that the ruling leaves as assumptions** (questions
+  192 and 193). Nothing in the crate read the list for a label: no
+  template and no constraint named a path of `Binding.result`, and
+  the comparison of labels read the list to find the stream of an
+  event alone. The crate records a binding for every bound handler,
+  whether or not a result path held its stream, and removes none, and
+  the executor has a stream for every binding of the plan. So the
+  prototype gives no case for either question, and neither is
+  answered by it.
+- **The key of a plain value with a declared key field.** The element
+  part is `value:` and the canonical form of the value of the
+  declared field, where the array declares one and the value holds
+  it, and of the whole value otherwise. So a key formed from the
+  field `id` with the value 7 is the key of a whole value that is 7.
+  The store resolves a reference by key with the key field that the
+  schema of the array declares for its items, and forms the keys of
+  an array that it reads whole, or that an element table is made
+  from, with the same field. It keeps the schema each document is
+  stored under: the argument schema and the result schema of the
+  plan, the schema of a state cell, and, for a document made with
+  none, as the record a handler pushed, the schema of the first
+  position that links to it, of the first link to it that holds one,
+  or of the first read of it. The copy of the keyword in
+  `Collection.keyField` is used for a plain array generated from
+  scratch, whose elements have no place, and for a stored array that
+  the store knows no schema for. Where a reader declares the element
+  type with `KeyedBy` and the place does not, or the reverse, the
+  executor follows the place. A reference by key that a read of a
+  whole array makes is formed with the field, which it was not at
+  the earlier commit. The key has no salt and no hash, and the
+  members of a segment of a `flatMap` are keyed with no declared
+  field. Each of these is about plain values: an array of plain
+  values in place, a plain array generated from scratch, and the
+  result of a `filter` and a `map` over it. Over an array of
+  references the key is the cell. All of this follows a ruling that
+  is withdrawn. By the ruling that replaces it the key names its
+  fields, a reference by key is resolved with no schema, and no
+  record of the schema an array is stored under is kept for it
+  ([Decided](#decided)). The note asks which schema decides the key
+  field of an array of plain values in place, and what a link by key
+  to a member below the element holds so that its resolver finds the
+  field. The ruling answers both: no schema decides, and the link
+  needs nothing beside the key.
+- **A state path of plain type, and a member handle read through a
+  handle of handles.** The executor did both before the ruling, and
+  four tests have them. Over an array of plain values in place, a
+  handler that declares `stop: Stop` is given a reference by key, and
+  `center.set(stop.position)` stores a reference by key with the
+  member's path; a member handle read through a handle of handles is
+  a reference by key. Over an array of references both resolve to
+  the element's cell, and a member handle names the position that
+  holds the link.
+- **What a re-key moves.** The executor holds each instance that a
+  function body made by its name, and on a re-key gives the instance
+  of the old key the name of the new key. The instance keeps its
+  documents and its streams, as an `asInstance()` instance does, and
+  the body that runs again under the new key writes its argument and
+  makes nothing. An instance that is named under the new key already,
+  of a key that left, is replaced: it stays in the store and no name
+  leads to it. Nothing moves for a binding that a function body made,
+  nothing moves for another element whose occurrence count the write
+  changed, and a `set` of the whole array re-keys nothing. Nothing
+  removes the instance that was replaced, or the stream of the
+  binding that the old key's run made. The case is an array of plain
+  values in place with no declared key field; over an array of
+  references the write changes no key and the instance stays.
+- **A spread among the children of a view node.** The crate and the
+  executor did what the ruling says before it. A JSX spread child,
+  and an array literal with a spread or a hole, are each one child
+  that holds a nested array, over an array of plain values in place,
+  over the result of a `map` whose source holds references, and over
+  an array of references. Value code reads the spread of an array of
+  references as values, so the nested array holds the values of the
+  elements and no links, which is a limit of the prototype.
+  `deno lint` stops with an internal error at a JSX spread child, so
+  the fixture is exempt from it.
+
+At commit `7774ba208c` the plan and the run have the following. The
+prototype at this commit has the marker `KeyedBy` on the element type
+and the plain form of the key, a string with separators and an
+escaping of its own; by the rulings since, the key is declared on the
+array with `ArrayByKey`, and a key is a fabric value that the helpers
+of `base/data-model` hash and write ([Decided](#decided)). Each
+statement about a key is about plain values: an array of plain values
+in place, a plain array generated from scratch, and the result of
+another per-element construct where the upstream position holds a
+value. Over an array of references the key is the cell, with or
+without declared key fields, which one test of the store and one of
+the fixture have.
+
+- **The key of a declared key field names the field.** The element
+  part of the key of a plain value that holds its declared key fields
+  is the prefix `fields:` and the fields, each as the name, `=` and
+  the value. A plain value with no declared key is keyed whole, as
+  `value:` and the canonical form of the value. So the key of a field
+  `id` that holds 7 is `fields:id=#7#0`, and the key of a whole value
+  7 is `value:7#0`. The prefixes, the separators and the count after
+  `#` are the prototype's, and none of them is the design: by ruling
+  the element part of the first is a record of the names and one
+  salted hash, that of the second is a hash, and the key is a record
+  of the element part and the occurrence count. What the withdrawn
+  ruling added is removed: the store keeps no schema for a document.
+- **A reference by key is resolved from the key alone.** The store
+  forms the keys of the array with the fields that the key names, and
+  with none for a key that names none, and takes the position whose
+  key is the key. It reads no schema: not that of the reference, not
+  that of a link on the way, and none of the document. A write
+  through a reference by key decides whether it re-keyed the element
+  with the fields of the key it went through. Forming a key uses a
+  declaration: an element table is made with `Collection.keyFields`,
+  and an array that is read whole gives each member that is a
+  container a reference by key formed with the key fields that the
+  schema of the read declares. By ruling since, a reader whose type
+  declares no key takes the fields from the schema that is traversed
+  while the link to the array is resolved; the executor forms the
+  keys of such a read from the whole value. By case:
+  - **An array of plain values in place.** A reference to the element
+    and one to a member below it resolve with no schema, after a
+    write to another member, which re-keys nothing, and after a move.
+    A stored link by key reads the same element through a reader
+    whose schema declares no key, the key `id`, the key `name`, and
+    both fields. The array read under each of those four declarations
+    gives its first member four addresses, and each resolves to that
+    member.
+  - **A plain array generated from scratch, with a `filter` and a
+    `map` after it.** The array is what a `lift` returns. Its
+    elements have no place in the executor, so a handler of a row is
+    given the value and stores the value and no link. The documents
+    have the result of `fetchJson` as one stored document whose
+    elements have an address, and the executor answers every effect
+    as pending, so it runs no such array. The note asks whether an
+    element of an array that a `lift` or a `computed` returns whole
+    has a reference by key with the address of the output as its
+    collection. By ruling since it has (question 206).
+  - **The result of another per-element construct.** An element has
+    the upstream key, so the key names the fields that the source
+    collection declares, and nothing is resolved by a key of the
+    result: the executor stores no assembled result at an address
+    that a reference could name.
+  - **An array of references.** A link to a cell holds no key.
+- **Several key fields in the front end and the plan.** The checker
+  reads the second argument of `KeyedBy` as a string literal type or
+  a union of them, and annotates `T` with the names, each once, in
+  the order of their code points. The schema of the items has the
+  keyword `keyFields`, an array of the names, in the place of
+  `keyField`: `["id"]` for one field and `["name", "owner"]` for
+  `KeyedBy<Repo, "owner" | "name">`. The record of a collection whose
+  source is a slot or an output has `keyFields` with the same array,
+  and one whose source is another collection has none. By ruling the
+  keyword is on the schema of the array and not of the items. The
+  type does not tell an array of plain values in place from an array
+  of references, and the crate accepts the marker on both. No type of
+  the corpus uses the marker.
+- **The diagnostic of a wrong declaration.** The crate reports
+  `keyed-by:declaration`, an error at the marker, where the second
+  argument is missing or has a member that is no string literal type,
+  and where a field names no property of `T`, an optional property,
+  or a property whose type is not `string`, `number`, a literal of
+  either, or a union of those. Nothing is reported where `T` or a
+  member of the union is a type the checker does not evaluate. The
+  documents name the diagnostic `array-by-key:declaration`, and
+  assume that a literal type counts.
+- **One key across the fields, and its written form.** The element
+  part is `fields:`, then the fields in the order of their names,
+  each as the name, `=` and the value, joined with `,`, and the
+  occurrence count after it: `fields:name=labs,owner=cf#0`. A `\`
+  stands before each `\`, `,` and `=` of a name and of a string
+  value, a number is `#` and its canonical form, and a string value
+  that starts with `#` has a `\` before it. That was the form the
+  documents proposed at the time, with values in the place of the
+  hash. By the ruling since, the design has no such form: no
+  separator and no escaping of its own (question 199). The names are
+  ordered by code point, as the documents have it. The tests of the
+  store, over arrays of plain values in place: three elements that
+  share `owner` or `name` have three keys; the order in which the
+  fields are given changes no key; each key resolves to its element
+  from the key alone; a write to a member that is no key field
+  re-keys nothing, and a write to one key field re-keys the element;
+  two elements with the same values of both fields are occurrences 0
+  and 1; and an element that lacks one field is keyed whole. Two
+  things are the executor's choice: an element is keyed whole where
+  a declared field holds a value that is neither a string nor a
+  number, which the documents assume as well, and the values are
+  held with no salt and no hash.
+- **A value that declares one key, given where another key is
+  declared.** The crate reports `keyed-by:mismatch`, an error at the
+  value, where a value is checked against a declared type: an
+  argument, an attribute of a tag that names a pattern, a returned
+  value under a written return type, and an initializer under an
+  annotation. The walk compares the two types through handles,
+  arrays, the properties that both declare, and the members of a
+  union, and reports the first position at which both declare key
+  fields and the two lists differ. A position at which one side
+  declares no key is no mismatch, in both directions, and the same
+  fields written in another order are one key. The documents name
+  the diagnostic `array-by-key:mismatch`. By case, as two tests have
+  it. An array of plain values in place, or of references, which the
+  type of a pattern input does not tell apart: an input declared with
+  the key `id`, given to a pattern whose input declares the key
+  `name` or both fields, to the state of a handler, to the argument
+  of a `lift` result, and to an authored function, is reported, and
+  given where a plain array type or the same key is declared it is
+  not. A plain array generated from scratch: the result of a `lift`
+  whose return type declares the key `id`, given where `name` is
+  declared, is reported. The result of another per-element construct:
+  the result of a `filter` has the element type of its source with
+  its key, and is reported the same way. Four limits: an object
+  literal or an array literal is checked member by member, so a
+  mismatch is reported at the member that is not a literal; an
+  assignment and the argument of a handle method are not checked; the
+  walk stops at depth 6; and both identifiers are provisional in the
+  crate's catalog. The note asks whether a value whose type declares
+  no key is accepted where a key is declared, as the crate has it
+  (question 205).
+- **A stream after a spread, compared with today's runtime.** Under
+  [The fixtures](#the-fixtures): today's runtime runs neither an
+  array literal with a spread among the children of a view node nor
+  a JSX spread child where a pattern's body writes it, so the ruling
+  on a spread child has no run of today's runtime to be compared
+  with in the reactive tier. In a `computed`, which today's runtime
+  runs, 15 of 15 values are equal.
+- **A re-key removes the instance that the moved one replaced.** The
+  case is an array of plain values in place with no declared key, and
+  an instance that a `lift` or a `computed` of the element body made.
+  Where the instance of the old key moves to a name that an instance
+  of a key that left has, the executor removes that instance: its
+  argument document, its result document and its state cells, the
+  record of its stream links, the instances and the bindings that its
+  own function bodies made, and the names that lead to them. A link
+  to one of its documents that is stored elsewhere reads as nothing,
+  and an event for one of its streams finds no instance. Two things
+  are not removed. An `asInstance()` instance that is named under the
+  new key is replaced in the table of the instances and stays in the
+  store, where a link that a handler stored elsewhere reads it; by
+  ruling since, that is the design ([Decided](#decided)). And the
+  stream of a binding that a function body made under the old key
+  stays. Whether the removal of the instance that a function body
+  made is the design is question 204. Over an array of references no
+  key changes and nothing is replaced.
+- **A `set` of a plain value on a cell that holds a link** writes
+  through the link in the executor: `picked.set(value)` after
+  `picked.set(reference)` wrote the value into the element that the
+  reference named. The prototype's author found it while testing keys
+  and did not examine it or compare it with today's runtime. The
+  reference there was a reference by key to an element of an array of
+  plain values in place.
+
+At commit `a4b4612b3b` the plan and the run have the following. The
+prototype at this commit has neither `KeyedBy` nor the plain form of
+the key. Each statement about a key is about plain values: an array of
+plain values in place, a plain array generated from scratch, and the
+result of another per-element construct where the upstream position
+holds a value. Over an array of references the key is the cell, with or
+without declared key fields, which one test of the store and one of
+`fixtures/array-by-key.tsx` have. Nothing below is compared with
+today's runtime, which has no `ArrayByKey`.
+
+- **The key is declared on the array.** `ArrayByKey<T, "a" | "b">` is
+  an array of `T` whose type has the key annotation, and the type of an
+  element has none. `KeyedBy` is not read: an array of it is an array
+  of a type the checker does not know, and declares no key. The schema
+  of the array has `keyFields` beside `items`, and the schema of the
+  items has none. The executor reads the keyword from the array schema,
+  and the keyword in an items schema declares nothing. The record of a
+  collection takes `keyFields` from the array type of the receiver
+  expression. By case: a collection whose source is a slot that holds
+  an array of plain values in place, and one whose source is an output
+  that is a plain array generated from scratch, have the copy; a
+  construct over the result of another per-element construct has none.
+  The crate reports `array-by-key:declaration` and
+  `array-by-key:mismatch`, the names of the documents. Both are
+  provisional in the crate's catalog.
+- **An element put into a second array has that array's key, or none.**
+  Nothing had to be built for it once the key is on the array. Two
+  `lift`s read the elements of an input declared
+  `ArrayByKey<Repo, "id">` through a parameter typed `Repo[]` and
+  return some of them. The collection over the result whose return type
+  is `Repo[]` has no key fields, the one over
+  `ArrayByKey<Repo, "name">` has `name`, and neither call is a
+  mismatch. Both results are plain arrays generated from scratch. The
+  result of another per-element construct is not a second array: the
+  elements of `saved.filter(...)` have the upstream keys. The type of a
+  `filter` result declares the key fields of its receiver, so giving it
+  where another key is declared is reported. In the crate the type of a
+  `map` or a `flatMap` result declares no key, though the elements of a
+  `map` result have the upstream key as well, so nothing is reported for
+  one. By ruling the type of a `map` result keeps the key fields of its
+  receiver, and the crate does not follow that ruling; for a `flatMap`
+  the crate does as the documents assume (question 208).
+- **A reader whose type declares no key, compiled in.** A pattern that
+  is compiled in reads the caller's places, so the crate decides at
+  compile time and no link is resolved. Where the receiver of a
+  construct declares no key, the record of the collection has the key
+  fields of the array that the place holds. For a slot, which is the
+  case of an array of plain values in place, they are those of the
+  declared type of the slot root at the path. For a computed value,
+  which is the case of a plain array generated from scratch, they are
+  those that the declared type of the argument expression has where the
+  value is given to the pattern. Over the result of another per-element
+  construct the record names the upstream collection and has no copy.
+  The documents had the reader of a plain array generated from scratch
+  take the fields from a collection that declares the key; no
+  collection has to, since the caller may apply no construct to the
+  array, so the crate carries the fields with the computed value
+  (question 207). It notes them at two places alone: a property of an
+  object literal at the call, and an attribute of a tag. An argument
+  that is a record held in a variable, a spread, and a value that
+  reaches the callee through a second pattern compiled in between are
+  not noted, and the reader then forms keys from the whole value. That
+  limit rests on a reading of the code and has no test.
+- **A reader whose type declares no key, as an instance of its own.**
+  The executor has no plan record of the caller to read. Its store
+  keeps the schema that the link nearest the position holds, where a
+  link whose schema declares no key fields does not replace one that
+  declares some, and a read forms the keys of an array with the key
+  fields of that schema where the schema of the read declares none. The
+  reader's own declaration comes first. No record of a stored schema is
+  kept. By case. An array of plain values in place: a link with the
+  array schema, a link to a link whose nearer link declares no key, and
+  a record read through a link whose schema declares the key below it
+  give keys of the declared fields; a link with no schema, or with a
+  schema that has no keyword, gives keys of the whole value, as
+  question 203 assumes. A plain array generated from scratch given
+  whole to an `asInstance()` instance: the argument of the instance
+  holds the values and no link, so no schema is met, and the rows are
+  keyed by their whole values. By ruling the argument holds a link to
+  the stored output with the schema of the array, and the executor does
+  not follow that ruling (question 207). The result of another
+  per-element construct given whole to an instance of its own was not
+  run.
+- **What a key with declared fields holds.** The element part of a
+  plain value in an array with declared key fields holds `fields`, the
+  names in the order of their code points, each once, and `hash`. It
+  holds no value. A plain value with no declared key, and one that
+  lacks a field or holds neither a string nor a number at one, is keyed
+  whole, with a hash and no `fields`. The hasher is `hashOf`
+  (`base/data-model/src/value-hash/impl.ts`), which puts a byte for the
+  type in front of each part, so the number 7 and the string `7` differ
+  and two lists of values never give one input. The tests form each
+  expected key with `hashOf` and `jsonFromFabricValue`, and not with
+  the store. The fixture `array-by-key-form` has the two cases that
+  were run: an array of plain values in place, and a plain array
+  generated from scratch with a `filter` and a `map` after it ([The
+  fixtures](#the-fixtures)).
+- **The secret, and the salted hash.** The store takes the secret as an
+  option and mints one with `crypto.randomUUID()` where it is given
+  none. A test fixes it, and the comparison's harness gives every run
+  one secret, so that two runs form the same keys. Four things differ
+  from the documents. The secret is a string that the store holds, and
+  not a labeled document that `ensureRuntimeSecret` mints. The executor
+  hashes the array of the secret and the value, and for a key with
+  declared fields the array of the secret and the array of the field
+  values, where by ruling the salted hash is of the record with the
+  members `salt` and `value` (question 210). The memo and the element
+  tables use the
+  salted key too, where `execution-and-storage.md` §5.3 lets the memo
+  use an unsalted hash. And no identifier of a part document is formed.
+- **The written form of a key.** A key is the record of its parts,
+  written by `jsonFromFabricValue` (`base/data-model/src/codecs.ts`):
+  `{ hash, count }` for a whole value, `{ fields, hash, count }` with
+  declared fields, `{ cell: { doc, path }, count }` for a position that
+  holds a link, `{ position, count }` for an element that holds a
+  reference by key into its own array while the keys of that array are
+  formed, and `{ of, member }`, two key records, for a member of a
+  `flatMap` segment. A hash is a `FabricHash`, which the codec writes
+  with its algorithm tag. The names are read back from a key with
+  `fabricFromJsonValue`. No separator and no escaping of the
+  prototype's own is in a key. The members are not those that the
+  documents assume, which are `element` and `occurrence`, and `source`
+  and `member` (question 202). The codec writes the members of a record
+  in one order, which the prototype relies on for two keys of the same
+  parts being one text, and does not check. The key of an array of
+  references is the record with `cell`; that of an array of plain
+  values in place, a plain array generated from scratch included, is
+  one of the first two; and the result of another per-element construct
+  has the upstream key unchanged.
+- **The key of a whole value.** It is the salted hash, where the
+  earlier commits had `value:` and the canonical JSON text of the value
+  with no salt and no hash. Three differences from the documents
+  remain at this commit: the value
+  that is hashed is what its JSON text holds, the key of a position
+  that holds a link names no space, and a key is about 100 characters
+  long and stands as it is in the names of state cells and child
+  instances.
+- **An `asInstance()` instance that a re-key replaces stays.** The
+  executor did so before the ruling, and one test has it ([The
+  fixtures](#the-fixtures), `as-instance`). An instance that a `lift`
+  or a `computed` of the element body made and that a moved one
+  replaces is removed, which the ruling does not cover (question 204).
+  The case is an array of plain values in place with no declared key;
+  over an array of references no key changes.
+- **An element of a plain array generated from scratch has a reference
+  by key.** Where the source of a collection is an output at the empty
+  path whose cone has a function body, which is what a `lift` or a
+  `computed` returned whole, the executor stores the array in a
+  document of the kind `output`, named by the output and the element
+  keys around it, and makes the element table as for a stored array. An
+  element is named by that document and its key, with or without a
+  declared key. With a declared key, over the result of a `filter`, the
+  handler of a row stores a link with the document of the output and
+  the key, and the readers read the element after the computation
+  returns a new array in another order or with another value of a
+  member that is no key field. With no declared key, the stored
+  reference names its element after another element is added, and reads
+  as nothing once every element changes; a write through it is refused.
+  Given to an instance called through `asInstance()`, the argument
+  holds a copy of the element, as it does over an array of plain values
+  in place, and a whole array given to an instance is a copy too. Over
+  an array of references, and over the result of another per-element
+  construct, nothing changed: a position that holds a link is keyed by
+  its cell, and an element of a derived collection has the upstream key
+  and the place of the upstream element.
+- **What that reference cost to build,** which the owner asked for with
+  the ruling. About 90 lines in the executor and the store, and about
+  110 lines of tests with one fixture. The executor keeps three things
+  that it did not. One document per output and combination of the
+  element keys around it, stored again whenever the array differs. For
+  an output outside every element body, a function per document that
+  brings the output up to date, which the store runs when a read enters
+  the document: the executor evaluates on demand, and a link stored
+  elsewhere is no dependency on the output. And the set of the
+  documents whose function is running. Every key is a salted hash of
+  the element, so each element is hashed once per element table and
+  once more per resolution of a reference by key. In the corpus it is
+  12 documents more in ten modules ([Documents](#documents)).
+- **Four limits of that reference as built.** An output inside an
+  element body has no function that brings it up to date, so a link to
+  one of its elements that is stored elsewhere reads what the document
+  held when its element table was last made. An output at a path below
+  a value, as `facts.main` where a function body returns a record that
+  holds the array, and an array written in the reactive tier are not
+  stored, and their elements have no place, as before. The refusal of a
+  write is by the kind of the document and is tested on a direct write
+  to the store alone. The fourth is the hashing that the item above
+  names. By ruling the first is a defect of the prototype, and the
+  second is a known limit of the design for now (question 209). The
+  limits rest on a reading of the code where no test is named.
+
+At commit `682b918ed1` the plan and the run have the following. Each
+item names the case it is about: an array of references, an array of
+plain values in place, a plain array generated from scratch, or the
+result of another per-element construct. Nothing below is compared with
+today's runtime, which has neither `ArrayByKey` nor `asInstance()`,
+except the `set` of the item before the last.
+
+- **The record forms of a key.** A key is the record
+  `{ element, occurrence }`, written by `jsonFromFabricValue`, and the
+  salted hash is `hashOf` of the record `{ salt, value }`, as ruled.
+  Over an array of plain values in place, a plain array generated from
+  scratch included: with no declared key the element part is the salted
+  hash of the value, and with declared key fields it is
+  `{ fields, hash }`, the names in the order of the names and the
+  salted hash of the array of the values of those fields in that order.
+  Over an array of references the element part is the record of the
+  address that the link names. Over the result of another per-element
+  construct an element has the upstream key unchanged, and the key of a
+  member of a `flatMap` segment is `{ source, member }`, two key
+  records. These are the forms that the documents assume (question
+  202). One form is not in the documents: an element that holds a
+  reference by key into its own array has the element part
+  `{ position }` while the keys of that array are formed. The tests of
+  the store form each expected key with `hashOf` and
+  `jsonFromFabricValue`; they were rewritten first, and 35 steps failed
+  on an assertion before the store changed.
+- **A whole value is hashed as the fabric value it is.** The store
+  gives the value to `hashOf` as it is, after `isValidFabricValue` of
+  `base/data-model`, and throws for a value that is none. So a member
+  that is `undefined` and a member that is absent give two keys, and so
+  do a hole of an array and a `null`. That is about a plain value: in
+  an array of plain values in place, in a plain array generated from
+  scratch, and a member of a `flatMap` segment that the callback
+  computed. For an element that has no place, as one of an array at a
+  path below a value that a function body returns, the executor hashes
+  the stored form of the value, in which a marker of a stream is the
+  link to the stream and a function is left out.
+- **The element part of a position that holds a link,** which is the
+  case of an array of references. It is `{ space, document, path }`,
+  with no member `space` in a store that was given none. For a link to
+  an element by key it is the record of that reference,
+  `{ collection, key, path }`, where `collection` is the address of the
+  array and `key` the key record, taken at the last key of the path, so
+  a reference into a nested array is a record inside a record. The
+  executor has no scope and the record holds none (question 211).
+- **The codec writes the members of a record in one order.** One test
+  of the store gives `jsonFromFabricValue` a key record, an element
+  part and the key of a `flatMap` member with their members written in
+  two orders, and the texts are the same; and each key that the store
+  forms is the text of the record that is read back from it. The test
+  passed when it was written. The codec does not write that order for a
+  member whose name reads as an integer, as
+  `plan-and-label-templates.md` §1.2 says, and no record of a key has
+  such a member.
+- **An identifier is the hash of the cause of the thing.** It is what
+  `taggedHashStringOf` returns for the record
+  `{ ...source, causal: cause }`, the record that
+  `execution-and-storage.md` §5.1 says `createRef` hashes. A key in a
+  cause is the record of the key, so no identifier holds the text of a
+  key, and an identifier is 48 characters whatever the key holds. The
+  causes follow `execution-and-storage.md` §5.1 and §5.2 for the
+  argument document, for a state cell, and for an instance called
+  through `asInstance()`, whose `element` step holds the name of the
+  collection and the key record. That key is the address record over an
+  array of references, the salted hash or the record with `fields` over
+  an array of plain values in place, a plain array generated from
+  scratch included, and the upstream key over the result of another
+  per-element construct. The document of an output that a function body
+  returned whole has the same cause with the type `output` (question
+  215). Three tests form the expected identifier in the test and were
+  seen to fail against a joined form. Where the causes do not follow
+  the documents is under [Known limits](#known-limits-of-what-exists).
+- **An output inside an element body is brought up to date on a read.**
+  That is about a plain array generated from scratch that a function
+  body of an element body returns whole; the element body can be over
+  any of the three cases, and in the fixture it is over an array of
+  plain values in place. The document of every such output has a
+  function, outside an element body and inside one. For the keys that
+  the document is named by, the function brings the element table of
+  each enclosing collection up to date, outermost first, finds the
+  element that holds the key, and evaluates the output for it. Where a
+  key is in no table, because it left its collection, nothing is
+  computed and the link reads what the document held ([The
+  fixtures](#the-fixtures), `generated-inner`). A read that enters the
+  document checks the assembly of each enclosing collection and the
+  cone of the output for being current, once per read; that cost was
+  not measured. An array at a path below a value that a function body
+  returns, and an array that the reactive tier writes, have no document,
+  as ruled.
+- **A plain array generated from scratch given whole to an
+  `asInstance()` instance is given as a link.** The argument of the
+  instance holds a link to the document of the output, with the empty
+  path and the schema `{ type: "array", keyFields }`, and no value of
+  the array. The executor knows the array by its identity: it records,
+  for the array that a value function returned for an output, the
+  output and the element keys around it. The plan holds no schema of an
+  output, so the crate writes `Output.keyFields`, a copy of the key
+  fields that the type of the output's value declares, as
+  `Collection.keyFields` is a copy, and the executor forms the schema
+  from it. An output with no declared key gives a link with no schema.
+  The documents have the member as an assumption (question 207). The
+  test of the plan and the test of the executor failed first.
+- **The result of another per-element construct given whole to an
+  `asInstance()` instance is given as values.** Over a `filter` of a
+  plain array generated from scratch and over a `filter` of an array of
+  plain values in place, both with the declared key `id` upstream, the
+  argument holds the values of the elements that the `filter` passes
+  on, and no link. The instance keys its rows by the whole value, and a
+  row loses its state cell when a member that is no key field changes.
+  That is what the documents assume, and one test has it (question
+  212). Over a `filter` of an array of references the argument holds
+  the links.
+- **The type of a `map` result keeps the key fields of its receiver.**
+  The crate applies to the result type of a `map` what it applies to
+  that of a `filter`, and reports `array-by-key:mismatch` at a `map`
+  call that is given where another key is declared. The type of a
+  `flatMap` result declares no key. The test, which failed first: the
+  result of a `map` over a pattern input, which is an array of plain
+  values in place, over a plain array generated from scratch, and over
+  the result of a `filter` is reported where `name` is declared and not
+  where `id` or no key is; a `flatMap` result is not reported. One
+  consequence is in the test:
+  `saved.map((repo) => ({ label: repo.name }))`, over an array that
+  declares `id`, is reported where
+  `ArrayByKey<Label, "label">` is declared, though `id` is no property
+  of the elements of the result, and the record of the output of such a
+  `map` has `keyFields: ["id"]`. The documents assume otherwise
+  (question 213).
+- **A key in a stored path, and the names that the executor holds in
+  memory.** The segment of a path that holds a key is the text of the
+  key, with nothing before it, and a segment is a key where it decodes
+  to a record with `element` and `occurrence` or with `source` and
+  `member`. A property whose name is such a text cannot be named by a
+  path; a property named `$key:x`, or named as the text of another
+  fabric value, is a property, which one test has. The documents assume
+  a record in the path (question 214). That is about every case in
+  which a reference by key exists: an array of plain values in place, a
+  plain array generated from scratch included, and the result of
+  another per-element construct where the upstream position holds a
+  value. The name of an array while its keys are formed, the name of a
+  position in the store's table of nested positions, and an address in
+  the executor are the text of the address record. The names of the
+  memo, of what is kept under an element key, and of the element tables
+  are the text of a record of the kind, the index in the plan, the keys
+  around it as records, and for an element its key. An element table
+  holds its collection and the keys around it as members, so no name is
+  taken apart. These names are in memory alone and are in no result, and
+  no test is for them.
+- **A name of several parts in a plan is a record:**
+  `{ name, ordinal }`, `{ body, site }`, and `{ operation, sidecar }`.
+  The member `name` of a state cell, an operation, a child, a
+  collection, a body and a binding changed in the plan JSON. The
+  executor takes a name as a fabric value into a cause, and the
+  comparison writes a name of several parts into a report as the text
+  of the codec. That is about no per-element construct.
+- **The key fields reach a reader that is compiled in by every way.**
+  The crate notes the key fields of a computed value wherever an
+  expression of a type that declares them denotes the value. In the
+  test a plain array generated from scratch reaches the pattern `Rows`
+  through a record held in a variable, a spread of it, and a second
+  pattern compiled in between, and each collection has
+  `keyFields: ["id"]`; an array of plain values in place reaches it
+  through the second pattern and has them from the type of the slot.
+  The first two failed before the change. Over the result of another
+  per-element construct the record names the upstream collection, as
+  before.
+- **A `set` of a plain value on a cell that holds a link** replaces the
+  record that the link names, and the cell keeps the link. Today's
+  runtime does the same, and 32 of 32 compared values are equal ([The
+  fixtures](#the-fixtures), `set-over-link`). The record is one of the
+  argument; no element of a per-element construct was tried, in any of
+  the three cases.
+- **The diagnostic catalog.** The crate's catalog test reads
+  `language-subset.md` in the crate's tree, which does not have the
+  three rows that the document has on the branch of these documents.
+  The crate holds the three as provisional, in the order of that table:
+  `element-body:result-stored-outside`, an error that the crate does
+  not report and that needs footprint analysis, and
+  `array-by-key:declaration` and `array-by-key:mismatch`, both errors
+  that are implemented in part. One test has the three with their
+  severities and statuses.
+
+At commit `abd965cc37` the plan and the run have the following (notes
+465 to 472 and 478). Each item that is about a per-element construct
+names the case.
+
+- **`dataFile` is a constant that the artifact holds.** The crate
+  rewrites a `dataFile("./path")` call to a read by an index and lists
+  the file in `code.dataFiles`, with its path resolved against the
+  module as an import is. The `emit` command reads the text of each file
+  and puts it beside the path, and the executor gives the text. The
+  member is the prototype's; the documents do not say where an artifact
+  holds the files (question 223).
+- **A `const` of the block body of a promoted `computed` that another
+  cone reads.** Value code holds such a `const` in a variable of the
+  block. A per-element construct inside the block is a cone of its own,
+  and it read the `const` as an output that no value function computed.
+  The crate registers a value function for a `const` whose value another
+  cone reads, from its initializer, and code that is registered outside
+  the block reads the names of the block as outputs. The block still
+  computes the `const` in its variable, so the initializer is evaluated
+  in two places. The plan did not change. Tried over arrays of plain
+  values in place alone.
+- **A check of a memo entry is made once while the clock of the store
+  stands.** A check of an entry checked each of its dependencies again
+  by every way that leads to it. On the fixture of shared values with
+  twenty-five values, one pass over a settled instance made 300,099
+  checks and makes 26. A read through a reference by key formed the keys
+  of its array again, with a salted hash for each member, for every
+  element that it resolved; the store keeps the keys that it formed for
+  a stored array until the clock moves. That is about an array of plain
+  values in place, a plain array generated from scratch included. One
+  read of the result of `showcase/battleship/multiplayer/room.tsx` took
+  13 seconds and takes 0.17, by one run. Neither changes a value or a
+  count of evaluations.
+- **The debug renderers.** `toCompactDebugString`,
+  `toIndentedDebugString` and the `debugStr` tag are those of
+  `@commonfabric/data-model` in the executor. Footprint analysis reads
+  the operand of a renderer as a conversion to a string, `value` over
+  the operand with widening W2 for a container (`footprint-analysis.md`
+  §3.4), where it read it as passed on. Value code gives each operand as
+  its value, so a record that the code builds, whose members are
+  references, is rendered with what they hold.
+- **A property written with a well-known key.** The schema of a type
+  that writes `[NAME]: string` names the property `$NAME`, as the value
+  is stored and as a path of the plan says, where it named it `[NAME]`.
+- **A captured name has the type it is declared with.** The slot of root
+  `binding` of a name that an `action` or an inline handler captures has
+  the schema of the type that the name is declared with: a handle where
+  a pattern declares one for the property of its parameter, with the
+  declared default. The state path of such a name holds the literal that
+  the call of a pattern compiled in writes, or the default of the callee
+  for a path that the call leaves out, where it held `null`. A constant
+  at a position of handle type is handed to the body as a handle that
+  reads it and refuses a write (`execution-and-storage.md` §2.4). A
+  captured name of plain type that is bound to a constant is still read
+  from the scope, and a constant that the crate cannot evaluate is still
+  `null` in the plan.
+- **Six smaller defects are fixed.** A built-in that the executor does
+  not have gives, while the modules are evaluated, a value whose members
+  can be read and called, and a call of it in a function body still
+  throws. A computed key that is a string literal names a path of the
+  argument of a pattern compiled in. A pattern compiled in that names
+  its whole argument reads every path that the call binds. The method
+  form `h.equals(x)` in the reactive tier is the comparison that
+  `equals(h, x)` is. `navigateTo` in a function body is a request of an
+  effect: the handler commits, the instance holds the request with its
+  target, and the executor answers no effect. And a state path that a
+  handler declares as a handle or `undefined` is handed to the body as a
+  handle.
+- **A spread in the reactive tier gives each member as what its position
+  holds.** That is for a spread in an array literal and for a JSX spread
+  child. Over an array of references each member is the reference to the
+  cell of its position, and the nested array stores the links. Over an
+  array of plain values in place each member is the value, and a record
+  is stored as a copy and not as a reference by key (question 221). Over
+  the result of another per-element construct the members are what the
+  construct assembled, a reference where its body passes the element on.
+  Today's runtime runs none of these forms in a pattern body, so nothing
+  of this is compared with it.
+- **The label template of an output repeats the template of each output
+  that it reads** (question 222). The crate writes the whole template of
+  each input into a `derive` node, so a value that two others read is
+  written out once for each. The size of a plan follows the number of
+  ways through its outputs. No test bounds the size of a plan. By ruling
+  a template names the template of another output with a node of its
+  own and holds no copy of it ([Decided](#decided)); the crate at this
+  commit does not follow that ruling.
+
+At commit `a84264daf2` the executor has the following (notes 479 to 497 and
+499). Each item says whether the statement of the documents held when it was
+built and tested. The one per-element construct in these fixtures is a `map`
+over an array of plain values in place.
+
+- **A transaction for each cause.** The executor records each transaction with
+  its cause (creation, event, derivation, request, completion), the cones it
+  evaluated, the documents it wrote, the cones that took an error state, and
+  whether it committed. An event's transaction that does not commit puts every
+  document back. The creation of an instance writes its two documents and
+  evaluates nothing, as `execution-and-storage.md` §1.1 assumes under question
+  77.
+- **A batch of events** (`scheduler-and-serving-loop.md` §5.1, §5.2 and §5.4):
+  holds. Each event has a transaction, an event that a handler sends joins the
+  queue behind the queued ones, one derivation transaction runs behind the
+  batch, a body that throws aborts its transaction alone, and a batch that
+  changes nothing a reader sees writes no document.
+- **Before a handler body** (`execution-and-storage.md` §1.3): holds, with the
+  one case of question 276. A handler whose state names an output is handed the
+  value as of its event, evaluated once in its transaction and not again behind
+  the batch.
+- **The bound of ten** (`scheduler-and-serving-loop.md` §8.1 and §8.2): holds,
+  with questions 224, 284 and 286.
+- **An error state** (`plan-and-label-templates.md` §5.2 and §5.3): holds, with
+  questions 278, 285 and 287. A failed cone instance is not evaluated again by a
+  cause that changes nothing it read.
+- **A handler and a failed cone instance, and a refused write**
+  (`scheduler-and-serving-loop.md` §5.5, first row): holds for values. A handler
+  whose state names a failed output fails and stores nothing; the error state of
+  the cone instance is stored by the derivation transaction behind the batch,
+  from the memo, with no evaluation.
+- **An instance that a handler creates** (`execution-and-storage.md` §1.1):
+  holds. The event's transaction writes the documents of the new instance and
+  evaluates nothing, and the derivation transaction behind the batch evaluates
+  its result.
+- **The request and the completion of an effect**
+  (`scheduler-and-serving-loop.md` §6.2, §6.5 and §6.6): hold, with questions
+  279 to 281 and 283. An effect that nothing reads is not requested and has no
+  state document; the request is a derived write with a cell passed on as a
+  link; a change that leaves the request as it was requests nothing, and a
+  change behind a reference of the request requests again; the completion is a
+  transaction of its own that evaluates nothing; and a reader that fails cannot
+  lose the result.
+- **A request that a handler makes:** holds, as far as one process shows. It
+  leaves when the event commits, though nothing reads its result, and each event
+  names an operation of its own. That a requeued event names the same operations
+  was not tested, since the executor requeues nothing.
+- **The stream document** (`execution-and-storage.md` §4.7): holds. A stream has
+  a document from its first event and a row of the stream index before. The
+  executor moves the watermark past an entry when its event was handled,
+  whatever became of it, outside the event's transaction.
+- **The reference forms** (note 499). The crate writes the node that names an
+  output in every record that holds a template, an entry of `Plan.templates` for
+  a template at more than one position, and a member of `$defs` for a repeated
+  schema of a schema document. The label-flow checks of the crate and its list
+  of the bodies that an output is derived by, which were walks of a template,
+  follow a reference to the template it names and keep the result of each named
+  template. No rule of the documents was found that the reference forms conflict
+  with.
+
+### Documents
+
+The executor stores an argument document, a result document, and one
+document per state cell that exists, and counts a cell that a function
+body creates.
+
+| Documents after the scenario, 186 modules | total | per module |
+| --- | ---: | ---: |
+| executor, measured: all | 1,302 | 7.0 |
+| executor, measured: argument documents | 186 | 1 |
+| executor, measured: result documents | 186 | 1 |
+| executor, measured: state cells | 898 | 4.8 |
+| executor, measured: cells a function body created | 32 | 0.2 |
+| today, measured: all, from the compile on | 9,700 | 52.2 |
+
+For a fixture with no state cell the executor stores two documents, and
+one more per state cell.
+
+At commit `96f3b83a73` the executor writes nothing when it creates a
+state cell whose first value is a constant, by the ruling, and the
+first write makes the document. Over the 187 modules it then stores 504
+documents, 2.7 per module, of which 98 are state cells, 0.5 per module;
+over the 189 modules of the wider set, 509 and 99. At commit
+`59055fd0c5`, over 194 modules, it stores 535 documents, 2.8 per
+module; the 26 more include 5 state cells and 11 records of a key of a
+list, which the executor stores as documents of their own (question
+166). At commit `77993077e4`, over the same 194 modules, it stores 598
+documents, 3.1 per module; 64 of them are records that a handler wrote
+into a list, each a document of its own as in today's runtime. At
+commit `e63b3d305c`, over 196 modules, it stores 615 documents for the
+scenarios of the saved values, 3.1 per module, and 793 for the
+scenarios of the fresh run, which send more events. The 17 more of
+the first are 5 argument and 5 result documents of the 2 modules more
+and of 3 instances that a function body made, and 7 cells and records
+of theirs. At commit `e4f2fb3431`, over the same 196 modules and the
+scenarios of a fresh run, it stores 793 documents again. At commit
+`a462df710a`, over the same 196 modules and the scenarios of a fresh
+run that sends 11 more events, it stores 802 documents, of which 290
+are state cells where 281 were. At commit `a4b4612b3b`, over the
+same modules and scenarios, it stores 814 documents. The 12 more are
+documents of an output, in ten modules: one per plain array generated
+from scratch that a per-element construct is over and per combination
+of the element keys around it. At commit `682b918ed1` it stores 814
+documents again. At commit `abd965cc37` it stores 887 documents, over
+212 modules and the scenarios of a fresh run that commits 531 events.
+At commit `a84264daf2` it stores 1,444 documents, over 214 modules and
+541 committed events: 552 of the 557 more are stream documents, one for
+each stream that received an event.
+The notes
+give no
+other row of the table for those six commits. The prototype's cost model
+still counts one document per state cell, which is an upper bound under
+the ruling, and the derived figures of [Storage](#storage) are not
+computed again.
+
+Today's figure includes the cells through which the scenario gives the
+instance its inputs, one per top-level input. It is not the row "today,
+measured: documents of the instance" of
+[Storage](#storage): that row is over 213 modules, after settle, and of
+the instance's own documents alone.
+
+The executor's count is a lower bound on what the compiled path stores
+for these scenarios, in this sense: it leaves out the part documents,
+the state documents of operations, the stream documents, and the
+instances document, which `execution-and-storage.md` §4.1 lists and the
+executor does not make. The count of commit `3e518147df` is not a
+bound on state cells. That executor
+makes a document for every state cell when the instance is created or
+the element key enters. By ruling a state cell whose first value is a
+constant, or that is declared with no value, has no document until
+something writes it (`execution-and-storage.md` §4.1), so the design
+stores fewer state cell documents than that executor counted. The 98
+of commit `96f3b83a73` are of the rule, for the scenarios run: the
+cells that an event or a side-write wrote.
+
+The derived counts of [Storage](#storage) stay the figures to compare
+with today's, and the executor's count does not replace them. It bears
+on them in two ways.
+
+- **It is between the two derived bounds, on the mean.** The derived
+  count is 2.2 documents per module at the least and 8.6 at the most,
+  over 213 modules after settle. The executor has 7.0 over 186 modules
+  after the events at commit `3e518147df`, and 2.7 over 187 modules at
+  commit `96f3b83a73`. The module sets and the points in the scenario
+  differ, so this is no check of either bound.
+- **The "least" bound counts no state cell,** because the document of a
+  state cell is written when the cell is first written. By ruling that
+  holds for a cell whose first value is a constant as well. A cell
+  whose first value is not a constant has a document once that value
+  is written, and the least bound rises by the number of such cells
+  whose first value has been written, which the derivation did not
+  count. In the prototype's corpus 3 of 1,399 first values read a
+  slot at commit `3e518147df`, and 8 of 1,496 state cells have a first
+  value that is not a constant at commit `96f3b83a73`. The 4.8 state
+  cell documents per module of the earlier commit count every state
+  cell, so they are no measure of that term. The 0.5 of the later
+  commit count the cells that were written, by an event or a
+  side-write as well as by a first value.
 
 ## Rules of this work
 
@@ -169,6 +5412,26 @@ next.
    `deno task check-conflict-markers`. `docs/` is excluded from `deno fmt`,
    so prose is wrapped at 80 columns by hand. Read
    [`../README.md`](../README.md) first.
+8. **A plan with a stub is enough to go on.** The owner's working preference
+   (2026-11-20): "we're still validating a larger design choice here, and i
+   think it's totally fine to write down a plan but stub things for now so we
+   can make progress. patternTool is a good example here." A point that the
+   validation does not rest on is written down as a plan, stubbed in the build,
+   and listed under [Known limits](#known-limits-of-what-exists).
+9. **Where two alternatives cost the same and one is clearly more sound, the
+   coordinator decides.** The owner's working preference (2026-11-20), given
+   with the ruling on the catch-up merge: "if it's equal complexity and
+   obviously more sound, just decide". Such a decision is tracked as a
+   provisional decision, by the standing instruction of 2026-11-17.
+10. **A channel that the write gate would close is recorded and not closed, and
+    every stored label is still correct.** The owner's working preference
+    (2026-11-20), given with the ruling on the write gate: "assume the proposal
+    or something equivalent eventually lands and so don't worry about the
+    potential for leaks now, but still make sure things are sound in terms of
+    just correctly computing the labels under that relaxed condition". A finding
+    is therefore sorted first: a stored label that lacks a clause of what flowed
+    into the value is a defect to fix, and a label change that a write under a
+    secret causes is recorded under question 335.
 
 ## Decided
 
@@ -177,6 +5440,25 @@ is relitigated.
 
 **Architecture**
 
+- The design is validated on two tracks at once (2026-11-18): the
+  prototype is the reference for semantics, and its executor run inside
+  the runtime is the reference for cost. Both work toward one target,
+  Topics (`patterns/apps/topics/`) at 100, 1,000 and 2,000 topics.
+  [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
+  has the goal of each track and what decides whether the work continues.
+  It settles provisional decision P30.
+- The integration into the runtime is behind one experimental option, off
+  by default (2026-11-18). Labels from templates at commit (its milestone
+  4) assume specs pull request #91 lands as it stands, and need no option
+  of their own.
+- Milestone 4 of the integration, labels from templates at commit, is
+  built ahead of its number (2026-11-19): next, on the adapter of milestone
+  1 and beside milestone 2.
+  [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
+  ("The order of work") has the reason. It is built in the coordinating
+  session (2026-11-19), and specs pull request 91 was updated on
+  2026-11-19 (`cfc/08-09-runtime-label-propagation.md` and
+  `cfc/18-runtime-implementation-profiles.md`).
 - The language is a subset of TypeScript with its own compiler, written in
   Rust. The runtime's CFC kernel and scheduler stay in TypeScript.
 - The compiler emits JavaScript value code and a data plan. There is no
@@ -203,6 +5485,71 @@ is relitigated.
   transaction of its own, which runs as the demanding principal.
 - A conflict on a derived write withdraws that write alone, and the rest
   of the cause's transaction commits.
+- A cone with side-writes is of one of two kinds. Where its writes go to
+  a small, fixed set of targets that the compiler names, the cone is an
+  ordinary node, and its write targets count as its outputs for demand:
+  a demanded reader of a written cell demands the cone first, a reader
+  that passes the cell on by reference included. Where the write set is
+  dynamic or very large, the cone is a materializer: it is evaluated
+  eagerly whenever one of its inputs changes, as a rule after the rest
+  of the wave has been evaluated, and its writes make their readers
+  stale, which a further wave evaluates.
+- Each entry of `Body.reads` holds the path in the body's argument at
+  which the slot's value is placed, as an entry of `Body.computed` does.
+- Value code places the stream of a binding in a value it computes. The
+  value function calls `host.stream(binding)`, a function of `ConeHost`,
+  and puts the marker it returns at the position. The marker is inert:
+  the function can place it in the value it returns and can do nothing
+  else with it. It cannot send to it or read through it, so the rule
+  that a cone's function holds no handle stands. When the runtime stores
+  a value, it replaces each marker by the link to the stream of that
+  binding for the element keys of the cone instance that called
+  `host.stream`, wherever the marker is: at a position of the result, in
+  the value of a side-write, or in a child's argument. That is the whole
+  rule. No position is checked, and no evaluation fails for where a
+  stream is. A binding record has no member that names where its stream
+  is stored, so a reader that has the plan alone cannot say where a
+  stream is, and reads the stored result. A stream that is an input of
+  the pattern is no binding's marker and is passed on as any input is. A
+  client runs the value code, places the marker, and stores the link it
+  derived. The rule is the same in an element body over an array of
+  references, over an array of plain values in place, and over the
+  result of another per-element construct. A `flatMap` whose callback
+  returns an inner `map` that binds a handler needs no rule of its own:
+  each stored position holds the link that value code placed, in all
+  three cases. This ruling withdraws five earlier ones, which govern
+  nothing: that the plan lists the result paths of a binding
+  (`Binding.result`) and the list is complete; that the runtime checks
+  the position of a marker against the list; that a listed path states
+  what each `*` stands for, by the kinds `element`, `every`, `member`
+  and `inside`; that a `*` of kind `element` at a `flatMap` result
+  matches by prefix; and which evaluation fails the check and that the
+  top-level property of the result keeps its stored value.
+- A collection among the children of a view node is stored as one
+  nested child, as the runtime of today stores the result of a `map`.
+  The collection is the child at the position `n` it is written at,
+  and its elements are at `children/<n>/*`. The children array is not
+  stored flat. A child written after the collection has a static
+  position, and two collections among the children of one node are
+  two child positions. The paths of `Plan.outputs`, of label entries,
+  of provenance records and of split points follow. An array literal
+  that the author writes among the children is still written out
+  among them when the tree is built. The same for a collection over
+  an array of references, over an array of plain values in place, and
+  over the result of another per-element construct.
+- A spread child, `{...xs}`, and an array literal with a spread or a
+  hole among the children of a view node, are each one child at the
+  position they are written at. The literal is stored as one nested
+  array value. The same for `xs` an array of references, an array of
+  plain values in place, and the result of another per-element
+  construct.
+- A stream that a function body returns into the result is stored as any
+  reference that a function body returns is. A `lift` or a `computed`
+  that returns a value holding the stream of a binding returns a
+  reference and no marker, so reads through it are dynamic. The same for
+  a body used in an element body over an array of references, over an
+  array of plain values in place, and over the result of another
+  per-element construct.
 - A handling is identified by the receipt, which leaves the acting
   principal out.
 - An event is routed to an instance that is not loaded through a stream
@@ -279,6 +5626,39 @@ is relitigated.
   a property that declares a default gets a link, not a copy, and the
   link holds the schema with the default, so the callee reads the
   default where nothing is stored, whether or not it declares one.
+- Where the call of a pattern compiled into another leaves out a path
+  for which the callee declares a default, the compiler writes the
+  callee's declared default into the plan as a constant for that path.
+  A path that the call binds to a slot of the caller at which nothing
+  is stored also reads the callee's default, as it does today.
+- The default read at a position is the one declared nearest the end
+  of the chain of places the read resolves through, the stored place
+  last. The reader's own default, a callee's included, is read only
+  where no place along the chain declares one. So a caller's argument
+  at which nothing is stored, or a bound cell, that declares a default
+  wins over the callee's default. The runtime of today reads the same
+  for a read addressed at a position: the top-level default of the last
+  link schema along the chain that declares one (`resolveLink` in
+  `runtime/runner/src/link-resolution.ts`, `combineSchemaForLink` in
+  `runtime/runner/src/traverse.ts`). A schema on the handle that wrote
+  the final document counts for nothing, because it is not stored.
+- A sandboxed body of a pattern compiled into another finds the
+  callee's default in the plan. The entry of `Body.reads` for a path
+  that the call binds to a slot of the caller holds the default the
+  callee declares for the path (`ReadInput.default`), and value code
+  does not pass it. Where the callee passes such a path on by
+  reference, the stored reference carries the callee's declared
+  default. The rule that the default nearest the end of the chain is
+  read then gives a reader of the callee's result the value the runtime
+  of today shows. Both are the same inside an element body over an
+  array of references, over an array of plain values in place, and over
+  the result of another per-element construct.
+- The name a pattern binds to `[SELF]` is a reference to the result
+  cell of the instance. Passed on, it adds no label, as a handle passed
+  on without a read adds none. A handler binding that captures the
+  name holds, at that state path, a kind of place of its own in the
+  binding record, which names the result of the instance
+  (`Binding.state.place` with `result`).
 - A read of a default carries no integrity. Where a stored object has
   an absent property and a default fills it, the defaulted part carries
   the empty integrity, not the object's claims. The specification has no
@@ -307,8 +5687,10 @@ is relitigated.
   names the pattern, because trust is attached to the pattern. That
   holds for a value the pattern only passes on, through a `slot`, a
   `select`, or a `pick`, as for one it computes. Where the value is
-  passed on by reference, the atom is on the link, as the pattern's
-  endorsement of the selection, and the target keeps its own label.
+  passed on by reference, the atom is joined onto the content at the
+  output path, with no scope, by the ruling Z81 below, which replaces
+  the earlier rule that the atom is on the link as the pattern's
+  endorsement of the selection.
 - A child in the reactive tier does not write an argument given as a
   literal or a computed value. The runtime allows it today. A pattern
   that changes or owns one of its arguments is given a writable cell
@@ -353,6 +5735,22 @@ is relitigated.
 - `patternTool` is removed in favor of a pattern closure: an inline
   `pattern(...)` in the reactive tier, used as a value, whose captures the
   compiler binds as private parameters.
+- `patternTool` has an interim acceptance (2026-11-19; the owner's words:
+  "let's do that"). In a pattern body, a direct call
+  `patternTool(P, { a, b })` of the name imported from `commonfabric` is
+  accepted with the warning `removed-form:pattern-tool-interim` and
+  rewritten before any other stage to
+  `pattern<Omit<Parameters<typeof P>[0], "a" | "b">>((rest) => P({ ...rest, a, b }))`.
+  The owner's reason: it makes it easier to switch between the compiler and
+  the current patterns, since one source runs in today's runtime and is
+  compiled. The interim ends as it does for `ifElse`, `when`, `unless` and
+  `str`. `language-subset.md` §4.4.3 has the accepted and the refused
+  shapes. Of the 31 calls in the corpus 29 are accepted. Three points of
+  the build were the implementer's choices, and the ruling Z84 below has
+  them stand (question 314). A rewritten call compiles to a pattern closure
+  used as a
+  value, which the prototype does not translate, so the tool is not sent
+  (questions 307 to 310).
 
 **Calls inside a function body**
 
@@ -402,6 +5800,29 @@ is relitigated.
   fine, and the runtime decides it by a rule about size.
 - A state cell's identifier derives from its cause, with the name taken from
   the assigned variable as the transformer's `.for(...)` does.
+- A first value of a state cell that is a constant is the default of the
+  cell's schema. Nothing is written when the cell is created, and a read
+  of a cell that holds nothing reads the default, with the integrity of
+  a default. A first value that is not a constant is computed by a cone
+  and written once, when the cell is first created, through a write edge
+  to the state cell, so the stored value has the label and the integrity
+  of that run. Writing a constant first value at creation as well is
+  legal and not required. A state cell with a constant first value has
+  no document until something writes it. The owner named both forms and
+  delegated the choice to the one of lower complexity; this is that
+  choice.
+- A write below the root of a state cell that holds nothing creates
+  the document from the default with the write applied, so the members
+  the write did not name stay readable. The members taken from the
+  default keep the label of a default, which has the empty integrity.
+  The same for a state cell of an element body over an array of
+  references, over an array of plain values in place, and over the
+  result of another per-element construct.
+- A first value that is not a constant is always stored as a value and
+  never as a reference, so a write to the cell never lands in the
+  input the value came from. The same in all three cases of a
+  per-element source, also where the first value is the element
+  itself.
 - A `map` element is keyed by its cell identity where the collection
   holds a reference, and by its value otherwise. In both cases the key
   also holds the count of earlier occurrences of the same identity or
@@ -437,6 +5858,370 @@ is relitigated.
   is legal, and where two equal values stand in a collection and the
   first is removed, the state that remains is that of the first
   occurrence.
+- The record of a cone lists the collections of the element bodies the
+  cone is written in, outermost first (`Cone.within`). The runtime uses
+  the list for two things. The first is which instances of the cone
+  exist: one for each combination of element keys of the listed
+  collections, made when a key is added and dropped when it is removed.
+  The second is where an instance's outputs, state cells, streams,
+  effects, and children are kept: under those keys. A cone of an
+  element body that reads neither the element nor the index has an
+  instance per element key all the same; it is not evaluated once for
+  every row. The rule is the same for an array of references, an array
+  of plain values in place, and the result of another per-element
+  construct.
+- When an element moves, the runtime moves what the element's key
+  holds, its stored results included, to the new position. It evaluates
+  nothing for the element except the nodes that read the index.
+  Evaluating again is permitted, and moving is preferred.
+- The removal of an element deletes nothing that is stored under its
+  key. The cone instances of the key are dropped. Its state cells and
+  its operation state stay stored, and an element that returns under
+  the same key reads what its state cells held. That is as today, where
+  the cells of an element are named from the key and an element that
+  returns finds its old values. The rule is the same over an array of
+  references, over an array of plain values in place, and over the
+  result of another per-element construct. Reclaiming the storage
+  would be a separate mechanism, and this design has none.
+- An element of a plain array generated from scratch, which a `lift`
+  or a `computed` returns whole and the instance stores as an output,
+  has a reference by key with the output's address as its collection,
+  by the same rule as an element of an array of plain values in
+  place, with or without a declared key. Without a declared key the
+  key is the whole value, so the reference reads as nothing once the
+  element changes, and no write repairs it, since a computed output
+  refuses writes. The owner gave the ruling weakly, with a
+  reservation: "if all that hashing gets too complex for little gain,
+  copies are fine". So storing a copy is acceptable if building the
+  reference proves complex for little gain. The prototype built the
+  reference at commit `a4b4612b3b` and reports what it cost: about 90
+  lines in its executor and its store, about 110 lines of tests with
+  one fixture, one stored document per such output and combination of
+  the element keys around it, a function per document that brings the
+  output up to date when a read enters the document, the set of the
+  documents whose function is running, and one hash per element for
+  each element table and each resolution of a reference by key
+  (question 206). The owner has not said whether that cost is within
+  the reservation, so the reservation stands with the ruling. The
+  ruling is about a plain array generated from scratch alone.
+- The ruling above on an element of a plain array generated from scratch
+  holds for an output inside an element body as for an output outside
+  every element body: a link to one of its elements that is stored
+  elsewhere reads the current value. The element body that holds the
+  output can be over an array of references, over an array of plain
+  values in place, or over the result of another per-element construct;
+  the ruling is about the plain array generated from scratch that the
+  body's `lift` or `computed` returns whole. An array at a path below a
+  value that a function body returns, as `facts.main` where the body
+  returns a record that holds the array, and an array that the reactive
+  tier writes give their elements no place for now, and a body over one
+  is given the value and stores a copy. That is a known limit, recorded
+  as one ([Known limits](#known-limits-of-what-exists)); it is no ruling
+  that such an array never gives its elements a place (question 209).
+- An element that is a plain value in place is named by its collection
+  and its key, and a reference to it or to a member of it resolves to
+  the current position at each read and write. So `equals`, two-way
+  binding, and a write through the element work, and a move still
+  evaluates nothing. A cone that passes such an element on stores
+  that reference, by the rule that a value passed on unchanged is
+  stored as a reference, and no copy of the value. After the element
+  is removed such a reference reads as nothing, which remains a
+  difference from today. The case is an array of plain values in
+  place, and the result of another per-element construct where the
+  upstream position holds a value. Over an array of references a
+  reference to an element is the link to its cell.
+- A write through a reference by key that changes the value re-keys
+  the element in the same transaction. The runtime moves what the old
+  key holds to the new key and updates the reference that the writer
+  holds, so the state of the row survives and later writes in the
+  same handler succeed. References stored elsewhere under the old key
+  still read as nothing, because the runtime cannot find them all.
+  The case is an array of plain values in place; nothing of it arises
+  over an array of references. Where such an array declares a key
+  field with `ArrayByKey<T, "field">`, a write to another member
+  changes no key, and nothing is re-keyed.
+- On a re-key, an instance that a `lift` or a `computed` of the
+  element body made moves as a child does, and nothing moves for a
+  binding that a function body made. What is moved replaces what is
+  stored under the new key. Nothing moves for the other elements
+  whose occurrence count the edit changed. A write that is not made
+  through a reference by key re-keys nothing. The case is an array of
+  plain values in place with no declared key field, and a body over
+  the result of another per-element construct applied to it; nothing
+  of it arises over an array of references.
+- On such a re-key, where a moved instance that was called through
+  `asInstance()` takes the name that another such instance holds, the
+  replaced instance is no longer named by the element table, and its
+  documents stay in the store. Nothing is cleaned up, as when an
+  element leaves, and a link to it that is stored elsewhere keeps
+  reading it. The case is an array of plain values in place with no
+  declared key; over an array of references no write changes a key.
+  The ruling does not cover a replaced instance that a `lift` or a
+  `computed` of the body made (question 204).
+- A function body that reads a plain value holds a copy, and writing
+  it elsewhere stores the value, as today. References by key are for
+  the nodes of the reactive tier that pass an element on. A handle
+  that a body is given for the element is a reference by key, and a
+  value that the body reads through a handle is a copy. The case is
+  an array of plain values in place.
+- A value that a handler is given for its element through a state
+  path of plain type, as `stop: Stop`, is a reference by key, and a
+  member read from it, as `stop.position`, carries the reference with
+  the member's path, so `center.set(stop.position)` stores a
+  reference by key. A member handle read through a handle of handles,
+  as `Writable<Writable<Item>[]>`, is a reference by key as well. A
+  binding made in an element body copies nothing under either answer,
+  because the reactive tier binds by reference, so the stream is the
+  same stream when the data changes; the ruling decides what a value
+  read from the state carries. The case is an array of plain values
+  in place, and the result of another per-element construct where the
+  upstream position holds a value; over an array of references the
+  state path and the member handle resolve to the element's cell.
+- `items.key(i)` is a handle by position, at the call and when it is
+  stored. Nothing rewrites it to a reference to the element, so
+  `items.key(0)` addresses the first element, whichever it is, and a
+  stored one reads whatever element is at the position at the time of
+  the read. The same for `items` an array of references, an array of
+  plain values in place, and the result of another per-element
+  construct. A reference to the element itself comes from the element
+  handle that a per-element body is given, from `elementById`, or,
+  for an array of references, from reading the element's own cell.
+- `items.key(i)` is equal to a reference by key to the element at
+  position `i`. Both are resolved to the current position and compared
+  there, so the comparison is of one moment and needs a read of the
+  parent. The case is an array of plain values in place.
+- An element of a collection that is the result of a per-element
+  construct, such as a `map` or a `filter`, is keyed by the key of the
+  upstream element it came from. A change of one upstream element then
+  evaluates that element's nodes through a chain of such constructs,
+  and no other element's. Where the source is plain values that one
+  computation produces as a whole array, an implementation may evaluate
+  the whole collection again on each change in place of keeping results
+  per element, and the observable result is the same.
+- The key of an element is derived from upstream causes and stays
+  stable, for an array of references and for the result of another
+  per-element construct. Over an array of references the key is the
+  identity of the element's cell, which is tied to the cause of adding
+  the item, as where a handler instantiates a pattern and pushes the
+  result. An edit of the item, a rename included, changes no key, and
+  such an array needs no declared key.
+- The key of the elements of an array is declared on the array, with
+  the array type `ArrayByKey<T, "field">`. `ArrayByKey<Repo, "id">`
+  is a `Repo[]` whose elements are plain `Repo`, as in
+  `fetchJson<{ items: ArrayByKey<Repo, "id"> }>({ url })`. It is a
+  type-level declaration with no run-time call, and the compiler
+  writes the key field into the schema of the array: the schema
+  keyword is on the array schema, and not on the items schema. It
+  applies to plain values: a plain array that is generated from
+  scratch, where one computation produces the whole array each time,
+  as the result of an API call is, and an array of plain values in
+  place. The key of such an element is formed from the value of the
+  field, with the occurrence count where two elements have the same
+  value of it. The result of another per-element construct is keyed
+  by the upstream key, so a declared key is carried through the
+  downstream constructs. An array of references does not need the
+  declaration. `ArrayByKey` is not the collection method `keyBy`,
+  which builds an index and changes the key of no element. This
+  ruling replaces the syntax of two earlier ones, and that syntax
+  governs nothing: a type marker `KeyedBy<T, "field">` on the
+  element type, with a union of field names for several fields.
+  `KeyedBy` does not exist. The rest of those rulings stands: a
+  plain value can have a declared key, the key is carried
+  downstream, and several fields are written as a union.
+- The key belongs to the array and not to the element. An element
+  that is put into a second array has the key that the second array
+  declares, or none: the two arrays hold two copies, or the second
+  array has a key of its own. The case is an array of plain values
+  in place and a plain array generated from scratch; the result of
+  another per-element construct has the upstream key, and an array
+  of references is keyed by its cells.
+- `ArrayByKey` can name several fields. The element still has one
+  key, which is formed across them. The syntax is a union of field
+  names, as `ArrayByKey<Repo, "owner" | "name">`. The fields are
+  ordered by name when the key is formed, so the order in which the
+  union is written changes no key. The case is that of the
+  declaration: an array of plain values in place, a plain array
+  generated from scratch included, with the key carried through the
+  result of another per-element construct; an array of references is
+  keyed by its cells.
+- The key of a plain value that has declared key fields names the
+  fields: its element part holds the list of the field names and one
+  salted hash of the combined values of those fields. It does not
+  hold the values. A reference by
+  key is resolved from the key alone, with no schema: the resolver
+  reads the names from the key, combines those fields of each
+  element of the array, hashes, and compares. The salt is the one
+  that the element key of a whole value is hashed with, which a
+  client cannot read, so a client cannot form such a key before the
+  server stores a link, and a stored reference does not show the
+  values of the key fields. Two keys that share the value of one
+  field have nothing in common. The key has no written form with
+  separators of the documents' own, by the ruling below on written
+  forms. Resolving from the key alone holds for a
+  reference to a member below the element, as the one that
+  `center.set(repo.position)` stores, and for every reader, whatever
+  key the reader's type declares. A key formed from a field `id`
+  with the value 7 is not the key of a whole value that is 7, and a
+  key formed from the whole value, where no key is declared, names
+  no field. The runtime keeps no record of the schema that an array
+  is stored under for the purpose of resolving a key. Forming keys,
+  when an element table is made or a whole array is read, uses the
+  key fields that the collection or the read declares. The case is
+  an array of plain values in place, a plain array generated from
+  scratch included, and the result of another per-element construct
+  where the upstream position holds a value; an array of references
+  is keyed by its cells and is not affected. This ruling withdraws
+  an earlier one, which governs nothing: that a key does not say how
+  it was formed, and that whoever resolves a key takes the key field
+  from the schema. It also replaces one part of the ruling that it
+  extends, and that part governs nothing: that the element part
+  holds each field name with the canonical form of the field's
+  value.
+- The design builds no key, no identifier and no other stored string
+  by joining parts with separators and an escaping of its own. The
+  owner gave the ruling for the element part of a key ("field names
+  can contain : as well") and for the design in general. Wherever the
+  design needs the written form of a structured thing, as the element
+  part of a key with its field names and hash, a whole key with its
+  element part and occurrence count, the key of a `flatMap` member
+  with the key of its source element, a name with its ordinal, or
+  the steps of a `within`, that form is the serialization of a fabric
+  value by the helpers of `base/data-model`: `hashOf` and
+  `taggedHashStringOf` (`base/data-model/src/value-hash/impl.ts`) for
+  a hash, and `jsonFromFabricValue` (`base/data-model/src/codecs.ts`)
+  for a string. The documents state the structure, for a key with
+  declared fields the names in the order of the names and one salted
+  hash, and name the helper; they define no separator. A hash is
+  written as the helpers write one, with its algorithm tag. This
+  replaces three things, which govern nothing: the assumed written
+  form `name,owner:<hash>` with its `\` escaping, the assumption of
+  a digest with no algorithm tag, and the separator `/` between the
+  key of a source element and the member part in the key of a
+  `flatMap` member, which the prototype writes under the ruling on
+  that key: this ruling replaces that part of it, and the rest of
+  that ruling stands. The record forms are the
+  documents' choice (question 202). The ruling covers every key: for
+  an array of references the element part is the record of the
+  address, for an array of plain values in place, a plain array
+  generated from scratch included, it is the hash or the record of
+  the names and the hash, and the result of another per-element
+  construct has the upstream key unchanged.
+- A reader whose type declares no key learns the key fields of an
+  array it is given from the schema that is traversed while the link
+  to the array is resolved: the keyword `keyFields` on the schema of
+  the array that is met on that traversal ("the keys should be picked
+  up while the schema is traversed while resolving the link"). No
+  separate record of the stored schema is kept. The case is an array
+  of plain values in place that the reader reaches through a link, a
+  plain array generated from scratch that an instance stored
+  included; the result of another per-element construct has the
+  upstream key, and an array of references is keyed by its cells.
+  What such a reader does where no schema with the keyword is met is
+  question 203.
+- A plain array generated from scratch that is given whole to an
+  instance of its own, as `Rows.asInstance()({ repos })` where `repos`
+  is what a `lift` or a `computed` returns whole, is given as a link to
+  the stored output, which has an address by the ruling on a reference
+  into such an array. The link holds the schema of the array, so the
+  keyword `keyFields` is met while the link is resolved and the key
+  fields are carried forward to a reader whose type declares no key. The
+  argument of the instance does not hold the values. The ruling is about
+  a plain array generated from scratch alone: an array of plain values
+  in place that is given whole is given as a link with the schema that
+  the caller reads it under, and an array of references is keyed by its
+  cells and is not affected. Two things are not ruled and stay
+  assumptions (question 207): how a reader that is compiled in learns
+  the key fields, and what the argument holds for the result of another
+  per-element construct that is given whole to an instance of its own.
+- The type of the result of a `map` over an array with a declared key
+  keeps the key fields of its receiver, as the type of the result of a
+  `filter` does, because the elements of both results have the upstream
+  keys. So the error `array-by-key:mismatch`, which is assumed (question
+  198), is reported for a `map` result as for a `filter` result. The
+  case is the result of another per-element construct over an array of
+  plain values in place, a plain array generated from scratch included;
+  over an array of references the declaration has no effect. That the
+  type of a `flatMap` result declares no key is not ruled and stays an
+  assumption (question 208).
+- The salted hash of a value is what `hashOf` returns for the record
+  with the two members `salt` and `value`, and the prototype is to
+  follow. The ruling is about the element part of a plain value: in an
+  array of plain values in place, a plain array generated from scratch
+  included, and in the result of another per-element construct where the
+  upstream position holds a value. The element part of an array of
+  references holds no hash. The other record forms stay the documents'
+  choice (question 202).
+- The key of an element that a `flatMap` contributes is formed from
+  the member itself, by the same rule as for any array, together with
+  the source element's key: the cell identity for a member that is a
+  reference, and the value with the occurrence count for a member that
+  is a plain value. The occurrence count is among the members of that
+  source element's segment. Two members of one segment that change
+  places then evaluate nothing, as for `map`. The rule covers a
+  segment of references and a segment of plain values, over a source
+  of any of the three cases. The two parts are not joined with a
+  separator: by the ruling on written forms the key is a record of
+  the key of the source element and the key of the member.
+- An output that passes a derived collection on unchanged is the same
+  collection for keying, and the plan marks that output as such
+  (`Output.passesCollection`). The case is the result of another
+  per-element construct that a `computed` or a `lift` returns as it
+  is, with a per-element construct applied to that output. The rule is
+  the same where the upstream source is an array of references and
+  where it is an array of plain values in place.
+- Every rule, assumption, and question about a per-element construct
+  says which case it is about: an array of references, an array of
+  plain values in place, or the result of another per-element
+  construct.
+- The identity of the cell that a slot of a collection links to is the
+  address the link resolves to: the space, the document, the scope, and
+  the path within the document. Two links into two paths of one
+  document are two elements. What an element body holds is named from
+  the enclosing instance and the key, as the result cell of an element
+  is named today from the result container and the key
+  (`cellIdentityKey` in `runtime/runner/src/builtins/scope-policy.ts`,
+  `listElementKeys` in
+  `runtime/runner/src/builtins/list-element-keys.ts`, and
+  `listElementResultCell` in
+  `runtime/runner/src/builtins/list-coordinator-plan.ts`). The design
+  does not need the links that the runtime of today stores between the
+  arrays that per-element constructs read and write. The causes are
+  computed as they were, in particular where an instance writes several
+  documents.
+- The record of a key of a list, which `elementById` yields a handle
+  of, is as today: a cell of its own, named by the address of the list
+  and the key. It is not a member of the list until a reference to it
+  is added, and a reader of the list's label does not cover it before
+  that. The list holds references to its records, so a per-element
+  construct over it is the case of an array of references.
+- An event for the stream of a binding of an element body whose key
+  has left its collection is refused, also where a link to the stream
+  is stored outside the collection. The same over an array of
+  references, over an array of plain values in place, and over the
+  result of another per-element construct. A row that is to take
+  events after its element has left is called through `asInstance()`.
+- `asInstance()` is a modifier of a pattern factory, beside
+  `asScope(scope)` and `inSpace(space, options)`, written
+  `Row.asInstance()({ r })`. It returns a factory of the same types.
+  The call is an instance of its own, with its own argument and
+  result documents, and is not compiled into the surrounding
+  instance. It composes with the other modifiers, and a call through
+  `inSpace` is such an instance already.
+- A pattern call through `asInstance()` in a per-element body is an
+  instance of its own from the moment the element first appears,
+  identified by the site of the call, the collection and the element
+  key. Over an array of references its argument holds the reference
+  to the element. Over an array of plain values in place, and over
+  the result of another per-element construct, its argument holds the
+  value, written again when the element changes while it is in the
+  collection. When the element leaves, nothing is written and the
+  instance stays; no copy is made then or when a reference to the
+  instance is stored elsewhere. When the same key returns it is the
+  same instance, so state within it survives a change of a query and
+  back. Events for its streams are handled whether or not the element
+  is in the collection. Cleanup of instances that nothing refers to
+  is deferred; the history of documents is kept by default, so it is
+  not a new issue.
 - Stored per-element state is not carried over from the current runtime.
 
 **Labels**
@@ -464,50 +6249,1489 @@ is relitigated.
 - A factory value that changes under a child tears the child down and starts
   a new one under the same name. An `inSpace` instantiation's identifiers
   are known before the cross-space commit.
+- A label template names the template of another output by reference.
+  The type `Template` has a node that names an output of the plan,
+  `{ op: "output", output }`, and the input of a `derive`, and of every
+  other node or record that takes a template, is that node wherever the
+  input is an output of the plan, kept or interim. A template never
+  holds a copy of the template of another output. The size of a plan is
+  therefore linear in the number of its outputs and of the nodes of
+  their templates, and does not follow the number of paths by which one
+  output depends on another. The statement of
+  `plan-and-label-templates.md` §4.1 that the template of an interim
+  value is a sub-template of every kept output that depends on it holds
+  by reference and not by copy. The label of an output is evaluated once
+  and used by every template that names it, as a memo entry is on the
+  value side, so the cost of label evaluation is linear as well. No rule
+  is defined as a walk of a template as a tree that follows the
+  references without that reuse. The meaning of every template is
+  unchanged: a template with each reference replaced by the template it
+  names denotes the same label. The member names of the node are the
+  documents' choice. Not about a per-element construct: the rule is the
+  same for a template of an element body over an array of references,
+  over an array of plain values in place, and over the result of another
+  per-element construct (question 222). What the ruling leaves
+  undetermined is questions 239 to 242, each with a provisional decision
+  ([Provisional decisions](#provisional-decisions-awaiting-the-owners-ratification)).
+  The ruling is on the templates of outputs. Its consequence for the
+  other records of a plan that hold a template is the provisional
+  decision P5, and no ruling.
+- Stored labels are concrete (2026-11-19, Z59). What is stored is the
+  instantiated label, its clauses and atoms, and not a symbolic reference
+  to the labels of its sources that a reader resolves at egress. A stored
+  label does not follow a later change of a source's label; it changes by
+  re-instantiation. The owner's words: "keep concrete for now".
+  `plan-and-label-templates.md` §2.3.
+- Only a serving runtime commits labels from templates (2026-11-19, Z60).
+  A client's speculative run is never the stored result, and the store
+  does not verify a label from a template. An exception for storage held
+  in memory for tests is allowed only if it lowers the complexity of the
+  whole, and it is not built. `plan-and-label-templates.md` §4.1.
+- A `derive` and a `fold` mint their `TransformedBy` atom only beside a
+  label that has a confidentiality clause or a hereditary atom
+  (2026-11-19, Z61), which is the runtime's condition. It settles
+  `plan-and-label-templates.md` question 66, and that document's §3.2 and
+  the pseudocode of its §4.2 state it.
+- Code of a pattern B compiled into a pattern A mints B's atom (2026-11-19,
+  Z62). It settles `plan-and-label-templates.md` question 64, which is
+  question 116 here, for which pattern the atom names.
+- A template label may rest on labels that an earlier transaction observed,
+  and not only on reads of the committing transaction (2026-11-19, Z63).
+  Such a label is checked for conflicts at commit. The runtime records, in
+  the committing transaction, an observation of the label metadata of each
+  such binding. The owner's words: "Yes, allow it".
+  `plan-and-label-templates.md` §4.2.
+- Every kept output carries the pattern's atom (the owner confirmed,
+  2026-11-19). Whether an interim value, the target of a write edge, the
+  argument of a child, the request of an effect and the state of a binding
+  get an added atom stays open: question 120 here, which is
+  `plan-and-label-templates.md` question 71. The owner's design for a value
+  passed on from an argument is question 302.
+- Every commit of a compiled pattern is prepared when the experimental
+  option is on, so every kept output carries the pattern's atom
+  (2026-11-19). The owner's reason: soon all data carries a label, at least
+  a `User` or `Space` atom. It settles question 303 here, which is
+  `plan-and-label-templates.md` question 177; that document's §3.2 ("Every
+  commit is prepared") states it. Measured over the corpus in milestone 4
+  of the integration: preparing every commit raised the preparations from
+  407 to 2,280 and the preparation time from 379 ms to 690 ms, about 0.3 ms
+  per added preparation. Milestone 4 of the integration builds it
+  ([Known limits](#known-limits-of-what-exists)).
+- A handler run of a compiled pattern that leaves a value as it was still stores
+  a label for what it read (2026-11-20, Z67). The owner agreed to the
+  recommendation "yes for compiled patterns, since the run's outcome does reveal
+  min; it would differ from today". The case is a handler that writes a value
+  clamped to a minimum: where the result equals the stored value, the value that
+  stays is still a function of the minimum. Today's runtime writes nothing there
+  and keeps the earlier label, so this is a rule on which the compiled path
+  differs from today's and is not looser. It settles question 315 here.
+  `plan-and-label-templates.md` §3.12 ("A write that leaves the value as it
+  was") states it, and milestone 4 of the integration builds it, for every write
+  of a compiled pattern that leaves the value as it was.
+- A removal through a handle (`remove`, `removeAll`, `removeByValue`) removes in
+  place, as `footprint-analysis.md` §6.1 describes, and the kept elements are
+  not labeled again with what the removal read (2026-11-20, Z68). The label rule
+  is to be derived from the CFC specification and not from today's
+  implementation. The owner's words: "are you matching the pre-existing
+  implementation? it might be labeling too much. let's make sure we do the right
+  thing here from first principles, i.e. CFC spec". It settles question 316
+  here. Milestone 4 of the integration builds the removal in place. The
+  derivation is made (`plan-and-label-templates.md` §2.5, "The label rule of a
+  removal through a handle"). For an array of references it gives the ruling as
+  worded. For an array of plain values in place the kept elements keep their own
+  labels, as the ruling says, and what the removal's decision read is consumed
+  by a read of a position all the same: the three rulings that follow say how.
+- After a removal through a handle from a list of plain values in place, what
+  decided the removal is stored once for the list, as one `*` entry in the
+  `value` class, and a read of a position joins it with the position's own entry
+  (2026-11-20, Z71). The owner's words for this ruling and the two that follow:
+  "go with 3, move the entries, and yes". It is alternative 3 of question 320
+  here, which it settles, and it replaces alternative 1 in the provisional
+  decision P39. It needs a sentence in section 4.6.3 of the specification's
+  label representation chapter (`04-label-representation.md`); the sentence is
+  proposed and pending the specification pull request (question 326).
+  `plan-and-label-templates.md` §2.5 states the rule and the proposed sentence,
+  and milestone 4 of the integration builds it.
+- A kept element that a removal moves keeps its integrity: the runtime moves the
+  stored label entries with the members of an array it splices, and no template
+  is instantiated for the kept element (2026-11-20, Z72). It settles question
+  321 here. Milestone 4 of the integration builds it, for an array of plain
+  values in place and for an array of references.
+- A removal that finds nothing is a label write of the enumeration, as a write
+  that leaves a value as it was stores its label (2026-11-20, Z73). It settles
+  question 322 here. Milestone 4 of the integration builds it.
+- An append through a handle (`push`) does not put the membership of the list,
+  or what else the list holds, on the position it writes or on a position of a
+  per-element result over the list (2026-11-20, Z74). The owner's words, on the
+  findings of the check in `examples/todo-list`: "i looked at the code of
+  addItem and it only pushes on the array. maybe the implementation looks at the
+  length, but the user-land code doesn't and so i don't think we should taint it
+  with the other items. this operation works semantically exactly the same
+  irrespective of what else happened before: it appends a new item, and whether
+  it does that or not doesn't depend on what is there already, nor can it
+  influence the position." Those findings are therefore no soundness finding.
+  The coordinator's reading, which is not the owner's words: the number of
+  members and the enumeration of the list still carry what decided each
+  addition; a read of a position by index consumes the position's own entry
+  alone (section 4.6.3, `04-label-representation.md`), so which member stands at
+  an index after appends is an accepted channel; and the rulings on a removal
+  are not affected, since a removal decides which member stands at the later
+  positions by a comparison that the handler makes. A `push` under a condition
+  that a labeled input decides needs no rule of its own. The owner's words: "i
+  think today handlers are just code and we don't understand the if yet and so
+  b's addition will be tainted by secret no matter what, right?" That is so as
+  built: the write template of a handler joins every slot that its body reads
+  statically, so every write of the handler carries the label of the condition.
+  It settles question 328 here for an addition. `plan-and-label-templates.md`
+  §2.5 ("An addition through a handle") states it. Milestone 4 of the
+  integration builds it: the record of an added member holds the label of the
+  write and of what the method compared, and nothing of what the list stored of
+  its membership. The fixture `push-under-condition` of the prototype confirms
+  the conditional push: both additions of one handler, the first under a
+  condition on an input, store the input's clause. What the ruling leaves open
+  is a member appended after a removal (question 328).
+- A state cell whose schema declares a label has a document from the start
+  (2026-11-20, Z69). The owner's words: "state cells getting documents is
+  generally not problematic, it's all the intermediate values that we want to
+  optimize away." It amends the ruling that a state cell whose first value is a
+  constant has no document until something writes it, for these cells, and
+  settles question 317 here. `plan-and-label-templates.md` §1.3 and
+  `execution-and-storage.md` §4.1 state it, and milestone 4 of the integration
+  builds it.
+- The budget of `SPEC-PENDING` markers is raised to 80 (2026-11-20, Z70). The
+  owner's words: "increase the budget to 80". It settles question 319 here. The
+  constant is `SPEC_PENDING_BUDGET` of `tasks/check-cfc-correspondence.ts`. It
+  is 80 on the integration branch. The governed files held 46 markers at the
+  eighth corpus run of milestone 4; the count at the head of the integration
+  branch was not taken.
+- The three changes of representation for collections with many members are
+  built (2026-11-20, Z75). The owner's words: "Yes, build them". They are (a)
+  one table of inputs per transaction, which the write records name by index;
+  (b) one record with a `*` target for equal writes into one container; and (c)
+  groups with counts for any read that covers a whole container, kept with the
+  collection. Each leaves every stored label as it is. It settles the direction
+  of question 318 here. `plan-and-label-templates.md` §4.7 states them. They are
+  being built in milestone 4 of the integration, started after its ninth corpus
+  run, and no result exists. What the ruling leaves open: that the stored labels
+  are byte-equal is argued and not shown (question 338), and the form of the
+  stored entries where the members have several labels is not part of it
+  (question 342).
+- At the catch-up merge with `main`, the executor's record of a splice places
+  the stored label entries of an array that has one, and the alignment by value
+  of `main` covers every other array (2026-11-20, Z76). The owner's words: "(a)
+  (and this is clearly more sound. if it's equal complexity and obviously more
+  sound, just decide)". It settles question 327 here. It is built in the merge
+  that brought `main` into the integration branch (`elementEntryPlacement` and
+  `elementEntryPlacements` of `runtime/runner/src/cfc/prepare.ts`). What it
+  leaves open is what no test covers (question 346).
+- The design waits for the specification's ruling on the write gate and makes no
+  investment in per-member audience labels of the lists that a handler writes
+  (2026-11-20, Z77). The owner's words: "(c) -- and yes, assume the proposal or
+  something equivalent eventually lands and so don't worry about the potential
+  for leaks now, but still make sure things are sound in terms of just correctly
+  computing the labels under that relaxed condition". So the channels that the
+  write gate closes, a label change that a write under a secret causes (section
+  14.3.5, `14-open-problems-and-proposals.md`), are not milestone 4's to close,
+  and each stored label must still be at least what flowed. It answers question
+  335 here as far as what is built meanwhile. It leaves open the rule itself,
+  which the specification has not ruled, and what the plan has to give it.
+- A stored label never changes because a collection crossed a size (2026-11-20,
+  Z78). The owner adds one possible exception, in the owner's words "possibly
+  (c) once the ceiling proposal is ratified": the labels of the members of a
+  container up to the container's declared label. `plan-and-label-templates.md`
+  §4.7 states the rule and the counterexample that it rests on. What it leaves
+  open: whether that exception is adopted once the proposal is ratified, and how
+  a threshold would be measured (question 341).
+- A label of very many clauses gets a diagnostic, and the commit is refused
+  above a hard limit that is set well above the diagnostic's number (2026-11-20,
+  Z79). Nothing is built. The ruling does not say whether the limit counts
+  clauses or encoded bytes, and sets neither number (question 339).
+- A body with a declared maximum confidentiality stores an output at the ceiling
+  where the author marks the output (2026-11-20, Z80). Nothing is built. The
+  mark has no syntax, and which ceiling an output takes where the inputs declare
+  different ones is not said (question 340).
+- The pattern's atom of a kept output that passes a value on by reference is
+  joined onto the content, with no scope, so a read through the link takes it
+  (2026-11-20, Z81). The owner's words: "i think (c) is fine, i see it as
+  lacking coarseness in differentiating selected vs computed, but what integrity
+  means is really in a semantic space the pattern author owns / what this
+  integrity means is anyway up for interpretation and passing through a
+  selection just has low meaning". It settles question 313 here, and it replaces
+  the earlier rule that the atom is on the link as an endorsement of the
+  selection. `plan-and-label-templates.md` §3.2 ("Where the atom of a kept
+  output is stored") states it, and milestone 4 of the integration builds it:
+  the atom is in the `value` entry at the output's path, whether the document
+  that holds the link is written whole or the path alone. What it leaves open:
+  the envelope of the document the link names is not written, so a reader that
+  reaches the target another way does not take the atom; a write edge that
+  stores a reference is not named by the ruling; and whether the specification
+  needs a sentence for an atom with no scope at the path of a link
+  (`plan-and-label-templates.md` question 72).
+- The requirement on the link of an argument, the owner's design for the minimum
+  integrity that a pattern declares on an input, is scheduled after milestone 4
+  (2026-11-20, Z82). It answers the scheduling of question 302 here; the open
+  points of that question stay open.
+- A closure through `inSpace` given as a tool is refused (2026-11-20, Z83). When
+  the modifier is needed on a tool, the captures stay with the factory value, in
+  the owner's words "whenever we need it, (b)". It settles the second part of
+  question 310 here. The provisional decisions P33 to P36 were listed in the
+  same item put to the owner and are not named in the answer: they stay
+  provisional. Nothing is built, and the diagnostic has no identifier
+  (`language-subset.md` §4.4.2).
+- The three choices of the implementer of the interim acceptance of
+  `patternTool` stand (2026-11-20, Z84). It settles question 314 here.
+- Three points of the build are agreed (2026-11-20, Z85): the group table of a
+  read that covers a whole container is kept in memory with the collection; a
+  label stored for a write that leaves the value as it was replaces the stored
+  one; and that rule applies to every write that storage finds unchanged, a
+  derived write included. The second and the third settle what the ruling Z67
+  did not determine (question 315). What it leaves open is the cost of those
+  labels (question 324).
 
-- **P31. An entry of `Body.reads` says where the body declares a handle**
-  (`ReadInput.handle`). *The case:* `execution-and-storage.md` §2.4 has the
-  runtime decide what an `identity` entry puts into the argument by the
-  type of the position, a handle at a position of handle type and a
-  reference stand-in at a position of data type, and takes that type from
-  `Slot.schema`, "the type the body declares for the formal input at the
-  path". The crate's slot holds the type of the place, and one slot of root
-  `argument` serves every body that reads the place in the same way, so
-  two bodies that declare a handle and a value at one input share an
-  `identity` slot. In Topics, `migrateTopicState` declares
-  `Writable<TopicAuthor | undefined>` at `createdBy` and `createdByOf`
-  declares `TopicAuthor`; the executor handed `createdByOf` a handle, and
-  `createdBy.name.trim()` threw. *Decision:* an entry of `Body.reads` at a
-  position of handle type in the body's declaration has `handle: true`
-  (from the positions of handle type that footprint analysis records), and
-  the runtime gives a handle there, before every entry at or below it. An
-  `identity` entry without it, at a place where the body also has a
-  `value` entry, gives way to the value, which carries the address. An
-  entry at `*` with it puts a handle at each element of an array and each
-  member of a record. *Alternative:* the slot holds the declared type, and
-  two bodies that declare different types at one place have two slots;
-  that changes the indexes of slots in every plan. *Tests:*
-  `exec/test/executor.test.ts`, "hands a body the value where it reads one
-  at a place that another body takes as a handle", "hands a body a handle
-  at each member of a record where it declares one at `*`"; the fixtures'
-  artifacts differ from before by this flag alone. *If decided otherwise:*
-  the crate splits the slots by the declared type, and the executor reads
-  the type from `Slot.schema`.
-- **P32. `equalsKey` is accepted, and is what `equals` compares of its
-  operand.** *The case:* `base/api` exports `equalsKey`, which returns a
-  string that two values share exactly when `equals` matches them, so that
-  a `Set` or a `Map` finds distinct references in one pass; Topics' board
-  uses it in `distinctByIdentity` and `mentionedByEach`.
-  `builtin-inventory.md` does not list it. *Decision:* a built-in of tier
-  F with the footprint of one operand of `equals` (a resolution of the
-  operand, decided on its own) and the type `string | undefined`. The key
-  holds for one run and is not stored, as `base/api` states. *Alternative:*
-  refused, and the board rewritten with `equals` in pairs, which is
-  quadratic in the number of topics. *Tests:* `tests/footprint_calls.rs`,
-  `equals_key_resolves_its_operand_as_equals_does`;
-  `exec/test/executor.test.ts`, "gives two references to one cell one
-  `equalsKey`". *If decided otherwise:* the crate reports the call, and the
-  Topics rewrite replaces the two helpers.
+## Provisional decisions awaiting the owner's ratification
+
+The owner's standing instruction of 2026-11-17: "Don't block progress on
+my ratifications, go with your recommendations but make sure to track
+them." An undecided design point therefore does not wait. The
+recommendation of the coordinator of this work is taken as a provisional
+decision, numbered P1, P2 and so on, and listed here. A provisional
+decision is the coordinator's and not the owner's. It is never moved to
+[Decided](#decided) and never cited as an owner ruling. The documents
+and the prototype follow it and say "provisional (P<n>)" where they do.
+Each entry names the question it answers, the alternatives, the reason,
+and what in the documents and the prototype has to change if the owner
+decides otherwise. The question stays in
+[Open, and needing the owner](#open-and-needing-the-owner) with a
+pointer to its entry.
+
+**To look at first,** in this order.
+
+1. **The findings of milestone 4,** at its ninth corpus run. Labels from
+   templates at commit are built (milestone 4 of the integration), with every
+   commit of a compiled pattern prepared, and run over the corpus with `wish`
+   simulated: of 271 modules 238 run; of 1,695 output rows 1,041 are tighter
+   than today's, 287 equal and 88 looser, and of 203 write rows 130 are equal, 9
+   tighter and 61 looser. That run is on the source of `main` before the
+   catch-up merge. *Open and unsound.* The check of the stored labels against
+   the values reports 4 values in 2 modules with every event sent three times,
+   and 1 of them on the scenario as given: 3 outputs at position 0 of the result
+   of a `map` in `examples/todo-list`, which is the result of another
+   per-element construct, and 1 write of `showcase/card-piles`, at a position
+   that a `push` after a `remove` writes. Neither is examined (question 344). A
+   removal's `*` entry is replaced by a more specific entry of origin
+   `structure`, which needs the specification sentence first and is not fixed
+   (question 343). A handler that writes nothing under a condition on a labeled
+   input stores nothing; by the ruling Z77 it is a channel of the write gate,
+   recorded and not fixed, and `examples/map-demo` shows it at 16 values with
+   generated events (question 335). *Cost, a regression that is serious.*
+   Against the eighth run the preparation time with the option on rose from
+   2,176 ms to 9,250 ms, the bounds taken from 499 to 1,762, the records of
+   writes that left the value as it was from 756 to 2,297, the label entries
+   they changed from 3,625 to 22,625, the write records checked from 4,271 to
+   9,039, the refused commits from 44 to 55, and the run from 10 to 22 minutes.
+   The fixes of the round give more records and give records as bound; the
+   regression is not attributed by measurement (question 345). The memory of the
+   executor on a large result is not fixed (question 332). *Fixed.* The slow
+   events of `dev/experimental/folksonomy-stress-test` had one cause,
+   `Store.changedSince` of the executor, and take 414, 3 and 53 ms where they
+   took 4,119, 3,720 and 14,945 ms. Six defects that stored a label narrower
+   than what flowed are fixed, each with a test: the rows of a view, a kept
+   output with no template, `cell.get() ?? fallback` stored in place, an output
+   evaluated again to the value it holds, `key(i).set(undefined)`, and a
+   `flatMap` over an array of references; so are a read of a position that holds
+   no member (question 329) and an array inside a value written whole (question
+   330). The membership is no longer on the position of an added member, and the
+   check has a criterion for an appended member (ruling Z74; question 328). The
+   atom of a kept output that holds a link is on the content in every case
+   (ruling Z81). *The rest.* The three changes of representation for collections
+   with many members are adopted and being built (ruling Z75; question 318). The
+   catch-up merge with `main` is made, with the record winning over the
+   alignment by value (ruling Z76; question 346), and the corpus of current
+   `main` is 287 modules of which 244 run; no corpus run exists yet with the
+   ninth run's code on that source. The specification sentence that Z71 needs is
+   proposed (question 326). The check covers 99 of the 238 modules with repeated
+   events and is a lower bound
+   ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+   "Milestone 4: labels from templates at commit").
+2. **A pattern closure used as a value is not translated,** and the interim
+   acceptance of `patternTool` rests on it: 29 calls of the corpus are accepted
+   and each compiles to a tool that is not sent. Three of the four points that
+   have to be decided first have a provisional decision (P33 to P36; questions
+   307 to 310), which the owner's answer of 2026-11-20 does not name, so they
+   await ratification. The fourth is ruled: a closure through `inSpace` as a
+   tool is refused (Z83).
+3. **What the rulings Z79 and Z80 leave undecided,** for the owner: whether the
+   hard limit on a label counts clauses or encoded bytes, with its two numbers
+   (question 339), and how an author marks an output as stored at the declared
+   ceiling (question 340).
+4. **Question 302,** the owner's design for the integrity of a value a pattern
+   passes on from an argument: the minimum integrity it declares on an input
+   becomes a requirement on the link written for the argument. It is recorded as
+   a sketch with its open points and needs a specification change of its own. By
+   the ruling Z82 it is scheduled after milestone 4.
+5. **P31,** which milestone 4 builds: labels by identifier, and a `fold`
+   instantiated once per group of element inputs, in the `uniform` form for
+   an array of plain values in place and the `groups` form, with a count per
+   group kept with the collection's assembly, for an array of references and
+   for the result of another per-element construct. With it a change of one
+   element costs 3 to 7 instantiations at 100, 1,000 and 10,000 elements.
+   Its `*` entry for the elements of an array written whole gives a wider
+   label after a `splice` than per-element entries would.
+6. **The scope of the storage decisions,** the coordinator's recommendation
+   after P29 was withdrawn: chunked storage of long arrays is a requirement
+   on the storage layer, which today's runtime has as well, and this design
+   keeps the split points, P22 and the bound on one row's change. It decides
+   where questions 290, point (a), 296 and 299 are answered.
+7. **Question 304,** a defect of today's runtime found by reading and shown
+   by a test: when an array of plain values in place is spliced, the
+   per-element label entries stay at their positions, so a position can
+   hold the label of the value that was there before. Pull request 9982
+   does not fix it (question 306). Pull request commonfabric/labs#10080,
+   merged to `main`, moves the entries with the elements.
+8. **P9** is flagged. With it a batch of events and the same events handled one
+   at a time can store different values, and today's runtime, which runs the
+   writer again, stores the same value in both. The coordinator adopted it only
+   so that the work continues.
+9. **Questions 254, 255 and 295,** on keys that are formed from plain values.
+   Over an array of plain values in place with no declared key, each keystroke
+   in a row that has state re-keys the row, moves its state, stores the row
+   again and leaves one new stream document, and a list of 100 records that is
+   replaced 100 times leaves 20,202 documents where the same list with
+   `ArrayByKey` or as an array of references holds 202. Both costs follow from
+   owner rulings, that a plain value edited in place is a new element and that
+   nothing stored under a key is deleted, and only the owner can change them.
+   Question 295 is what a re-key does with the stream document of the old
+   key, on which nothing is assumed. P21 changes none of the three: it was a
+   warning of the compiler, is withdrawn, because the type of an array does
+   not say whether it holds plain values in place or references and 168
+   reports in 80 of 286 corpus modules were mostly for lists of references,
+   and is replaced by a report of the runtime at the first such edit.
+10. **P18 with P19.** P18 changes the records of a plan and is written in full
+   into `plan-and-label-templates.md` §1.1. Its status: designed; amended
+   after round 5 by one rule, for a callee that passes an argument on at a
+   site that binds it by a literal; sound on the evidence of the corpus,
+   where each of 53 pairs of copies of one callee is given by one callee
+   record with the binding of its site under that rule; and not built, so
+   that values, identifiers and stored documents are not tested under it.
+   P19 makes the compile-time checks on declared labels modular under it,
+   which is the one point at which the written-out form is not preserved
+   outside the result (question 288). The corpus has no report that P19
+   could lose.
+11. **P22,** which resolves a conflict of the documents with themselves: a cone
+   that places the result of a per-element construct holds a reference to the
+   collection, so one row's change evaluates no enclosing cone.
+
+Beside these, question 285 is no provisional decision: the documents said that
+today's runtime commits none of the writes of a node that throws, and it commits
+them, so the withdrawal of a failed cone's side-write is a difference from
+today.
+
+- **P1. A read gives the members of a stored record in the order of the
+  `base/data-model` codec** (question 218). A read gives the members of
+  a stored record in the order in which the serialization of a fabric
+  value by `base/data-model` writes them: the order of the UTF-8 bytes
+  of their names (`encodePlainObject` of `JsonEncodeAct` in
+  `base/data-model/src/codec-json/JsonEncodeAct.ts`). *Alternative:* the
+  order in which the members were written. *Reason:* it is consistent
+  with the ruling that this design takes every written form from the
+  helpers of that package, and today's runtime gives the order of the
+  names in the one module of the corpus that shows it. Which order a
+  member whose name reads as an integer has stays part of question 218.
+  *If decided otherwise:* `execution-and-storage.md` §2.4 says what "the
+  stored order" of a record is with the other order, and its question 94
+  changes. The prototype's executor gives the written order, which is
+  the alternative, so under P1 it is the prototype that has to change,
+  and 6 values of the corpus run differ for it. Not about a per-element
+  construct.
+- **P2. The slot-free hash, the instantiation key and the memo key are
+  over a template as it is written** (question 239). The recommendation
+  of the author of `plan-and-label-templates.md`, adopted by the
+  coordinator subject to review. In the slot-free hash the index of a
+  node that names an output is replaced by its position in the
+  template's own list of the outputs it names, as a slot index is. The
+  instantiation key and the memo key hold, for each such node that the
+  template reaches under its own selections, the identifier of the
+  label of the named output's template, and no slot, selection or chosen
+  child of the named template. *Alternative:* the keys are over the
+  template with every reference replaced, so the hash covers the hash
+  of each named template and the key lists every slot, selection and
+  chosen child reached through the references, each once. *Reason:* the
+  label is a function of exactly what the recommended key holds, so no
+  label changes, and the keys of a plan stay linear in its size, which
+  the ruling on references requires of label evaluation. What differs is
+  which runs share a memo entry and which changes leave a key equal.
+  *If decided otherwise:* `plan-and-label-templates.md` §1.2, §4.1, §4.3
+  and §4.6 and two rows of the table of its §3.2 ("A rule over a
+  template"), `execution-and-storage.md` §1.9 and §7.2, and
+  `scheduler-and-serving-loop.md` §5.6. The prototype implements neither
+  yet. The same for a template of an element body over an array of
+  references, over an array of plain values in place, and over the
+  result of another per-element construct.
+- **P3. Two inputs of a join are the same template where they are equal
+  as they are written** (question 240). The recommendation of the author
+  of `plan-and-label-templates.md`, adopted by the coordinator subject
+  to review. Two nodes that name one output are one input of a join, and
+  two nodes that name two outputs with equal templates are two inputs.
+  *Alternative:* the compiler compares the templates that the nodes
+  name. *Reason:* the label is the same under both, because a join and a
+  meet are idempotent; the recommended reading compares no template down
+  to its slots; only the canonical form of a plan, and so its hash,
+  differs. *If decided otherwise:* the second case of "A join" in
+  `plan-and-label-templates.md` §3.2 and its row of the table there, and
+  the prototype's compiler compares named templates. Not about a
+  per-element construct.
+- **P4. The provenance record of a kept output holds what its template
+  reaches through the outputs it names** (question 241). The
+  recommendation of the author of the Z58 pass, adopted by the
+  coordinator subject to review. `OutputProvenance` of
+  `execution-and-storage.md` §7.2 holds an entry for each selector,
+  choice point and set of dynamic reads that the output's template
+  reaches through its references, each once, as it did with every
+  template in place. *Alternative:* the record holds the entries of the
+  nodes of the output's own template alone. *Reason:* an interim output
+  has no record of its own, so under the alternative nothing stores the
+  selections of an interim output that a kept output names, which
+  changes what the record means. The cost is that one record grows with
+  everything upstream of its output. *If decided otherwise:* the
+  paragraph "A template that names other outputs" of
+  `execution-and-storage.md` §7.2, the comments of the three members of
+  the record, and its question 97. The prototype stores no provenance
+  record. The same for a kept output of an element body over an array of
+  references, over an array of plain values in place, and over the
+  result of another per-element construct.
+- **P5. Every record of a plan that holds a template names an output
+  by reference** (question 242). The coordinator's extension of the
+  ruling on question 222, which is on the templates of outputs.
+  `WriteEdge.template`, `ComputedInput.template`, `Operation.input`,
+  `Collection.membership`, and the `template` of a path of
+  `Binding.state` and of `Closure.params` have the node that names an
+  output wherever the template they hold, or an input of it, is an
+  output of the plan. No record holds a copy of the template of an
+  output. *Alternative:* those records hold a copy. *Reason:* it is the
+  ruling's reasoning applied to the other records: a representation
+  changes and no label does, and the size of those records no longer
+  follows the paths through the outputs. *If decided otherwise:* the
+  provisional paragraph of "A reference to an output" in
+  `plan-and-label-templates.md` §3.2, the comments of those members in
+  its §1.1, and `footprint-analysis.md` §6.5. The prototype's crate
+  emits the reference forms: the node that names an output in every record
+  that holds a template (`base/pattern-compiler/src/plan.rs`; prototype
+  note 499). Not covered: the template of a body is
+  no output, so it is still written at each write edge of the body. The
+  same for a record of an element body over an array of references,
+  over an array of plain values in place, and over the result of another
+  per-element construct.
+- **P6. No plan holds the same template twice: a table of templates**
+  (question 245). The coordinator's decision. The ruling on question 222
+  and P5 remove a copy of the template of an *output*. They do not reach
+  a template that is repeated and is no output: an operand of `&&`, `||`
+  and `??`, which is in the condition and in a branch, so that a chain
+  of `n` operands computed in one cone has about 2 to the power `n`
+  nodes (`plan-and-label-templates.md` §3.5); the condition of a
+  `select` or the choice of a `pick` at every path of a constructed
+  value (its §3.4); the template of a body, the `derive` over its
+  footprint, at each write edge and each path of its result (its §3.9);
+  the membership of a `map`, which copies its source's (its §3.2 and
+  §3.17); and a constructed value observed whole, at each place that
+  consumes it (its §3.4). The plan has a table `Plan.templates`, and a
+  node `{ op: "shared"; template }` that denotes the template at that
+  index, instantiated with the inputs of the place that holds the node.
+  The compiler writes every template that is larger than one leaf node
+  and stands at more than one position of a plan once in the table and a
+  `shared` node at each position. An entry may hold `shared` and
+  `output` nodes, and the references form no cycle. The label of an
+  entry is formed at most once for one set of inputs in a transaction.
+  No label changes: a template with each `shared` node replaced by its
+  entry denotes the same label. *How it is written against P2 and P3,*
+  which the decision asked the author to check: the decision's words are
+  that the hash, the keys and "the same input of a join" are over the
+  template with `shared` nodes expanded by the identity of the entry.
+  The documents have it so: equality in a join is decided on the
+  templates as written before the table is formed, and two `shared`
+  nodes are one input where they name one entry, which is the same test
+  because no two entries are equal, so P3 is unchanged; and the
+  slot-free hash, the instantiation key and the memo key treat a
+  `shared` node as P2 has them treat a node that names an output, with
+  the index replaced by a position in the hash and the identifier of the
+  label of the entry in the two keys, because a key over the replaced
+  form has the size that the table removes. The author added three
+  points that the decision does not state, each part of question 245:
+  sharing is part of the canonical form and the largest repeated
+  templates are taken first; the entries are in the order of first
+  occurrence in a walk of the plan; and the selections of an entry are
+  those of the place that holds the node. One consequence is new:
+  whether a template is an entry depends on what else its plan holds, so
+  the slot-free hash of one template can differ between two plans, which
+  costs a miss of the memo across plans and changes no label.
+  *Alternative:* every template is written in place, and the size of a
+  plan follows the five rules above. *Reason:* it is the reasoning of
+  the ruling on question 222 applied inside a cone and to the records
+  that are no output; a representation changes and no label does. *If
+  decided otherwise:* the node and the table leave
+  `plan-and-label-templates.md` §1.1, and the paragraphs that name them
+  leave its §1.2, §3.2 ("A template written once", and the last column
+  of the table of "A rule over a template"), §3.4, §3.5, §3.17, §4.1 to
+  §4.4 and §6.2, `footprint-analysis.md` §6.5 and
+  `execution-and-storage.md` §7.2. The prototype's crate emits the table
+  `Plan.templates` with a `shared` node at each position
+  (`base/pattern-compiler/src/plan.rs`; prototype note 499). Not covered: the
+  records of a plan other than its templates, and the copies of a pattern that
+  is compiled in at several
+  sites, whose slots differ (questions 247 to 250). The table is formed
+  alike for a template of an element body over an array of references,
+  over an array of plain values in place, and over the result of another
+  per-element construct; the membership of a `map` is an entry in the
+  third case alone, since in the first two it is one `slot` node.
+- **P7. A schema of a plan writes a repeated subschema once** (question
+  246). The coordinator's decision, as revised on the author's objection
+  that the hash of a schema must not depend on which types the author
+  named. `plan-and-label-templates.md` §1.5 gave a member of `$defs` to
+  the recursive types alone and wrote every other type in place at each
+  occurrence, so `D` aliases that each use the next one twice gave a
+  schema of 2 to the power `D` copies. Sharing in a schema is
+  structural, as P6's is for templates, and independent of what the
+  author declared: a subschema that is equal as written at more than one
+  position of one schema, and larger than a leaf (one primitive type
+  alone, or one `$ref` alone), is written once under `$defs` and named
+  by `$ref` at each position. It is part of the canonical form: it is
+  mandatory, and the largest repeated subschemas are taken first. The
+  recursive types stay as they are, and the sentence of §1.5 that a
+  schema does not depend on which of its types the author named holds.
+  No schema changes its meaning. *Assumed by the author,* each part of
+  question 246: the name of such a member is its ordinal among them, in
+  decimal digits, in the order of first occurrence in the walk by which
+  §1.5 orders the recursive types of one declared name, so it uses no
+  name of the author's and equals no declared name; a member that stands
+  alone is a document of its own by the split of `decomposeSchema`
+  (`runtime/runner/src/schema-decompose.ts`), so its ordinal is in no
+  emitted document; and equality counts the default, the scope, the
+  handle marker and the label annotations of a subschema. *Alternative:*
+  a type that is not recursive is written in place at each occurrence.
+  *Reason:* a representation changes and no meaning does, and the size
+  of a schema no longer follows the paths through its types. *If decided
+  otherwise:* the provisional paragraph of `plan-and-label-templates.md`
+  §1.5 and the sentences on such a member in "The documents" there are
+  removed. The prototype writes such a type in place. Not covered:
+  `Slot.schema`, where a subschema that stands once in each of two
+  schemas of a plan is written in each, for which question 246 names an
+  option that is not adopted; and the entries of a footprint, which are
+  per position of the type written out (question 252). Not about a
+  per-element construct.
+- **P8. A slot of a handler that observes the reference alone does not make the
+  cone that writes its cell run before the body** (question 276). The choice of
+  the prototype's author, adopted by the coordinator. *The case:* in
+  `fixtures/batch.tsx` the cone `_join` writes the cell `joined` from `items`,
+  an array of plain values in place, and the handler `overwrite` writes `joined`
+  and reads nothing, so it holds the handle through one slot of class
+  `identity`. In the batch `add`, `overwrite`, `_join` is not evaluated before
+  the body, is evaluated behind the batch, and writes over what the handler
+  wrote: `joined` holds `a`. *Alternative:* any bound slot counts; `_join` is
+  evaluated before the body, is current behind the batch, and `joined` holds
+  what the handler wrote. *Reason:* `execution-and-storage.md` §1.3 speaks of
+  what the handler reads, and today's runtime gives the value of the first
+  reading. *Tests:* the executor has one for each reading on that fixture, the
+  second under the option `beforeBody: "bound"`, and
+  `compare/test/batch.test.ts` has the batch on today's runtime. *If decided
+  otherwise:* the paragraph "A slot that observes the reference alone" of
+  `scheduler-and-serving-loop.md` §5.2 and the provisional sentence of
+  `execution-and-storage.md` §1.3; in the prototype the option's other value
+  becomes the default and one test changes its expectation. Not about a
+  per-element construct.
+- **P9. A cone that writes a cell is not stale when another writer writes that
+  cell** (question 277). **Flagged: the coordinator adopts it only so that work
+  continues, and asks the owner to look at it first.** The choice of the
+  prototype's author. *The case:* the same fixture. The events `add` and then
+  `overwrite`, each a batch of its own, leave `joined` holding what the handler
+  wrote: `_join` was evaluated behind `add`, and nothing it read changed. The
+  same two events in one batch leave `a` (P8). So a batch and the same events
+  one at a time store different values, and which of the two happens depends on
+  arrival times. Today's runtime stores `a` in both cases: it runs the writing
+  computation again behind the handler's write. By a reading of the source that
+  is not verified, that is because the `set` of a cell reads the cell to
+  compare, so the writing action has its target among its reads. *Alternative:*
+  a write to the target of a write edge makes the writing cone instance stale,
+  as today, and a batch and its events one at a time store the same value.
+  *Reason:* `execution-and-storage.md` §2.7 lists a write to a cell that a cone
+  instance read, and no staleness by a write to a cell that it writes. *Tests:*
+  the executor has a test of each outcome (one batch, and two), and the
+  comparison of values with today's runtime differs in 2 values of `batch` for
+  it. *If decided otherwise:* the third item of "Two things follow" in
+  `scheduler-and-serving-loop.md` §5.4, the provisional sentences of
+  `execution-and-storage.md` §2.7 and of `plan-and-label-templates.md` §5.5, and
+  in the prototype a write to the target of a write edge marks the writing cone
+  instance stale. The 2 values then equal today's. Not about a per-element
+  construct.
+- **P10. The memo entry of a cone instance that failed at the bound is current
+  against what is stored when its transaction ends** (question 224). The
+  assumption that question 224 already had, with the prototype's tests. *The
+  case:* `fixtures/bound.tsx`, a cycle of two cones that does not settle; both
+  fail at the bound and their side-writes are withdrawn, so the last reads of
+  each were of values that are no longer stored. *Alternative:* the entry is
+  current against what its last evaluation read, which is what the fingerprint
+  check of `execution-and-storage.md` §3.3 gives. *Reason:* the ruling's own
+  reason, that with the same inputs a later cause would reach the bound again.
+  *Tests:* one for each reading, for a later event that writes a cell no cone of
+  the cycle reads (options `afterBound: "stored"`, the default, and `"reads"`).
+  Under the first neither cone is evaluated and nothing fails. Under the second
+  each cause finds both stale, evaluates each ten times and fails them again:
+  twenty evaluations per cause, for every cause. *If decided otherwise:* the
+  provisional sentences of `execution-and-storage.md` §1.7, §2.7 and §3.3 and of
+  `scheduler-and-serving-loop.md` §8.1. The same is assumed for a body that
+  wrote a cell, read it, and threw, which no fixture has. An element cone has
+  one count for each key in both readings.
+- **P11. An error state is the record `{ $error: { message } }`, and a cone that
+  places a failed value without observing it does not fail** (question 278). The
+  choice of the prototype's author. *The case:* in
+  `patterns/dev/test/silent-computed-crash.tsx` a `computed` that throws is
+  placed among the children of the view. The view holds the error state at that
+  child and the rest of it is stored. *Alternative:* placing is reading, the
+  cone of `$UI` fails, and the whole view is an error state. *Reason:*
+  `plan-and-label-templates.md` §5.3 has a `map` pass an errored element on, and
+  today's runtime stores the rest of the view. *Tests:* `view` of
+  `fixtures/failing.tsx` shows the first reading, with the error state at two
+  child positions; no test shows the second, which the executor would give by
+  failing the cone in `Host.output` and `Host.slot`. *If decided otherwise:* the
+  paragraphs "The form of an error state" and "Placing is not reading" of
+  `plan-and-label-templates.md` §5.2 and §5.3 and the provisional sentence of
+  `execution-and-storage.md` §1.7. The one per-element construct tested is the
+  `map` of `failing.tsx`, over an array of plain values in place, where an
+  element whose body fails is one errored element; over an array of references
+  and over the result of another per-element construct it was not tried.
+- **P12. Before the first request transaction `pending` reads as nothing, and
+  while a newer request is outstanding the earlier result stays readable**
+  (question 279). The choice of the prototype's author. *The case:*
+  `fixtures/effects.tsx`, which has no per-element construct. The request
+  transaction runs behind the derivation transaction that staged the request, so
+  in that first derivation transaction a reader of `pending` reads a document
+  that holds the request alone. *Alternative:* `pending` is `true` from the
+  derivation transaction that staged the request, and a new request clears the
+  result. *Reason:* step 6 of `scheduler-and-serving-loop.md` §6.2 writes the
+  hash and the pending mark alone. *Tests:* the executor's tests of the request
+  and the completion show the first reading; none shows the second. *If decided
+  otherwise:* the paragraph "What a reader reads around a request" of that
+  section, the bullet "What a reader reads" of `execution-and-storage.md` §6.4
+  and the paragraph of `builtin-inventory.md` ("Effectful built-ins"); in the
+  prototype the staging evaluation writes the mark, or the request transaction
+  clears `result` and `error`.
+- **P13. A request that comes back while it is outstanding leaves a second
+  time** (question 280). The choice of the prototype's author:
+  `scheduler-and-serving-loop.md` §6.2 as its steps are written, against the
+  sentence of its §6.6. *The case:* with request A outstanding, a change to B
+  and back to A. The stored hash is B's, so A leaves again and the outbox holds
+  A, B, A; both completions of A are written. *Alternative:* the operation
+  remembers the hashes that are outstanding, and A is made once. *Reason:* steps
+  4 to 6 compare with the one hash the document holds. *Tests:* one test shows
+  the outbox holding A, B, A; none shows the other reading. *If decided
+  otherwise:* the paragraph "A request that comes back while it is outstanding"
+  of that section, the provisional sentence of its §6.6, and the state document
+  of `execution-and-storage.md` §6.4, which then holds a set of outstanding
+  hashes. Not about a per-element construct.
+- **P14. The state document of an operation holds `request`, `requestHash` and
+  `outcome`; a request is the single argument or the arguments in order; every
+  reference in a request is followed** (question 281). The choice of the
+  prototype's author. *The case:* `execution-and-storage.md` §6.4 lists what the
+  document holds and no layout. With `outcome` holding what a reader reads, the
+  link that a handler stores to an effect's result leads to `pending`, `result`
+  and `error` and not to the request. *Alternatives:* another layout; and for
+  the references, the depth that `builtin-inventory.md` gives each operand of
+  each built-in, which is narrower than "every reference" for a built-in with an
+  operand that leaves as a link. *Reason:* it is what the prototype built; the
+  documents state nothing on the layout. *Tests:* the tests of
+  `fixtures/effects.tsx` and `fixtures/handler-effect.tsx` read the three
+  members. *If decided otherwise:* the bullet "Layout" of
+  `execution-and-storage.md` §6.4 and the paragraph of `builtin-inventory.md`;
+  the prototype takes the layout and the depth of each entry. Open under it: the
+  schema that today's compiler adds to a `fetchJson` request, which
+  `builtin-inventory.md` has as part of the request and of its hash and the
+  prototype's request does not hold. Not about a per-element construct.
+- **P15. A `wish` is resolved in the evaluation that stages its operands, and
+  makes no request** (question 282). The choice of the prototype's author, and
+  what `plan-and-label-templates.md` §1.1 already says of an operation of kind
+  `wish`. *The case:* the overview has `wish` among the structural operations,
+  `builtin-inventory.md` has its entry under the effectful built-ins with class
+  A, "not an effect", and `execution-and-storage.md` §4.1 gives it a state
+  document with the stored operands. *Alternative:* a transaction of the
+  operation, with the request transaction and the outbox of an effect. *Reason:*
+  the class of the inventory. *Tests:* three on `fixtures/wishes.tsx`: a target
+  from a table that a test gives, stored in a document of its own with the
+  result a reference to it; no entry, where the result holds nothing and `error`
+  a text; and the clock, a document that a test writes. *If decided otherwise:*
+  the provisional sentences of `builtin-inventory.md` (`wish`) and of
+  `execution-and-storage.md` §6.4, and the comment of `Operation.kind` in
+  `plan-and-label-templates.md` §1.1. Not about a per-element construct.
+- **P16. A request whose cone failed holds one error state for the whole
+  request** (question 283). The choice of the prototype's author, narrower than
+  the documents, which have the error state at the path whose cone failed. *The
+  case:* the crate registers one function for the request of an operation, and
+  where it throws the executor stores an error state as the whole request. The
+  request is not made, and the readers of the operation's result fail in turn,
+  under both. *Alternative:* the request function is split by path, and the
+  other paths hold their values. *Reason:* one function per request is what the
+  crate emits. *Tests:* one on `fixtures/effects.tsx`. *If decided otherwise:*
+  the provisional sentences of `execution-and-storage.md` §6.4 and of
+  `scheduler-and-serving-loop.md` §6.2, step 1. Not about a per-element
+  construct.
+- **P17. The bound of ten is counted per value function of a cone instance**
+  (question 284). The choice of the prototype's author. *The case:* the executor
+  counts per memo entry, which is a value function of a cone instance, where the
+  documents count per cone instance; a cone with two value functions has two
+  counts. *Alternative:* one count per cone instance. *Reason:* it is what the
+  memo holds. *Tests:* those of `fixtures/bound.tsx`, whose cones have one value
+  function each, so no test tells the two counts apart, and it is not verified
+  that they agree on any module of the corpus. *If decided otherwise:* the
+  provisional sentences of `plan-and-label-templates.md` §5.2,
+  `execution-and-storage.md` §2.7 and `scheduler-and-serving-loop.md` §8.1. An
+  element cone has a count for each key under both, over an array of references,
+  over an array of plain values in place, and over the result of another
+  per-element construct.
+- **P18. A pattern compiled in is written once and named by its call sites**
+  (question 247). The coordinator's decision. *Measured:* with two call sites
+  per level, at a depth of 1 to 6, plans of 3,193, 7,746, 16,961, 35,665, 73,936
+  and 152,575 bytes and 5, 13, 29, 61, 125 and 253 cones, doubling with each
+  level; P6 does not help, because the copies differ in their slot indexes.
+  *Decision:* the plan holds each pattern that is compiled in once, as a callee
+  record with its slots, bodies, cones, outputs, edges and templates numbered
+  inside it, and each call site is a record that names the callee and binds its
+  argument to places of the caller. The meaning is that of the plan with the
+  callee written out at the site: labels, values, identifiers and stored
+  documents are the same, and the identifier of a cone instance holds the chain
+  of call sites. Value code is registered once per callee. *How it is written:*
+  `plan-and-label-templates.md` §1.1 has the records `Callee`, `CallSite`,
+  `SiteArgument` and `SiteResult`, the members `Plan.callees` and `sites`, and a
+  member `site` beside every `output` that names what a callee returns, and its
+  paragraph "A pattern compiled in is written once" goes through the scoping of
+  indexes, `within` and names, cone instances, a `Child`, a site in an element
+  body in each of the three cases, a construct of the callee over an argument,
+  `asScope`, templates across the call, schemas, defaults, value code, and a
+  table of the rules that are evaluated once for a callee and those that are
+  evaluated once for a site. The size of a plan is linear in the source for any
+  nesting. Cone instances, memo entries, labels, state cells, streams, children
+  and kept outputs stay per chain of sites at run time, as they are in the
+  written-out form. *Where the author could not determine a rule,* each is part
+  of a question: whether the compile-time checks on declared labels follow an
+  argument into the caller's template, which is per chain of sites, or stop at
+  the callee's annotation (question 288); and eight further points of the record
+  design, each with what is assumed (question 289). *Where the decision does not
+  preserve the written-out form,* neither in a label, a value, an identifier or
+  a stored document of a result: `Cone.code` of a callee's cone is the hash of
+  one function for every site, so what is keyed by it is keyed by another hash;
+  and the compile-time diagnostics of question 288, which P19 decides
+  provisionally. *Status:* designed and not built. At prototype commit
+  `e63851c1ee` the crate still writes a callee out at every site, the plans of
+  two sites per level are 3,175 to 149,595 bytes for 1 to 6 levels, and none of
+  the points of question 289 is tested. *Two facts from that round* (its note
+  517). Over the corpus the prototype's author estimates, from the written-out
+  plans, that the decision makes the plans 1.4% smaller, 5,870,726 bytes for
+  5,956,178: a pattern is seldom compiled in at more than one site today, so
+  P18 bounds the worst case and does not change the corpus. And of 82 pairs of
+  copies of one callee in the corpus plans, 38 differ in more than numbers, 33
+  of them in how many records they have, so the binding decides which records
+  the written-out form has, against the design's sentence that a callee record
+  depends on nothing of its call sites; that is the ninth point of question
+  289. *Amended after round 5* (prototype notes 529 and 530, at commit
+  `3d33db2e4d`). The round compared each copy of a callee in the plans of the
+  corpus with the first copy of that callee, record by record, 53 pairs: 16
+  are equal but for indexes; 2 have another path of the caller's argument; 1
+  has a slot at one site and an output at another; 19 differ in the paths
+  below a path that the callee passes on; and 16 differ for the defect of
+  the crate that follows. *The added rule:* a write edge or an output of a
+  callee whose template is an argument slot stands, at a site that binds
+  that path by a literal, for one entry for each entry of the literal, at
+  the entry's path. With it one callee record with the binding of each site
+  gives the records of the written-out form on the whole corpus, and "a
+  callee record depends on nothing of its call sites" holds. Which of
+  `Cone.slots` and the incoming edges a cone instance has is decided at
+  binding. Both are in `plan-and-label-templates.md` §1.1 ("A callee that
+  passes an argument on, at a site that binds it by a literal" and "What is
+  decided when a cone instance is bound") and its question 170, points (c)
+  and (j). *A defect of the crate to correct first:* two call sites with
+  one name in one body get the same `site` step with no ordinal, in 17 of
+  the 382 plans of the corpus, against `plan-and-label-templates.md` §1.3,
+  which states the case; a state cell of such a callee has one
+  identifier at both sites. *Status after round 5:* designed, amended, sound
+  on the evidence of the corpus, and not built. The plans of two sites per
+  level are 2,261 to 103,508 bytes for 1 to 6 levels, and an ignored test
+  of the crate holds the bound that the build has to meet. *Alternative:*
+  the written-out form as the format. *If decided otherwise:* those records and
+  members leave `plan-and-label-templates.md` §1.1, with the provisional
+  sentences of its §1.4, §3.2 and §4.4, of `execution-and-storage.md` §2.1 and
+  §4.5, of `scheduler-and-serving-loop.md` §10.2 and of the overview, and plans
+  return to `k` to the power `D` for nested calls at several sites. The
+  prototype's crate writes the written-out form. The record of a callee is the
+  same for a site in an element body over an array of references, over an array
+  of plain values in place, and over the result of another per-element
+  construct.
+- **P19. Under P18, the compile-time checks on declared labels are modular**
+  (question 288). The coordinator's decision. *The case:* the four `cfc-flow`
+  diagnostics that evaluate a template on declared labels, `writer-fit`,
+  `write-floor`, `max-confidentiality` and `required-integrity`. With a callee
+  written out at each call, a path of its argument that the call binds to an
+  output of the caller is a node that names that output, and the check follows
+  it into the caller's template, once per chain of call sites. *Decision:* the
+  checks run once per callee, against the declared labels of the callee's
+  argument slots, and once per call site for the binding alone: that what the
+  site binds to each argument slot fits that slot's declared label, and that
+  each result of the callee fits the place the site gives it. They do not
+  follow an argument into the caller's template. The work at compile time is
+  linear in the source. Enforcement at run time is unchanged, so no label, no
+  value and no run-time decision differs. What differs is which compile-time
+  reports are made: a flow that the written-out form reports only by following
+  a caller's output through the callee is reported at the site's binding, or at
+  run time. *Alternative:* checks per chain of sites, with the reports of the
+  written-out form and work that is `k` to the power `D`. *Reason:* the
+  alternative returns to compile time the growth that P18 removes from the
+  plan. *Tests:* none. The prototype has neither P18 nor P19, and no
+  diagnostic of the corpus was compared under it. *How it is written:* the
+  paragraph "The checks on declared labels are modular" and the row of the
+  table of `plan-and-label-templates.md` §1.1, its question 170, point (a),
+  and the row of `language-subset.md` §10 on what each diagnostic is computed
+  from. `footprint-analysis.md` describes none of these checks and is not
+  changed. *Assumed in the writing:* a binding is checked as a write edge to a
+  target that declares the slot's label is checked, and where the callee
+  declares no label on an argument path nothing is checked at the site. *If
+  decided otherwise:* that paragraph, the row and the two sentences are
+  replaced, and compile-time work returns to `k` to the power `D`. The rule is
+  the same for a site in an element body over an array of references, over an
+  array of plain values in place, and over the result of another per-element
+  construct.
+- **P20. Part documents: a row is a part only from a minimum size on, and a
+  long array is stored in chunks** (questions 229 and 264, with question 290
+  for what stays open). The coordinator's decision. *The trade-off, first:*
+  with chunks an edit of one small row writes the chunk that holds it, which
+  is a document of up to 65,536 bytes written whole where storage takes no
+  patch below a path of a document. Under the rule that P20 replaces, an edit
+  of a row of 23 bytes with a declared key wrote one part document of 24
+  bytes. So P20 exchanges a write of 610,081 bytes for each append to a list
+  of 10,000 for a write of at most 65,536 bytes for each edit, each append and
+  each removal, and what the decision is worth for small rows depends on
+  question 290, point (a), which stays open; the prototype is to measure
+  both, the bytes of the documents written whole and the bytes of a patch.
+  *Measured* (prototype notes
+  511 and 513), on a `map` over an array of plain values in place with rows of
+  23 bytes, with a declared key and with none: the rule of
+  `execution-and-storage.md` §4.10 that made every split point directly below a
+  document a part, whatever its size, when the document exceeds
+  `DOCUMENT_MAX_BYTES`, turns 2,600 rows into 2,800 documents in the one
+  transaction that crosses the number; a storage link is 61 bytes, so the array
+  of links is larger than the rows it replaced, exceeds the number itself, and
+  has no split point left; and at 10,000 rows every append writes 610,081 bytes
+  of documents for 98 bytes of change. *Decision:* (a) a split point becomes a
+  part of its own only where its stored size is at least `PART_MIN_BYTES`, and
+  a smaller row stays in place; (b) an array whose content in place would
+  exceed `DOCUMENT_MAX_BYTES` is stored as chunk documents, each a contiguous
+  run of the array's entries, with an ordered list of links to the chunks at
+  the place of the array, which is itself stored in chunks when it exceeds the
+  number, so that the chunks form a tree. A chunk that exceeds the number is
+  divided in two, and two adjacent chunks that together fall under half of it
+  become one. An insertion, a removal or an edit of one row writes the chunk
+  that holds it and, only on a split or a merge, the list above; P25 revises
+  that for an insertion and a removal, which write one list for each level
+  as well. No row is
+  renumbered in storage by an insertion elsewhere: a position is derived from
+  the order of the chunks and the offset in the chunk. (c) A part returns in
+  place only where its size falls under half of `PART_MIN_BYTES`. A read sees
+  the same array, so no meaning changes. The bytes of the documents written
+  for one change of one row are bounded by the size of a chunk and the depth of
+  the tree, at any length. *How it is written:* `execution-and-storage.md`
+  §4.10, the paragraphs "The rule about size" to "Worked sizes", with
+  `PART_MIN_BYTES` proposed as 1,024 bytes, a placeholder that takes the place
+  and the value of the split number the section had, about 17 storage links.
+  The section says how a chunk is identified, how a position is derived, how a
+  path, a reference by key and a storage link resolve through chunks, what each
+  kind of change writes, how label entries and provenance records are counted
+  and where they are stored, what a re-key of an element of an array of plain
+  values in place writes, and the sizes that the rule gives for the measured
+  list, which are derived and not measured: 6 documents for 10,000 rows of 23
+  bytes where the old rule gave 10,002, and one chunk of at most 65,536 bytes
+  for an append where it wrote 610,081. The sections that cite the rule follow:
+  its sections 2.2, 4.1, 4.2, 5.2 and 10.1, `plan-and-label-templates.md` §2.3,
+  `scheduler-and-serving-loop.md` §3.1 and §4.2, and the overview. *What the
+  decision gives up:* an edit of a small row with a declared key writes its
+  chunk, where a row that is a part by itself was one document of 24 bytes.
+  *Open under it* (question 290): whether storage takes a patch below a path
+  of a document, which is not decided; the stored form of a chunk list; and a
+  document of many small split points that are not the entries of one array.
+  Two further points of that question are decided provisionally: whether a
+  chunk list holds the number of entries below each link (P25), and which
+  arrays are stored in chunks (P26). *Built in round 5* (prototype notes 523
+  to 528, at commit `3d33db2e4d`), as documents beside the value that the
+  executor's store holds, with value code not reading through them. Measured
+  over an array of plain values in place with `ArrayByKey`: one change of
+  one row writes at most 139,217 bytes in 4 documents for rows of 23 bytes
+  and 149,137 bytes in 6 documents for rows of 2,000 bytes, at 100,000
+  rows; one row is read through 2 or 3 documents. *Where the decision was
+  incomplete,* each with what the prototype chose, which
+  `execution-and-storage.md` §4.10 has as assumed (question 300): by the
+  merge rule a chunk whose last row is removed stays beside a neighbor over
+  half the maximum, and is deleted; when an array is stored in place again
+  was not stated, and is when one chunk of at most half the maximum is
+  left; a document of several arrays exceeds the maximum with each array
+  under it, and its largest arrays become documents of their own; an array
+  that is written whole would write every chunk, and is compared with what
+  is stored, which reads the whole array; the first write of a long array
+  creates all its chunks and parts in one transaction, 200,236 documents
+  for 100,000 rows of 2,000 bytes, which no rule avoids; a chunk over the
+  maximum is cut into equal shares, more than two where many rows are
+  written at once; and rows inserted one at a time at one end leave every
+  chunk half full, 55 chunks for 40,000 small rows where 28 would hold
+  them, which is measured and not changed. *What the build showed missing*
+  is decided provisionally as P27 and P28; P29 is withdrawn and its
+  question 299 open. *Alternative:* the rule as
+  it was, with the measured cost. *Tests:* the executor's tests bound the
+  bytes of one change at two lengths for each case and each size of row.
+  *If decided
+  otherwise:* those paragraphs and the sentences that name a chunk are
+  removed. The rule is the same for the rows of a kept collection over an array
+  of references, over an array of plain values in place, over a plain array
+  generated from scratch, and over the result of another per-element
+  construct.
+- **P21. A report for per-element state under a key formed from the value:
+  withdrawn as a warning of the compiler, and replaced by a report of the
+  runtime** (questions 291 and 301; it bears on questions 254 and 255 and
+  decides neither). The coordinator's decision. *Measured* (prototype notes
+  515 and 516): over an array of plain values in place with no declared key,
+  each keystroke-sized edit of a row that has state re-keys the row, moves
+  its state, stores the row again and leaves one new stream document, 20
+  stream documents for 20 keystrokes; and a polled list of 100 records
+  replaced 100 times leaves 20,202 documents, where it holds 202 with
+  `ArrayByKey` or as an array of references. These follow from owner
+  rulings, that a plain value edited in place is a new element and that
+  nothing under a key is deleted, and are not changed. *As first decided:*
+  the compiler reports a warning, `array-by-key:state-without-key`, where the
+  body of a per-element construct over an array of plain record values whose
+  array type declares no key holds per-element state: a handler binding, a
+  state cell, an operation, or a child called through `asInstance()`, and,
+  as revised on the objection of the documents' author, not an instance of
+  a `lift` or a `computed`, which stores no document under the key.
+  *Withdrawn* after round 5 (prototype note 532, at commit `3d33db2e4d`):
+  the crate reports the warning 168 times in 80 of the 286 modules of the
+  corpus that are accepted with a pattern, each at a `map`, 163 for a
+  handler binding, 10 for an operation, 4 for a state cell and 2 for a
+  child instance. Most are over lists that are filled by `push` of a record
+  through a handle, which stores references. The type of an array does not
+  say whether it holds plain values in place or references, so the compiler
+  cannot tell the case that costs from the one that does not. *Replacement:*
+  the runtime reports `array-by-key:state-under-value-key`, the name
+  assumed, once for each collection in a session, at the first re-key that
+  moves stored state, or leaves it stored, under a key formed from a whole
+  value. It covers an array of plain values in place, a plain array
+  generated from scratch, and a chain of per-element constructs whose first
+  source is one of these, each with no declared key; over an array of
+  references and with `ArrayByKey` it is never made. *Alternatives:* the
+  warning of the compiler with its reports over lists of references; a type
+  or an annotation that says that an array holds plain values in place,
+  which the subset does not have; and no report. *How it is written:*
+  `execution-and-storage.md` §2.5 ("The runtime reports state under a key
+  formed from a whole value") and its question 112; `language-subset.md`
+  §4.4.1, whose catalog has no row for it, and its question 47; and a
+  sentence each in `plan-and-label-templates.md` §1.3 and in
+  `builtin-inventory.md` ("Element keys"). *Assumed in the writing:* the
+  report is made for a change by which one transaction removes a key at a
+  position and enters another there, and not for a removal alone; it is a
+  warning of the runtime that evaluated the transaction; and a session is
+  the lifetime of that runtime's loaded instance. *Tests:* none for the
+  report. The crate has the withdrawn warning and a test of it. *If decided
+  otherwise:* that paragraph and those sentences are removed or replaced.
+  Questions 254 and 255 keep the coordinator's recommendation.
+- **P22. A cone that places the result of a per-element construct and observes
+  nothing of it holds a reference to the collection** (question 259, with
+  question 292 for what stays open). The choice of the prototype's author, its
+  provisional choice 1 of the round. *The case:* the documents conflicted with
+  themselves. `plan-and-label-templates.md` §1.4, "The enclosing cone uses the
+  assembled result"; `execution-and-storage.md` §3.3, "An entry is not current
+  when an upstream output it pulled has a different value from the one
+  recorded"; and its §2.2, assumed there, "the function returns the whole
+  constructed value once". By the three a change of one row makes the cone
+  that holds the collection, each cone that pulls it, and the `result` cone
+  stale, and each returns a value of every row. Against them the worked example
+  of its §10.1 lists the cone instances of a send with no cone of the tree
+  among them. *Decision:* in favor of §10.1. Such a cone holds a reference to
+  the collection, the rows are stored by the collection, and the enclosing cone
+  and the `result` cone are not evaluated for a change of one row. It applies
+  to the result of a `map`, a `filter` or a `flatMap` over an array of
+  references, over an array of plain values in place, and over the result of
+  another per-element construct. *Measured:* evaluations per change 2 and 4 in
+  the place of 3 and 5, and 2 to 26 bytes put into the documents in the place
+  of 238,904 at 10,000 rows; over the corpus 445 evaluations fewer, and no
+  value changed. *How it is written:* `execution-and-storage.md` §2.2 ("A
+  collection that a cone places"), which says what placing and observing are,
+  what makes the placing cone stale, who stores the rows, how a reader and a
+  handler read through the place, and that the labels of the result, demand
+  per kept path, the keep set and a client that renders one row are as they
+  were; its sections 2.5, 3.1, 3.3 and 10.1; and
+  `plan-and-label-templates.md` §1.4. *Open under it* (question 292): one
+  collection placed at two kept paths; and a construct over a plain array
+  generated from scratch, which the decision does not name. *Alternative:* the
+  cone returns the whole value. *Tests:* the executor's growth tests bound the
+  evaluations and the bytes, and the corpus comparison is unchanged. *If
+  decided otherwise:* those paragraphs are removed, the cone returns the whole
+  value, and the writes follow the list.
+- **P23. Keys are kept for the positions a write did not touch, and an assembly
+  is brought up to date from the splices of its source** (question 256). The
+  choice of the prototype's author, its choice 2. *The case:*
+  `execution-and-storage.md` §2.5, step 2, "Compute the key of every position",
+  and `scheduler-and-serving-loop.md` §3.2, "rebuilds the table". *Decision:*
+  both describe the result and not the algorithm: a runtime may keep the key of
+  a position that no write touched and apply the change to the table and to
+  the assembled result. *Measured* at 10,000 elements of an array of plain
+  values in place: 1 salted hash per change in the place of 10,000, with the
+  same keys and the same result; the option that forms every key and every
+  assembly again is built and measured beside it. Over an array of references
+  no key is hashed either way, and over the result of another per-element
+  construct the keys are the upstream keys. *Alternative:* the two sentences
+  as an algorithm. *Reason:* a key is a function of what its position holds.
+  *How it is written:* the paragraph "The steps state the result, and not an
+  algorithm" of `execution-and-storage.md` §2.5 and a sentence of
+  `scheduler-and-serving-loop.md` §3.2. *If decided otherwise:* those are
+  removed and each change of membership costs the length of the list.
+- **P24. A reader through a reference by key is marked by the key that a write
+  touched** (question 293). The choice of the prototype's author, its choice 3.
+  *The case:* a reference by key into an array of plain values in place has no
+  address of its own, so marking by the path of a write marks every reader
+  through a key of the array for a write to one element. *Decision:* the store
+  reports with each write below such an array the keys that the write touched,
+  and the scheduler marks the readers registered under those keys.
+  `scheduler-and-serving-loop.md` §3.2 ("Which keys a write touched") says
+  which keys each kind of write reports. *Alternative:* marking by the array,
+  which is one check for each reader through a key of it. *Reason:* that
+  section tags the entries of element slots with the key. *Tests:* the
+  executor's growth tests: 1 or 2 checks per change at every length. *Open
+  under it* (question 293): in which record the keys are reported, and what a
+  client does, which cannot form a key of a plain value. *If decided
+  otherwise:* that paragraph is removed and the checks of one change are the
+  length of the list over plain values in place. Over an array of references a
+  reference to an element is a link and the question does not arise.
+- **P25. A chunk list holds the number of entries of each chunk it names**
+  (question 290, point b). The coordinator's decision, on the objection of the
+  documents' author to P20 as it was stated. *The case:* with a list that
+  holds links alone, as P20 had it, no insertion writes a list, and a reader of
+  one position that has no numbers in memory reads every chunk before the
+  position. *Decision:* beside each link a chunk list holds the number of
+  entries of the array below that link. A read by position is bounded by the
+  depth of the tree: one document for each level and one chunk. An insertion
+  or a removal writes the chunk and one list for each level, which is one
+  level up to about 930 chunks, about a million rows that are parts, and two
+  beyond that. The bound of P20 is restated: one change of one row writes one
+  chunk and one list for each level, and on a split two chunks; an edit writes
+  no list. *Alternative:* links alone. *Reason:* a read of one row by position
+  must not follow the length of the list. *How it is written:*
+  `execution-and-storage.md` §4.10, the paragraphs "The chunk list", "How a
+  position is derived" and "What one change of an array writes" with its
+  table and the bound, and its question 103, point (b). *Built in round 5,*
+  as the prototype's default, with the list of links alone as an option.
+  Measured at 100,000 rows of 23 bytes: with the numbers the row at position
+  50,000 is read through 2 documents and an insertion writes 4; with no
+  numbers it is read through 20 documents, every chunk before it, and an
+  insertion writes 2. The list of the first level is in the document that
+  holds the array, so each insertion writes that document. *If decided
+  otherwise:* the numbers leave those
+  paragraphs, and an insertion writes its chunk alone. The rule is the same
+  for an array over an array of references, over an array of plain values in
+  place, over a plain array generated from scratch, and over the result of
+  another per-element construct.
+- **P26. P20 applies to every stored array, and not only to one that a result
+  document or a part stores** (question 290, point c, with question 296 for
+  what conflicts). The coordinator's decision, on the same objection. *The
+  case:* an array of plain values in place in an argument document or in a
+  state cell is one document at any length, 676,691 bytes for the 10,000
+  small records that the prototype measured, and every edit of one element
+  writes below a path of it. *Decision:* such an array is stored in chunks by
+  the same rule. *Alternative:* the arrays of a result alone. *How it is
+  written:* `execution-and-storage.md` §4.10, "An array of an argument
+  document or of a state cell", and its questions 103, point (c), and 107.
+  *Assumed in the writing:* the runtime that commits a transaction lays the
+  array out when the transaction seals, and a handler body and a client name
+  the array's path and decide no split; no element of a source array is a
+  part, since a split point is a kept path of a result, so no document of a
+  source array is named by a key; and a chunk of a source document takes the
+  scheme of that document. *What was looked for and found:* a `set` of the
+  whole array, a `splice` and a reference by key into the array have no
+  conflict, since each names the array's path, or the array and a key, and
+  resolves through the chunk list. A mergeable `push` conflicts: it commits
+  today without a read of the array, and with P25 each push writes the number
+  of the last chunk, so two concurrent pushes write the same number unless
+  storage applies the layout below the operation that the writer sent. And a
+  writer that is not the compiled runtime finds a chunk list at the place of
+  the array. Both are question 296. *Read in source after round 5:* today a
+  `push` is sent as the operation `append` with the path of the array and
+  the values, and the server applies it to the array of the one document
+  that the operation names; no part of today's storage applies an
+  operation to an array that is stored across several documents. So the
+  assumption that storage applies the layout is a requirement on storage
+  that today's does not meet (question 296). *Tests:* the prototype stores
+  a source array in chunks and measured `push`, `set` and a `splice` on it
+  with one writer; two concurrent pushes were not tried, since the
+  executor has no concurrent writers. *If decided otherwise:*
+  that paragraph is removed and a source array is one document. The case is
+  an array of plain values in place and an array of references in an argument
+  document or a state cell; the result of another per-element construct is an
+  array of a result.
+- **P27. A record with many members is stored in chunks as an array is**
+  (question 297, with question 290, point e, which it answers). The
+  coordinator's decision, after prototype round 5. *The case:* a gap in P20
+  and P26, which speak of arrays. A record `pool` of an argument that holds
+  one member for each element under an identifier, as an array of references
+  keeps its elements, is one document. One keystroke writes 68,456 bytes of
+  documents at 100 members, 109,141 at 1,000 and 572,774 at 10,000, for a
+  patch of 25 bytes (prototype note 526). *Decision:* a stored record whose
+  content in place would exceed `DOCUMENT_MAX_BYTES` is stored in chunk
+  documents, each holding the members of a contiguous range of member names
+  in the order that P1 gives, the order of the `base/data-model` codec,
+  under a list of links that names the first member name of each chunk. The
+  split, the merge and the tree are those of an array. A read of one member
+  loads one document for each level and one chunk. No meaning changes.
+  *Alternative:* a record is never divided, with the measured cost. *How it
+  is written:* rule 5 and the paragraph "A record with many members is
+  stored in chunks" of `execution-and-storage.md` §4.10, with its question
+  108, and a sentence each in `plan-and-label-templates.md` §2.3,
+  `scheduler-and-serving-loop.md` §3.1 and the overview. *Assumed in the
+  writing,* each part of question 297: the name beside a link is a bound
+  that is fixed when the chunk is created, so an insertion of a member
+  writes no list; the bounds are read under the label of the record's set
+  of names; where a record exceeds the maximum and holds arrays that are
+  each under it, the largest arrays become chunk documents first, as the
+  prototype built it for a document of several arrays, and the rule takes
+  what is left; a member is no part for being a member; and a `FabricMap`
+  is not divided. *Tests:* none; the prototype has no split point for a
+  record. *If decided otherwise:* rule 5 and that paragraph are removed.
+- **P28. The part document of a row is identified by a number that is minted,
+  and not by the element's key** (question 298). The coordinator's decision,
+  on the recommendation of the prototype's author. *The case:*
+  `execution-and-storage.md` §4.10 named the part of a row by the key of
+  its element. With the key in the identifier, an edit of a row of an array
+  of plain values in place with no declared key renames its part: measured
+  at 10,000 rows of 2,000 bytes, 5 documents and 128,748 bytes with 2 parts
+  deleted and 2 created, against 4 documents and 66,747 bytes with a minted
+  identifier. And a source array has no key before a reader forms one, by
+  the reader's declared key fields (by ruling), so under P26 the part of a
+  row has no name when it is written: with `ArrayByKey` the first edit
+  after a reader formed keys renamed it, 3 documents and 65,977 bytes
+  against 2 and 3,976 (prototype note 526). *Decision:* the identifier is
+  minted when the row first becomes a part and stays with the entry of the
+  row's position across edits and re-keys. It is derived from no content.
+  *Alternative:* the key, hashed under the secret of the space. *How it is
+  written:* the paragraphs "How a part document is identified", "A re-key of
+  an element of an array of plain values in place" and "An array of an
+  argument document or of a state cell" of `execution-and-storage.md`
+  §4.10, its sections 5.2 and 5.3 and its question 109;
+  `plan-and-label-templates.md` §2.3 ("A storage link reveals no element
+  key"); and the table of `scheduler-and-serving-loop.md` §11.1. *What was
+  looked for and found,* against a rule that finds a part from a key. A
+  client that loads one row from a reference by key is not affected: it
+  could not derive the identifier before, since it cannot read the salt,
+  and it reaches the part through the storage link. A server could form
+  the identifier of the part of a key and read it with no chunk, and that is
+  lost: it reads the chunk of the key first (question 299). What the scheduler
+  maps a watch on a part to was the key steps in the identifier's record,
+  and is assumed held in the part as data. *Assumed in the writing,* each
+  part of question 298: the number comes from one counter at the root of
+  the result cell or of the source document, so each creation of such a
+  part writes that root and two creations conflict; a part that lies below
+  a row is minted as a row's is; a row of a result whose key changes at
+  its position keeps its part, where the prototype deletes and creates
+  one; and an element of a source array is a part from `PART_MIN_BYTES`
+  on, as the prototype built it, where the section had no element of a
+  source array as a part. *Tests:* the prototype has the minted identifier
+  as an option, measured and not the default. *If decided otherwise:* those
+  paragraphs return to the key.
+- **P29. Withdrawn: an index from a key to its chunk** (question 299). The
+  coordinator withdrew it on 2026-11-18, on the showing of the author of the
+  documents that it breaks the bound of P20: an index entry that names a
+  chunk is rewritten for every row that a split or a merge moves, and those
+  entries are spread over the whole index by the order of the hashes, so one
+  split can write every chunk of the index (derived, not measured: about
+  1.1 MB for 10,000 small rows, more than the rows). Question 299 stays open
+  with no provisional decision. Until it is decided, a runtime that does not
+  hold an array's keys in memory reads the array's chunks to resolve a
+  reference by key, which is what the prototype does.
+- **P30. The design is validated by running the prototype's executor inside
+  the runtime, and the prototype stays the reference for semantics.** The
+  coordinator's decision, on the owner's request of 2026-11-18 for a strategy.
+  *The case:* the prototype's run times (0.3 s to settle the corpus against
+  14.2 s today, 1.6 s for 541 events against 43.7 s) leave out the CFC
+  preparation at commit, storage transactions, a scheduler across instances, a
+  network and a sandbox, so they say little about a finished runtime.
+  *Decision:* one executor, the prototype's, which reaches the runtime through
+  a small interface: its transactions are the runtime's transactions, with the
+  runtime's commit and CFC preparation, and in later milestones its events
+  come through the scheduler and its value code runs in the sandbox. The
+  in-memory store and the comparison harness stay, and a question of semantics
+  is settled there first. *Alternatives:* building the missing pieces into the
+  prototype, which writes again in `base/` the storage, encoding, labels and
+  commit that `runtime/` has and gives synthetic figures; and a second
+  executor written for the runtime, which is two implementations of one
+  semantics. *How it is written:*
+  [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+  with the milestones, what each measures, and what stays in the prototype.
+  *Built:* milestone 1, in the prototype's tree (`exec/executor.ts`
+  `TransactionHooks`, `compare/runtime-transactions.ts`,
+  `compare/integrated.ts`). *First figures:* over 213 corpus modules on the
+  runtime's emulated storage, with the inputs as labeled cells, 1.7 to 2.0 s
+  to settle against 25 to 43 s for today's runtime, and 10.0 to 10.3 s for 536
+  events against 73 to 75 s; 176 commits of 79 modules refused for want of the
+  schema of a write, which the adapter does not yet record. *If decided
+  otherwise:* those three stay as a measurement, and the missing pieces are
+  built into the prototype. *Settled* by the owner on 2026-11-18, with both
+  tracks and Topics as their shared target; see [Decided](#decided).
+- **P31. Labels by identifier, and a `fold` instantiated once per group of
+  element inputs** (question 244, which is `plan-and-label-templates.md`
+  question 167). The coordinator's decision of 2026-11-19, made when the
+  owner asked, before milestone 4 was built, for something better than one
+  instantiation of a label per element. *The case:* the function of
+  `plan-and-label-templates.md` §4.2 instantiated a `fold`'s body for every
+  element on every commit, so the label of a collection cost the length of
+  the collection; the count per label identifier that §4.3 had "with the
+  fold's durable state" has no home for a `fold` that belongs to no
+  operation, such as the membership of a `filter` or a `flatMap`.
+  *Decision:* inside instantiation a label is handled by its identifier, the
+  content hash of the normalized label, interned in a table of the runtime
+  so that equal labels are one object; a join and a meet are computed over
+  the set of distinct identifiers and memoized by that set. A `fold` is
+  instantiated once per distinct group of element inputs, a group being the
+  label identifiers of the slots the body reads with the selections. The
+  write record reports a `fold`'s elements in one of two forms. `uniform`:
+  one set of bindings whose addresses hold `*` at the element's position,
+  allowed only where the body's template holds no `select`, `pick`,
+  `fold`, `dynamic`, `shared` or `output` node below the element, so that a
+  join before instantiation equals instantiation followed by a join; it is
+  the form for an array of plain values in place. `groups`: one entry per
+  group with its bindings, selections and the number of elements that have
+  it, with the group of each element key and the count per group kept with
+  the collection's assembly; it is the form for an array of references and
+  for the result of another per-element construct. A label that changes
+  while the value stays the same regroups only the elements that read a
+  position of the document whose label changed. A `fold` in the body of
+  another `fold` puts the set of inner groups in the outer group key, so a
+  change of the inner set regroups the enclosing element. *Added from the
+  measurement:* when every element of an array written whole has one label,
+  one entry at the array's `*` path is stored. An element with another label
+  adds its own entry and is then read with the union of the two; a `splice`
+  removes the `*` entry and the elements take the list's label. Both limits
+  give a label equal to or wider than the label per element, never a
+  narrower one. With one entry per element a change of one element prepared
+  in 2.2, 16.8 and 157.5 ms at 100, 1,000 and 10,000 elements, and with the
+  one `*` entry in 0.6 to 0.8 ms. *Alternative:* one instantiation per
+  element, with the cost in the length. *How it is written:*
+  `plan-and-label-templates.md` §2.3 ("One entry for the elements of an
+  array written whole"), §4.2 ("Labels by identifier, and a `fold` per
+  group", and `TemplateInputs.groups` in the pseudocode) and §4.3. *Not
+  determined:* the label of a collection's array for a slot of root
+  `index`; the removal of the extreme of `min` and `max`; and what a slot
+  under `*` binds over an empty collection (question 305). *Tests:*
+  milestone 4 of the integration counts instantiations per commit, 3 to 7
+  for a change of one element at 100, 1,000 and 10,000 elements of a
+  `filter` over each of the three cases, and a test pins equal counts at
+  two lengths. *If decided otherwise:* those passages return to one
+  instantiation per element, and the count per identifier needs a home.
+- **P33. A template node names the closure whose factory value a path
+  holds** (question 307, which is `plan-and-label-templates.md` question
+  179). The coordinator's decision of 2026-11-20, derived from that
+  document's §3.15. *The case:* `Child.callee` is the one member that
+  names an entry of `Plan.closures`, so no record says which output,
+  argument or request path holds the factory value of which entry, and a
+  reader of a plan cannot tell which closure a request passes as a tool.
+  *Decision:* a leaf node `{ op: "closure", closure }` at the place of the
+  closure expression, which denotes the label of the factory value over
+  the entries of `Closure.params`. The `Output` at the path of a closure
+  in the result and the `WriteEdge` at an argument path or at the path of
+  a tool have it as their template, or below a `select`. *Alternative:* a
+  member `closure` on `Output` and `WriteEdge`, which cannot name two
+  entries for a path that a conditional decides. *How it is written:*
+  `plan-and-label-templates.md` §3.15 ("What is undecided for a pattern
+  closure used as a value", point 1), in prose; the `Template` type of its
+  §1.1 and the function of its §4.2 do not hold the node. *Tests:* none;
+  the prototype translates no closure used as a value. *If decided
+  otherwise:* that passage. The node is the same over an array of
+  references, an array of plain values in place and the result of another
+  per-element construct, where the closure is written in an element body.
+- **P34. The factory value of a closure is a record in place, with the
+  captures below `params`** (question 308, which is
+  `plan-and-label-templates.md` question 180 and ES question 114). The
+  coordinator's decision of 2026-11-20. *The case:* the documents say
+  that a copied capture is stored with the factory value and a captured
+  cell as a link, and bind the slots of root `params` to the factory
+  value at the address its `identity` slot is bound to; none says what is
+  stored there. *Decision:* a record at the path, with the content
+  address of the compiled inline pattern in the form a module-scope
+  pattern factory is stored in, and a member `params` that holds each
+  copied path, narrowed to what the inline pattern's plan observes, and
+  each link to a captured cell. Each copied path has the label of its
+  template, and the record has the label of the factory value. A body
+  that passes the factory on unchanged passes a reference. *Alternative:*
+  a parameters document that the factory value links to, which every
+  holder of the factory shares and whose identifier needs a cause.
+  *How it is written:* `plan-and-label-templates.md` §3.15 (point 2) and
+  `execution-and-storage.md` §4.6. *Not determined:* the names of the
+  members. By the ruling Z83 the captures of a closure called through
+  `inSpace` stay with the factory value where that is built. *Tests:*
+  none. *If decided otherwise:* those two passages.
+- **P35. Value code makes a factory value through a marker of the host
+  object** (question 309, which is `plan-and-label-templates.md` question
+  181 and ES question 113). The coordinator's decision of 2026-11-20.
+  *The case:* a cone's value function holds no handle, and the host
+  object of `execution-and-storage.md` §2.2 has no member that makes a
+  factory value. *Decision:* a member `closure(closure, computed)` that
+  returns a marker, as `stream` does; the function places it, and the
+  runtime writes the record of P34 in its place, copying the copied
+  paths from `computed` and building the paths of slots and the links
+  itself. *Alternative:* the function returns the record, which needs it
+  to hold links and the content address of the inline pattern. *How it is
+  written:* `execution-and-storage.md` §2.2 and
+  `plan-and-label-templates.md` §3.15 (point 3). *Tests:* none. *If
+  decided otherwise:* those two passages.
+- **P36. A conditional between two closures given as a tool is a `select`
+  over their nodes** (question 310, first part, which is
+  `plan-and-label-templates.md` question 182). The coordinator's decision
+  of 2026-11-20. *The case:* `language-subset.md` §4.4.2 makes the
+  conditional a factory value, and `plan-and-label-templates.md` §3.15
+  left open what the request records. *Decision:* the template at the
+  path is a `select` whose branches are the `closure` nodes of P33; the
+  value function makes the marker of the branch it takes and reports the
+  selection; the tool rule applies to the selected factory value under
+  the label of the `select`. *Alternative:* a conditional between
+  closures is refused where it is given as a tool. *How it is written:*
+  `plan-and-label-templates.md` §3.15 (point 4). *Ruled, and no part of
+  this decision:* a closure through `inSpace` as a tool is refused (Z83),
+  the second part of question 310. P36 itself is not named in the owner's
+  answer and stays provisional. *Tests:* none. *If decided otherwise:*
+  that passage.
+- **P37. A scan keeps the groups of its prefix with its memo entry**
+  (question 311, which is `plan-and-label-templates.md` question 183).
+  The coordinator's decision of 2026-11-20. *The case:* the groups of P31
+  hold a count per group and no order, so the groups of the elements up
+  to the deciding position of `findIndex`, `some`, `every` and `find`
+  cannot be read from them; the run of milestone 4 takes the whole
+  collection as a bound there. *Decision:* a scan keeps, with the memo
+  entry that holds its position, a count per group over the elements of
+  the prefix. An element that enters or leaves the prefix, and an element
+  of the prefix that changes, is one update. A move of the deciding
+  position costs the number of elements between the old and the new
+  position. Where no element decides, the groups are those of the
+  collection's assembly. By case: over an array of references and over
+  the result of another per-element construct, the `groups` form with
+  those counts; over an array of plain values in place in the `uniform`
+  form, one binding at `*`, whose label covers all elements, which is
+  the label of the prefix where every element has the one `*` entry and
+  wider otherwise, and a move costs nothing. *Alternative:* the
+  predicate's template instantiated per element of the prefix on every
+  commit that changes the scan. *How it is written:*
+  `plan-and-label-templates.md` §4.2 ("The groups of a prefix", and the
+  table of what is reported for each selection and choice). *Tests:*
+  none; not built. *If decided otherwise:* that passage.
+- **P38. W6 over a value whose type declares no structure widens where
+  the path repeats** (question 312). The choice of the prototype's
+  author, adopted by the coordinator on 2026-11-20. *The case:* W6 of
+  `footprint-analysis.md` §5.2 is decided by type, and a body that walks
+  a value of type `unknown`, of no type or of an index signature reaches
+  no type that says where a path re-enters. One function of
+  `patterns/apps/weekly-calendar/view-walk.ts` recorded 28,799 read
+  entries. *Decision:* an access on a path that ends in a sequence of
+  segments repeated in direct succession that holds a key, or in three
+  `*`, widens to `value` at that position, and so does a key read again
+  on a value whose type declares no structure for it. *Direction:* wider
+  than W6 by type, never narrower. *Measured:* that function records 45
+  entries, and no plan of the corpus changed. *Alternative:* refuse a
+  walk of a value with no declared structure, or leave the set of paths
+  to the analysis limit W7. *How it is written:* `footprint-analysis.md`
+  §5.2 ("W6 over a value whose type declares no structure"). *Tests:* the
+  crate's (`square_end` and `holds_key` of
+  `base/pattern-compiler/src/footprint.rs`). *If decided otherwise:* that
+  passage, and the crate's two rules.
+
+- **P39. A list that a handler adds to or removes from has an enumeration entry,
+  and an added element is recorded at its own position** (question 323, which is
+  `plan-and-label-templates.md` question 190). The coordinator's decision of
+  2026-11-20; it is no owner ruling. *The case:* a list of plain values in place
+  had one `value` label, that of its last write, so a change of its members lost
+  what an earlier change decided; over an array of references the same held for
+  the number of members and for which reference stands at a position.
+  *Decision:* the list has an enumeration entry at its own path. An addition
+  (`push`, `pushAll`, `addUnique`) and a removal (`remove`, `removeAll`,
+  `removeByValue`) replace it with the stored enumeration joined with what
+  decided the change. An added element is recorded at its own position, with its
+  own label. By the owner's ruling Z74 the position of an added element does not
+  carry the membership of the list, and milestone 4 builds it so. *What it no
+  longer decides:* for a removal, where what the decision
+  read is stored for the positions from the first removed one on. P39 took
+  alternative 1 of question 320, an entry written per kept element; the owner's
+  ruling Z71 replaces it with alternative 3, one `*` entry that a read of a
+  position joins with the position's own entry, and the rulings Z72 and Z73
+  settle the two questions beside it ([Decided](#decided)). The result of
+  another per-element construct has no handle to add or remove through. *How it
+  is written:* `plan-and-label-templates.md` §2.5 ("An addition through a
+  handle") and `footprint-analysis.md` §6.1. *Built:* in milestone 4 of the
+  integration, with the `enumerate` entry stored for a
+  list of plain values in place, which today's runtime stamps on containers of
+  links alone; that is a change of what CFC stores and carries the
+  `SPEC-PENDING` marker for specs pull request 91. *Tests:*
+  `base/pattern-compiler/compare/test/stored-labels.test.ts` and
+  `runtime/runner/test/cfc-plan-labels.test.ts` ("for changes of the members of
+  a list in place"). *If decided otherwise:* those passages, and what is built
+  from them.
+- **P40. An entry of `Body.reads` says where the body declares a handle**
+  (`ReadInput.handle`). The decision of the author of the Topics track, adopted
+  by the coordinator; it is no owner ruling. *The number:* the branch
+  `claude/compiled-pattern-topics` records this decision as P31 in its copy of
+  this plan and in `base/pattern-compiler/SPEC-NOTES.md` (note 541). This
+  document governs the numbering, P31 here is another decision, and the Topics
+  branch renumbers at its merge. *The case:* `execution-and-storage.md` §2.4 has
+  the runtime decide what an `identity` entry puts into the argument by the type
+  of the position, a handle at a position of handle type and a reference
+  stand-in at a position of data type, and takes that type from `Slot.schema`.
+  The crate's slot holds the type of the place, and one slot of root `argument`
+  serves every body that reads the place in the same way, so two bodies that
+  declare a handle and a value at one input share an `identity` slot. In Topics,
+  `migrateTopicState` declares a writable handle at `createdBy` and
+  `createdByOf` declares a value there; the executor handed `createdByOf` a
+  handle, and its read of a member of the value threw. *Decision:* an entry of
+  `Body.reads` at a position of handle type in the body's declaration has
+  `handle: true`, from the positions of handle type that footprint analysis
+  records, and the runtime gives a handle there, before every entry at or below
+  it. An `identity` entry without it, at a place where the body also has a
+  `value` entry, gives way to the value, which carries the address. An entry at
+  `*` with it puts a handle at each element of an array and at each member of a
+  record; the case there is an array of references and a record of references
+  that a body declares as handles. *Alternative:* the slot holds the declared
+  type, and two bodies that declare different types at one place have two slots,
+  which changes the indexes of slots in every plan. *How it is written:* on the
+  Topics branch alone; `plan-and-label-templates.md` §1.1 does not hold the
+  member. *Tests:* on that branch, `exec/test/executor.test.ts`. *If decided
+  otherwise:* the crate splits the slots by the declared type, and the executor
+  reads the type from `Slot.schema`.
+- **P41. `equalsKey` is accepted, and is what `equals` compares of its
+  operand.** The decision of the author of the Topics track, adopted by the
+  coordinator; it is no owner ruling. *The number:* the Topics branch records it
+  as P32 (note 541 there), and renumbers at its merge. *The case:* `base/api`
+  exports `equalsKey`, which returns a string that two values share exactly when
+  `equals` matches them, so that a `Set` or a `Map` finds distinct references in
+  one pass. Topics' board uses it, and `builtin-inventory.md` does not list it.
+  *Decision:* a built-in of tier F with the footprint of one operand of
+  `equals`, a resolution of the operand that is decided on its own, and the type
+  `string | undefined`. The key holds for one run and is not stored.
+  *Alternative:* refused, and the board written with `equals` in pairs, which is
+  quadratic in the number of topics. *How it is written:* on the Topics branch
+  alone; `builtin-inventory.md` gets the entry at that merge. *Tests:* on that
+  branch, `tests/footprint_calls.rs`
+  (`equals_key_resolves_its_operand_as_equals_does`) and
+  `exec/test/executor.test.ts`. *If decided otherwise:* the crate reports the
+  call, and the Topics source replaces the two helpers that use it.
+
+**The scope of the storage decisions** (the coordinator's recommendation to
+the owner, 2026-11-18; not an owner ruling). Read in source after round 5:
+today's storage receives a patch from the writer and stores it, and sends
+the whole document to every subscriber. The costs that P20 and P25 to P28
+address, what a subscriber receives for one small change of a long list,
+merging pushes into an array stored in chunks, and finding the chunk of a
+key, are properties of the storage layer and hold for today's runtime as
+much as for the compiled language. Chunked storage of long arrays is
+therefore a requirement on the storage layer, decided there: a sync that
+carries a patch to a subscriber that holds the prior version, and storage
+that maintains the chunk layout so that the four mergeable operations keep
+merging. This design keeps of it what it needs: the split points, P22 (a
+cone holds a reference to a collection it places), and the bound that the
+change of one row writes and delivers an amount that does not depend on the
+length. P20 and P25 to P28 stay recorded as the shape the design expects
+of storage.
 
 ## Open, and needing the owner
 
@@ -528,7 +7752,9 @@ answer goes to the specification with the document.
 
 10. **A value passed on unchanged is a reference** (FA question 2).
     *Assumed:* yes, as today, which makes "the stored value is a link to
-    the original" a rule of the language.
+    the original" a rule of the language. The values of the prototype's
+    corpus run need the rule. What a write stores where the reference
+    leads into what the write replaces is question 84 of ES.
 11. **A label-only change** (SS question 8). *Assumed:* a demanded kept
     output is instantiated again without running value code.
 
@@ -544,9 +7770,10 @@ answer goes to the specification with the document.
 16. **Demand across spaces** (SS question 5). *Assumed:* a serving
     runtime's session on another space counts as demand there.
 17. **`inSpace` on a statically resolved callee in the reactive tier**
-    (A9). Such a callee is compiled into the surrounding instance and
-    cannot be in another space. It either always makes a child instance or
-    is refused.
+    (A9). Settled with the ruling on `asInstance()`: a call through
+    `inSpace` is an instance of its own, with its own argument and
+    result documents, and is not compiled into the surrounding
+    instance ([Decided](#decided)). The entry keeps its number.
 <!-- The list restarts so that the numbers below stay as cited. -->
 
 21. **Event order per space** (SS question 10). *Assumed:* the proposal of
@@ -629,13 +7856,34 @@ assumption.
 41. **Where a result is split** (ES §4.10, question 32). *Assumed:* the
     split points are the root of a kept output, a row of a kept
     collection, and a node of the rendered tree at any depth; a part is
-    split off at 1,024 bytes and merged back at 512, and a document holds
-    at most 65,536; the properties of a rendered node stay with the node.
-    The numbers are placeholders for stage 4 to measure.
+    split off at 1,024 bytes and merged back under half of that, and a
+    document holds at most 65,536; the properties of a rendered node stay
+    with the node. Provisional (P20): the first number is the constant
+    `PART_MIN_BYTES`, no split point becomes a part for the size of the
+    document that holds it, and an array over the second number is stored
+    in chunks. The numbers are placeholders for stage 4 to measure.
 42. **An instance made again under the identity of one torn down** (ES
-    §2.8, question 33). *Assumed:* it finds the stored state where that
-    is not yet deleted, as an element whose key returns does. A link to a
-    torn-down instance held elsewhere reads the last stored values.
+    §2.8, question 33). By ruling the removal of an element deletes
+    nothing stored under its key, and an element that returns under the
+    same key reads what its state cells held ([Decided](#decided)). The
+    ruling is on the state cells and the operation state that an
+    element body declares, over an array of references, an array of
+    plain values in place, and the result of another per-element
+    construct alike. It does not speak of an instance. *Assumed:* an
+    instance made again under the identity of one torn down finds the
+    stored state where that is not yet deleted, and the documents of a
+    torn-down instance are deleted after the retention period of ES
+    §9.6. A link to a torn-down instance held elsewhere reads the last
+    stored values. That covers an instance that a `lift` or a
+    `computed` makes, which is not about a per-element construct, and a
+    child of an element body, in each of the three cases: the key
+    returns when the same resolved address, the same value, or the same
+    upstream key stands in the collection again. The alternative for
+    the child of an element body keeps its documents as the state cells
+    of the body are kept, so that a child made again always finds its
+    state. By ruling a child of an element body that is called through
+    `asInstance()` is not torn down when its key leaves, in each of the
+    three cases, so the assumption covers a child without the modifier.
 43. **A failed evaluation of a computation that makes instances** (PL
     §3.14). *Assumed:* the instances of the last evaluation stay, and
     their arguments take the error state.
@@ -752,7 +8000,13 @@ as an assumption.
 76. **The state of an occurrence among equal elements** (PL question
     36). Which state an occurrence has depends on the equal elements
     before it in the collection, which the label of its own position
-    does not hold. *Assumed:* accepted as a residual.
+    does not hold. *Assumed:* accepted as a residual. It is the same
+    over an array of references, where equal elements are links that
+    resolve to one address, and over an array of plain values in place,
+    where they are equal values. An element of the result of another
+    per-element construct has its upstream key, so its state depends on
+    the equal elements of the first source of the chain and not on
+    equal values in the result.
 77. **The argument of a `.for(tag)` instance on a later event** (PL
     question 39). *Assumed:* not written again. The alternative writes it
     on every event, as a computation does.
@@ -826,6 +8080,8 @@ as an assumption.
 103. **How value code reads the child a dynamic key chose** (PL question
     46). *Assumed:* it is handed every child. `execution-and-storage.md`
     §2.2 gives `ConeHost.slot` no key, which disagrees with PL §3.18.
+    The assumption was enough for the three corpus modules with such a
+    read that the prototype's executor ran.
 104. **The plan record of `wish`** (PL questions 47 and 48). *Assumed:*
     one operation of kind `wish`, whose result is read through slots
     rooted at the operation and labeled with the request joined with
@@ -890,8 +8146,10 @@ as an assumption.
 
 116. **What identifies the pattern in its `TransformedBy`, and which
     pattern it is for code compiled into another** (PL question 64).
-    *Assumed:* the pattern's module and binding, and the pattern in
-    whose source the expression is written.
+    Settled for which pattern by the ruling of 2026-11-19 ([Decided](#decided)):
+    code of a pattern B compiled into a pattern A mints B's atom, the
+    pattern in whose source the expression is written. *Assumed* for the
+    identity: the pattern's module and binding.
 117. **What the corpus comparison compares.** The runtime copies values
     where the plan passes references. *Assumed:* the comparison is made
     on dereferenced labels. The static part the runtime joins from a
@@ -915,7 +8173,10 @@ as an assumption.
     runtime's static part included for a conditional.
 
 120. **Where the pattern's `TransformedBy` is added** (PL questions 71
-    and 72). *Assumed:* at kept outputs only, with no condition, as one
+    and 72). The owner confirmed on 2026-11-19 that every kept output
+    carries it; the rest is open, and question 302 is the owner's design
+    for a value passed on from an argument. *Assumed:* at kept outputs
+    only, with no condition, as one
     entry at the root of the result document. A promoted `computed`
     that passes a value unchanged to a child argument, a write target,
     or an effect request then has fewer atoms than today. What a reader
@@ -943,10 +8204,21 @@ as an assumption.
     today. The alternative joins the event and the reference alone.
     For a `lift` or a `computed` that passes a handle on at a result
     path the link keeps the label of the reference alone.
-125. **How a result path of a binding names a position inside an
-    element** (PL question 78). *Assumed:* a `*` at the position of
-    each enclosing collection. Two collections spread into one array
-    of children are not told apart by the path.
+125. **Where the stream of a binding of an element body is stored** (PL
+    question 78). Not applicable as a question about the plan, by the
+    ruling that value code places a stream and that no record names
+    where it is stored ([Decided](#decided)): each element of the
+    assembled collection holds the link that the cone instance of its
+    key placed, and a reader of the plan alone cannot say where a
+    stream is. Settled by ruling as well: a collection among the
+    children of a view node is one nested child, with its elements at
+    `children/<n>/*`, so two collections among the children of one node
+    are two child positions, and a child written after a collection has
+    a static position. The prototype's plans hold a list of result
+    paths with a kind for each `*` (prototype note 372), which the
+    design does not have. The same over an array of references, an
+    array of plain values in place, and the result of another
+    per-element construct. The entry keeps its number.
 126. **A schema of the plan and the schema the runtime stores an input
     under** (PL question 80). *Assumed:* the comparison stores inputs
     under the runtime's schema. The documents do not say how a schema
@@ -969,24 +8241,49 @@ as an assumption.
     a handler emptied carries the clauses its former elements were
     created under. *Assumed:* the compiled path keeps it, equal to
     today. The alternative removes it with the path.
-130. **A result path of a stream that the elements of a collection
-    hold** (PL question 84). A stream inside a value that one element
-    holds, as `example[UI]` over an array of the results of patterns
-    in `patterns/examples/cfc-trusted-component-examples/` (208
-    bindings). *Assumed:* the binding has no result path through the
-    collection, so no reader finds its stream from the plan. The
-    alternatives name the position of the member, or write `*` and
-    have a reader try each position.
+130. **A stream that the elements of a collection hold inside a value**
+    (PL question 84). Not applicable, by the ruling that value code
+    places a stream and that no record names where it is stored
+    ([Decided](#decided)). A stream inside a value that one element
+    holds, as `example[UI]` over an array of the results of patterns in
+    `patterns/examples/cfc-trusted-component-examples/` (208 bindings),
+    is stored where the element cone passes the member on with the
+    marker in it. A further 5 bindings of the corpus have a stream that
+    is read through a member of the element by name, as `entry.node`.
+    The source is an array of plain values in place, an array written
+    in place in the pattern body whose members the instance computes,
+    or the result of another per-element construct whose elements hold
+    the stream of a binding of that construct's body. Over an array of
+    references the case does not arise, because a stream behind a
+    reference is no binding's marker. The entry keeps its number.
 131. **The declared label of an element's handle in the compiled
-    path** (PL question 85). By ruling the handle of an element is
-    read at the element's position in the source collection. Not
-    settled: whether a handle the body resolves, reads through, or
-    writes through also carries the label that the declaration of the
-    source collection gives the element, which the `link` entry at
-    `element` of the argument document holds today. *Assumed:* it
-    does, which is equal to today for `askToRetire` of
-    `patterns/system/profile-picker/profile-picker.tsx`. No record of
-    the plan holds that declared label.
+    path** (PL question 85). Settled by ruling: the handle of an
+    element is read at the element's position in the source
+    collection, and nothing of the `map` coordinator's join is in its
+    label. Settled by PL's own rule: an entry of origin `link` at that
+    position is in the label of a handle the body resolves or reads or
+    writes through. Open: whether such a handle, where it is resolved
+    and not read through, also carries the label that the declaration
+    of the source collection gives the element. A clause a list
+    declares for itself is stored at the root of the list's document
+    and is consumed by a read of content, not by a read of which
+    reference a position holds. In the runs observed the argument
+    document of the element's instance has no `link` entry at
+    `element`, and the handler has the list's clause from the
+    coordinator's join alone, so the two descriptions the question
+    gave of one label are two labels. *Assumed:* the handle carries
+    the declared label, which is equal to today for `askToRetire` of
+    `patterns/system/profile-picker/profile-picker.tsx`. Without it
+    that write is tighter in confidentiality and has no atom
+    (question 138). No record of the plan holds the declared label.
+    Not determined by a run: whether a list that declares a clause
+    for its items alone gives the link at `element` a `link` entry.
+    The open part is about an array of references, which the observed
+    runs are over. Over an array of plain values in place no link
+    stands below the position, and the assumption gives the handle the
+    same declared label of the list. Over the result of another
+    per-element construct the element's label is what the template of
+    the upstream output gives the position, and nothing is open.
 133. **A written path that holds a link, for a write edge with no
     reference** (PL question 87). *Assumed:* the row is not compared
     where the run stored a link at the written path, and is counted
@@ -1002,22 +8299,4562 @@ as an assumption.
     it holds and by no place, and everything an element body holds is
     per element key. *Assumed:* the first governs, so two occurrences
     that bind equal state from a `computed` or a `lift` have one
-    stream.
-137. **The key of an element of a `filter` result** (PL question 91).
-    *Assumed:* it keeps the key it has in the source, count included.
+    stream. That is the same over an array of references (two links
+    that resolve to one address, passed on), an array of plain values
+    in place (equal copied values), and the result of another
+    per-element construct (two elements with different keys that copy
+    or pass on equal state).
+138. **A write row whose template is empty beside the coordinator's
+    join** (PL question 96). Where every clause a run stores for a
+    handler's write is of the `map` coordinator's join, the template
+    has no clause and mints no atom, and the run mints one. The row is
+    tighter in confidentiality and looser in integrity by that atom.
+    *Assumed:* it is counted apart as looser in integrity and is not
+    among the deliberate exceptions. The alternatives count it as an
+    exception by ruling, or mint on every `derive` of a write edge.
+    One fixture has such a row and the corpus has none. The row arises
+    in all three cases. What the coordinator's join holds today
+    differs: the clauses of the list's own document over an array of
+    references, those of the other elements as well over an array of
+    plain values in place, and, over the result of another per-element
+    construct, which today is an array of links to the upstream
+    elements' result cells, what it holds for an array of references.
+140. **The transaction that creates an instance outside a handler**
+    (ES question 77). *Assumed:* one transaction that writes the
+    argument and evaluates nothing, so that a new instance settles in
+    two transactions. The alternative evaluates in the creating
+    transaction. The derived count of two transactions to settle
+    rests on the assumption.
+
+**From the prototype's executor.** Each is written into the documents
+as an assumption, which is what the prototype does.
+
+141. **What `Cone.within` holds beside the collections** (PL question
+     98). By ruling the record of a cone lists the collections of the
+     element bodies it is written in, outermost first, and the runtime
+     takes from the list which instances of the cone exist and under
+     which keys what they hold is kept. The ruling is on the
+     collections. *Assumed:* the member holds the steps of where the
+     cone's code is written, as the `within` of a declaration does, so
+     it has a `site` step for each pattern compiled in that the code is
+     written in, and its `element` steps are the list the ruling
+     names. The alternative holds the collections alone. The
+     prototype's plans hold the `site` steps as well, as assumed: of
+     3,717 cones, 576 have an `element` step and 1,336 a `site` step.
+     Open with it: whether `Cone.entry` is
+     unique in a plan without the `site` steps. The question is the
+     same for a collection over an array of references, over an array
+     of plain values in place, and over the result of another
+     per-element construct: a `site` step names a call and no
+     collection.
+144. **A marker stored outside the result, and a marker handed to a
+     sandboxed body** (ES question 78). Settled by ruling for the first:
+     value code places a stream with `host.stream`, and the runtime
+     replaces the marker by the link when it stores the value, wherever
+     the marker is, so a marker in a side-write or at a path of a
+     child's argument that a cone computes is replaced as one in the
+     result is, and no position is checked ([Decided](#decided)). One
+     thing the ruling does not determine. *Assumed:* a marker at a path
+     of the argument that a value function gives a sandboxed body is
+     handed to the body as a reference to the stream, as any reference
+     at that path is. The alternative refuses it. The prototype's
+     executor does both, and no test of it stores a marker outside the
+     result. The same in an element body over an array of references,
+     over an array of plain values in place, and over the result of
+     another per-element construct. Question 165 has a stream that a
+     function body returns.
+145. **What a cone stores that passes on an element that is a plain
+     value** (ES question 79). Settled by ruling: an element that is a
+     plain value in place is named by its collection and its key, a
+     reference to it or to a member of it resolves to the current
+     position at each read and write, and a cone that passes the
+     element on stores that reference and no copy. Two such references
+     are equal where they name the same collection, key and path, and
+     neither equals a reference to a cell. A write through one lands
+     at the position that holds the key. A handler bound in the body
+     holds the same reference as the cones of its row. After removal
+     the reference reads as nothing, a deliberate difference from
+     today. The case is an array of plain values in place, and the
+     result of another per-element construct where the upstream
+     position holds a value; over an array of references nothing
+     changed. Questions 160 to 163 have what the ruling leaves open.
+     The entry keeps its number.
+146. **Which cone with side-writes is of which kind** (ES question 80).
+     By ruling a cone with a small, fixed set of write targets is an
+     ordinary node and one whose write set is dynamic or very large is
+     evaluated eagerly. *Assumed:* the compiler decides the kind from
+     the footprint, as FA §6.3 has it: an ordinary node where every
+     write target is a statically named slot, and a materializer where
+     a target is reached through data (a `*`, a computed path, a handle
+     read from a value). No number is set for "very large": no count of
+     static targets makes a cone a materializer.
+147. **The key of an element that a `flatMap` contributes** (PL question
+     101). Settled by ruling: the key is formed from the member itself,
+     by the rule for any array, together with the source element's
+     key. A member that is a reference has its cell identity and a
+     member that is a plain value its value, each with the count of
+     earlier occurrences among the members of that source element's
+     segment. Two members of one segment that change places evaluate
+     nothing, and a state cell declared in a body over the result
+     stays with the member. The prototype forms the member part so at
+     commit `e63b3d305c`, and its fixture has both kinds of segment:
+     two members of one segment that change places evaluate nothing.
+     Question 180 has which collection a reference by key to such a
+     member names. Open: a segment that is itself the result of
+     another per-element construct, as
+     `xs.flatMap((x) => x.items.map(f))` yields. *Assumed:* the member
+     part is the key the member has in that result. The alternative
+     forms it from what the position holds. That case is the result of
+     another per-element construct as the segment, over upstream
+     references and upstream plain values alike. The entry keeps its
+     number.
+<!-- The list restarts so that the numbers below stay as cited. -->
+
+149. **A property default of a place, in a read of an object whole** (PL
+     question 103). By ruling the default nearest the end of the chain
+     is read. For a read of an object whole, the runtime of today takes
+     only the top-level default of a link's schema: a default that the
+     link's schema declares for a property is dropped, and the reader's
+     own default for the property is read. *Assumed:* the ruling holds
+     at every path of what a slot reads, so a property that is absent
+     reads the same default in a whole read as in a selection of it,
+     which differs from today for the whole read. The alternative keeps
+     today's two answers. One value of the prototype's fixtures is of
+     this kind: a path of a compiled-in callee's result that passes on
+     a path the caller left empty reads the callee's default where the
+     read is addressed at the path, in both runs, and nothing in
+     today's read of the whole result. Not about a per-element
+     construct: the same for a callee in an element body in each of
+     the three cases.
+150. **A stored `undefined`, and a default written at setup** (PL
+     question 104). Today a stored `undefined` reads as an absent value
+     does, and a pattern writes its own argument defaults into its
+     argument document at setup where a key is absent, which makes each
+     a stored value for whatever reads through the document. *Assumed:*
+     a stored `undefined` reads as absent, so the default the ruling
+     names is read; and the compiled path writes no default into an
+     argument document, so a default is always read and has the
+     integrity of a default. The alternative writes the callee's
+     defaults at setup, as today, which gives them the integrity of
+     that run.
+151. **What "the causes are computed as they were" requires** (PL
+     question 105). By ruling the design does not need the links that
+     today's runtime stores between the arrays per-element constructs
+     read and write, and the causes are computed as they were.
+     *Assumed:* the same inputs and structure of derivation, not
+     identifiers equal byte for byte to today's. Over an array of
+     references the key has today's inputs, the resolved address and
+     the count. Over an array of plain values in place it differs from
+     today's by ruling. Over the result of another per-element
+     construct it is the upstream key, where today's is the address of
+     the upstream element's result cell. The alternative asks for
+     today's identifiers over an array of references.
+
+**From the rulings as the prototype implemented them.** Each is what
+its notes 307 to 320 found a ruling to leave undetermined, written
+into the documents as an assumption, which is the prototype's choice
+unless the entry says otherwise.
+
+152. **How a sandboxed body of a compiled-in callee is handed the
+     callee's default** (ES question 85). Settled by ruling: the entry
+     of `Body.reads` holds the default (`ReadInput.default`), and value
+     code does not pass it. The same inside an element body over an
+     array of references, over an array of plain values in place, and
+     over the result of another per-element construct. The entry keeps
+     its number.
+153. **A path of a compiled-in callee's result that passes on a path
+     the caller left empty** (PL question 106). Settled by ruling: the
+     stored reference carries the callee's declared default, so a
+     reader of the result reads the default of the caller's place where
+     it declares one and the callee's default otherwise, as today. The
+     same in all three cases. Question 158 has what the two rulings
+     leave open. The entry keeps its number.
+154. **A write below the root of a state cell that holds nothing** (ES
+     question 86, PL question 109). Settled by ruling: the document is
+     created from the default with the write applied, and the members
+     taken from the default keep the label of a default, the empty
+     integrity. The same for a state cell of an element body in all
+     three cases. The entry keeps its number.
+155. **Whether a first value is stored as a value** (ES question 87).
+     Settled by ruling: always a value, so a write to the cell never
+     lands in the input. The same in all three cases, also where the
+     first value is the element itself: over an array of plain values
+     in place the cell holds the value and no reference to the
+     element. *Assumed* beside it: a member of the value that is of
+     data type and carries the address it was read from is stored as
+     a value as well, and a member of handle type is stored as the
+     link its type declares. The entry keeps its number.
+156. **An output that passes a derived collection on unchanged** (PL
+     question 107). Settled by ruling: such an output is the same
+     collection for keying, and the plan marks it
+     (`Output.passesCollection`). The case is the result of another
+     per-element construct that a cone returns as it is, with a
+     per-element construct applied to that output, over an upstream
+     array of references and over an upstream array of plain values in
+     place alike. Question 159 has what the ruling leaves open. The
+     entry keeps its number.
+157. **A read through the name a pattern binds to `[SELF]`** (PL
+     question 108). By ruling the name is a reference to the result
+     cell of the instance ([Decided](#decided)). Open: what a read
+     through it is, of a path of the result that a cone of the
+     instance computes; no record of the plan holds it. At commit
+     `abd965cc37` 3 values of the prototype's corpus run differ for it
+     (its note 473): 2 in `dev/self-reference-test/self-reference-test.tsx`,
+     at `parent`, and 1 in `dev/test/input-self/subjects.tsx`. A read
+     of the whole result that enters the result again gives nothing
+     there in the prototype's executor, and today's read follows the
+     link at each level, to the depth that the comparison reads.
+     Question 170
+     has what a handler binding that captures the name holds. Not
+     about a per-element construct.
+
+**From the rulings on questions 145 and 152 to 156.** Each is what a
+ruling leaves undetermined, written into the documents as an
+assumption.
+
+158. **Where the callee's default is held beside `Body.reads`** (PL
+     question 110). By ruling the entry of `Body.reads` of a sandboxed
+     body of a pattern compiled in holds the callee's default, and a
+     reference to a path of its argument that the callee passes on
+     carries it. A handler is one body for all its bindings.
+     *Assumed:* the entry of `Binding.state` whose place is a slot the
+     call bound holds the default; and every reference to a path of
+     its argument that the callee stores carries the default, not only
+     one at a path of the result. The same inside an element body over
+     an array of references, over an array of plain values in place,
+     and over the result of another per-element construct.
+
+159. **An output that is a derived collection on some evaluations
+     only** (PL question 111). By ruling an output that passes a
+     derived collection on unchanged is the same collection for
+     keying, and the plan marks it. *Assumed:* the compiler marks an
+     output where every evaluation yields the assembled result of the
+     one collection, a chain of such outputs included, and for a
+     sandboxed body where its record says the result always passes
+     that input on. An output that is the collection under one
+     selection and another array under the other is not marked, and
+     its elements are keyed by what its positions hold. The case is
+     the result of another per-element construct; the keys differ
+     from the marked case where the upstream source is an array of
+     plain values in place or the upstream body computes values, and
+     not where the positions hold references to cells.
+
+160. **A write through a reference by key that changes the value** (PL
+     question 112). Settled by ruling: the write re-keys the element
+     in the same transaction. The runtime moves what the old key
+     holds to the new key and updates the reference the writer holds,
+     so a row keeps its state and a handler that writes two members
+     in turn succeeds at both. References stored elsewhere under the
+     old key still read as nothing. *Assumed* beside it: what is
+     moved is the state cells, the streams, the operation state and
+     the children of the row, with their labels unchanged; and a
+     write through a reference whose key no position holds is
+     refused. By ruling an edit that is not made through a reference
+     by key re-keys nothing and is a new element (question 190). The
+     prototype re-keys at commit
+     `e4f2fb3431`, when the handler returns or at the next settling
+     for a write from outside a handler; before, one write committed,
+     the row lost its state, and a second write through the same
+     reference was refused with the event. Question 190 has four
+     further points of the re-key, which are ruled since. The
+     case is an array of plain values in place, and the result of
+     another per-element construct where the upstream position holds
+     a stored value; not an array of references. The entry keeps its
+     number.
+161. **How a reference by key is stored, and a key that returns** (PL
+     question 113). *Assumed:* a link whose target is the address of
+     the collection, with the key in the place of a position and the
+     path after it; a client, which cannot read the salt, does not
+     resolve one, and a read through it is pending there until the
+     server's result arrives; and a reference whose key left resolves
+     again when an equal value is added. The same two cases; not an
+     array of references. Open with it, over the result of another
+     per-element construct: what names a collection that is the
+     assembled result of a `map` or a `flatMap` whose body computes
+     its values, where the output is interim and nothing is stored at
+     an address. *Assumed:* the instance and the index of the output,
+     and a read through the reference reads the output as a cone reads
+     another cone's output. The prototype passes such an element on as
+     its value.
+162. **The label of a reference by key** (PL question 114). The key is
+     a salted hash of the value. *Assumed:* the stored reference
+     carries the label of the run that wrote it and nothing for the
+     value; a read through it carries the label of what is stored at
+     the position it resolves to, joined with the label of the
+     collection's array; and a read that resolves to nothing carries
+     the label of the array. The alternative joins the labels of every
+     position's value. The same two cases; not an array of references.
+163. **Which readers hold a reference by key** (PL question 115).
+     Settled by ruling, in both halves. A function body that reads a
+     plain value holds a copy, and writing it elsewhere stores the
+     value, as today; a handle the body is given for the element is a
+     reference by key. And `items.key(i)` is equal to a reference by
+     key to the element at position `i`, with both resolved to the
+     current position and compared there. With them, by ruling:
+     `items.key(i)` is a handle by position at the call and when
+     stored, and nothing rewrites it. The prototype does both halves
+     at commit `e4f2fb3431`: a handler that exchanges members between
+     two arrays stores the values (`showcase/card-piles/main.tsx`, 28
+     of 28 values equal in a seeded run, where 9 differed), and a
+     handle by position is equal to the reference by key of the
+     element that stands there
+     (`dev/gideon-tests/test-handler-capture-key-equals.tsx`, 4 of 4
+     values, where 2 differed). Question 174 has what the comparison
+     gives where the parent cannot be read, and question 189 has two
+     ways in which a body gets an element and holds a reference by
+     key, by ruling. The case of the two halves is an array of
+     plain values in place. Over an array of references both operands
+     resolve to the cell. The entry keeps its number.
+
+**From the rulings on questions 141 and 144 as the prototype implemented
+them, and from the pieces added to its executor.** Each is what its
+notes 325 to 341 found undetermined, written into the documents as an
+assumption, which is the prototype's choice, unless the entry says it
+is settled by ruling. Question 167 is what the ruling on question 166
+leaves undetermined.
+
+164. **Which cone instance fails where a stream is stored at a position
+     the plan does not name** (ES question 88). Not applicable, by the
+     ruling that value code places a stream and that no position is
+     checked ([Decided](#decided)): no evaluation fails for where a
+     stream is. Where one cone instance called `host.stream` and another
+     stores the value, the link is to the stream of the keys of the
+     instance that called. The same in an element body over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct. The prototype's executor
+     at commit `e4f2fb3431` makes the check and keeps the top-level
+     property of the result where it fails (prototype notes 370 and
+     390), which the design does not have. The entry keeps its number.
+
+165. **A stream that a function body returns into the result** (PL
+     question 116). Settled by ruling. A `lift` or a `computed` that
+     returns a value holding the stream of a binding its body made, or
+     of one it was handed, returns a reference and no marker. The stream
+     is treated like any reference a function body returns: the link is
+     stored, and reads through it are dynamic. The corpus has 3 such
+     positions, in rows that one `computed` returns as a whole array of
+     plain values, and 9 at prototype commit `e63b3d305c`, where a body
+     is handed a reference to the stream wherever its computed argument
+     holds a marker (question 179); the rule is the same for a body used
+     in an element body in all three cases. The entry keeps its number.
+
+166. **Where the record of a key of a list is stored** (`elementById`;
+     ES question 89). Settled by ruling: as today, the record is a
+     cell of its own, named by the address of the list and the key. It
+     is not a member of the list until a reference to it is added, and
+     a reader of the list's label does not cover it before that. Open:
+     what the footprint records for the handle. *Assumed:*
+     `footprint-analysis.md` §7 keeps the entry at `*` below the list's
+     handle, as the name of some record of the list, and a write
+     through the handle is no write at a position of the list: it
+     makes no reader of the list stale and is not labeled as a member
+     of the list. The alternative records the write as dynamic, as a
+     write to a cell made under a cause computed from data. The list
+     holds references to the records, so for a per-element construct
+     over it this is the case of an array of references; it does not
+     arise over an array of plain values in place or over the result
+     of another per-element construct.
+
+167. **`elementById` in the reactive tier** (PL question 117). PL §3.19
+     has `h.elementById(k)` with a key that is not a constant as a
+     `pick` with the template of `k` as the choice, and a `pick`
+     chooses a child of its container. By ruling the record is a cell
+     of its own and no child of the list. *Assumed:* the plan keeps the
+     `pick`, and the runtime binds the chosen child to the record that
+     the address of the list and the key name. A read through the
+     handle then has the label of the key and of the record, and
+     nothing of the list's members or of its membership. The
+     alternative gives the plan a slot root for the record of a key.
+     The list holds references to its records, so this is the case of
+     an array of references; not about an array of plain values in
+     place or the result of another per-element construct.
+
+**From the measurement of what today's runtime stores for a record
+in a list, and from the rulings on questions 145 and 152 to 157 as the
+prototype implemented them.** Each is what its notes 344 to 363 found
+undetermined, written into the documents as an assumption.
+
+168. **The document of a record that a function body writes into a
+     list** (PL question 118). Today's runtime gives a record that
+     `set`, `push` or `addUnique` writes into a stored array a
+     document of its own and stores a link, and keeps in place a
+     record of the argument that an instance is created with, or of a
+     default. The documents have the compiled path store the first as
+     today, and the prototype does so. *Assumed:* the document is
+     named as a cell that the body creates with no explicit cause is,
+     so two writes of equal records make two documents, as today; a
+     record written through a handle that names one position gets a
+     document as well; and a record in a constant first value of a
+     state cell, or in a default that is read and not stored, is a
+     plain value in place. The alternative stores every record in
+     place. The question decides which case a stored list is of: an
+     array of references for a list that function bodies fill, and an
+     array of plain values in place for the records of an argument or
+     of a default. It does not arise for the result of another
+     per-element construct.
+169. **Which record holds the default that a stored reference to a
+     path bound by a call carries** (PL question 119). By ruling a
+     reference to a path of its argument that a compiled-in callee
+     passes on carries the callee's declared default, and no record of
+     the plan gives the runtime the schema the callee declares for the
+     path. *Assumed:* value code supplies it: value code of the callee
+     hands the runtime the reference with the default when it stores
+     it, and a read by code of the caller of such a path of the
+     callee's result is written as a read of the caller's slot with
+     the callee's default. The alternative gives `Output`, or the
+     slot, a member for it. The prototype does the first half. The
+     same in an element body in all three cases.
+170. **What `Binding.state.place` holds for a state path bound to the
+     name of `[SELF]`** (PL question 120). Settled by ruling: a new
+     kind of place in the binding record names the result of the
+     instance, written `{ result: true }`, and the runtime hands the
+     handler a reference to the result cell. The prototype does so at
+     commit `e4f2fb3431`. Its crate knows the name by its spelling
+     and not by its scope, and gives a pattern compiled in the result
+     of the enclosing instance for its own `[SELF]`: limits of the
+     prototype. The same for a binding in an element body in
+     all three cases. The entry keeps its number.
+171. **How value code compares two references** (ES question 90).
+     `equals` compares what its operands name once their links are
+     resolved, and a value function cannot read through a reference.
+     *Assumed:* `ConeHost` has a member `equals(a, b)` that takes the
+     two references, and the cone instance depends on the links the
+     resolution crossed. The alternative makes `equals` an operation
+     of the plan with an output of its own. The same over an array of
+     references, where an element resolves to its cell; over an array
+     of plain values in place, where an element is a reference by key
+     and no key is resolved to a position; and over the result of
+     another per-element construct.
+172. **Which record gives the type of a position of a body's argument
+     that no slot names** (ES question 91). Whether an `identity`
+     position holds a handle or a reference stand-in follows from the
+     type the body declares, which for an entry of `Body.reads` is
+     `Slot.schema`. An entry of `Body.computed` has no schema.
+     *Assumed:* the runtime takes the type from the body's declared
+     parameter type at the entry's place, which the artifact holds
+     beside the plan. The alternative gives `ComputedInput` a schema
+     member. Not about a per-element construct.
+173. **A write below a place that holds nothing and is no state cell**
+     (ES question 92). Settled by ruling: as for a state cell. A
+     `push` below a path of the argument at which nothing is stored
+     and whose schema declares a default starts from the default, and
+     the push is applied. The members taken from the default keep the
+     label of a default. Today's runtime has written the default into
+     the argument document by then, which this design is assumed not
+     to do (question 150). At commit `e4f2fb3431` the prototype's
+     executor starts a `push` from the default, and 12 of 12 values
+     of its fixture equal today's. It starts a `set` of one member
+     below an empty path of the argument from an empty record, which
+     is a limit of the prototype. The same for
+     a handle in an element body in all three cases. The entry keeps
+     its number.
+
+**From the rulings of 2026-11-16 and 2026-11-17 on questions 160, 163,
+164, 170 and 173, on the children of a view node, and on a pattern
+call that is an instance of its own; and from the prototype's notes 367
+to 386.** Each is what a ruling leaves undetermined or a note found
+undetermined, written into the documents as an assumption.
+
+174. **A handle by position compared with a reference by key, where
+     the parent cannot be read** (PL question 121). By ruling
+     `items.key(i)` is never rewritten to a reference to the element,
+     and it is equal to a reference by key to the element at position
+     `i`, with both resolved to the current position. Resolving needs
+     a read of the parent. *Assumed:* where the comparing code cannot
+     read the parent, the two are not equal. The alternatives fail
+     the comparison or leave it pending. The owner did not restate
+     that the ruling on the comparison stands beside the ruling on
+     `key(i)`; the documents take it to stand, as a comparison at one
+     moment. The case is an array of plain values in place, and the
+     result of another per-element construct where the upstream
+     position holds a value; over an array of references both
+     resolve to the element's cell, which needs the same read.
+
+175. **A declared key field for an array of plain values generated
+     from scratch** (PL question 122). By ruling keys derive from
+     upstream causes and stay stable, over an array of references and
+     over the result of another per-element construct, and a declared
+     key field would matter only for an array of plain values that
+     one computation produces whole each time. Settled by the ruling
+     on the array type `ArrayByKey<T, "field">`: the author declares
+     the key on the array, and the key of a plain value of it then
+     names that field and holds a salted hash of its value; the
+     declaration can name several fields ([Decided](#decided)).
+     Without the
+     declaration the elements of such an array are keyed by their whole
+     value with the occurrence count. The ruling is about an array of
+     plain values in place, a plain array generated from scratch
+     included. The entry keeps its number.
+
+176. **A stored reference to the result of a pattern call in a
+     per-element body without `asInstance()`** (LS question 41).
+     *Assumed:* a function body that stores such a reference outside
+     the collection is a compile error unless the call has
+     `asInstance()` or `inSpace(...)`
+     (`element-body:result-stored-outside`), reported where the
+     compiler can follow the result to a write outside the
+     collection. The rule was proposed to the owner, who did not
+     object, and is not ruled. The alternative allows the store, and
+     the reference reads as nothing once the element has left. The
+     same over an array of references, over an array of plain values
+     in place, and over the result of another per-element construct.
+177. **`asInstance()` outside a per-element body** (LS question 42).
+     *Assumed:* legal wherever the instantiation it modifies is
+     legal, with the same meaning: the call is an instance of its own
+     and is not compiled in. The alternative refuses it there. Not
+     about one case of a per-element source.
+178. **What the rulings on `asInstance()` leave open for the record
+     and the argument** (PL question 123). Three parts. First, the
+     record. *Assumed:* the plan records the call as a `Child` with a
+     member `asInstance`. Second, a re-key against an instance, which
+     by ruling is answered for two cases and open for one. Over an
+     array of references it does not arise: the key is the identity
+     of the element's cell, tied to the cause of adding the item, and
+     an edit does not change it. Over an array of plain values in
+     place that declares a key field with `ArrayByKey<T, "field">`
+     it is avoided: an edit of another member, and a new array that
+     holds an element with the same value of the field, keep the key
+     and the instance. Open is an array of plain values in place with
+     no declared key, edited through a reference by key. *Assumed:*
+     the instance is re-keyed with the element (question 160), as the
+     rest of what the old key holds is, and a link stored elsewhere
+     to its result under the old key reads what it read before. The
+     owner did not object to this and did not rule it. By a later
+     ruling an instance that such a re-key replaces under the new key
+     stays in the store ([Decided](#decided)). No record maps
+     a key to an instance. The prototype's executor answers with the
+     smaller mechanism (its note 397): it keeps a table from the
+     child and the element keys to the instance, moves the table
+     entry to the new key on a re-key, and leaves the documents under
+     the names they were made with. The row keeps its instance and
+     its argument is written again, as assumed, and a link stored
+     elsewhere to the result keeps reading the later values, where
+     the documents assume that it reads what it read before the write
+     and no later value. The coordinator of this work recommends
+     adopting the executor's behavior. That is a recommendation and
+     no ruling, and the assumption in the documents is unchanged
+     until the owner rules. Over the result of another per-element
+     construct the case is that of the upstream source. Third, the
+     argument of an instance whose key is away. *Assumed:* it holds
+     at a path bound to the element what it last held, the reference
+     over an array of references and the value over an array of
+     plain values in place and over the result of another per-element
+     construct.
+
+179. **Which record says that a position of a body's argument holds
+     the stream of a binding** (PL question 124). By ruling a stream
+     that a function body returns is allowed and not checked, and a
+     marker at a path of the argument of a sandboxed body is handed
+     to the body as a reference to the stream (question 144).
+     `execution-and-storage.md` §2.2 assumes an `identity` entry of
+     `Body.computed` at the path. The prototype's crate records
+     nothing for a stream bound to a formal of a body, and its
+     executor hands the body a handle wherever a marker is in the
+     computed argument. *Assumed:* the compiler owes the `identity`
+     entry of `Body.computed`, and a marker at a path that no entry
+     names is not handed on. The same for a body used in an element
+     body over an array of references, over an array of plain values
+     in place, and over the result of another per-element construct.
+180. **Which collection a reference by key to a member of a `flatMap`
+     result names** (PL question 125). PL §1.3 names the assembled
+     result for an element of a `map` or `flatMap` result whose body
+     computed a value. For a member that is a plain value in place of
+     a stored array that the callback passed on, the prototype names
+     that stored array and the member's key in it. The two differ in
+     what a move of a member between two segments is. *Assumed:* the
+     stored array, as the prototype does, since a write through the
+     reference has to land there. The case is a segment of plain
+     values in place that the callback passes on, over a source of
+     any of the three cases; a member that is a reference is the link
+     to its cell.
+181. **Which template labels a write to the record of a key** (PL
+     question 126; with question 166). By ruling the record that
+     `elementById` yields a handle of is a cell of its own and no
+     member of the list. The plan has a write edge and an envelope
+     with target `handle` at `*` below the list, and that edge is the
+     only one whose template could label the write. *Assumed:* the
+     template of that edge labels the write to the record, and the
+     write is no write at `*` of the list for a reader of the list.
+     The list holds references to its records, so this is the case of
+     an array of references.
+182. **An array assembled from entries that is spread into another** (PL
+     question 127). Not applicable, by the ruling that no record names
+     where a stream is stored: each stored position of such an array
+     holds what value code placed there, and nothing states a kind of
+     position. The case is an array value outside the children of a view
+     node, over collections of any of the three cases. The entry keeps
+     its number.
+183. **Whether a runtime instantiates from `Child.callee` or from the
+     factory value** (PL question 128). PL §1.1 has the hash of the
+     compiled pattern in `Child.callee` for a callee the compiler
+     knows. The prototype's value code carries the identity of each
+     `pattern(...)` in the factory value, and its executor finds the
+     callee's artifact by that identity; its `Child` has no `callee`.
+     *Assumed:* `Child.callee` is what the runtime instantiates from
+     where the compiler knows the callee, and the identity in the
+     factory value is used for a factory value received as data. Not
+     about a per-element construct.
+
+**From the rulings of 2026-11-17 on a declared key.** The ruling
+that a plain value can have a declared key, which is declared with
+`ArrayByKey<T, "field">`, settles question 175 and two of the three
+cases of the re-key in question 178. These three points it does not
+rule.
+
+184. **A write to the key field itself of a plain value in place**
+     (PL question 129). The key of a plain value in an array that
+     declares a key field is formed from the value of that field, so
+     a write
+     to the field, or to any one of several key fields, through a
+     reference by key changes the key. *Assumed:* it is the
+     re-key that is ruled for a write that changes the value of a
+     plain value with no declared key (question 160): what the old
+     key holds moves to the new key in the same transaction, and the
+     writer's reference is updated. The alternative refuses the
+     write. The case is an array of plain values in place; nothing of
+     it arises over an array of references, and over the result of
+     another per-element construct it is the case of the upstream
+     source.
+185. **The document of a plain value of a keyed array that a
+     function body pushes elsewhere** (ES question 93). A handler
+     that reads an element of an array that declares a key field and
+     pushes it to another list without `asInstance()`, as
+     `saved.push(repo)` does, stores a copy as a document of its own.
+     By ruling the key belongs to the array, and an element put into
+     a second array has that array's key, or none; the second list
+     here holds a link and is keyed by the cell. Whether the
+     identity of the copy's document derives from the key is not
+     ruled, and the owner gave no assumption. *Assumed* by the
+     documents: it does not; the
+     document is named as any record that a body writes into a list
+     is (question 168), so two pushes of one
+     element make two documents. The alternative derives the
+     identifier from the destination and the key, so that a second
+     push names the same document. The case is a body that reads an
+     array of plain values in place, or the result of another
+     per-element construct where the upstream position holds such a
+     value; over an array of references the body pushes the link and
+     no document is made.
+186. **`ArrayByKey` on an array of references** (LS question 43). By
+     ruling an array of references does not need the declaration.
+     Whether the declaration written on one is ignored or is an error
+     is not ruled, and the owner gave no assumption. *Assumed* by the
+     documents: it is accepted and ignored, because whether a
+     position holds a link or a plain value is a fact of the stored
+     array that the checker does not always know; a position that
+     holds a link is keyed by its cell. The alternative reports an
+     error or a hint where the compiler can tell that the elements
+     are cells. The question is about an array of references alone.
+
+**From the prototype's notes 387 to 402, on the rulings of 2026-11-16
+and 2026-11-17 as it implemented them.** Each is what a note found
+that a ruling does not name, written into the documents as an
+assumption.
+
+187. **A spread child, and an array literal with a spread, among the
+     children of a view node** (PL question 130; note 387). Settled by
+     ruling: a spread child, `{...xs}`, and an array literal among the
+     children that itself has a spread or a hole, are each one child at
+     the position they are written at, and the literal is stored as one
+     nested array value ([Decided](#decided)). Every child written after
+     either has a static position. The prototype's crate makes it so.
+     The same whether `xs` is a collection over an array of references,
+     over an array of plain values in place, or the result of another
+     per-element construct; where `xs` is another expression of array
+     type, as an input, the child holds the reference, as today's run
+     stores it. The entry keeps its number.
+188. **A handler bound in the body of an inner `map` that the callback
+     of a `flatMap` returns** (PL question 131; note 389). Not
+     applicable, by the ruling that value code places a stream and that
+     no record names where it is stored ([Decided](#decided)). The
+     binding has two `element` steps, the stored result of the `flatMap`
+     has one level of positions, and each position holds the link that
+     value code placed. The prototype's crate lists `*/*` for such a
+     binding, in a list that the design does not have. The case is the
+     result of another per-element construct, the `flatMap`, over a
+     source of any of the three cases, with a segment that is the result
+     of a `map` or a `filter` over an array of references or over an
+     array of plain values in place. The entry keeps its number.
+189. **What a function body is given for an element where it is given no
+     handle** (PL question 132; notes 391 and 392). Settled by ruling,
+     in both cases ([Decided](#decided)). A handler bound in an element
+     body whose state declares a data type for its element, as
+     `stop: Stop`, is given a reference by key, and a member read from
+     it carries the reference with the member's path, so
+     `center.set(stop.position)` stores a reference by key. A member
+     handle read through a handle of handles, as
+     `Writable<Writable<Item>[]>`, is a reference by key. The
+     prototype's executor does both. Both cases are an array of plain
+     values in place, and the result of another per-element construct
+     where the upstream position holds a value; over an array of
+     references the state path and the member handle resolve to the
+     element's cell. The entry keeps its number.
+190. **What a re-key does beside moving what the old key holds** (PL
+     question 133; note 393). Settled by ruling, in four points
+     ([Decided](#decided)): an instance that a `lift` or a `computed` of
+     the body made moves as a child, and nothing moves for a binding
+     that a function body made; what is moved replaces what is stored
+     under the new key; nothing moves for the other elements whose
+     occurrence count changed; and a write that is not made through a
+     reference by key re-keys nothing. The prototype's executor does the
+     last three, and at commit `7774ba208c` moves an instance that a
+     function body made as well. What becomes of an instance that the
+     moved one replaces is ruled for an `asInstance()` instance and is
+     question 204 for one that a function body made. The case is an
+     array of plain values in place with no
+     declared key field, and a body over the result of another
+     per-element construct applied to it; nothing of it arises over an
+     array of references. The entry keeps its number.
+191. **Whether a key says how it was formed** (PL question 134; notes
+     399 and 411). Settled by ruling: the key of a plain value that has
+     declared key fields names the fields and, by a later ruling, holds
+     one salted hash of their values (question 197), a
+     key formed from the whole value names no field, and a reference by
+     key is resolved from the key alone, with no schema
+     ([Decided](#decided)). The ruling that the key does not say how it
+     was formed, and that the resolver takes the key field from the
+     schema, is withdrawn. The prototype's executor at commit
+     `a462df710a` follows the withdrawn ruling: it forms the key with no
+     field name, resolves it through the schema that the array is stored
+     under, and keeps a record of that schema; it has to change. Its
+     note 411 found that the withdrawn ruling does not determine which
+     schema decides the key field, the one the array is stored under or
+     the one the reader declares, or what a link by key to a member
+     below the element holds so that its resolver finds the field. The
+     ruling answers both: no schema decides, and the link needs nothing
+     beside the key. The case is an array of plain values in place, a
+     plain array generated from scratch included, and the result of
+     another per-element construct where the upstream position holds a
+     value; an array of references is keyed by its cells. The entry
+     keeps its number.
+
+**From the ruling of 2026-11-17 that drops the listed result paths.**
+The ruling settles question 188 and makes questions 125, 130, 164 and
+182 not applicable. These two points it does not rule.
+
+192. **The label of a position that holds a stream** (PL question 135).
+     No record names where a stream is stored. No label rule of PL §3
+     reads where one is: a position of the result has the template of
+     the nearest entry of `Plan.outputs` at or above it, a stream that a
+     function body returns has the template of the body's output, a
+     marker stored by a side-write or in a child's argument has the
+     label of that write, and the label of which stream exists is with
+     the row of the stream index. *Assumed:* those rules stand
+     unchanged, and the expression that places the stream of a binding
+     of the reactive tier has the template `const`, as a reference
+     passed on. The alternative gives the position a template of its
+     own. The same below a collection over an array of references, over
+     an array of plain values in place, and over the result of another
+     per-element construct, where the position has the template of the
+     element.
+193. **Whether anything decides that a binding has to exist from where
+     its stream is stored** (PL question 136). *Assumed:* nothing does.
+     A stream of a binding exists by the binding's record and its
+     `within`, one per combination of element keys, and its row of the
+     stream index is written when its identifier is first computed,
+     whether or not a kept path holds a link to it. The alternative
+     leaves out a binding whose stream no kept output and no stored
+     value can hold, which needs an analysis of where value code can
+     place the marker. The same for a binding of an element body over an
+     array of references, over an array of plain values in place, and
+     over the result of another per-element construct.
+
+**From the rulings of 2026-11-17 on a key that names its fields and on
+several key fields.** The rulings settle question 191 again and answer
+the prototype's note 411. They left these five points, each proposed
+by the coordinator of this work and written into the documents as an
+assumption. Questions 194 and 197 are ruled since, and the rulings
+that followed are under the next heading.
+
+194. **The order of the fields of a key with several fields** (PL
+     question 137). Settled by ruling: the fields are ordered by name
+     when the key is formed, so the order in which the author writes
+     the union changes no key ([Decided](#decided)). The ruling is
+     about plain values: an array of plain values in place, a plain
+     array generated from scratch included, and the result of another
+     per-element construct where the upstream position holds a value.
+     An array of references is keyed by its cells and is not affected.
+     The entry keeps its number.
+195. **Which properties can be key fields** (PL question 138). Each
+     field is a required property of the element type at the top
+     level, of type `string` or `number`, and the compiler refuses
+     anything else (`array-by-key:declaration`). The owner deferred
+     one extension, with priority 2: a key field that holds a
+     reference, whose identity goes into the hash in the place of a
+     value ("in principle references to other keyed things could work
+     as well"). It is not part of the design until it is taken up. The
+     other alternatives, which are not ruled, allow another scalar
+     type, an optional property, or a path to a nested member. The
+     question is about plain values: an array of plain values in
+     place, a plain array generated from scratch included, and the
+     result of another per-element construct where the upstream
+     position holds a value. An array of references is keyed by its
+     cells and is not affected.
+196. **The schema keyword of the key fields** (PL question 139). By
+     ruling the keyword is on the schema of the array, and not on the
+     schema of the items. Its name is not ruled. *Assumed:* the
+     keyword is `keyFields`, an array of the names in the order of
+     the names, also where the declaration names one field, with a
+     copy in `Collection.keyFields` of the plan record. It is read
+     where a key is formed and by no resolver. The alternative is a
+     keyword `keyField` that holds one name or an array of names.
+     Prior art that the coordinator named from memory, not verified:
+     the Kubernetes OpenAPI extension `x-kubernetes-list-map-keys`
+     beside `x-kubernetes-list-type: map`, `primaryKey` of the
+     Frictionless Table Schema, `key` of a YANG `list`, and `xs:key`
+     of XML Schema. The question is about plain values: an array of
+     plain values in place, a plain array generated from scratch
+     included, and the result of another per-element construct where
+     the upstream position holds a value. An array of references is
+     keyed by its cells and is not affected.
+197. **What the element part of a key that names its fields holds**
+     (PL question 140). Settled by ruling: the element part holds the
+     list of the field names and one salted hash of the combined
+     values of those fields, and does not
+     hold the values ([Decided](#decided)). The documents' earlier
+     assumption, the plain values written as
+     `name=labs,owner=commonfabric`, governs nothing. The form of the
+     element part is question 199. The ruling is about plain values:
+     an array of plain values in place, a plain array generated from
+     scratch included, and the result of another per-element
+     construct where the upstream position holds a value. An array of
+     references is keyed by its cells and is not affected. The entry
+     keeps its number.
+198. **An array whose type declares one key, passed where another key
+     is declared** (PL question 141). By ruling a key is resolved
+     whatever key the reader's type declares, and keys are formed with
+     the key fields that the collection or the read declares, so two
+     readers whose types declare different keys form two keys for one
+     element. *Assumed:* an array whose type declares one key, passed
+     to a parameter whose type declares another key, is a compile
+     error where the compiler sees both types
+     (`array-by-key:mismatch`), and a parameter whose type declares no
+     key accepts it (question 200). The owner said yes to the
+     proposal, and it is not ruled. The alternative reports nothing.
+     The question is about plain values: an array of plain values in
+     place, a plain array generated from scratch included, and the
+     result of another per-element construct where the upstream
+     position holds a value. An array of references is keyed by its
+     cells and is not affected.
+
+**From the rulings of 2026-11-17 on the form of a key and where it is
+declared.** The rulings settle questions 194 and 197 and replace the
+syntax of the declaration: the key is declared on the array, with
+`ArrayByKey<T, "field">`. These three points they do not rule. The
+owner said yes to the coordinator's proposal for each, and each was
+written into the documents as an assumption. Questions 199 and 200
+are ruled since, and the rulings that followed are under the next
+heading.
+
+199. **The written form of the element part of a key that names its
+     fields** (PL question 142). Settled by ruling: the element part
+     has no written form that the documents define with separators
+     or an escaping of their own. It is a fabric value, and the
+     helpers of `base/data-model` hash it and write it
+     ([Decided](#decided)). The documents' assumption, the names
+     joined with `,`, then `:`, then a digest with no algorithm tag,
+     with a `\` before a `\`, `,` or `:` of a name, governs nothing.
+     The structure is the names of the key fields in the order of the
+     names, and one salted hash of the array of the values of those
+     fields in the same order, as `["labs", "commonfabric"]` and
+     `[7]`; the hasher puts a byte for the type in front of each
+     part, so the number 7 and the string `7` have two keys. The
+     record forms are question 202. The ruling is about plain values
+     where it concerns this element part: an array of plain values in
+     place, a plain array generated from scratch included, and the
+     result of another per-element construct where the upstream
+     position holds a value. An array of references is keyed by its
+     cells and is not affected. The entry keeps its number.
+200. **A reader whose type is a plain array type, given an array with
+     a declared key** (PL question 143). By ruling
+     `ArrayByKey<Repo, "id">` is a `Repo[]`, so a parameter typed
+     `Repo[]` accepts it. Settled by ruling: the reader learns the
+     key fields from the schema that is traversed while the link to
+     the array is resolved, which is the keyword `keyFields` on the
+     schema of the array met on that traversal, and forms keys with
+     them, so the key is carried forward. No separate record of the
+     stored schema is kept ([Decided](#decided)). The documents'
+     assumption that the link holds the schema that the array is
+     stored under is replaced by the ruling. A collection of the plan
+     that declares the key has `Collection.keyFields`, and the result
+     of another per-element construct has the upstream key. Resolving
+     a key reads no schema. The ruling is about an array of plain
+     values in place that the reader reaches through a link, a plain
+     array generated from scratch that an instance stored included.
+     Over an array of references nothing of it arises. What the
+     reader does where no schema with the keyword is met is question
+     203. The entry keeps its number.
+201. **The diagnostics of `ArrayByKey`** (LS question 44). *Assumed:*
+     a declaration whose second argument does not name required
+     top-level properties of type `string` or `number` is an error
+     named `array-by-key:declaration`, and the error of question 198
+     is named `array-by-key:mismatch`. The two keep the meaning that
+     the documents gave them under the earlier syntax, and the names
+     follow the type name. The alternative for the first is a type
+     error of the checker with no name of its own. Both concern plain
+     values: an array of plain values in place, a plain array
+     generated from scratch included, and the result of another
+     per-element construct where the upstream position holds a value.
+     On an array of references the declaration has no effect
+     (question 186).
+
+**From the later rulings of 2026-11-17 and the prototype's notes 419
+to 426.** Four rulings settle questions 199 and 200 and what notes
+420 and 426 asked: on written forms, on the schema that a reader
+learns the key fields from, on an `asInstance()` instance that a
+re-key replaces, and on a reference by key to an element of a plain
+array generated from scratch ([Decided](#decided)). Questions 202 to
+205 are what they and the notes leave undetermined, each written
+into the documents as an assumption. Entry 206 is ruled and records
+the owner's reservation.
+
+202. **The record forms of a key and of a name** (PL question 144).
+     By ruling the documents state the structure of each thing that
+     has a written form, and the helpers of `base/data-model` hash
+     and write it. The ruling gives the structure of a key with
+     declared fields and leaves the record forms to the documents.
+     *Assumed:* a key is a record with the members `element` and
+     `occurrence`; the element part of a key that names fields is a
+     record with the members `fields` and `hash`, that of a key
+     formed from a whole value is the hash alone, and that of a
+     position that holds a link is the record of the address; the
+     key of a `flatMap` member is a record with the members `source`
+     and `member`; the salted hash of a value is `hashOf` of the
+     record with the members `salt` and `value`; a key that stands
+     in a stored path is the text that `jsonFromFabricValue` returns
+     for it; and a name of several parts in a plan record is a
+     record, as `{ name: "save", ordinal: 1 }` for a name with its
+     ordinal, in the place of the strings `save#1` and `make#1/n0`
+     that the documents had. The alternatives use arrays in the place
+     of records, give the salt to the hasher in another way, or hold
+     a name as the text of the codec. The parts on a key are about
+     each case: the address record for an array of references, the
+     hash and the record with `fields` for an array of plain values
+     in place, a plain array generated from scratch included, and
+     the upstream key unchanged for the result of another
+     per-element construct. The part on a name is not about a
+     per-element construct. The prototype at commit `a4b4612b3b` writes
+     a key with `jsonFromFabricValue` and has other record forms: a key
+     is `{ hash, count }`, `{ fields, hash, count }` or
+     `{ cell, count }`, with no member for the element part, and the
+     key of a `flatMap` member is `{ of, member }`. Its names in a plan
+     record are strings still, and it forms the salted hash from an
+     array, where by ruling the hash is of the record with `salt` and
+     `value` (question 210).
+     At commit `682b918ed1` the prototype has the record forms that
+     are assumed here: the key, the element part, the key of a
+     `flatMap` member, the salted hash, and the names in a plan
+     record. Two things differ: the address record of a position that
+     holds a link has no member `scope` (question 211), and a cell
+     that a body creates under a constant cause is named
+     `{ body, site }`, where the documents have the body and the
+     cause. The members of the address record, `space`, `document`,
+     `scope` and `path`, and of the record of a reference by key,
+     `collection`, `key` and `path`, are *assumed* with the rest. By
+     the assumption of question 214 a key in a stored path is the
+     record and no text, which replaces that part of the assumption
+     above.
+203. **A reader whose type declares no key, where no schema with the
+     keyword is met** (PL question 145). By ruling such a reader
+     learns the key fields from the schema that is traversed while
+     the link to the array is resolved. The coordinator of this work
+     named the case that the ruling leaves: a link that holds no
+     schema, or one written by a party whose type declares no key.
+     *Assumed:* the reader then forms keys from the whole value.
+     References by key still resolve, since a key names its fields.
+     The alternatives fail the read, or keep the record of the
+     stored schema that the ruling says is not kept. The case is an
+     array of plain values in place that the reader reaches through
+     a link, a plain array generated from scratch that an instance
+     stored included; the result of another per-element construct
+     has the upstream key, and over an array of references nothing
+     of it arises. The prototype's executor does as assumed, in two
+     tests of its store over an array of plain values in place.
+     Question 207 has the readers that resolve no link: a pattern that
+     is compiled in and, as assumed, an instance of its own that is
+     given the result of another per-element construct whole.
+204. **An instance that a function body made, replaced on a re-key**
+     (PL question 146; note 426). By ruling an `asInstance()`
+     instance that a re-key replaces under the new key stays in the
+     store, and a link stored elsewhere keeps reading it. The ruling
+     does not cover a replaced instance that a `lift` or a `computed`
+     of the element body made. *Assumed:* it is removed with its
+     documents, and with the instances and bindings that its own
+     function bodies made, as the prototype's executor does at
+     commit `7774ba208c`; a link to one of its documents that is
+     stored elsewhere reads as nothing. The alternative leaves it in
+     the store, by the rule that a removal deletes nothing. The case
+     is an array of plain values in place with no declared key, and
+     a body over the result of another per-element construct applied
+     to it; nothing of it arises over an array of references.
+205. **An array whose type declares no key, given where a key is
+     declared** (PL question 147; note 424). The assumed error
+     `array-by-key:mismatch` is for two declared keys that differ
+     (question 198), and a reader whose type declares no key accepts
+     an array with a declared key (question 200). *Assumed:* an
+     array whose type declares no key is accepted where a key is
+     declared, as the prototype's crate has it, and the reader forms
+     keys with the fields that its own type declares. Two readers of
+     one program can then form two keys for one stored array; both
+     resolve to the element, and what each reader keeps under its
+     key is its own. The alternative refuses it as a mismatch. The
+     case is an array of plain values in place and a plain array
+     generated from scratch; the result of another per-element
+     construct has the element type of its source with the key of
+     the source, which is the case of question 198, and on an array
+     of references the declaration has no effect.
+206. **A reference by key to an element of a plain array generated
+     from scratch** (PL question 148; note 420). Settled by ruling:
+     an element of an array that a `lift` or a `computed` returns
+     whole, stored as an output, has a reference by key with the
+     output's address as its collection, by the same rule as an
+     element of an array of plain values in place
+     ([Decided](#decided)). The two sub-cases. With a declared key
+     the reference stays with the element while the values of its
+     key fields stay, across each new array that the computation
+     returns. Without a declared key the key is the whole value, so
+     the reference reads as nothing once the element changes, and no
+     write repairs it, since a computed output refuses writes. The
+     owner's reservation stands with the ruling: "if all that
+     hashing gets too complex for little gain, copies are fine". The
+     prototype's executor gives such an element no place: a handler
+     of a body over the array is given the value and stores a copy,
+     with a declared key and without one. That was the executor of
+     commit `7774ba208c`. At commit `a4b4612b3b` the executor builds
+     the reference, and the prototype reports what it cost (its note
+     443): about 90 lines in the executor and the store, and about 110
+     lines of tests with one fixture. The executor keeps three things
+     that it did not: one document per output and combination of the
+     element keys around it, stored again whenever the array differs;
+     for an output outside every element body, a function per document
+     that brings the output up to date when a read enters the document,
+     since the executor evaluates on demand and a link stored elsewhere
+     is no dependency on the output; and the set of the documents whose
+     function is running. Each element is hashed once per element table
+     and once more per resolution of a reference by key. In the corpus
+     the executor stores 12 documents more, in ten modules. The owner
+     has not said whether that is within the reservation. What is built
+     has limits, which question 209 states. The ruling is about a
+     plain array generated from scratch alone: an array of plain
+     values that is stored in place has its reference by key by the
+     earlier ruling, an element of the result of another per-element
+     construct has the upstream key, and an element of an array of
+     references is the link to its cell. The entry keeps its number.
+
+**From the prototype's notes 432 to 443.** The prototype at commit
+`a4b4612b3b` implements the rulings of 2026-11-17 on a key. Questions
+207 to 210 are what its notes found those rulings and the documents to
+leave undetermined. Four more rulings of 2026-11-17 settle them: the
+owner adopted the recommendation of the coordinator of this work on each
+([Decided](#decided)). Each entry says what is ruled and what of it
+stays an assumption. All four are about plain values; an array of
+references is keyed by its cells and is not affected.
+
+207. **A reader whose type declares no key, given a plain array
+     generated from scratch whole** (PL question 149; notes 434 and
+     435). By ruling such a reader learns the key fields from the schema
+     that is traversed while the link to the array is resolved (question
+     200). Settled by ruling, for a reader that is an instance of its
+     own, as `Rows.asInstance()({ repos })` where `repos` is what a
+     `lift` or a `computed` returns whole: the array is given as a link
+     to the stored output, which by ruling has an address (entry 206).
+     The link holds the schema of the array, so the keyword `keyFields`
+     is met while the link is resolved and the key fields are carried
+     forward. The argument of the instance does not hold the values
+     ([Decided](#decided)). The documents' assumption that the argument
+     holds the values, so that the reader forms keys from the whole
+     value, is replaced by the ruling. The prototype's executor at
+     commit `a4b4612b3b` does as that assumption had it, and does not
+     follow the ruling. At commit `682b918ed1` it follows the ruling.
+     Two parts are not ruled, and a third follows
+     from the ruling. *Assumed,* for a pattern that is compiled in: it
+     reads the caller's places and
+     resolves no link, so the compiler decides, and writes
+     `Collection.keyFields` with the key fields that the type of the
+     place declares, or that the type of the argument expression
+     declares where the caller gives a computed value. The prototype's
+     crate does so where the value is a property of an object literal at
+     the call or an attribute of a tag, and not for a record held in a
+     variable, a spread, or a value that passes through a second pattern
+     compiled in. At commit `682b918ed1` it does so for those as well.
+     *Assumed,* for the result of another per-element
+     construct that is given whole to an instance of its own: the
+     argument holds the assembled values, and
+     a position that holds a link is keyed by its cell. The prototype's
+     executor at commit `682b918ed1` does so, and question 212 has the
+     recommendation against it. *Assumed,* for
+     the link of the ruling: no plan holds a schema of an output, so
+     the record of the output holds the key fields that the type of
+     its value declares, in a member `Output.keyFields`, and the
+     runtime forms the schema of the link from them, an array schema
+     with the keyword; an output that declares no key gives a link
+     with no schema. The prototype at commit `682b918ed1` does so. The
+     alternative gives an output a schema among the schemas of the
+     plan. The ruling is about a plain
+     array generated from scratch. An array of plain values in place
+     that is given whole is given as a link with the schema that the
+     caller reads it under, and the reader forms keys of the declared
+     fields, in the prototype as well. Over an array of references
+     nothing of it arises. The entry keeps its number.
+208. **The key that the type of the result of a per-element construct
+     declares** (PL question 150; note 433). The assumed error
+     `array-by-key:mismatch` compares the keys that two types declare
+     (question 198). The question is about the result of another
+     per-element construct over an array with a declared key, given
+     where a key is declared. Over an array of references the
+     declaration has no effect. Settled by ruling, for a `map`: the type
+     of the result of a `map` keeps the key fields of its receiver, as
+     the type of the result of a `filter` does, since the elements of
+     both results have the upstream keys. So `array-by-key:mismatch` is
+     reported for a `map` result that is given where another key is
+     declared ([Decided](#decided)). The documents' assumption that the
+     type of a `map` result declares no key is replaced by the ruling.
+     The prototype's crate at commit `a4b4612b3b` gives the type of a
+     `map` result no key, and does not follow the ruling. At commit
+     `682b918ed1` it follows the ruling. Two parts are
+     not ruled. *Assumed,* for a `flatMap`: the type of its result
+     declares no key, so nothing is reported for it. The key of an
+     element of its result is a record of the key of the source element
+     and the key of the member, the declared fields describe the first
+     part alone, and the member is keyed by its cell or its whole value
+     with no declared field, so no list of fields names that key. The
+     owner has not seen that reasoning. *Assumed,* for a `map` whose
+     callback computes a value of another element type: the type of
+     the result declares no key fields, which is question 213. The
+     entry keeps its number.
+209. **Which arrays that an instance computes give their elements a
+     place** (PL question 151; note 443). By ruling an element of a
+     plain array generated from scratch, which a `lift` or a `computed`
+     returns whole and the instance stores as an output, has a reference
+     by key (entry 206). The prototype built it for an output at the
+     empty path whose cone has a function body. Settled by ruling,
+     first: that ruling holds for such an output inside an element body
+     as for one outside every element body, and a link to one of its
+     elements that is stored elsewhere reads the current value
+     ([Decided](#decided)). The prototype's executor at commit
+     `a4b4612b3b` brings an output up to date on such a read outside
+     every element body alone, so inside one the link can read a stale
+     document. That is a defect of the prototype, which commit
+     `682b918ed1` corrects: a read that enters the document of such
+     an output brings the output up to date. Second, a known limit
+     and no ruling that it stays: an array at a path below a value that
+     a function body returns, as `facts.main`, and an array that the
+     reactive tier writes give their elements no place for now, and a
+     body over one is given the value and stores a copy. The prototype's
+     executor does so. The owner has not ruled that such an array never
+     gives its elements a place. Third, and no question: the refusal of
+     a write through such a reference is tested on a direct write to the
+     store alone. At commit `682b918ed1` a handler that writes through a
+     stored reference fails and commits nothing, in one test. The entry
+     is about a plain array generated from
+     scratch, with or without a declared key, and the element body that
+     holds such an output can be over any of the three cases. An array
+     of plain values that is stored in place, the result of another
+     per-element construct, and an array of references are not affected.
+     The entry keeps its number.
+210. **How the salt and the value are combined in a salted hash** (PL
+     question 152; note 437). Settled by ruling: the salted hash of a
+     value is `hashOf` of the record with the members `salt` and
+     `value`, as the documents have it, and the prototype is to follow
+     ([Decided](#decided)). The prototype's executor at commit
+     `a4b4612b3b` hashes the array of the secret and the value, and for
+     a key with declared fields the array of the secret and the array of
+     the values of the fields, and does not follow the ruling. At commit
+     `682b918ed1` it forms the hash from the record. No key of
+     one form equals a key of the other. The other record forms stay
+     assumed (question 202). The ruling is about the element part of a
+     plain value: an array of plain values in place, a plain array
+     generated from scratch included, and the result of another
+     per-element construct where the upstream position holds a value.
+     The element part of an array of references holds no hash. The entry
+     keeps its number.
+
+**From the prototype's notes 446 to 458.** The prototype at commit
+`682b918ed1` implements the four rulings on questions 207 to 210 and
+has the record forms of the documents for a key, an identifier and a
+name. Questions 211 to 216 are what its notes found the documents to
+leave undetermined, or to state in two ways. Each is written into the
+documents as an assumption. Where the coordinator of this work has a
+recommendation, the entry gives it; it is a recommendation and no
+ruling.
+
+211. **Whether the scope of a link is a part of the element part of a
+     key** (PL question 153; note 448). The question is about an array
+     of references, where a position that holds a link is keyed by the
+     address that the link resolves to. The ruling on that identity
+     lists the space, the document, the scope and the path
+     ([Decided](#decided)), and `cellIdentityKey`
+     (`runtime/runner/src/builtins/scope-policy.ts`) forms today's key
+     from the same four. `plan-and-label-templates.md` §1.3 and
+     `execution-and-storage.md` §5.3 both state the assumption below.
+     *Assumed:* the address record has the members `space`, `document`,
+     `scope` and `path`, and `scope` is absent where the link names
+     none. Two links to one document and path under two scopes are
+     then two elements, and the scope of such a link enters the
+     identifiers of what the element body holds, where no identifier
+     of today has a scope in its preimage. The alternative leaves the
+     scope out, and the two links have one element part with two
+     occurrence counts. *Recommended* by the coordinator, and not
+     ruled: the alternative, unless the documents give a reason for
+     the scope. The ruling's list of parts is such a reason, so the
+     documents keep the scope until the owner says which was meant.
+     The prototype's executor has no scope, and its record holds
+     `space`, `document` and `path`. An array of plain values in
+     place, a plain array generated from scratch included, is not
+     affected. An element of the result of another per-element
+     construct has the upstream key, which is this record where the
+     upstream position holds a link.
+212. **The result of another per-element construct, given whole to an
+     instance of its own** (PL question 154; note 452). By ruling a
+     plain array generated from scratch that is given whole to an
+     instance of its own is given as a link to the stored output
+     (question 207). The ruling does not cover the result of a `map`,
+     a `filter` or a `flatMap` that is given whole. *Assumed:* the
+     argument holds the assembled values, and the instance keys a
+     position that holds a value by the whole value, so a declared key
+     of the upstream array is not carried forward. The prototype's
+     executor does so, over a `filter` of an array of plain values in
+     place and over a `filter` of a plain array generated from
+     scratch, both with the declared key `id`: a row of the instance
+     loses its state cell when a member that is no key field changes.
+     *Recommended* by the coordinator, and not ruled: the result is
+     given as a link to the assembled collection with the key fields,
+     as the ruling has it for a plain array generated from scratch.
+     What the documents have for it: the assembled result is an output
+     of the plan, which has an address where it is kept, its path in
+     the result document. Where it is interim nothing is stored at an
+     address (question 113 of `plan-and-label-templates.md`), and it
+     would be stored in a document of its own, as question 215 assumes
+     for a plain array generated from scratch. The key fields are
+     those of `Output.keyFields`, where the type of the result
+     declares them (question 213). The instance forms keys of its own
+     from the stored values; the element part equals that of the
+     upstream key, and the occurrence count can differ where the
+     construct dropped an earlier element with the same values of the
+     key fields. So the recommendation can be built for a `filter`
+     result and for a `map` result whose elements keep the key fields.
+     The result of a `map` whose callback computes a value of another
+     type, and the result of a `flatMap`, declare no key fields, and
+     the instance keys their plain values whole under either answer.
+     The question is about the result of another per-element construct
+     where the upstream position holds a plain value, in an array of
+     plain values in place or in a plain array generated from scratch.
+     The result of a `filter` over an array of references holds the
+     links, and the instance keys each position by its cell under
+     either answer.
+     *Growth, from the read-only audit:* under the assumption the
+     argument document holds a second copy of the `N` values, a change
+     of one element writes all `N` again, and the upstream keys are
+     formed again by a hash of each whole value. Where each of `N` rows
+     is an instance that takes the list whole, that is `N` times `N`
+     stored values and `N` document writes for one change: 1,000 rows
+     hold 1,000,000 values. With a link, as recommended, the argument is
+     one link. It depends on the choice this question leaves open, and
+     the choice changes a representation and which key a position has,
+     so the state a row keeps. *Measurement:* `N` rows that are each
+     given the result of a `filter` whole, over an array of plain values
+     in place and over a plain array generated from scratch; one element
+     changed; the values stored in argument documents and the documents
+     written. *Today:* an argument is a link to a cell (the audit's
+     statement).
+213. **The key fields of the result of a `map` whose callback computes
+     a value of another type** (PL question 155; note 453). By ruling
+     the type of a `map` result keeps the key fields of its receiver
+     (question 208). The callback can compute a value whose type has
+     none of them, as `saved.map((repo) => ({ label: repo.name }))`
+     over `ArrayByKey<Repo, "id">`. The elements of the result have
+     the upstream keys in every case. *Assumed,* as the coordinator
+     recommends, and not ruled: the type of the result declares the
+     key fields of the receiver only where the element type of the
+     result has each of them as a property that can be a key field.
+     Otherwise the result is a collection with keys and with no
+     declared key fields: its keys are the upstream keys, a reader
+     cannot form them again from the values, `array-by-key:mismatch`
+     is not reported for it wherever it is given, and
+     `Output.keyFields` of its output is absent. The alternative is
+     what the prototype's crate does: every `map` result keeps the key
+     fields of its receiver, so the example is reported where
+     `ArrayByKey<Label, "label">` is declared, and the record of its
+     output has `keyFields: ["id"]` though no element has an `id`. The
+     question is about the result of a `map` over an array of plain
+     values in place, a plain array generated from scratch included,
+     and over the result of another per-element construct of such an
+     array. Over an array of references the declaration has no effect.
+     A `filter` passes its elements on unchanged, and the type of a
+     `flatMap` result declares no key (question 208).
+214. **A key in the path of a stored reference by key** (PL question
+     156; note 454). A reference by key is stored as a link whose path
+     holds the key in the place of a position. *Assumed,* as the
+     coordinator recommends, and not ruled: the path of such a link is
+     an array of segments, a segment is a string or a key record, and
+     the key stands in the path as the record. A reader tells a key
+     from a property name by the type of the segment. The alternative
+     writes the key as the text that `jsonFromFabricValue` returns for
+     it, which the prototype's executor does: a segment is taken for a
+     key where it decodes to a key record, so a property whose name is
+     exactly such a text cannot be addressed by a path.
+     That changes the stored form of a link whose path holds a key:
+     the path of a link of today is an array of strings
+     (`NormalizedLink` in `runtime/runner/src/link-types.ts`). The
+     question is about every case in which a reference by key exists:
+     an element of an array of plain values in place, a plain array
+     generated from scratch included, and an element of the result of
+     another per-element construct where the upstream position holds
+     a value. A reference to an element of an array of references is
+     a link to the element's cell, and its path holds no key.
+215. **The document of an output that has an address, and its cause**
+     (PL question 157; note 450). By ruling an element of a plain
+     array generated from scratch has a reference by key whose
+     collection is the output, at its address (entry 206), and such an
+     array that is given whole to an instance of its own is given as a
+     link to the stored output (question 207). No ruling says where an
+     output that is not kept is stored. *Assumed:* an
+     output that is kept has its path in the result document, or in a
+     part document, as its address. An interim output that is a plain
+     array generated from scratch, and that a per-element construct is
+     over or that is given whole to an instance of its own, is stored
+     in a document of its own, one per combination of the element keys
+     around it. Its identifier derives from the instance, the type
+     `output`, the `within` of the output's cone, and the name of the
+     interim value with the output's path. The prototype's executor
+     stores every such output in a document of that type, a kept one
+     included, and names an output that has no interim name by its
+     index in the plan, which is a position among declarations and no
+     name by the documents' rules. The alternatives store such an
+     output in the cache document, or in the argument document of the
+     first instance that is given it. The coordinator has made no
+     recommendation on this question. It is about a plain array
+     generated from scratch; an array of plain values that is stored
+     in place and an array of references have an address already, and
+     the assembled result of another per-element construct is
+     question 212.
+216. **An `asInstance()` instance that a re-key moves to a name that
+     another holds, and the instance made later under the key it left**
+     (PL question 158; note 450). By ruling, where a moved
+     `asInstance()` instance takes the name that another such instance
+     holds, the replaced instance stays in the store and a link to it
+     keeps reading it ([Decided](#decided)). The assumption of
+     question 178 writes a moved instance under the identifiers of the
+     new key, which are those that the replaced instance holds, so
+     the two cannot both hold in this case. *Assumed,* for this case
+     alone: the moved instance keeps the identifier it was made with,
+     and the element table and the instances document name it under
+     the new key. The prototype's executor does so for every moved
+     instance, which is what the coordinator recommends at question
+     178. An instance that is made later under the key that the moved
+     one left would then derive the identifier that the moved one
+     holds. *Assumed:* its cause has one more member, the number of
+     instances that were made under that key before it. The
+     prototype's executor writes `again` and a number into the cause.
+     The coordinator has made no recommendation on the second part.
+     The case is an array of plain values in place with no declared
+     key, and a body over the result of another per-element construct
+     applied to it. With a declared key a write to another member
+     changes no key, and over an array of references no write changes
+     a key.
+
+**From the prototype's notes 461 to 478.** At commit `abd965cc37` the
+prototype's author classed every module that the executor did not run,
+every committed event that it did not handle, and every value that
+differed at commit `682b918ed1`, and fixed the defects of the crate and
+the executor among them. Questions 217 to 223 are what those notes show
+the documents not to decide, or to decide in a way that the owner should
+see. Each is written into the documents as an assumption. Where the
+coordinator of this work has a recommendation, the entry gives it; it is
+a recommendation and no ruling. The coordinator has one on question 218
+alone.
+
+217. **A `computed` that meets the criterion of promotion and whose body
+     computes another value as a function body** (LS question 45; note
+     473). `language-subset.md` §6.1 promotes a `computed` whose body is
+     an expression of the reactive tier, and §6.2 says that a promoted
+     `computed` computes the same value as the unpromoted one. Two
+     modules of the corpus have a body for which that does not hold. In
+     `examples/nested-counter/nested-counter.tsx`, ``computed(() =>
+     `Double counter: ${state.value}`)``, where `state.value` is a
+     `Writable<number>`: as a function body the template string converts
+     the handle to a string, which is `[object Object]` in today's
+     runtime, and promoted it reads the value, `3`. In
+     `dev/scope-bug-computed-vnode-blank/main.tsx`, `computed(() =>
+     <cf-input $value={name} />)`: as a function body today's JSX
+     factory throws, because the name is a plain value there, and
+     promoted the attribute is bound to the input both ways. There are
+     three answers: such a `computed` is promoted and has the value of
+     the reactive tier; it is not promoted and keeps the value of the
+     function body; or the compiler refuses it. *Assumed:* the first,
+     which is what the criterion of §6.1 gives as it is written and what
+     the prototype does. The sentence of §6.2 then does not hold for a
+     body that converts a handle to a string or that writes a `$`
+     attribute. The coordinator has made no recommendation. 7 values of
+     the corpus run differ for it, 5 in the first module and 2 in the
+     second. No per-element construct is involved.
+218. **The order in which a read gives the members of a stored record**
+     (ES question 94; note 473). `execution-and-storage.md` §2.4 gives a
+     body, for an entry of class `enumeration`, "the stored keys in the
+     stored order", and no document says what the stored order of a
+     record is. In `dev/gideon-tests/test-record-key-set-56.tsx` a
+     handler writes `{ value: "test-a", count: 1 }` and a debug string
+     renders the record. Today's runtime renders
+     `{count:1,value:"test-a"}`, the members in the order of their
+     names, and the prototype's executor renders them in the order in
+     which the handler wrote them. A record that a body builds and
+     renders without storing it has the written order in both. The order
+     shows wherever a body enumerates a record that it read:
+     `Object.keys`, `JSON.stringify`, a debug string. *Assumed,* as the
+     coordinator recommends, and not ruled: a read gives the members of
+     a stored record in the order in which the serialization of a fabric
+     value by `base/data-model` writes them. That is the order of the
+     UTF-8 bytes of their names (`encodePlainObject` of `JsonEncodeAct`
+     in `base/data-model/src/codec-json/JsonEncodeAct.ts`, which takes
+     the names from `utf8SortedKeysOf`). It is consistent with the
+     ruling that this design takes every written form from the helpers
+     of that package ([Decided](#decided)). That method does not yet
+     write that order for a member whose name reads as an integer, and
+     which order such a member has is part of the question. The
+     alternative gives the members in the order in which they were
+     written, which the prototype's executor does. 6 values of the
+     corpus run differ for it. That today's runtime gives the order of
+     the names for every stored record rests on that one module. Not
+     about a per-element construct. The recommendation is taken as the
+     provisional decision P1
+     ([Provisional decisions](#provisional-decisions-awaiting-the-owners-ratification)).
+219. **A write through a handle to a path that the call of a pattern
+     compiled in leaves out** (LS question 46; note 473). The case is
+     `Counter({})`, where `Counter` declares `value` as a handle that
+     can write, with the default `0`, and binds it to a handler that
+     increments it. By ruling a path that the call leaves out is the
+     callee's default, held as a constant (`plan-and-label-templates.md`
+     §1.1, "A constant of the argument, and a path the call leaves out";
+     [Decided](#decided)). `execution-and-storage.md` §2.4 refuses a
+     write through a handle to a constant. `language-subset.md` §10.2
+     says of `binding:write-to-computed` that "A property that the
+     argument leaves out is not a literal and is not reported". So the
+     call compiles with no diagnostic and every increment is refused,
+     where today the callee is an instance with an argument document and
+     keeps the count there. The same pattern with a plan of its own has
+     a handle to that path of its argument document, and the write lands
+     (`plan-and-label-templates.md` §2.5, "A handle to a position that
+     holds nothing"). The documents decide each part and the prototype
+     follows each. Together the parts accept a program whose handler
+     writes nothing. There are three answers: that is intended; the
+     compiler reports the call; or the path gets a place, so that the
+     write lands. *Assumed:* the documents as they stand, so the call is
+     accepted and the write is refused when the handler runs. The
+     coordinator has made no recommendation. Two modules of the corpus
+     call a pattern so: `examples/ui-variants/ui-variants-host.tsx`, and
+     `showcase/wordsearch/main.tsx` through `$checked`. Two of the three
+     committed events that the executor does not handle at commit
+     `abd965cc37` are such writes, both in the first module, and 2
+     values differ for them. Not about a per-element construct.
+220. **`equals` of a reference by key with a copy of the same element,
+     in a function body** (ES question 95; note 475). This is not open
+     by the letter. It follows from two rulings, and is recorded so that
+     the owner sees what they give together. In the three
+     `budget-tracker` modules of the corpus a handler of a row finds its
+     element with `current.findIndex((b) => equals(budget, b))`, where
+     `current` is `budgets.get()`. The case is an array of plain values
+     in place: `budgets` holds its records in place. So `budget`, which
+     the handler is given for its element, is a reference by key, and
+     each member of `current` is a copy that carries no address, by the
+     ruling that a function body that reads a plain value holds a copy
+     ([Decided](#decided)). A reference and a value that carries no
+     address do not name one thing, so `equals` is false for every
+     member, and the handler finds nothing and removes nothing. Today
+     each record of the list is a cell, and the handler finds it. 15
+     values of the corpus run differ for it, in
+     `apps/budget-tracker/expense-form.tsx`, `confidential.tsx` and
+     `main.tsx`; the prototype's author read the cause for the last two
+     from their source, which has the form of the first. The question
+     for the owner is whether `equals` of a reference by key with a copy
+     of the element that the key names, read from the element's own
+     array, should hold. *Assumed:* it does not, as the rulings give it.
+     For it to hold, either the comparison takes the value of the copy,
+     or a member of an array that a body reads through a handle carries
+     the address it was read from, which the ruling on a copy excludes.
+     The coordinator has made no recommendation. The `findIndex` here is
+     the JavaScript method on the array that `get()` returned, in a
+     function body, and no per-element construct of the reactive tier.
+     Over an array of references each member of `current` is the value
+     of its cell and carries that cell's address, and the prototype's
+     executor finds the element.
+221. **A member of a spread in the reactive tier, over an array of plain
+     values in place** (PL question 159; note 472). The forms are an
+     array literal with a spread, as `[head, ...xs]`, and a JSX spread
+     child, `{...xs}`, in a pattern body. `plan-and-label-templates.md`
+     §3.4 ("A spread in an array literal") says that "An element that
+     comes from a spread operand is passed by reference", and names no
+     case. Over an array of references each member is the link to the
+     cell of its position, and the prototype stores the links. Over the
+     result of another per-element construct the members are what the
+     construct assembled, a reference where its body passes the element
+     on. Over an array of plain values in place no document says whether
+     a member that is a record is stored as a reference by key to the
+     element or as a copy of its value. *Assumed:* a reference by key.
+     That is what the sentence of §3.4 gives where it is read with the
+     ruling that a node of the reactive tier that passes an element on
+     holds a reference by key ([Decided](#decided)); neither names this
+     case. The prototype stores a copy of the record. The coordinator
+     has made no recommendation. Today's runtime runs neither form in a
+     pattern body, so nothing of this is compared with it.
+222. **The label template of an output that reads another output** (PL
+     question 160; note 478). Settled by ruling: the owner adopted the
+     recommendation of the coordinator of this work
+     ([Decided](#decided)). The type `Template` of
+     `plan-and-label-templates.md` §1.1 has a node that names an output
+     of the plan, and a template never holds a copy of the template of
+     another output. The size of a plan is linear in the number of its
+     outputs and of the nodes of their templates, the label of an output
+     is evaluated once and used by every template that names it, and
+     the meaning of no template changes. The documents' assumption that
+     a template holds the template of each input in place is replaced by
+     the ruling. With the copies, where an output reads two outputs that
+     each read two more, the template of each is written once for every
+     way that leads to it. In the prototype's fixture `shared-values`
+     twenty-five values each read the two before them. Its plan was
+     31 MB as compact JSON, all but 8 kB of it in `outputs[].template`,
+     and the template of the last value alone was 12 MB. The sizes
+     follow the Fibonacci numbers along the chain. The prototype's crate
+     at commit `abd965cc37` writes the copies, and does not follow the
+     ruling; its fixture holds eleven values, because its generated
+     files could not be pushed at twenty-five. Three parts are not
+     ruled, and each has a provisional decision: how the slot-free hash
+     and the keys cover a named template (question 239), what the same
+     template is in a join (question 240), and what the provenance
+     record of a kept output holds of the outputs that its template
+     names (question 241). How the node is instantiated, and with which
+     selections and picks, follows from the documents and is no
+     question: for the inputs of the template that holds it, under the
+     selections and the chosen children that the cone of the named
+     output reported (`plan-and-label-templates.md` §3.2, "A reference
+     to an output"). The notes do not say whether a plan of the corpus
+     is large for this reason, and no test bounds the size of a plan.
+     Not about a per-element construct. The entry keeps its number.
+223. **Where a compiled artifact holds the files that `dataFile` names**
+     (BI question 15; note 465). `builtin-inventory.md` has the result
+     of `dataFile(path)` as "a constant of the program" and *assumes*
+     that the path is a string literal, and `language-subset.md` §4.4.4
+     assumes the same. No document says where a compiled artifact holds
+     the text of such a file, whether the text is a part of what
+     identifies the compiled pattern, or which diagnostic a call with
+     another argument gets. The prototype's crate rewrites the call to a
+     read by an index and lists the files in a member `code.dataFiles`
+     of the artifact, each with its path resolved against its module as
+     an import is. The `emit` command puts the text of each file beside
+     its path. An artifact that holds no text for a file fails when the
+     instance starts, and a call whose argument is no string literal is
+     left as it is written and fails when it runs. *Assumed:* the
+     artifact holds the text of each file beside the value code, as the
+     prototype has it. Nothing is assumed for the other two parts. The
+     coordinator has made no recommendation. One module of the corpus is
+     executed for it and six more have every value equal. Not about a
+     per-element construct.
+
+**From a reading of the documents for what the prototype's executor does
+not exercise.** A read-only analysis listed the statements of the
+documents on effects, the serving loop, storage, clients, and spaces and
+scopes that a test could check, and the places where two statements
+conflict or where nothing is stated. Questions 224 to 238 are those
+places, each checked against the text of the documents for this plan.
+Each names the statements with their sections and what is assumed until
+the owner rules. Where the documents state nothing and an assumption
+would be a new rule, the entry says that nothing is assumed. The
+coordinator has made no recommendation on any of them. The places of
+that analysis that are no question are named after question 238.
+
+224. **The memo entry of a cone instance that failed at the bound, after
+     its side-writes are withdrawn** (SS question 43). By ruling a cone
+     instance that failed at the bound of ten evaluations is not
+     evaluated again until one of its inputs changes
+     ([Decided](#decided)). `scheduler-and-serving-loop.md` §8.1 and
+     `execution-and-storage.md` §2.7 state it, and
+     `execution-and-storage.md` §1.7 says that the memo entry of a
+     failed cone instance "holds the error state and the reads made up
+     to the failure" and that the cone instance "is evaluated again when
+     something it read changes". `scheduler-and-serving-loop.md` §8.2
+     withdraws the side-writes of the cone instance that failed at the
+     bound, so that each target "keeps the value and the label it had
+     before the transaction". In a cycle through a side-write the last
+     reads of the failed cone instance were of values that the
+     transaction staged and that are then withdrawn. What is stored then
+     differs from what the entry recorded. By the check of
+     `execution-and-storage.md` §3.3, which reads the marked addresses
+     again and compares fingerprints, the entry is not current, and the
+     cone instance would be evaluated, and would fail at the bound, on
+     every later cause. `scheduler-and-serving-loop.md` §3.5 also says
+     that a cone instance whose side-write was withdrawn has its memo
+     entry dropped and is stale; it names a conflict and a handler's
+     write as the reasons, and not the bound. The ruling governs the
+     outcome: the cone instance is not evaluated again. No document says
+     which reads its entry records so that the check agrees with the
+     ruling. *Assumed:* the entry of a cone instance that failed at the
+     bound is kept, and it is taken as current against what is stored
+     after the withdrawal, so that only a change after that transaction
+     evaluates the cone instance again. Not about a per-element
+     construct, except that an element cone has one count for each key.
+     The assumption is provisional decision P10. The prototype at commit
+     `a84264daf2` has a test for each reading on `fixtures/bound.tsx` (its note
+     484): with the entry current against what is stored, a later event that
+     writes a cell no cone of the cycle reads evaluates neither cone; with the
+     entry current against what its last evaluation read, each cause evaluates
+     each cone ten times and fails both again. The same is open for a body that
+     wrote a cell, read it, and threw, which no fixture has.
+225. **`asScope` on a call that is compiled into the surrounding
+     instance** (PL question 161). The case is `savedRooms.map((entry)
+     => FoundRoom.asScope("user")({...}))` in the pattern body of
+     `patterns/system/fabrichat/manager.tsx`, as `builtin-inventory.md`
+     ("FabriChat") quotes it. By `language-subset.md` §4.4.2 a
+     statically resolved pattern that is called in the reactive tier is
+     compiled into the surrounding instance, and of the three modifiers
+     `asInstance()` and `inSpace` alone make the call an instance of its
+     own. `builtin-inventory.md` says of this call: "The `asScope`
+     modifier inside a `map` body is a modifier of the anonymous
+     sub-pattern: it sets the scope of the state the sub-pattern
+     declares." The one member of the plan that holds the scope of a
+     call is `Child.scope` (`plan-and-label-templates.md` §1.1), and
+     `execution-and-storage.md` §4.6 states its rule for "A child with a
+     scope". A call that is compiled in has no `Child`. So no record is
+     named for the scope of such a call, and the rule of §4.6, which is
+     itself assumed (question 65), is stated for a child alone.
+     *Assumed:* the compiler writes the scope of the modifier into
+     `StateCell.scope` of each state cell that the callee declares with
+     a broader scope, and a state cell that the callee declares with a
+     narrower scope keeps its own, which is what §4.6 assumes for the
+     state cell documents of a child. No member of the plan then says
+     that the call had the modifier. The question is the same for a call
+     in an element body over an array of references, over an array of
+     plain values in place, and over the result of another per-element
+     construct, and for a call outside every element body.
+     Under provisional decision P18 the call-site record of such a call has a
+     member `scope` that holds the modifier, so a member of the plan says that
+     the call had it. The assumption on what the state cells of the callee then
+     have is unchanged, and is stated per site: the narrower of the cell's own
+     scope and the scope of each call site on its chain.
+226. **A `navigateTo` of the reactive tier behind a batch of events of
+     several sessions** (SS question 44).
+     `scheduler-and-serving-loop.md` §6.2 says that a `navigateTo`
+     written in the reactive tier "is demanded whenever its instance
+     is", that the operation has session scope, and that "A request that
+     is not a consequence of an event a client session fired is
+     refused". `builtin-inventory.md` ("The requester of a request")
+     appends the intent to the effects document of the session that
+     fired the event. A request of the reactive tier is staged by a
+     derivation transaction. By ruling one derivation transaction runs
+     behind a batch of several events ([Decided](#decided)), which can
+     be events of several sessions, and by the assumption of question
+     232 the changes that the cycle drained from storage are in the same
+     transaction. No document says how the derivation transaction, or
+     the request transaction of the operation after it, finds the
+     session whose event the request is a consequence of, or what is
+     done where the request follows from a change from storage and from
+     no event. Nothing is assumed. On a client the question does not
+     arise: a client enacts the `navigateTo` of its own speculative run
+     (`scheduler-and-serving-loop.md` §6.7). Not about a per-element
+     construct.
+227. **A speculative handler that holds a reference by key** (SS
+     question 45). `scheduler-and-serving-loop.md` §11.1 *assumes* that
+     a client does not resolve a reference by key, because resolving the
+     key to a position needs the salt, and that "a read through it is
+     pending on the client" (question 113 of
+     `plan-and-label-templates.md` §8). The overview says that `equals`,
+     a member bound both ways, and a write through the element work over
+     an array of plain values in place. No document says what a handler
+     that a client runs speculatively does where it writes through such
+     a reference, or where it compares one with a handle by position,
+     which resolves the key (`execution-and-storage.md` §2.2): whether
+     the whole speculative transaction is abandoned, the one write is
+     left out of the overlay entry, or the client sends the event and
+     shows nothing until the server's result arrives. Every handler
+     bound in an element body that writes through its element is in this
+     case, where the body is over an array of plain values in place, or
+     over the result of another per-element construct whose upstream
+     position holds a value. Nothing is assumed. `equals` of two
+     references by key resolves no key. Over an array of references the
+     element is a link, which a client resolves.
+228. **What "pending" is for value code on a client** (SS question 46).
+     `scheduler-and-serving-loop.md` uses "pending" for a cone instance
+     that reads an input that the client has not replicated or cannot
+     name (§11.1), for the result of an effect whose request differs
+     from the stored one (§6.7), for a stream whose identifier a client
+     cannot derive (§11.1, the table), and for a read through a
+     reference by key (question 227). No document says what value code
+     receives from the host for a pending input, whether a cone instance
+     with a pending input is evaluated at all, or whether such an
+     evaluation counts toward the bound of ten. One case is undetermined
+     in more: a row of an element body over an array of plain values in
+     place. By `execution-and-storage.md` §5.3 the memo and the element
+     table need no salt, so a client can evaluate the cones of such a
+     body, and it cannot derive the stream of a handler bound there. No
+     document says whether the whole kept path of such a row is pending,
+     or the row is rendered with the committed link or with nothing
+     where the stream is placed. Nothing is assumed beyond the sentences
+     of §11.1: the cone instances that read an input that a client
+     cannot name are pending, "and what they feed renders its committed
+     value or its loading state". Over an array of references a client
+     derives the stream.
+229. **Part documents: which split points the rule on the size of a
+     document takes, and which size is measured** (ES question 96).
+     `execution-and-storage.md` §4.10, rule 3: when the content of a
+     document exceeds `DOCUMENT_MAX_BYTES`, "every split point directly
+     below it that is stored in place becomes a part, whatever its
+     size". The same section, "A row": "A list of many small rows stays
+     in the document that stores the array until that document exceeds
+     `DOCUMENT_MAX_BYTES`, and then rule 3 makes each of those rows a
+     part." Where the array is a kept output that is stored in place in
+     the result document, the root of that output is a split point and
+     stands between the document and the rows. By rule 3 as it is
+     written the array becomes one part and its rows stay in it; by the
+     sentence on a row the rows become parts. Second, the size of a
+     split point is "the length in bytes of the stored encoding of its
+     subtree", with the stored label entries and provenance records of
+     its paths, and no document names the encoding. *Assumed:* rule 3 as
+     it is written. The array becomes a part, and its rows become parts
+     when that part exceeds the number in turn, since rule 3 is stated
+     for a part as for the result document. Nothing is assumed for the
+     encoding. The three numbers are placeholders (question 41). The
+     rows are those of a kept collection over an array of references,
+     over an array of plain values in place, or over the result of
+     another per-element construct alike.
+     *Measured* at prototype commit `e63851c1ee` (notes 511 and 513), with the
+     layout kept as an accounting under the assumption of this entry, on a
+     `map` over an array of plain values in place with rows of 23 bytes: the
+     array of 2,000 rows is one part of 46,960 bytes; the transaction in which
+     the part exceeds the number makes every row a part, 2,800 documents for
+     2,600 rows that 200 are appended to; and the array of storage links, 61
+     bytes each, is then about 171,000 bytes with no split point left. The
+     reading of the assumption is confirmed as costly. *Assumed,* provisional
+     (P20): no rule makes a part of a split point for the size of the document
+     that holds it, so the first half of this entry has no case; the array is
+     a part by its own size, a row is a part by its own size alone, and a long
+     array is stored in chunks. The second half, the encoding in which a size
+     is measured, is unchanged: the prototype measured JSON text.
+230. **Which transaction evaluates what became demanded since the last
+     cycle** (SS question 47). The cycle of
+     `scheduler-and-serving-loop.md` §10.2 runs one derivation
+     transaction "if a demanded output is stale, unstored, or reached by
+     a label-dirty slot", for the changes drained and the batch, and
+     after it one derivation transaction "for each change of demand
+     since the last cycle", as the demanding principal.
+     `execution-and-storage.md` §1.1 says that the cone instances of an
+     instance are evaluated in one derivation transaction, "that of the
+     change of demand, or the one behind the batch where the demand
+     already stands". No document says whether demand that changed since
+     the last cycle already stands for the first of the two
+     transactions. The two readings give an evaluation of user or
+     session scope another acting principal, and give another number of
+     transactions. *Assumed:* such demand does not stand for the
+     transaction behind the batch, and what it reaches is evaluated in
+     the transaction of the change of demand, as the ruling that a
+     change of demand is a cause with a transaction of its own has it
+     ([Decided](#decided)). Not about a per-element construct.
+231. **A request of the reactive tier that is refused** (SS question
+     48). `scheduler-and-serving-loop.md` §6.3: "The request is not
+     made, and the operation's result takes the refusal as an error
+     state in a following transaction, under the joined label", and §6.2
+     says the same of a request that has no requester. For a later send
+     that is refused the same section names the transaction: the
+     completion transaction of the operation, whose commit is a cause of
+     the third kind. For a refused request no document says which
+     transaction stores the refusal, or whether its commit is a cause.
+     Second, `builtin-inventory.md` ("The refused globals") has the
+     result of an effect read as the fields `pending`, `result` and
+     `error`, and `plan-and-label-templates.md` §5.2 defines an error
+     state as what the outputs of a failed cone take, which fails every
+     cone instance that reads it. No document says whether a refusal
+     shows as a value of the field `error`, which a reader can test, or
+     as an error state in the sense of §5.2. §6.3 says that it settles
+     "as a built-in's rejected staging settles today". Nothing is
+     assumed for either part. Not about a per-element construct.
+232. **Whether the changes that a cycle drains from storage join the
+     derivation behind the batch** (SS question 3; ES §1.1). By ruling
+     the derivations that the events of a batch made stale settle once
+     behind the batch ([Decided](#decided)). `execution-and-storage.md`
+     §1.1 marks as *assumed* that the changes one cycle drains from
+     storage and the writes of the events of that cycle form one set of
+     changes, with one derivation transaction.
+     `scheduler-and-serving-loop.md` §12, question 3, calls the same
+     "this document's decision" and lists it among the questions for the
+     owner. Neither is a ruling, and this plan did not list it.
+     *Assumed:* one set of changes and one derivation transaction, as
+     both documents have it.
+233. **The batch on a runtime without a serving loop** (SS question 49).
+     `scheduler-and-serving-loop.md` §5.1: the batch of a cycle is the
+     events in the queue "together with the events that their handlers
+     send to streams of the same space". The same paragraph, and §10.7:
+     "On a runtime with no serving loop a batch is the events queued
+     when the runtime begins to handle them", which does not say whether
+     an event that a handler of the batch sends joins the batch. The
+     prototype's executor is such a runtime, and it handles one event at
+     a time. *Assumed:* such an event joins the batch, as with a serving
+     loop, because §10.7 says that such a runtime "is the same scheduler
+     with sealing equal to committing".
+234. **When a write that was withdrawn for a conflict on its target is
+     stored again** (SS question 50). `scheduler-and-serving-loop.md`
+     §5.5: "A write withdrawn for a conflict on its target alone is
+     stored again from the memo", and its §3.5: "The next transaction
+     that demands an unstored output stores it from the memo, without an
+     evaluation". Neither says that the write waits until the replica
+     holds the commit that it conflicted with. Before that, the write is
+     staged against the same state of the target and conflicts again. Of
+     a requeued event the same section says that it "runs again once the
+     replica holds the commit that made the read stale". *Assumed:* the
+     write is stored again once the replica holds that commit, as a
+     requeued event waits for it.
+235. **The requeue of an event whose handler read something that is
+     stale at the commit** (SS question 51).
+     `scheduler-and-serving-loop.md` §5.5 and `execution-and-storage.md`
+     §1.7 state that a recorded read of the handler that is stale when
+     the wave commits requeues the event whole. §5.5 cites the
+     serving-loop specification for it, "where the rule is proposed and
+     awaits a ruling". The rule that a withdrawal that reaches a
+     handler's own writes requeues the event rests on it. No ruling of
+     this plan covers it. *Assumed:* the proposal, as both documents
+     state it.
+236. **The label of an interim output that is stored in a document of
+     its own** (PL question 162). `plan-and-label-templates.md` §3.15
+     ("Labels going in") gives a plain array generated from scratch
+     whole to an instance of its own as a link to the stored output, and
+     says that what the child reads through the link "resolves to the
+     labels stored at the output, as a read through any link does". Its
+     §4.1 says: "An interim value that is not kept is never labeled".
+     `execution-and-storage.md` §1.6 says that an interim value is not
+     instantiated, and its §7 that it has no stored provenance. An
+     output document holds an interim output (`execution-and-storage.md`
+     §4.1; question 215). So the one statement has a reader find labels
+     where the other three store none. *Assumed:* §3.15 holds for an
+     output document. Such an output is instantiated when its document
+     is written, and the document holds its label entries, because a
+     reader in another instance reaches the values through the link and
+     has no other label for them. Whether it has a provenance record is
+     not assumed. The case is a plain array generated from scratch that
+     is given whole to an instance of its own, or into which a reference
+     by key is stored elsewhere. An array of plain values in place and
+     an array of references are stored with their labels already, and
+     the assembled result of another per-element construct is question
+     212.
+237. **How an overlay entry holds a change of membership** (SS question
+     52). `scheduler-and-serving-loop.md` §11.6: "An entry of this
+     design carries each kept path its transaction wrote, as a whole
+     value", and "An entry for one row therefore hides no other row and
+     no other path". `execution-and-storage.md` §4.2: an insertion or a
+     reorder is "a `splice` of the stored array". Where a speculative
+     handler inserts a row, the kept path that its transaction wrote is
+     either the collection or the row. As the collection, the entry
+     holds the whole array and hides a committed change of membership
+     that arrives meanwhile, and a change of another row that is stored
+     in place. As the row, the entry needs a position, which the server
+     can assign otherwise. Nothing is assumed. The same over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct.
+     *Growth, from the read-only audit:* as the collection, one entry
+     holds `N` rows, so `E` pending insertions hold `E` times `N`: ten
+     unconfirmed sends into a list of 2,000 rows hold 20,000 rows in the
+     overlay. It depends on the choice this question leaves open, and a
+     fix changes a representation only. *Measurement:* `E` speculative
+     insertions into a kept collection of `N` rows before any is
+     confirmed; the bytes that the overlay holds. *Today:* not
+     established by the audit.
+238. **The batches for another space behind a derivation transaction
+     that evaluates for several scope keys** (SS question 53).
+     `scheduler-and-serving-loop.md` §9.3 carries an `inSpace`
+     instantiation by "An authored batch per target space, under the
+     acting principal of the requesting evaluation or handler", and for
+     a computation that principal is the one of the scope key that the
+     making cone instance is evaluated for. `execution-and-storage.md`
+     §1.8: "One derivation transaction may hold the evaluations for
+     several scope keys". No document says whether a wave then carries
+     one batch for each principal for the same target space, or in which
+     order; `scheduler-and-serving-loop.md` §9.4 orders the steps by the
+     order in which the transactions sealed, and these evaluations are
+     of one transaction. Nothing is assumed. It extends question 45
+     and question 61.
+
+**From the ruling of 2026-11-17 that a template names the template of
+another output.** Questions 239 to 242 are what that ruling
+([Decided](#decided); question 222) leaves undetermined. Each is written
+into the documents as an assumption, and the assumption of each is a
+provisional decision
+([Provisional decisions](#provisional-decisions-awaiting-the-owners-ratification)).
+Questions 243 and 244 are two findings of a read-only audit of growth
+that the text of `plan-and-label-templates.md` bears out. Nothing is
+assumed for either and neither has a provisional decision: each names
+the measurement that the prototype should run.
+
+239. **How the slot-free hash, the instantiation key and the memo key
+     cover a template that is named** (PL question 163). The ruling says
+     that the label of an output is evaluated once and used by every
+     template that names it, and that the cost of label evaluation is
+     linear. It does not say what the slot-free hash of
+     `plan-and-label-templates.md` §1.2, the instantiation key of its
+     §4.1 and the memo key of its §4.3 hold for a node that names an
+     output. *Assumed,* provisional (P2): each is over the template as
+     it is written. The hash replaces the index of such a node by its
+     position in the template's own list of the outputs it names, and
+     the two keys hold the identifier of the label of each named
+     output's template, and no slot, selection or chosen child of it.
+     The alternative keeps the keys over the template with every
+     reference replaced, which grows with everything upstream of an
+     output. No label differs between the two. The same for a template
+     of an element body over an array of references, over an array of
+     plain values in place, and over the result of another per-element
+     construct.
+240. **What the same template is in a join** (PL question 164).
+     `plan-and-label-templates.md` §3.2 ("A join") leaves a repeated
+     input out of a join. With a node that names an output, two outputs
+     can have equal templates under two indexes. *Assumed,* provisional
+     (P3): two inputs are the same where they are equal as they are
+     written, so two nodes are the same where they name one output. The
+     alternative compares the templates that the nodes name. The label
+     is the same under both, and the hash of a plan differs. Not about a
+     per-element construct.
+241. **What the provenance record of a kept output holds of the outputs
+     that its template names** (ES question 97).
+     `execution-and-storage.md` §7.2 has `OutputProvenance` hold the
+     selections, the chosen keys and the dynamic addresses "the template
+     reaches". The ruling does not say whether that follows a node that
+     names an output. *Assumed,* provisional (P4): it does, each entry
+     once, so the record holds what it held with every template in
+     place. An interim output has no record of its own. The size of one
+     record then follows everything upstream of its output. The
+     alternative holds the entries of the output's own template alone,
+     which is linear in the plan and stores the selections of a named
+     interim output nowhere. The same for a kept output of an element
+     body over an array of references, over an array of plain values in
+     place, and over the result of another per-element construct.
+     *Growth, from the read-only audit:* `execution-and-storage.md` §7.2
+     has it that a "row with dynamic addresses has a record of its own".
+     Where each of `N` rows reaches, through the outputs its template
+     names, a body that read `N` addresses through a handle, the records
+     hold about `N` times `N` addresses, and one more address read
+     rewrites the record of every row: 1,000 rows over one value read
+     from 1,000 cells is 1,000,000 stored addresses. Under the
+     alternative the addresses are stored once, with the output whose
+     template has the `dynamic` node. A fix changes a representation,
+     and with it what the record of one output means. *Measurement:* `N`
+     rows that each read one interim value computed over `N` cells
+     through a handle; the addresses in the provenance records, and the
+     part documents written for one append. *Today:* no provenance
+     record exists.
+242. **The records other than `Output` that hold a template** (PL
+     question 165). The ruling on question 222 is on the templates of
+     outputs. `WriteEdge.template`, `ComputedInput.template`,
+     `Operation.input`, `Collection.membership`, and the `template` of a
+     path of `Binding.state` and of `Closure.params` hold a template in
+     place as well. *Assumed,* provisional (P5): each has the node that
+     names an output wherever the template it holds, or an input of it,
+     is an output of the plan. The alternative leaves a copy there. No
+     label differs. The template of a body is no output and is written
+     at each write edge of the body under either. The same for a record
+     of an element body over an array of references, over an array of
+     plain values in place, and over the result of another per-element
+     construct.
+243. **What forming the key of an output costs where the outputs it
+     names did not change** (PL question 166). Within one transaction
+     the label of each named output is formed once. Across transactions
+     nothing requires the runtime to keep the label identifier of an
+     interim output, so where the cone at the end of a chain of D
+     outputs is evaluated alone, forming the key of its output forms the
+     keys of the D outputs behind it. The units that a staged write uses
+     and the reads of a unit follow the same chain
+     (`plan-and-label-templates.md` §4.5 and §4.6). Nothing is assumed.
+     *Measurement:* the fixture of twenty-five values that each read the
+     two before them, at run time, with a change of the first value and
+     then of the last; for each changed output the count of template
+     nodes visited, of keys formed, the length of each key, and the
+     entries of each unit's read set and of the units it uses. The
+     counts for the change of the last value should not grow with the
+     number of values. The same for a chain in an element body over an
+     array of references, over an array of plain values in place, and
+     over the result of another per-element construct.
+244. **The label of a `fold` that has no durable state** (PL question
+     167). `plan-and-label-templates.md` §4.3 says that a count per
+     label identifier is kept "with the fold's durable state, so adding
+     or removing an element updates the set in constant time". The
+     membership `fold` of a `filter` and of a `flatMap` belongs to no
+     operation and has no such state, a scan needs no state by §3.13
+     and joins a prefix, the function of §4.2 instantiates the body for
+     every element, and the label of a collection's array for the index
+     joins every position with no count stated. For `min` and `max` the
+     removal of the extreme needs the other contributions in an order.
+     Provisional decision P31 answers where the count is kept: with the
+     collection's assembly, a count per group of element inputs, and a
+     `fold` instantiated once per group. It leaves a scan's prefix, the
+     label of a collection's array for the index, and the extreme of `min`
+     and `max` undetermined. *Measurement:* a `filter`, a `flatMap`, a
+     `some`, and a `map` whose body reads the index, each over 100,
+     1,000 and 10,000 elements, with one element changed, one appended
+     and one removed, and for `min` the extreme removed; the count of
+     body-label instantiations and of label identifiers joined for each
+     change. Each is run over an array of references, over an array of
+     plain values in place, and over the result of another per-element
+     construct.
+
+Six places of that analysis are no question, because the documents
+decide them. `streamData` and `llm` are removed ([Decided](#decided)),
+so nothing of them runs. After a recovery the stored hash of a handler's
+request is the hash of the content as it is then: the recovery's request
+transaction "writes the hash it computed with the pending mark"
+(`scheduler-and-serving-loop.md` §2.3). The parts of a `wish` "are
+evaluated on demand like any cone" (`builtin-inventory.md`, "When an
+effect is demanded, and its time gates"), so a derivation transaction
+resolves it. The overview's sentence that a move takes the stored
+results of a key with it does not conflict with the deletion of the part
+document of a removed row: "A part document holds kept paths of the
+result and nothing that is stored under the key"
+(`execution-and-storage.md` §4.10). A kept path with an empty label and
+no dynamic part has no provenance record, since the envelope holds a
+record "for the path where it has a label entry or a dynamic part"
+(`execution-and-storage.md` §7.2). And that a handler with an anonymous
+`inSpace` target is never speculated follows from
+`scheduler-and-serving-loop.md` §9.4 and `execution-and-storage.md`
+§5.6. Seven more places are open already: the order of the genesis
+commit and the allocation record of a created space (question 15), what
+a withdrawn write takes with it (question 39), the gates that a client
+evaluates (question 33), demand across spaces (question 16), the acting
+principal of an evaluation of space scope (questions 45 and 61), the
+transaction of a first value that is not a constant (question 83 of
+`execution-and-storage.md`), and which cone with side-writes is a
+materializer (question 80 of `execution-and-storage.md`).
+
+One question above is restated by the notes 307 to 320. For the
+assumption of ES question 83, in which transaction a first value that is not a
+constant is written, the prototype does the alternative: it computes
+the value when the cell is created, which for a cell of an element body
+is when the key enters the element table, in all three cases.
+
+**From the provisional decisions P6 and P7.** Each is written into
+`plan-and-label-templates.md` as an assumption, and the assumption is a
+provisional decision ([Provisional
+decisions](#provisional-decisions-awaiting-the-owners-ratification)).
+
+245. **A template that is no output and stands at more than one position
+     of a plan** (PL question 168). The ruling on question 222 removes a
+     copy of the template of an output, and five rules of
+     `plan-and-label-templates.md` write a template that is no output at
+     several positions: an operand of `&&`, `||` and `??` (its §3.5),
+     the condition or the choice of a node over a constructed value at
+     every path (its §3.4), the template of a body at each write edge
+     and each path of its result (its §3.9), the membership of a `map`
+     over the result of a `filter` or a `flatMap` and the parts of an
+     index (its §3.2 and §3.17), and a constructed value observed whole
+     at each place that consumes it (its §3.4). *Assumed,* provisional
+     (P6): a table `Plan.templates` holds each such template once, and
+     each position holds a `shared` node that names the entry. Part of
+     the question is how the author wrote the decision in: sharing is
+     part of the canonical form; the entries are in the order of first
+     occurrence; the slot-free hash and the two keys treat a `shared`
+     node as P2 has them treat a node that names an output; two `shared`
+     nodes are one input of a join where they name one entry, as P3 has
+     it; and the selections of an entry are those of the place that
+     holds the node. The alternative writes every template in place. No
+     label differs. The table is formed alike over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct, and the membership of a
+     `map` is an entry in the third case alone.
+     *Measured* at prototype commit `a84264daf2` (note 500): the template of a
+     chain of `&&` operands in one cone was 11,128 bytes for 4 operands, 165,732
+     for 8, 3,262,474 for 12 and 63,119,254 for 16, and with the table it is
+     12,701 for 12, 16,165 for 16 and 19,629 for 20; the templates of the write
+     edges of a handler with 16 reads and 16 writes were 18,944 bytes and are
+     one reference each; the plans of the corpus are 5,956,178 bytes with the
+     table and were 6,410,715 with the ruling on question 222 alone. The growth
+     is confirmed, and the table removes it. No row of the comparison of labels
+     changed its category.
+246. **A subschema that stands at more than one position of a schema**
+     (PL question 169). `plan-and-label-templates.md` §1.5 wrote a type
+     that is not recursive in place at each occurrence, which for `D`
+     aliases that each use the next one twice is 2 to the power `D`
+     copies in the schema documents emitted beside the plan. *Assumed,*
+     provisional (P7): a subschema that is equal as written at more than
+     one position of one schema, and larger than one primitive type or
+     one `$ref` alone, is a member of `$defs`, named by `$ref` at each
+     position, whatever the author declared; the largest are taken
+     first, and it is part of the canonical form. Part of the question
+     is what the author assumed: the member is named by its ordinal in
+     the order of first occurrence, which is in no emitted document for
+     a member that stands alone, and equality counts the default, the
+     scope, the handle marker and the label annotations. The alternative
+     writes every type that is not recursive in place. No schema changes
+     its meaning. What it does not reach: `Slot.schema` is one schema
+     for each distinct type and path of a reader, and a subschema that
+     stands once in each of two schemas of a plan is written in each. An
+     option, not adopted: form the members over all the schemas that one
+     plan names together. It changes no meaning, and the hash of a
+     schema would then depend on which other schemas its plan names, so
+     two plans would not name one type by one hash. The entries of a
+     footprint are not reached either (question 252). Not about a
+     per-element construct.
+     *Measured* at prototype commit `a84264daf2`: a test of the crate bounds the
+     schema of a type that each level uses twice (`tests/schema.rs`); the notes
+     give no sizes. The growth is confirmed, and P7 removes it from the schema
+     documents. The schemas that the prototype's plan holds in place, the event
+     schema of a binding and the schema of an output, are not changed, and the
+     crate still cuts a type at a depth of twelve.
+
+**Sizes and costs that may grow faster than linearly.** Questions 247 to
+275 are the findings of two read-only lists of sizes and costs in the
+design that may grow faster than linearly in the size of the source or
+of the data, or that follow the number of paths: an audit of all seven
+documents, and a list made from `plan-and-label-templates.md` while the
+ruling on question 222 was written in. Each was found by reading. The
+prototype at commit `a84264daf2` measured six of them (questions 247,
+256, 257, 259, 271 and 274), and at commit `e63851c1ee` it measured
+questions 248, 250, 252, 254 to 256, 259, 260, 264 and 271, with question
+229. Each of those entries ends with the measurement and with whether the
+finding is confirmed, refuted, fixed or unchanged; the others were not
+measured and are unchanged. They are in the order
+of the audit's ranking, in its
+four groups, with the findings of the second list placed in the first
+group. Each entry quotes the rule with its section, says what grows and
+in what with a small example, gives the class (certain from the text, or
+depending on a choice the text leaves open), says whether a fix would
+change a representation or an algorithm only or the meaning of a rule,
+names the measurement that the prototype should run, and says what
+today's runtime does where the lists establish it. Nothing is assumed
+for any of them beyond the text as it stands, and none has a
+recommendation. One has a provisional decision: question 247 (P18). "The audit's
+statement" marks a
+claim about today's runtime that the audit made from source and that
+this pass did not check again; a function named with its file was found
+there.
+
+*The size or the work follows paths and not nodes.*
+
+247. **A pattern that is compiled in is written out at every call
+     site.** `plan-and-label-templates.md` §1.1: "A pattern compiled
+     into another has no plan of its own", and "Its slots, bodies and
+     cones are entries of the enclosing plan". *What grows:* the size of
+     a plan, in the number of call paths. A pattern used at `k` sites is
+     `k` sets of slots, bodies, cones, outputs, bindings and templates,
+     and where the callee uses another pattern at `k` sites in turn, `D`
+     levels deep, the innermost is written `k` to the power `D` times.
+     With A calling B at two sites and B calling C at two sites the plan
+     holds four copies of C, and eight such levels hold 256 copies of
+     the innermost. Each copy of a `ReadInput` holds the callee's
+     default by value. The table of templates of P6 shares nothing
+     between the copies, because their slots differ. The text bounds the
+     depth only by refusing a pattern on a cycle of calls (question
+     102). A call site in an element body multiplies nothing further in
+     the plan, over an array of references, over an array of plain
+     values in place, and over the result of another per-element
+     construct alike: the copies are per site and the cone instances per
+     key. *Class:* certain from the text for the plan; for the size of
+     the value code and for compile time it depends on a choice the text
+     leaves open. *A fix would change* a representation, the records of
+     a callee written once and bound to the slots of each site, and no
+     meaning of a rule; it changes what the record of a compiled-in
+     pattern is. *Measurement:* a pattern `P_d` that uses `P_(d-1)` at
+     two JSX tags, for `d` from 1 to 8; the bytes of the plan, the
+     counts of its slots, cones, outputs and bodies, the bytes of the
+     value code, and the compile time. *Today:* a sub-pattern is one
+     module, instantiated at run time (the audit's statement).
+     *Measured* at prototype commit `a84264daf2` (note 500), with two sites per
+     level and a depth of 1 to 6: plans of 3,193, 7,746, 16,961, 35,665, 73,936
+     and 152,575 bytes, 5, 13, 29, 61, 125 and 253 cones, and value code that
+     doubles as well, where the source grows by 148 bytes per level; with one
+     site per level the plan is linear. The compile time was not measured apart,
+     and depths 7 and 8 were not run. The finding is confirmed. *Assumed,*
+     provisional (P18): the plan holds each such pattern once, as a callee
+     record, and each call as a call-site record that binds the callee's
+     argument (`plan-and-label-templates.md` §1.1, "A pattern compiled in is
+     written once", and its question 170). The size of a plan is then linear in
+     the source for any nesting, and the cone instances and what they store stay
+     per chain of sites. Questions 288 and 289 hold what the record design could
+     not determine. The prototype does not have the decision.
+     At prototype commit `e63851c1ee` (note 517) the decision is still not
+     built. The plans of two sites per level are 3,175, 7,632, 16,652, 34,975,
+     72,491 and 149,595 bytes for 1 to 6 levels: the finding is confirmed and
+     unchanged. An estimate from the written-out plans, which is no measurement
+     of P18, gives 3,055, 5,365, 7,979, 11,101, 15,291 and 21,445 bytes for the
+     same six, and over the 382 plans of the corpus 5,870,726 bytes for
+     5,956,178, which is 1.4% less. P18 bounds the worst case and does not
+     change the corpus.
+248. **A `Body` record is written per use, with the whole footprint.**
+     `plan-and-label-templates.md` §1.1 describes `Body` as "One use of
+     a sandboxed function body and the result of footprint analysis",
+     and two calls of one function in the reactive tier are two records
+     with one `code`. *What grows:* `reads`, `computed`, `handles`,
+     `writes`, `envelopes`, `outputs`, `calls` and `widenings` are
+     written again for each use, so the size is uses times footprint. A
+     function with 40 entries of its footprint that the pattern body
+     calls at 30 places is 1,200 entries, where the shape of the
+     footprint is one and the slots alone differ by use. The copies of
+     question 247 multiply it. A use in an element body is one record
+     whatever the number of elements, over an array of references, over
+     an array of plain values in place, and over the result of another
+     per-element construct. *Class:* certain from the text. *A fix would
+     change* a representation only. *Measurement:* one authored function
+     with `R` reads called at `U` places, with `R` and `U` varied; the
+     bytes of `Plan.bodies`. *Today:* no plan exists.
+     *Measured* at prototype commit `e63851c1ee` (note 518): for one `lift`
+     with `R` reads of members of its argument, called at `U` places of a
+     pattern body, `Plan.bodies` is 2,006 bytes for `R` 10 and `U` 5, 8,052
+     for 10 and 20, 5,756 for 40 and 5, and 23,052 for 40 and 20, which is the
+     product. The slots do not grow with `U`: 20 and 80 at both. The template
+     table of P6 does not reach the records, which differ by the slot of each
+     read. The finding is confirmed, and nothing was changed.
+249. **`Output.constraints` lists the input constraints of every body
+     upstream.** `plan-and-label-templates.md` §1.5 ("At an input")
+     lists the constraint of a body in the `constraints` "of every
+     output whose template has a `derive` by that body", and "The
+     `derive` can be anywhere in the output's template", through the
+     outputs it names included. *What grows:* the lists of a plan
+     together. In a chain of `n` outputs in which each adds one body
+     with an annotated input, output `i` lists `i` constraints, so the
+     lists hold `n` times `n + 1` over two entries, and each constraint
+     is checked at each output that lists it: 100 outputs give 5,050
+     entries. Finding the lists is linear by the ruling on question 222;
+     the lists themselves are not. *Class:* certain from the text for
+     the size of the lists; whether a constraint is evaluated once and
+     used at each output depends on a choice the text leaves open. *A
+     fix would change* a representation, where an output lists its own
+     constraints and names the outputs upstream, and no meaning;
+     checking a constraint at fewer outputs than the rule lists would
+     change the meaning of the rule. *Measurement:* a chain of `n`
+     `lift` calls that each declare an annotated input, for `n` of 10
+     and 100; the entries of `Output.constraints` over the plan, and the
+     constraint checks for one change of the first input. The chain is
+     the same in an element body over an array of references, over an
+     array of plain values in place, and over the result of another
+     per-element construct. *Today:* no plan exists.
+250. **`within` and `Name` repeat the enclosing chain on every record.**
+     `plan-and-label-templates.md` §1.1: a `WithinStep` is "One step of
+     where a declaration sits", every `Collection`, `Body`, `Cone`,
+     `StateCell`, `Operation`, `Child` and `Binding` holds the list of
+     its steps, a `site` step holds a `Name`, and a `Name` of the form
+     `{ body: Name, site }` holds the whole name of its body. *What
+     grows:* records times the depth of nesting, with names nested in
+     names. A declaration inside five compiled-in calls and two element
+     bodies holds seven steps, and `R` records at that depth hold 7
+     times `R` steps. *Class:* certain from the text. *A fix would
+     change* a representation only: a step that names its enclosing step
+     by index. The cause that an identifier derives from holds the steps
+     as a value either way. *Measurement:* the fixture of question 247,
+     with the bytes of the `within` and `name` members counted apart.
+     The steps of an element body are the same over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct. *Today:* no plan exists.
+     Under provisional decision P18 no record holds a `site` step:
+     the steps of a call site are formed from the chain of sites, so the part of
+     this finding that is about compiled-in calls has no case. The `element`
+     steps and a `Name` that holds the name of its body stay as they are.
+     *Measured* at prototype commit `e63851c1ee` (note 518), in the written-out
+     form, since P18 is not built: with one call site per level the `within`
+     members of a plan are 89 bytes at 3 levels and 302 at 6, for 4 and 7
+     cones, which is the depth times the records; with two sites per level they
+     are 36, 212, 788, 2,388, 6,484 and 16,468 bytes for 1 to 6 levels. The
+     finding is confirmed, and nothing was changed.
+251. **The reads of a unit are the reads of every cone upstream.**
+     `execution-and-storage.md` §1.9: "What a derived write read from
+     storage is the reads of the cone instance that computed it and of
+     the cone instances it pulled from through `output` edges", and
+     "Each derived write is a unit of its own".
+     `plan-and-label-templates.md` §4.6: "the reads of the producing
+     cone are reads of the consumer's unit". *What grows:* the read sets
+     of the units of one transaction, and the digest over them. `N` rows
+     that each pull one shared cone which journaled `N` reads give `N`
+     units of `N` reads each, and a chain of `n` derived writes gives
+     read sets of `n` times `n` over two entries: 1,000 rows over one
+     shared value read through 1,000 handles is 1,000,000 attributed
+     reads. *Class:* depends on a choice the text leaves open, whether a
+     unit names the read set of a producing cone instance or holds a
+     copy of it. *A fix would change* a representation only.
+     *Measurement:* `N` rows that each read one interim value computed
+     over `N` cells through a handle; the entries of each unit's read
+     set and the bytes that the digest covers, for one change. The rows
+     are run over an array of references, over an array of plain values
+     in place, and over the result of another per-element construct.
+     Question 243 has the same for a chain of outputs. *Today:* not
+     established by the audit.
+252. **Footprint analysis: entries per position of the type written out,
+     and a callee analyzed per call.** `footprint-analysis.md` §2.2: "So
+     a `value` entry over a subtree is accompanied by one `identity`
+     entry per such position". Its §3.6: "When an authored function
+     takes a function parameter, its summary is computed per call, with
+     the argument bound". *What grows:* the entries of a footprint, each
+     a slot of the plan, in the positions of a type written out as a
+     tree and not in its declarations; and compile time, in the call
+     paths through parameters of function type. For `type T1 = { l: T0;
+     r: T0 }` and so on to `T10`, with a handle in `T0`, one read of a
+     value of type `T10` whole gives 1,024 `identity` entries. P7 writes
+     the schema of such a type once and does not reach the entries. A
+     closure passed to a helper that calls a helper with a closure is
+     analyzed once per resolved call at each level. *Class:* depends on
+     a choice the text leaves open, and is not measured: the audit
+     states that the prototype has no `identity` entries of this kind
+     yet and analyzes every callee per call to a depth of eight. *A fix
+     would change* a representation of the footprint, an entry per
+     declaration with the positions it stands for, and the algorithm of
+     the analysis; no label rule. *Measurement:* the type above for a
+     depth from 1 to 12, and helpers `f_d` that call `f_(d-1)` twice
+     with a closure; the time of the analysis, the entries of the
+     footprint and the slots of the plan. At run time each such slot
+     whose path holds `*` is bound once per child, over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct. *Today:* no footprint
+     analysis exists.
+     At prototype commit `e63851c1ee` (note 518) the first part could not be
+     measured: for the type above to `T10`, with one `lift` that reads a value
+     of the type whole, the plan has 1 slot and 1,136 bytes at every depth,
+     and the schema document grows by 222 bytes a level, by P7. The crate
+     records the read as one `value` entry and writes no `identity` entry for
+     each position, so it does not conform to `footprint-analysis.md` §2.2
+     there, and the growth of 1,024 entries at depth 10 is neither confirmed
+     nor refuted. The callee analyzed per call was not measured. Unchanged.
+253. **The rounds of a cycle of side-writes.**
+     `plan-and-label-templates.md` §4.5 ("Cycles"): "the round is
+     repeated with the labels of the round before until no staged label
+     changes". *What grows:* the label instantiations of one
+     transaction. Each round can add one clause at one address, so the
+     rounds are bounded by the clauses times the addresses of the cycle,
+     and each round instantiates every template on the cycle: a product,
+     not a sum. A cycle of 10 addresses that 20 distinct clauses reach
+     can take 200 rounds of 10 instantiations. *Class:* certain from the
+     text as an upper bound; whether a run reaches it depends on where
+     the clauses enter. *A fix would change* an algorithm only:
+     instantiate again the templates that read a label which changed.
+     *Measurement:* a cycle of `c` side-writes with `k` clauses that
+     enter at different addresses, `c` and `k` varied; the rounds and
+     the instantiations. Not about a per-element construct. *Today:* not
+     established by the audit.
+
+*The key of an element is formed from its value.* These follow from a
+rule of meaning.
+
+254. **An edit of a plain value with no declared key changes its key,
+     and a re-key moves every document stored under the key.** The case
+     is an array of plain values in place, or a plain array generated
+     from scratch, whose type declares no key field, and a body over the
+     result of another per-element construct applied to such an array.
+     It does not arise over an array of references, where an edit of the
+     cell's content leaves the key equal. `plan-and-label-templates.md`
+     §1.3: "A plain value edited in place is a new element".
+     `execution-and-storage.md` §2.5 ("A write that changes the value
+     re-keys the element"): the runtime "moves what the old key holds to
+     the new key", in storage "the state cells, the streams, the
+     operation state and the children that the body keeps under the
+     key". *What grows:* the documents written for one edit of one
+     member, in what is stored under the row. A row with two state cells
+     and a child of 40 documents, bound as `$value={item.title}`: typing
+     20 characters writes the documents under the key 20 times under new
+     identifiers and retires as many, about 840 written and 840 retired,
+     where one write of one member is expected. Each re-key also hashes
+     the whole element and needs its occurrence count. An edit that is
+     not made through a reference by key moves nothing: the child of the
+     old value is torn down and one is set up for the new value.
+     *Class:* certain from the text, and ruled (questions 160 and 190);
+     how deep the move goes rests on an assumption (PL question 112). *A
+     fix would change* the meaning of a rule, that the key of a plain
+     value is formed from the value; an author bounds it today by
+     declaring a key field. *Measurement:* `N` rows of plain records,
+     each with `C` state cells and one `asInstance()` child; 20
+     characters typed into one row; the documents written and retired
+     and the hashes computed. The same with `ArrayByKey` and with an
+     array of references. *Today:* `listElementKeys`
+     (`runtime/runner/src/builtins/list-element-keys.ts`) keys a value
+     stored in place by its position, so an edit moves nothing, and
+     "today such a child stays and receives the new value as its
+     argument" (`execution-and-storage.md` §2.5).
+     *Measured* at prototype commit `e63851c1ee` (note 515), on rows that each
+     have a state cell, a handler binding with a stream, a `lift` and an
+     `asInstance()` child, with 20 keystrokes in one row, each an event for a
+     handler that writes the `title` of its element through the reference to
+     the element. Over an array of plain values in place with no declared key,
+     per keystroke, the same at 100, 1,000 and 10,000 rows: 1 salted hash, 3
+     evaluations, 3 documents written (the argument, the argument of the row's
+     instance, and the result), the place of the state cell moved, the row
+     stored again whole, about 610 bytes, because its links to its streams and
+     its state cell hold the key, and one new stream document, since the next
+     event is for the stream of the new key: 20 keystrokes leave 20 stream
+     documents (question 295). Where the rows are parts, one part is deleted
+     and one created per keystroke. With `ArrayByKey`: 3 documents, 81 bytes,
+     nothing moved, one stream document in all. Over an array of references: 2
+     documents, 25 bytes, no hash. Today's runtime, with a plain value keyed by
+     position and the child called in the body: 4 runs of an action, 2 commits
+     and 3 documents changed per keystroke, nothing moved, in 60 ms at 100 rows
+     and 579 ms at 1,000. The finding is confirmed in kind: every keystroke
+     re-keys the row and leaves a document. It is smaller in amount than the
+     estimate above, because the prototype re-keys the instance of the child,
+     which keeps its two documents, where the assumption of PL question 112
+     writes them under the identifiers of the new key. The cost follows from
+     owner rulings, and only the owner can change it:
+     the coordinator recommends to keep the rulings, to adopt the report of
+     provisional decision P21, which is the runtime's since the warning of
+     the compiler was withdrawn, and to decide a retention rule for the
+     documents under a key that no stored array holds any longer. Recommended
+     for that rule: they are deleted by the transaction that removes the last
+     element with that key, except where a reference by key to the element is
+     stored elsewhere. The retention rule is recommended and not adopted,
+     because it reverses a stated deferral.
+255. **Nothing that is stored under an element key is ever deleted.**
+     `plan-and-label-templates.md` §1.3 and `execution-and-storage.md`
+     §2.6: "By ruling the removal of an element deletes nothing that is
+     stored under its key". *What grows:* the stored documents of a
+     collection, in the number of keys it ever held and not in its
+     length. Over an array of references that is the elements ever
+     added. Over an array of plain values in place and over a plain
+     array generated from scratch with no declared key it is the
+     distinct values ever held, since each edit is a new key (question
+     254). Over the result of another per-element construct an element
+     has its upstream key, so it follows the source. A polled list of
+     100 records in which half change per poll, each row an
+     `asInstance()` child, adds 50 instances per poll, each of at least
+     an argument and a result document, and 72,000 instances in a day of
+     one poll a minute. *Class:* certain from the text, which states it
+     and defers reclaiming. *A fix would change* the ruling, or add a
+     mechanism that reclaims storage and changes nothing a pattern
+     computes. *Measurement:* an array of `N` plain records generated
+     from scratch `P` times with one member changed each time, with an
+     `asInstance()` child and one aggregate in the body; the stored
+     documents after each run. *Today:* by the statement of
+     `execution-and-storage.md` §2.6 today's runtime deletes no document
+     of a removed element either, and with a plain value keyed by
+     position the count is bounded by the largest length the array had.
+     *Measured* at prototype commit `e63851c1ee` (note 516): 100 plain records
+     with no declared key, each row with an `asInstance()` child, replaced 100
+     times by a writer outside the instance, over an array of plain values in
+     place. The executor holds 202 documents at the start, 402 after 1 round,
+     2,202 after 10 and 20,202 after 100, which is 10,100 instances with an
+     argument and a result document each. No state cell was written and no row
+     received an event; a row that was used would leave those documents as
+     well. With `ArrayByKey`, and over an array of references: 202 throughout.
+     A plain array generated from scratch was not measured. The finding is
+     confirmed. The cost follows from an owner ruling, and only the owner can
+     change it:
+     the coordinator recommends to keep the rulings, to adopt the report of
+     provisional decision P21, which is the runtime's since the warning of
+     the compiler was withdrawn, and to decide a retention rule for the
+     documents under a key that no stored array holds any longer. Recommended
+     for that rule: they are deleted by the transaction that removes the last
+     element with that key, except where a reference by key to the element is
+     stored elsewhere. The retention rule is recommended and not adopted,
+     because it reverses a stated deferral.
+256. **A change of membership computes the key of every position.**
+     `execution-and-storage.md` §2.5, step 2: "Compute the key of every
+     position." `scheduler-and-serving-loop.md` §3.2: "The evaluation it
+     causes rebuilds the table". *What grows:* the work of one append,
+     insertion or removal, in the length `N` of the collection. Over an
+     array of references it is `N` resolutions of a link. Over an array
+     of plain values in place it is `N` salted hashes of whole values
+     and the occurrence counts, and there every edit that is not made
+     through a reference by key is itself a change of membership. Over
+     the result of another per-element construct no key is computed, and
+     each body of a chain of `D` constructs passes over its collection
+     again, `D` times `N`. The table is per scope key. Building a list
+     of 2,000 by appends is about 2,000,000 key computations. *Class:*
+     certain from the text for the pass; the constant depends on a
+     choice the text leaves open. *A fix would change* an algorithm
+     only: update the table from the splice. *Measurement:* one element
+     appended to an array of 100, 1,000 and 10,000, in each of the three
+     cases and for a chain of `filter`, `map` and `map`; the key
+     computations, link resolutions, hashes and bytes hashed. *Today:*
+     `createMapInstance` (`runtime/runner/src/builtins/map.ts`) also
+     passes over all positions when the list changes, so over an array
+     of references the order is the same; the hash of each whole value,
+     and a pass for each edit, are new over an array of plain values in
+     place.
+     *Measured* at prototype commit `a84264daf2` (note 501), at lengths of 1,000
+     and 10,000: over an array of plain values in place every array write forms
+     one salted hash for each position, for an append, an edit of one field and
+     a removal (1,001, 1,000 and 999 hashes at 1,000; 10,001, 10,000 and 9,999
+     at 10,000), with a declared key and without. With a declared key the edit
+     changes no key and the hashes are spent all the same. Over an array of
+     references no hash is formed. For a `map` over the result of a `filter`
+     over plain values in place the hashes are those of the source, the same
+     counts. The finding is confirmed for plain values in place. A key kept for
+     each position that a write did not touch is a change of the executor alone
+     and was not made. The chain of three constructs was not measured, and
+     neither were link resolutions or bytes hashed.
+     *Measured* at prototype commit `e63851c1ee` (notes 507, 509 and 512), with
+     the key of a position that a write did not touch kept and the assembly
+     brought up to date from the splices: at 100, 1,000 and 10,000 elements of
+     an array of plain values in place, with a declared key and without, one
+     append, prepend or edit forms 1 salted hash and one removal none; over an
+     array of references none is formed; for a `map` over the result of a
+     `filter` of plain values in place the counts are those of the source.
+     With every key and every assembly formed again, which is the wording of
+     the two sentences quoted above, one change at 10,000 forms 10,000 or
+     10,001 hashes and takes 174 to 321 ms over plain values. The finding is
+     confirmed for the wording and fixed in the executor. *Assumed,*
+     provisional (P23): the two sentences state the result and not an
+     algorithm. What still follows the length: a `set` of a whole new array,
+     whose entries the store compares to keep their keys; the positions behind
+     an insertion or a removal (question 260); and a `flatMap`, the
+     aggregates that scan, and a construct over a plain array generated from
+     scratch, whose assembly the executor still forms whole. The chain of
+     three constructs, link resolutions and bytes hashed were not measured.
+257. **A reference by key is resolved by hashing every element where no
+     element table exists.** `execution-and-storage.md` §2.5 ("Resolving
+     a reference by key"): "Where it has none, because no loaded
+     instance iterates the array, the runtime computes the keys of the
+     array's positions as step 2 below does".
+     `plan-and-label-templates.md` §1.3: "Each element is hashed once
+     per element table and once more per resolution of a reference by
+     key", and a reference resolves "at each read and each write". *What
+     grows:* the hashes of one pass, in the references times the length
+     of the array. `M` references into an array of `N` plain values cost
+     `M` times `N` hashes, and `N` rows that each hold a reference to
+     their own element cost `N` times `N`: 1,000,000 for 1,000 rows. The
+     case is an array of plain values in place, a plain array generated
+     from scratch, and the result of another per-element construct whose
+     upstream position holds a plain value. A reference to an element of
+     an array of references is a link and is not hashed. *Class:*
+     certain from the text where no table exists; whether the runtime
+     keeps an index of keys for an array that references alone point
+     into depends on a choice the text leaves open. *A fix would change*
+     an algorithm only. *Measurement:* `N` rows that each hold a
+     reference by key to their own element, in a pattern that does not
+     iterate the array; all of them read once after one write; the
+     hashes. *Today:* a reference to a member of a record stored in
+     place is a link to the position and resolves without a hash (the
+     documents' statement).
+     *Measured* at prototype commit `a84264daf2` (note 500), for an array whose
+     keys the store had formed: a reference by key was resolved by a scan of the
+     keys of its array, and with 10,000 plain values in place a settle took 4.8
+     s and one change 5 to 11 s. The store now keeps an index from a key to its
+     position for each list of keys it formed. That confirms the cost of a scan
+     and removes it where a list of keys exists. The case of this entry, an
+     array that no loaded instance iterates, was not measured and is unchanged.
+     At prototype commit `e63851c1ee` the case of this entry was again not
+     measured, and it is unchanged. One thing bears on it (note 506): a memo
+     entry that read through a key into the document of a computed output,
+     which is a plain array generated from scratch, is compared at every pull,
+     because the read itself brings the output up to date and no write
+     announces it (question 294).
+258. **Equal plain values: an edit or a removal changes the key of the
+     later equal elements.** `plan-and-label-templates.md` §1.3: "An
+     edit that makes the value equal to that of another element, or ends
+     such an equality, changes the count of elements that the write did
+     not touch". `execution-and-storage.md` §2.5: "Where two equal
+     values stand in the collection and the first is removed, the one
+     that remains becomes occurrence 0". *What grows:* the cone
+     instances that one removal makes stale, in the number `K` of equal
+     elements: removing the first of `K` equal rows gives `K - 1` rows
+     another key, and each then reads what is stored under that key. The
+     case is equal values in an array of plain values in place or in a
+     plain array generated from scratch, and equal links in an array of
+     references. An element of the result of another per-element
+     construct has its upstream key. Which state an occurrence has is
+     question 76; this entry is the cost. *Class:* certain from the text
+     for the change of key; the cost depends on whether an equal output
+     ends the evaluation. *A fix would change* the meaning of a rule.
+     *Measurement:* `K` equal rows with a state cell each; the first
+     removed; the cone evaluations and the documents written. *Today:* a
+     plain value in place is keyed by position (question 254).
+
+*One element changes, and the work or the bytes follow the length.*
+
+259. **One row's change makes the enclosing cone and the `result` cone
+     return their whole value, and the documents do not agree on it.**
+     `plan-and-label-templates.md` §1.4 ("The partition"): "The
+     enclosing cone uses the assembled result".
+     `execution-and-storage.md` §3.3: "An entry is not current when an
+     upstream output it pulled has a different value from the one
+     recorded." Its §2.2, assumed there: "the function returns the whole
+     constructed value once". By these three, a change of one row's
+     output changes the assembled array, so the cone of the JSX tree
+     that encloses the `map` is not current, is evaluated again and
+     returns the whole tree, and the runtime compares a value of `N`
+     rows with what is stored; the same one level up for each cone that
+     pulls the tree and for the `result` cone. Against that,
+     `execution-and-storage.md` §10.1 lists the cone instances of the
+     derivation transaction behind a send as `facts`, `isEmpty`, the
+     participants derivation, the per-session records, the 30 existing
+     rows and the new row, with no cone of the tree among them, and its
+     seal table has for the document of the main list "One storage link
+     appended". The worked example assumes that the enclosing cone is
+     not evaluated, and the rules make it stale. *What grows:* the work
+     and the bytes returned for a change of one element, in `N` for each
+     enclosing level, over an array of references, over an array of
+     plain values in place, and over the result of another per-element
+     construct alike. *Class:* depends on a choice the text leaves open,
+     and the text conflicts with itself. *A fix would change* a
+     representation only: the enclosing value holds a reference to the
+     collection and depends on its membership, and the store step writes
+     the paths of the cone instance that changed. *Measurement:* one
+     member of one element changed in a list of `N` inside two levels of
+     enclosing JSX, for `N` of 100, 1,000 and 10,000 in each of the
+     three cases; the evaluations of the enclosing cones and of
+     `result`, the bytes that their value functions return, and the
+     positions compared or written. *Today:* the `map` coordinator keeps
+     the content of the elements out of its reads, so a change of one
+     element does not run it again (the audit's reading of
+     `runtime/runner/src/builtins/map.ts`).
+     *Measured* at prototype commit `a84264daf2` (notes 501 and 503), with one
+     `map` in the result and no enclosing JSX: a change of one element costs 2
+     to 5 evaluations at every length, which are the element, the assembly and
+     the result, so the `result` cone is evaluated, as the three rules give it
+     and against the worked example. The executor writes the result document
+     whole: 22,879 to 22,924 bytes for a change of a list of 1,000 and 238,879
+     to 238,925 for one of 10,000, in each of the three cases. Over the corpus
+     the derivation transactions wrote 31,642,734 bytes in 755 transactions, of
+     which 14,970,456 are of one module whose result document of about 140,000
+     bytes is written whole behind each event. The finding is confirmed for the
+     evaluations and for the bytes that the executor writes. The executor has no
+     patch, so the measurement does not show what a store step that writes the
+     changed paths would write, and the two levels of enclosing JSX were not
+     measured.
+     *Measured* at prototype commit `e63851c1ee` (notes 508 and 512), with a
+     cone that places a collection holding a reference to it and the rows
+     stored by the collection: one change of one element costs 2 evaluations
+     for a `map`, the element and the assembly, and 4 for a `map` over the
+     result of a `filter`, at 100, 1,000 and 10,000 elements, where it cost 3
+     and 5; and 2 to 26 bytes are put into the documents, where 238,904 were
+     written at 10,000. Over the corpus the executor counts 6,673 evaluations
+     for 7,118, and no compared value changed. The finding is confirmed for
+     the three rules and fixed in the executor. *Assumed,* provisional (P22):
+     the conflict is resolved in favor of the worked example of
+     `execution-and-storage.md` §10.1 (its §2.2, "A collection that a cone
+     places"). It was measured over an array of references, over an array of
+     plain values in place, and over the result of a `filter` of plain values
+     in place. Two levels of enclosing JSX, a `flatMap`, and a construct over
+     a plain array generated from scratch were not measured. Question 292 has
+     what the decision leaves open.
+260. **Labels, bindings and stored results are held at positions.**
+     `builtin-inventory.md` ("Element keys"): aggregates and indexes
+     "keep, as part of their state, the position of each element key".
+     `execution-and-storage.md` §2.6: "The stored array is rewritten in
+     the new order". `plan-and-label-templates.md` §1.3: "reordering a
+     collection recomputes nothing but the cones that read the index".
+     *What grows:* the entries written for one insertion or removal at
+     position `i`, in `N - i`: the label entries of the envelope, the
+     provenance records, the origin facts of a derived collection, and
+     the positions in the state of a fold or an index. A row prepended
+     to 1,000 rows moves 1,000 of each. `execution-and-storage.md` §4.2
+     calls the write of the array a `splice`, and §2.6 says "rewritten".
+     *Class:* certain from the text for the count of entries; the bytes
+     are bounded for rows stored in place by `DOCUMENT_MAX_BYTES`, and
+     rows that are parts do not move. *A fix would change* a
+     representation only. *Measurement:* one row prepended to `N` rows,
+     over an array of references, over an array of plain values in
+     place, and over the result of a `filter`; the envelope entries,
+     provenance records and state entries written. *Today:*
+     `normalizeAndDiff` (`runtime/runner/src/data-updating.ts`) visits
+     every index of a written array.
+     *Measured* at prototype commit `e63851c1ee` (note 512), for the positions
+     that the executor holds in memory and not for stored entries, of which it
+     has none: a prepend and a removal of the first element have the same
+     counts as an append and a removal of the last, and take 6 to 10 times as
+     long at 10,000 elements as at 100, where an append takes 0.6 to 2.2
+     times, over an array of references and over an array of plain values in
+     place. Each later key gets another position, one number each. The finding
+     is confirmed with a small constant for the positions. The label entries,
+     provenance records and origin facts were not measured. Under provisional
+     decision P20 the stored entries of a row are at paths relative to the run
+     of its chunk, so an insertion renumbers those of one chunk
+     (`execution-and-storage.md` §4.10); that is derived and not measured.
+261. **A read of one element by index is a read of every element, with
+     no diagnostic.** `footprint-analysis.md` §3.1: "An index into an
+     array is not a widening", and "so `rows[0].price` is `rows/*/price`
+     too". Its §3.1 also: "An entry whose path holds `*` is one entry of
+     the footprint and one slot of the plan". *What grows:* for a body
+     that uses one row, the bindings, the values in its argument and the
+     labels joined, each in `N`, and for a `lift` or a `computed` that
+     is not promoted one run for a change of any row. A handler that
+     looks up one of 5,000 messages by index binds and reads 5,000. `N`
+     changes of distinct elements are `N` runs of `N` each. The array is
+     one of references, where each binding crosses a link, or one of
+     plain values in place; the result of another per-element construct
+     read by index in a body is the same. *Class:* certain from the
+     text. *A fix would change* a rule of the analysis, what an index
+     observes, or add a diagnostic. *Measurement:* a body that reads
+     `rows[0].x`, and a change of the `x` of the last row; no evaluation
+     is expected by an author, and one with an argument of `N` values is
+     observed. *Today:* the same order, by the statement of
+     `footprint-analysis.md`.
+262. **The label of the membership is in the label of every element, and
+     a label that all rows share is stored once per part.**
+     `plan-and-label-templates.md` §3.7 gives each element of a `filter`
+     and of a `flatMap` its root "`shape` replaced by the membership
+     template", and its §3.17 does the same for the elements of a
+     bucket. `execution-and-storage.md` §4.10: "A part's envelope is
+     complete for its paths". *What grows:* the documents written for
+     one change of the label of the membership, in `N`: every row's
+     label changes, and where the rows are parts each of the `N` part
+     documents is written. One row whose label differs replaces one
+     entry for all children by `N` entries. The construct is a `filter`
+     or a `flatMap` over an array of references, over an array of plain
+     values in place, or over the result of another per-element
+     construct; a `map` adds no membership of its own. *Class:* certain
+     from the text. *A fix would change* the meaning of a rule for the
+     part that every element carries the membership, and a
+     representation only for the copy of a shared label in each part.
+     *Measurement:* a `filter` over `N` rows that are parts; the
+     confidentiality of one input of the predicate changed; the
+     documents and label entries written. *Today:* an envelope per
+     labeled document (the statement of `execution-and-storage.md` §4.8
+     and §4.9).
+263. **`reduce` evaluates every step on any change.**
+     `execution-and-storage.md` §6.2: "In the baseline the fold is not
+     kept per key, so one changed element evaluates every step".
+     `builtin-inventory.md` (`reduce`): "The value of a `reduce` is
+     therefore recomputed in input order". *What grows:* the steps for
+     one change, in `N`, and `N` pushes cost `N` times `N` over two
+     steps. A step is an expression that does not mutate, so an
+     accumulator that is an array or a record is copied at each step,
+     about `N` times `N` over two members for one evaluation: 2,000
+     elements folded into an array copy 2,000,000 members. The
+     checkpoints that `builtin-inventory.md` names as an option store
+     one accumulator per prefix. The source is an array of references,
+     an array of plain values in place, or the result of another
+     per-element construct, alike. *Class:* certain from the text, which
+     states the first part. *A fix would change* an algorithm and what
+     is stored, with checkpoints, or a rule of the language, with a step
+     that may mutate its accumulator. *Measurement:* a `reduce` into a
+     number and into an array over `N` elements; one element changed and
+     one appended; the steps and the members copied. *Today:* a `reduce`
+     that mutates its accumulator inside a `computed` is linear per run
+     (the audit's statement).
+264. **Part documents: what crossing the size limit does, and what
+     measuring costs.** `execution-and-storage.md` §4.10 ("The rule
+     about size"): "Sizes are computed from the documents being written
+     and are not stored"; where a document exceeds `DOCUMENT_MAX_BYTES`,
+     "every split point directly below it that is stored in place
+     becomes a part, whatever its size"; and "A list of many small rows
+     stays in the document that stores the array until that document
+     exceeds `DOCUMENT_MAX_BYTES`". *What grows,* in three ways. First,
+     a write of one leaf measures every enclosing split point, and with
+     sizes not stored each measurement encodes the subtree, so `N`
+     appends encode about `N` times `N` over two rows. Second, a list of
+     2,000 rows of 33 bytes crosses 65,536 bytes at one append, and that
+     transaction creates up to 2,000 part documents, each with an
+     identifier, a link back, the `within` steps and an envelope, which
+     is several times the row; a reader of the list then loads 2,000
+     documents, and a list that shrinks stays split until a part is
+     written. Third, the array of `N` storage links is one document with
+     no split point. *Class:* the first depends on a choice the text
+     leaves open; the second is certain from the text, with the
+     placeholder numbers of question 41 and the reading of question 229;
+     the third is certain. *A fix would change* an algorithm for the
+     first, and a representation for the second, parts that hold several
+     rows, which changes what a part is and nothing a pattern computes.
+     *Measurement:* a kept collection of `N` rows of 30 bytes, appended
+     to past the limit; the bytes encoded for the size rule per
+     transaction, the documents created in the crossing transaction, the
+     stored bytes before and after, and the documents a reader of the
+     whole list loads. The rows are those of a kept collection over an
+     array of references, over an array of plain values in place, and
+     over the result of another per-element construct. *Today:* no part
+     documents; a `map` element is an instance with several documents of
+     its own, and a list of plain records that no `map` renders is one
+     document (the statement of `execution-and-storage.md` §4.8).
+     *Measured* at prototype commit `e63851c1ee` (notes 511 and 513), on a
+     `map` over an array of plain values in place with rows of 23 bytes, with
+     a declared key and with none. The first part was not measured: the
+     executor keeps the bytes of each split point in memory and adds the
+     difference that a write makes, which the section did not allow for. The
+     second part is confirmed: a list of 2,600 rows that 200 are appended to
+     creates 2,800 part documents in that transaction, and 3,000 rows are
+     3,002 documents of 250,960 bytes where 2,000 rows are 2 documents of
+     46,960. The third part is confirmed and is worse than stated: a storage
+     link is 61 bytes and a row 23, so the array of links, about 171,000 bytes
+     at 2,800 rows and 610,000 at 10,000, is larger than the rows it replaced,
+     and every append and every removal writes it, 610,081 bytes of documents
+     for 98 bytes put in. An edit of a row with no declared key deletes one
+     part, creates one and writes that array. Label entries and provenance
+     records are in no measured size. *Assumed,* provisional (P20): a split
+     point is a part only from `PART_MIN_BYTES` on, and a long array is stored
+     in chunks, so that one change of one row writes one chunk of at most
+     `DOCUMENT_MAX_BYTES`; and with each part and each chunk counted as its
+     link, measuring encodes no document that the transaction does not write,
+     which bounds the first part. The decision is written into
+     `execution-and-storage.md` §4.10 and is not built. Question 290 has what
+     it leaves open.
+265. **An element body that reads the index, or that captures the whole
+     collection.** `plan-and-label-templates.md` §1.3: "reordering a
+     collection recomputes nothing but the cones that read the index".
+     `execution-and-storage.md` §2.6 has for a captured outer value that
+     changes every element's cone instances that read it. *What grows:*
+     for a body that reads the index, one insertion at the front
+     evaluates the index-reading cones of all `N` elements, writes `N`
+     arguments where a child takes the index, and requests `N` effects
+     again where a request holds it. For a body that captures the
+     collection it iterates, `N` cone instances each read `N` elements,
+     and one change evaluates `N` of them. It is alike over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct. *Class:* certain from the
+     text, which states it. *A fix would change* the meaning of a rule,
+     since the index and the captured collection are values the body
+     reads; the documents bound it with a hint alone. *Measurement:* a
+     `map` whose callback uses its index in a child's argument, over `N`
+     elements; one element inserted at the front; the evaluations,
+     argument writes and effect requests. *Today:* the same order:
+     `createMapInstance` (`runtime/runner/src/builtins/map.ts`) sets
+     every element up again where the callback uses the index
+     (`usesIndex`).
+266. **Stores of one document that hold one entry per element key.**
+     `execution-and-storage.md` §8.4: "One cache document per instance
+     and per scope key"; its §2.8: "The enclosing instance has one
+     **instances document** per scope key", which lists the children of
+     an element body per element key; and its §6 holds the contributions
+     of an aggregate or an index per key in the operation's own state
+     document. *What grows:* the bytes written for a change of one
+     entry, in `N`, if a write of one entry writes the document, because
+     the rule about size of §4.10 applies to the result and its parts
+     and to none of these. The name of an entry is the text of the key
+     record, which for a link holds a space, a document and a path. A
+     cache document for 2,000 rows with 5 promoted element cones of 5
+     reads each holds 50,000 read records. The durable fingerprint of a
+     cache entry holds the version of the document read, so after a
+     restart an entry of an element cone over an array of plain values
+     in place misses whenever any element of that array's document was
+     written; over an array of references each element has a document of
+     its own, and over the result of another per-element construct it
+     follows what the upstream position holds. *Class:* depends on a
+     choice the text leaves open for the bytes per update; certain from
+     the text for the fingerprint. *A fix would change* a representation
+     only. *Measurement:* a `sum` and a `groupBy` over `N` references
+     with one element changed, and the bytes written to the state
+     document; an element cone that is promoted to the cache, a restart,
+     one element changed, and the cache hits. *Today:* no such documents
+     exist.
+267. **Verifying a `oneOf` reference: `M` result positions against `N`
+     candidates.** `footprint-analysis.md` §3.8: "The runtime verifies
+     both forms by reference identity", and one entry whose path holds
+     `*` stands for every reference its positions hold. *What grows:*
+     the comparisons of one evaluation of a body that returns `M` of the
+     `N` references it was given, as `rows.filter(keep)` or
+     `rows.toSorted(f)` in a function body does: `M` times `N` with a
+     scan, 4,000,000 for a sort of 2,000. The array is one of
+     references, or the result of another per-element construct that
+     holds references; a plain value has no reference to verify.
+     *Class:* depends on a choice the text leaves open. *A fix would
+     change* an algorithm only: a set of the candidates. *Measurement:*
+     a `lift` that returns its `N` input references sorted; the identity
+     comparisons per run. *Today:* not established by the audit.
+
+*The scheduler, demand, a restart, and a client.*
+
+268. **A handler that follows `L` links to instances that are not loaded
+     runs `L + 1` times.** `scheduler-and-serving-loop.md` §5.3 ("A
+     writer in an instance that is not loaded"): "The cost is one more
+     run of the handler for each instance whose stale output a journaled
+     read discovers", and for a runtime with no basis index, such as a
+     client, "There the stale case applies". *What grows:* the runs of
+     one handler for one event, in the number `L` of instances whose
+     stale output it reads through a handle, and the reads over those
+     runs, `L` times `L + 1` over two, since attempt `i` runs the body
+     up to read `i`, is withdrawn, and one instance is loaded. A handler
+     that sums a derived member of 200 linked cards runs 201 times and
+     makes about 20,000 reads. On the server that is for the outputs the
+     basis index shows stale; on a client it is for every such instance
+     that is not loaded. The section states the cost per instance (its
+     open question 28) and not the total or the case of a client.
+     *Class:* certain from the text. *A fix would change* an algorithm
+     only, loading every instance that the withdrawn attempt shows is
+     needed before the next run, as far as a read does not decide which
+     instance is read next. *Measurement:* a handler that reads one
+     computed member of each of `L` instances that are not loaded, for
+     `L` from 1 to 50; the runs of the body, the journaled reads and the
+     loads per event, on a server with all `L` stale and on a client.
+     The links are the elements of an array of references; an array of
+     plain values in place holds no instance. *Today:* by the statement
+     of the same section the read closure of a handler is computed once,
+     by a deep read under the handler's schema before it runs.
+269. **Basis rows are keyed by cone and document, and do not advance
+     under demand for some rows.** `scheduler-and-serving-loop.md`
+     §10.4: "The row of a document every key reads advances only when
+     every bound key has been evaluated against it". Its §4.2: "A reader
+     of one row demands that row's element cones and no other row's."
+     *What grows:* the evaluations at each activation, restart or load.
+     A document that every key reads has one row per cone. Where a
+     client renders 30 of 2,000 rows, the keys that nothing demands are
+     not evaluated, so the row never advances once the document changed,
+     and every demanded key of every element cone is found stale and
+     evaluated at each activation: 30 times the cones of the body, each
+     time. Over an array of plain values in place, and over the result
+     of another per-element construct whose upstream holds plain values,
+     all elements are in one document, so one edit puts the rows of
+     every element cone behind, and after a restart `N` times the cones
+     of the body are stale; the assumption of `execution-and-storage.md`
+     §3.4 then holds over an array of references alone, where each
+     element has a document. A write that was refused never advances its
+     rows and is tried at every load. *Class:* certain from the text. *A
+     fix would change* what is stored, a row per key or the set of keys
+     in a row, and no meaning of a rule. *Measurement:* `N` plain values
+     in one document with 10 rows demanded, a restart, and nothing
+     changed; the cone instances found stale and evaluated. The same
+     with a captured outer value that changed once, over an array of
+     references. *Today:* a row per run of an element's sub-pattern,
+     which other elements do not hold back (the statement of the same
+     section).
+270. **The first evaluation after a restart, and every first render on a
+     client, is not incremental.** `scheduler-and-serving-loop.md`
+     §10.6: "The memo of evaluated cone instances is process memory and
+     starts empty", and so do the element tables.
+     `execution-and-storage.md` §2.5, step 3: "For each key not in the
+     table, create its cone instances", and evaluate them.
+     `scheduler-and-serving-loop.md` §1.5 has an interim output as one
+     "which is stored nowhere". *What grows:* the evaluations for the
+     first change after a restart, in `N` times the cones of the body:
+     the first stale consumer that pulls an interim output of an element
+     body, as a `filter` over the result of a `map` that is not kept
+     does, pulls it for all keys. A client has no basis rows and no memo
+     when a page opens, so every cone instance it renders counts as
+     never evaluated. Over an array of references, over an array of
+     plain values in place, and over the result of another per-element
+     construct the count is the same; the third is the case that has
+     interim outputs to pull. *Class:* depends on a choice the text
+     leaves open: whether step 3 or `execution-and-storage.md` §3.4
+     governs, and no rule says when a client takes a committed kept
+     output as current. *A fix would change* an algorithm for the
+     server, and for a client it needs a rule about evaluation, which is
+     not a rule about what a pattern computes. *Measurement:* a `map`
+     that is not kept, feeding a `filter`, feeding a kept `map`, over
+     `N` elements; all memo entries and tables dropped; one element
+     appended; the element evaluations. On a client, a page of `N`
+     rendered rows and one event that changes one row. *Today:* not
+     established by the audit.
+271. **Finding the demanded outputs that a dirty slot makes due.**
+     `scheduler-and-serving-loop.md` §3.3: "Marking a slot dirty does
+     nothing else". Its §2.2: "The scheduler keeps no second copy of any
+     of them". `plan-and-label-templates.md` §4.1, step 1, makes a
+     demanded output due where a slot that its template reaches has a
+     new label and an unchanged value. *What grows:* the work of one
+     cycle to find where to start. The text gives the order and the
+     condition and not how the set is found: either a walk forward from
+     each mark, which follows the change, or a visit of every demanded
+     output, which follows all that is demanded. For 2,000 rows rendered
+     by 20 sessions and one changed member the second is 40,000 checks
+     per cycle. For a slot whose label alone changed, an index from slot
+     to outputs is slots times outputs, and a propagation along the
+     references is linear in what is downstream; no document says which.
+     *Class:* depends on a choice the text leaves open. *A fix would
+     change* an algorithm only, within the sentence of §2.2 on where
+     staleness is held. *Measurement:* `N` demanded rows and one member
+     of one element changed, for `N` of 100, 1,000 and 10,000, over an
+     array of references, over an array of plain values in place, and
+     over the result of another per-element construct; the memo entries
+     visited and the fingerprints compared in the derivation
+     transaction, which should not grow with `N`. *Today:* a lookup in
+     an index per changed address (`EntityTriggers.forEachMatching` in
+     `runtime/runner/src/scheduler/entity-triggers.ts`).
+     *Measured* at prototype commit `a84264daf2` (note 501): for one change of
+     one element the executor checked 3,002 to 3,007 memo entries at a length of
+     1,000 and 30,002 to 30,007 at 10,000, and 7,002 to 7,014 and 70,002 to
+     70,014 for a `map` over the result of a `filter`: 3 `N` to 7 `N`, in each
+     of the three cases. The executor finds what is stale by checking each entry
+     that is demanded, which is the second of the two ways this entry names. The
+     finding is confirmed for that way: the checks grow with `N`. An index from
+     a write to its readers was not built, so the first way is not measured.
+     *Measured* at prototype commit `e63851c1ee` (notes 506 and 512), with each
+     memo entry registered as a reader of the positions it read and as a user
+     of the entries it used, and a write marking its readers: one change of
+     one element is 1 or 2 checks at 100, 1,000 and 10,000 elements, over an
+     array of references, over an array of plain values in place with a
+     declared key and with none, and over the result of a `filter` of plain
+     values in place, where it was 3 `N` to 7 `N`. That is the first of the
+     two ways this entry names, and the finding is fixed for it in the
+     executor. Two things are left. A reader through a reference by key into
+     an array of plain values in place is marked by the key that the write
+     touched (provisional decision P24; question 293). And an entry that
+     depends on something the index does not hold is compared at every pull,
+     so that over a plain array generated from scratch the checks follow the
+     list as before (question 294). The executor does not hold demand per kept
+     output path or the address index of `scheduler-and-serving-loop.md` §3.1,
+     so the measurement is of its own marking.
+272. **A withdrawal of demand derives the counts again over the upstream
+     region, for each path released.** `scheduler-and-serving-loop.md`
+     §4.3: "a withdrawal derives the counts again over the region
+     upstream of the output that lost demand". *What grows:* the visits
+     for one session that closes, in the paths `P` it watched times the
+     upstream region `U` of each, since the rows of one list share most
+     of what is upstream: 2,000 rows of 10 kept paths over a shared
+     region of 50 cone instances is 1,000,000 visits. Demand is also
+     held for the length of an event's transaction, so each event grants
+     and withdraws over the upstream closure of what its handler reads.
+     *Class:* depends on a choice the text leaves open, whether the
+     counts are derived again only where a count reaches zero. *A fix
+     would change* an algorithm only. *Measurement:* `K` sessions that
+     each demand `P` row paths of one list, and one closed; the units
+     visited and the counts written. Then one event for a handler that
+     reads a value derived from all rows. The rows are over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct alike. *Today:*
+     `withdrawDemandFrom`
+     (`runtime/runner/src/scheduler/dependency-graph.ts`) derives the
+     region upstream of its origin again as well; the read closure of a
+     handler is no demand root today, so the work per event is new.
+273. **Factors per scope key and per session.**
+     `execution-and-storage.md` §1.8: "A cone instance of user or
+     session scope is evaluated once per scope key that demands it". Its
+     §10.1 has the per-session records that the room derives for every
+     row evaluated "once per demanding session" on each send. *What
+     grows:* evaluations and stored documents, in rows times sessions. A
+     cone instance takes the narrowest scope of anything it reads, a
+     part document has a scope instance for each session that rendered
+     the row, with no stated end, and a materializer in an element body
+     is one unit, one standing demand and one transaction per key and
+     scope key. A body nested in a body has one cone instance per
+     combination of keys, also for a cone that reads nothing of the
+     inner element. It is alike over an array of references, over an
+     array of plain values in place, and over the result of another
+     per-element construct. *Class:* certain from the text. *A fix would
+     change* the meaning of the scope rules for the first part, and the
+     partition of cones (question 101) for a cone that reads nothing of
+     the element. *Measurement:* `N` rows with one session-scoped cell
+     read by each row, and `S` sessions; one send; the evaluations, and
+     the documents stored after all sessions rendered. *Today:* present,
+     by the figures of the documents.
+274. **The bound of ten, across the transactions of a cycle and the
+     events of a batch.** `execution-and-storage.md` §2.7: "A cone
+     instance is evaluated at most ten times in one transaction".
+     `scheduler-and-serving-loop.md` §8.3: "In one serving cycle, a
+     materializer runs at most 10 times". `execution-and-storage.md`
+     §1.1: "the stale cone instances it reads are evaluated in that
+     handler's own transaction, before its body". *What grows:* inside
+     one transaction the bound is per cone instance, so the ceiling is
+     10 times the cone instances and nesting does not multiply it.
+     Across transactions the count starts again: a cone instance on a
+     cycle with a materializer can be evaluated 100 times in one serving
+     cycle, and again after each backoff. `E` events whose handler reads
+     a derivation over a whole list of `N` cost `E` times `N`, since
+     what a handler reads is evaluated once per event and not once
+     behind the batch. *Class:* bounded by a stated rule inside a
+     transaction; certain from the text across transactions. *A fix
+     would change* the meaning of a rule: a bound per cycle or per batch
+     is a new rule. *Measurement:* `N` rows that read a state cell which
+     a cone writes again from their count with a function that does not
+     settle, for `N` of 5, 50 and 500; the evaluations and which cone
+     instances hold an error state. And `E` events in one batch for a
+     handler that reads an aggregate over `N` rows. Over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct alike. *Today:* `MAX_ITERS`
+     is 10 (`runtime/runner/src/scheduler/constants.ts`).
+     *Measured* at prototype commit `a84264daf2` (notes 480, 483 and 484), on
+     fixtures with no row: a cycle of two cones that does not settle evaluates
+     each ten times in one derivation transaction, a reader of both cells is
+     evaluated five times, and a later event that writes one of the cells
+     evaluates the two to the bound again. Under the reading of question 224
+     that provisional decision P10 does not take, every later cause costs twenty
+     evaluations per cone. A handler that reads a derivation behind two events
+     of one batch has it evaluated once, in its own transaction, and not again
+     behind the batch. The measurement of this entry, with `N` rows and `E`
+     events, was not run. The finding is unchanged.
+275. **Seven smaller sizes.** Each is from the audit's last finding or
+     from the second list, and is certain from the text unless it says
+     otherwise; none is measured. (a) The stream index holds a row per
+     binding and key, so a `filter` whose membership changes writes and
+     deletes rows with it, `N` rows times the bindings of the body, over
+     an array of references, over an array of plain values in place, and
+     over the result of another per-element construct; and the drain
+     still scans the heads of all stream entries
+     (`selectPendingStreamEventDocs` in
+     `runtime/runner/src/executor/space-server.ts`, today). An
+     algorithm. (b) A `wish` search records the name and the schema of
+     every candidate it considered, per cone instance
+     (`scheduler-and-serving-loop.md` §3.4). A representation. (c)
+     Migration compiles and writes the setup of every instance of a
+     space while no cycle runs, and one refused instance holds the space
+     (questions 83 and 84). (d) The key of a member of a `flatMap`
+     result is a record of the source element's key and the member's own
+     (`plan-and-label-templates.md` §1.3), so a chain of `d` `flatMap`
+     constructs, each over the result of the one before, has keys of
+     depth `d` in every reference by key, state member name and cause;
+     over an array of references and over an array of plain values in
+     place with no construct upstream the key has one level. Today an
+     identifier is a hash of fixed length. A representation. (e) A
+     `lift` that instantiates in a loop updates all `N` instances at
+     each run. (f) `footprint-analysis.md` §6.3: "A body with one write
+     that is not static is a materializer for all of its writes", and
+     where an author follows the hint for a widened read and keeps the
+     record in a cell, a write of one child under a computed key, as
+     `counts.key(flavor).set(n)`, is such a write. A rule of the
+     analysis. (g) A `derive` mints one atom with an `inputWitness` for
+     each `TransformedBy` atom that every labeled input carries
+     (`plan-and-label-templates.md` §3.2, assumed, its question 67), so
+     the integrity of a value at the end of a chain of derivations holds
+     atoms that nest those of the steps before, to the depth
+     `INPUT_WITNESS_MAX_DEPTH` allows. It is a size of stored labels and
+     not of the plan, it is bounded by that depth, and the runtime of
+     today has the same bound. *Measurement:* for (a), a `filter` over
+     `N` rows with `B` bindings per row and one predicate input changed,
+     and the rows written; for (d), the bytes of a key at chain depths 1
+     to 4; the others are counted in the fixtures of questions 256, 268
+     and 270.
+
+Findings of the two lists that an earlier question holds, and that have
+no entry above. The instantiation key, the digest and the provenance of
+an output that list every upstream slot: questions 239 and 243. The
+provenance record that copies the dynamic addresses of an upstream body
+into every kept output that depends on it: question 241, which has the
+growth and a measurement. A derived collection that is given whole to an
+instance and copied into its argument: question 212, the same. The label
+of a `fold` that has no durable state, and `min` and `max` when the
+extreme leaves: question 244. The overlay entry for an insertion, which
+holds the whole collection: question 237, the same. The records other
+than `Output` that hold a template, and a template repeated inside one
+cone, at each path of a constructed value, at each write edge of a body,
+in the membership of a `map` and where a constructed value is observed
+whole: questions 242 and 245 (P5, P6). A type written in place at each
+occurrence: question 246 (P7). One finding is settled in the documents
+and is no question: the label of the membership that a collection
+iterates, and the label of a collection's array that a slot of root
+`index` resolves to, were formed once per element, which is `N` times
+`N` for a `filter` over `N` elements; `plan-and-label-templates.md` §4.1
+("A label is instantiated once") has both formed once for the collection
+and the enclosing keys, over an array of references, over an array of
+plain values in place, and over the result of another per-element
+construct. A representation changed there and no label did.
+
+No finding of either list is refuted by the text of the documents. Three
+are bounded by a rule and are entries all the same: the bound of ten
+inside one transaction (question 274), the bytes of rows stored in place
+that move with a position (question 260), and the depth of a
+witness-bearing atom (question 275).
+
+**From the prototype's notes 479 to 504.** At commit `a84264daf2` the
+prototype's executor has a queue of events and a batch, a transaction for each
+cause, the bound of ten, the error state and a stubbed effect layer. Questions
+276 to 287 are what those notes show the documents not to decide, or to state
+wrongly. Questions 276 to 284 each have a provisional decision, which is the
+choice of the prototype's author in its note 502, adopted by the coordinator of
+this work ([Provisional
+decisions](#provisional-decisions-awaiting-the-owners-ratification)); each is
+written into the documents as an assumption. Questions 288 and 289 are what the
+record design of provisional decision P18 could not determine. The fixtures of
+these notes hold one per-element construct, a `map` over an array of plain
+values in place, and no entry below was tried over an array of references or
+over the result of another per-element construct.
+
+276. **A slot of a handler that observes the reference alone, and the cone that
+     writes its cell** (SS question 54, ES question 98).
+     `execution-and-storage.md` §1.3 has "a slot of the handler" bound to the
+     target of a static side-write, and the writing cone instance evaluated
+     first. The plan gives a handle that the body reads through two slots, one
+     of class `identity` and one of class `value`, and a handle that the body
+     only writes through one slot of class `identity`. The case: the handler
+     `overwrite` of the prototype's `fixtures/batch.tsx` writes the cell
+     `joined` and reads nothing, and the cone `_join` writes `joined` from a
+     list. In the batch `add`, `overwrite`, under the reading that a slot of
+     class `identity` alone is no read, `_join` is not evaluated before the
+     body, is evaluated behind the batch, and writes over what the handler
+     wrote, so `joined` holds `a`. Under the reading that any bound slot counts,
+     `_join` is evaluated before the body and is current behind the batch, and
+     `joined` holds what the handler wrote. Today's runtime gives `a`.
+     *Assumed,* provisional (P8): the first reading. The prototype has a test
+     for each. Not about a per-element construct.
+277. **Whether a cone with a static side-write is evaluated again when another
+     writer writes its target** (SS question 55, ES question 99).
+     `execution-and-storage.md` §2.7 makes a cone instance stale by a write to a
+     cell that it read, and no rule makes it stale by a write to a cell that it
+     writes. `scheduler-and-serving-loop.md` §8.2 speaks of "a state cell that a
+     handler also writes" beside "a computation that normalizes it", which is
+     this case. In the prototype, the events `add` and then `overwrite` of
+     `fixtures/batch.tsx`, each a batch of its own, leave the cell holding what
+     the handler wrote, and the same two events in one batch leave what the cone
+     wrote (question 276). Today's runtime leaves what the cone wrote in both
+     cases: it runs the writer again behind the handler's write, by a reading of
+     the source that is not verified because the `set` of a cell reads the cell
+     to compare. *Assumed,* provisional (P9), and flagged for the owner to look
+     at first: the cone instance is not stale, and the size of a batch is among
+     what decides a stored value (`scheduler-and-serving-loop.md` §5.4). The
+     alternative is today's: a write to the target of a write edge makes the
+     writing cone instance stale, and a batch and its events one at a time store
+     the same value. 2 values of the fixture comparison differ from today's for
+     it. Not about a per-element construct.
+278. **The form of an error state, and whether placing a failed value is reading
+     it** (PL question 171). The documents give an error state no form.
+     `plan-and-label-templates.md` §5.3 says that a cone that reads an errored
+     slot fails in turn and that a `map` passes an errored element on. Value
+     code that places a value in a record or among the children of a view node
+     and observes nothing of it is not said to read it. In
+     `patterns/dev/test/silent-computed-crash.tsx` a `computed` that throws is
+     placed among the children of the view: if placing is reading, the cone of
+     `$UI` fails and the whole view is an error state, where today the view is
+     stored with nothing at that child. *Assumed,* provisional (P11): the record
+     `{ $error: { message } }`; a cone instance that fails in turn holds the
+     record of the failure it read; and a cone fails at an observation of the
+     value and passes an error state on where it places it. The second of the
+     three is the prototype's and is not in its list of choices. The prototype
+     tested an errored element of a `map` over an array of plain values in place
+     alone.
+279. **What `pending`, `result` and `error` read as before the first request
+     transaction, and while a newer request is outstanding** (SS question 56, BI
+     question 16). The request transaction runs behind the derivation
+     transaction that staged the request, so in that first derivation
+     transaction a reader reads a document that holds the request alone.
+     `builtin-inventory.md` says that the result is read as the three fields and
+     no more. *Assumed,* provisional (P12): nothing before the first request
+     transaction, `true` for `pending` in the derivation transaction behind it,
+     and the result of the earlier request readable while a newer one is
+     outstanding. The alternative: `pending` is `true` from the derivation that
+     staged the request, and a new request clears the result. Not about a
+     per-element construct.
+280. **A request that comes back while it is outstanding** (SS question 57).
+     `scheduler-and-serving-loop.md` §6.6 says that a request is made at most
+     once per distinct request hash and state document, and steps 4 to 6 of its
+     §6.2 compare the hash with the one hash that the document holds. With
+     request A outstanding, a change to B and back to A leaves A a second time.
+     *Assumed,* provisional (P13): the steps govern. The alternative: the
+     operation remembers the hashes that are outstanding. Not about a
+     per-element construct.
+281. **The layout of the state document of an operation, the shape of a request,
+     and how far a reference of a request is followed** (ES question 100, BI
+     question 17). `execution-and-storage.md` §6.4 lists what the document holds
+     and no layout, and does not say what a link to an effect's result names.
+     *Assumed,* provisional (P14): the members `request`, `requestHash` and
+     `outcome`, a link to the result that names `outcome`, a request that is the
+     one argument or the arguments in order, and every reference of the request
+     followed. Open under it, with nothing assumed: the schema that today's
+     compiler adds to a `fetchJson` request, which `builtin-inventory.md` has as
+     part of the request and of its hash; and the depth that the inventory gives
+     each operand, which the prototype does not follow. Not about a per-element
+     construct.
+282. **Which transaction resolves a `wish`** (BI question 18). The overview has
+     it among the structural operations, `builtin-inventory.md` under the
+     effectful built-ins as class A, and `execution-and-storage.md` §4.1 gives
+     it a state document with the stored operands. `plan-and-label-templates.md`
+     §1.1 says that it has no request transaction and is resolved in the
+     transaction that evaluates a reader of its result. *Assumed,* provisional
+     (P15): that sentence. Not decided by any document, and built by the
+     prototype in one way: what a resolved target is stored as (a document of
+     its own, with the result a reference to it), what the result holds where
+     nothing is found (nothing, and a text at `error`), and how the clock is
+     held (one document that the runtime writes, copied once for the one-shot
+     time and referenced for the ticking one, with the interval not read). Not
+     about a per-element construct.
+283. **A request one of whose paths has a failed cone** (ES question 101). The
+     documents have the error state at the path whose cone failed. The prototype
+     forms a request with one function and stores one error state as the whole
+     request. *Assumed,* provisional (P16): the whole request. Under both the
+     request is not made and the readers of the result fail in turn. Not about a
+     per-element construct.
+284. **Whether the bound of ten is counted per cone instance or per value
+     function of one** (PL question 173). *Assumed,* provisional (P17): per
+     value function. It is not verified that the two counts agree on any module
+     of the corpus. An element cone has a count for each key under both.
+285. **A side-write that a cone made before it failed is withdrawn, and today's
+     runtime commits it** (PL question 172). `plan-and-label-templates.md` §5.2
+     said: "Today a node that throws commits none of its writes, so the second
+     case is equal". That is wrong as a statement about today.
+     `finalizeSchedulerAction` in `runtime/runner/src/scheduler/run.ts` reports
+     the error and calls `finalizeReactiveActionCommit` in a `finally`, which
+     starts the commit of the run's transaction whether or not the action threw;
+     this was verified in the source for this plan. On the prototype's
+     `fixtures/failing.tsx` the cone `_try` writes the cell `log` and then
+     throws for a negative input: today's runtime stores `tried -4`, and the
+     design, which withdraws the write, stores `tried 4`. 4 of the 6 values of
+     the fixture that differ are this. The sentence is corrected, and the
+     withdrawal is recorded there as a difference from today in a stored value.
+     It is no difference in a label and none of the exceptions to "equal or
+     tighter". Whether the difference is intended is for the owner. *Assumed:*
+     the withdrawal stands. The alternative keeps the writes made before the
+     failure, as today, and a cell that other writers share then holds a value
+     of a computation that did not complete. Not about a per-element construct.
+286. **Which cone instances of a cycle fail depends on the order of evaluation**
+     (SS question 58). In the prototype's cycle of two, both cones had been
+     evaluated ten times when the first reached the bound, and the second failed
+     by its own count when the withdrawal made it stale. Had the second been
+     evaluated nine times, it would have been evaluated once more against the
+     earlier value and left its write, and one cell of the cycle would hold one
+     step of it. A reader of the cells is evaluated once for each state it is
+     pulled in, five or six times in the fixture, and under an order that pulls
+     it after every write it would reach the bound itself and fail, though it
+     writes nothing. `scheduler-and-serving-loop.md` §10.2 fixes the order of
+     the demanded outputs and has a client and the server evaluate in the same
+     order. No document fixes the order of the pulls inside a transaction, and
+     the outcome depends on it. Nothing is assumed. The executor's order is that
+     of its own pull, and no test compares two orders. An element cone has a
+     count for each key, over an array of references, over an array of plain
+     values in place, and over the result of another per-element construct.
+287. **A `select` one of whose operands failed, against today** (PL question
+     174). By `plan-and-label-templates.md` §5.3 a `select` whose unselected
+     branch is in an error state is unaffected. On `fixtures/failing.tsx` the
+     executor holds the selected branch at `chosen` and today's runtime holds
+     nothing there: 2 of the 6 values of the fixture that differ. The cause on
+     today's side is not established. *Assumed:* the rule of §5.3 stands, and
+     the difference is one from today. Not about a per-element construct.
+288. **Whether a compile-time check follows an argument of a compiled-in pattern
+     into the caller's template** (PL question 170, point a).
+     `cfc-flow:writer-fit`, `cfc-flow:write-floor`,
+     `cfc-flow:max-confidentiality` and `cfc-flow:required-integrity` evaluate a
+     template on declared labels. With a callee written out at each call, a path
+     of its argument that the call binds to an output of the caller is a node
+     that names that output, and the check follows it into the caller's
+     template, so it can be decided at one call and not at another. Under
+     provisional decision P18 the callee's record has a slot there, with the
+     declared label of the callee's own type. Two readings. Evaluated once per
+     callee, a check that the written-out form decides through a caller's output
+     is left to instantiation, or is decided on the callee's annotation alone:
+     fewer or other compile-time reports, and the same enforcement at run time.
+     Evaluated per chain of call sites, the reports are those of the written-out
+     form, and the work at compile time follows the number of chains, `k` to the
+     power `D`, which is the growth that P18 removes from the plan. No label and
+     no run-time decision differs between the two. *Assumed,* provisional (P19):
+     the first reading, stated as a rule. The checks run once per callee,
+     against the declared labels of the callee's argument slots, and once per
+     call site for the binding alone, and do not follow an argument into the
+     caller's template (`plan-and-label-templates.md` §1.1, "The checks on
+     declared labels are modular"). A flow that the written-out form reports
+     only by following a caller's output through the callee is reported at the
+     site's binding or at run time. The prototype built neither P18 nor P19,
+     so no diagnostic of the corpus was compared under the decision.
+     This is the one place where P18 does not give exactly what the written-out
+     form gives without paying its cost. A path bound to a slot of the caller
+     has no such case: its declared label is that of the callee's type in both
+     forms. The same for a call site in an element body over an array of
+     references, over an array of plain values in place, and over the result of
+     another per-element construct.
+289. **Nine further points of the record of a compiled-in pattern** (PL
+     question 170, points b to j; SS question 59; ES question 102). P18 is
+     designed and not built: at prototype commit `3d33db2e4d` the crate writes
+     a callee out at every site, so no point below is tested by a build.
+     Round 5 examined the written-out plans of the corpus in the place of
+     the build, and what it found is at each point. Each is
+     assumed in `plan-and-label-templates.md` §1.1 as stated here. (a) What a
+     call site binds a path of the argument to: a slot, an output or a constant
+     by the text, and *assumed* also the stream of a binding and the result of
+     the instance. *From the corpus plans:* confirmed for the stream of a
+     binding. Of the state paths of the bindings of callee copies, 1,443 are
+     bound to a slot, 282 to a constant, 49 to an output, 140 to the stream
+     of a binding of the same copy and 8 to the stream of a binding of the
+     caller; none is the result of the instance, so that form has no case.
+     (b) A literal that the call writes above the paths that the
+     callee reads: *assumed* built by the runtime from the entries of the
+     binding. *From the corpus plans:* this needs one more rule, which amends
+     P18: a write edge or an output of a callee whose template is an
+     argument slot stands, at a site that binds that path by a literal, for
+     one entry for each entry of the literal, at the entry's path. 19 of 53
+     pairs of copies differ in exactly this. *Assumed,* provisional (P18 as
+     amended), proposed by the prototype's author and not built. (c) Where the
+     callee's result is held: the call-site record lists the places that the
+     source writes; an output that the written-out form keeps because the
+     result reaches it through a value, as through the
+     elements of a collection that hold the results of several calls, a branch
+     of a `select`, or what a body returns, is *assumed* kept where that value
+     is. *From the corpus plans:* not determined; 100 of the 3,867 outputs
+     of callee copies are kept, and whether each stands at a place that the
+     call-site record would list was not examined.
+     (d) A construct of the callee over a path of its argument that the call
+     binds to the result of a per-element construct of the caller: *assumed* to
+     have the upstream keys and membership through the binding, as an output
+     that passes a collection on has, with no difference from the record that
+     the written-out form has when the compiler sees the caller's construct at
+     the call. The other two cases, over an array of references and over an
+     array of plain values in place, are a binding to a slot and have no
+     question. *From the corpus plans:* not determined; the collections of
+     callee copies have as their source an output 133 times, a slot 32
+     times and a collection 10 times, and the 10 were not examined.
+     (e) The order of the demanded outputs "by instance identifier and
+     output index" (`scheduler-and-serving-loop.md` §10.2): *assumed* by the
+     chain of call sites and then the index. (f) A pattern with type parameters:
+     *assumed* one record for each set of type arguments. (g) Whether a plan
+     names a callee by the content address of that pattern's own plan: *assumed*
+     not, and the plan holds the record. (h) How a handler written in place in a
+     callee, which captures names of the callee's scope, is registered once for
+     all sites: not determined (`execution-and-storage.md` §2.1). (i) Whether
+     the binding decides which records a callee has. The design has "A callee
+     record depends on nothing of its call sites". Of 82 pairs of copies of one
+     callee in the written-out plans of the corpus, 44 are equal but for the
+     numbers in them and 38 differ, 33 of those in how many records they have:
+     in `dev/experimental/folksonomy-demo.tsx` a cone lists a slot at one site
+     and none at the other, and in
+     `examples/suggestion-test/suggestion-test.tsx` the write edges of a request
+     have the path `context` at one site and `context/content` at the other
+     (prototype note 517). So in the written-out form the binding decides which
+     records exist. The count is from a script that was not kept, which pairs
+     records by their place in the lists, and it was not checked record by
+     record. *Answered on the corpus in round 5* (prototype note 529), by a
+     comparison of each copy with the first copy of its callee, record by
+     record, 53 pairs: 16 equal but for indexes; 2 with another path of the
+     caller's argument; 1 with a slot at one site and an output at another;
+     19 with the paths below a path that the callee passes on; and 16 that
+     differ in the number of cones for a defect of the crate, which gives
+     two call sites of one name in one body the same `site` step (17 of 382
+     plans; against `plan-and-label-templates.md` §1.3). One callee record
+     with the binding of each site gives the records of the written-out
+     form in every pair, with the rule of point (b) added, and the
+     design's sentence holds. The binding decides which of `Cone.slots`
+     and the incoming edges a cone instance has, and at which paths an
+     edge or an output that passes an argument on stands. Not shown: that
+     values, identifiers and stored documents are preserved, which needs
+     the build. Beside these,
+     `Cone.code` of a callee's cone is one hash for every site, which changes
+     the keys of the cache documents and the basis rows and no result. One
+     fact on what the decision is worth: over the corpus the estimate of the
+     prototype's author is plans 1.4% smaller, since a pattern is seldom
+     compiled in at more than one site today, so P18 bounds the worst case and
+     does not change the corpus.
+
+**From the prototype's notes 505 to 522.** At commit `e63851c1ee` the
+prototype's executor marks what a write reaches, keeps keys, has a cone hold a
+reference to a collection that it places, and keeps the layout of a stored
+result as an accounting. Questions 290 to 296 are what those notes, and the
+provisional decisions P20 to P26 that the coordinator took from them, leave
+undecided. The lists of these notes are a `map` over an array of references,
+over an array of plain values in place with a declared key and with none, and
+over the result of a `filter` of plain values in place; nothing was tried over
+a plain array generated from scratch or with a `flatMap`.
+
+290. **What the rule on chunks leaves open** (ES question 103). Provisional
+     decision P20 stores a long array in chunk documents. Five points under
+     it. (a) Whether storage takes a patch below a path of a document, and
+     the size of a chunk that follows from it.
+     `execution-and-storage.md` §4.2 has the write of a kept collection as a
+     `splice` of the stored array. That is the trade-off of P20: an edit of
+     a small row with a declared key wrote one part document of 24 bytes
+     under the rule that P20 replaces, and writes its chunk under P20.
+
+     *What today's storage does,* read in the source of this repository
+     after prototype round 5. Verified by reading:
+     - A commit carries one operation for each document it writes
+       (`ClientCommit.operations` in `runtime/memory/v2.ts`): a `set` with
+       the whole document, a `patch` with a list of operations that each
+       name a path of the document (`PatchOp`), or a `delete`.
+     - A writer sends a `patch` of the paths it wrote for a document that
+       its transaction read before writing (`getNativeCommit` and
+       `#buildPatchOperation` in
+       `runtime/runner/src/storage/v2-transaction.ts`). It sends a `set`
+       for a document that had no value, for a write of the document's
+       root, and for a transaction marked to write whole documents, which
+       by a comment there the write-back of an effect's completion is.
+     - The server stores one row for each operation, and for a `patch` the
+       row holds the operations and not the document (`writeOperation` in
+       `runtime/memory/v2/engine.ts`). After every tenth patch of one
+       document it stores the whole document as a snapshot and keeps the
+       last two (`maybeMaterializeSnapshot`, `DEFAULT_SNAPSHOT_INTERVAL`,
+       `DEFAULT_SNAPSHOT_RETENTION`). A read replays the patches on the
+       latest `set` or snapshot (`reconstructPatchedDocument`).
+     - A subscriber receives the whole document for each document that
+       changed: a `SessionSyncUpsert` has a member `doc` and no patch
+       (`runtime/memory/v2.ts`; `toCacheEntry` and `toWireUpsert` in
+       `runtime/memory/v2/server-sync.ts`).
+
+     Inferred, and not verified by a test or a measurement: that the
+     writer's own replica applies its operations again when the server
+     accepts them and is not sent the document, which a comment of
+     `engine.ts` says; and that no path through `server.ts` sends a
+     subscriber less than the document, since its sends were not all read.
+     Not read: the cost of the engine's in-memory copy of a document that
+     a patch changes.
+
+     *What follows.* The answer to "does storage take a patch" is yes for
+     what a writer sends and for what a commit stores, and no for what a
+     subscriber receives. One edit of one small row of a chunk of `C` bytes
+     costs the writer the patch (24 bytes measured), the store the patch
+     and, for every tenth edit, `C`, and each subscriber of the chunk `C`
+     for every edit. So the larger chunk is not simply better: it is
+     better for the writer, for the number of documents and for the reads
+     of one row, and worse by its size for every subscriber and by a tenth
+     of its size for the store. For P20: the bound "the bytes of the
+     documents written for one change are bounded by the size of a chunk"
+     is the bound of what each subscriber receives, and stands as the
+     figure that matters. For P25: a list of the first level is written by
+     every insertion, and every subscriber of the array's place receives
+     it whole, so the balance `C = sqrt(75 * N * s)` between a chunk and
+     its list (5,900 bytes for 10,000 small rows, 59,000 for a million) is
+     the balance of what a subscriber receives. For P26: an edit of one
+     element of a source array of 10,000 records in one document already
+     costs the writer its patch today; what chunks remove is the 676,691
+     bytes that each subscriber receives and the snapshot of that size at
+     every tenth edit.
+
+     *Recommended* by the author of the documents, and not adopted: that
+     the design state a requirement on storage, that a sync carry the
+     patch of a document to a subscriber that holds the version before
+     it. With it every figure of the tables is its patch, the snapshot
+     interval is the one remaining cost of a large chunk, and
+     `DOCUMENT_MAX_BYTES` is chosen for the number of documents and reads.
+     Without it, a maximum near the balance for the lengths that are
+     common, such as 4,096 to 16,384, costs a subscriber 8,130 to 32,134
+     bytes for an edit at 10,000 rows where 65,536 costs 122,242, at the
+     price of 44 to 173 documents where 13 stand. Not decided: the
+     requirement, and the number. `DOCUMENT_MAX_BYTES` stays 65,536, a
+     placeholder.
+     (b) Whether a chunk list holds, beside each link, the number of
+     entries below it. *Assumed,* provisional (P25): it does. A position is
+     found in one document for each level of the tree and one chunk, and each
+     insertion or removal writes one list for each level beside the chunk.
+     The alternative is a list of links alone, which an insertion does not
+     write and under which a reader of one position that has no numbers in
+     memory reads every chunk before the position. (c) Which arrays are
+     stored in chunks. *Assumed,* provisional (P26): every stored array, the
+     array of an argument document and of a state cell included, so that an
+     array of plain values in place that a handler writes is not one document
+     at any length, which was 676,691 bytes for the 10,000 small records
+     measured. The alternative is the arrays of a result alone. Question 296
+     has what conflicts with it. (d) The
+     stored form of a chunk list and the identifier of a chunk, which is
+     *assumed* to hold a serial number that the list at the place of the array
+     keeps. (e) A document can still exceed `DOCUMENT_MAX_BYTES` where it holds
+     many split points that are each under `PART_MIN_BYTES` and are not the
+     entries of one array, as a record of many small members; the number of
+     such members is bounded by the source where they are declared. *Assumed,*
+     provisional (P27): such a record is stored in chunks (question 297).
+     The measured case is a record with one member for each element, whose
+     number of members is not bounded by the source. The same for the rows of a
+     kept collection over an array of references, over an array of plain values
+     in place, over a plain array generated from scratch, and over the result
+     of another
+     per-element construct.
+291. **The warning for per-element state under a key formed from the value**
+     (LS question 47). Provisional decision P21, which is withdrawn as a
+     warning of the compiler. The crate reports
+     `array-by-key:state-without-key` by the decision as revised, for a
+     handler binding, a state cell, an operation and a child instance, and
+     not for an instance of a `lift` or a `computed`: 168 reports in 80 of
+     the 286 corpus modules that are accepted with a pattern. The type of
+     an array does not say whether it holds plain values in place or
+     references, most lists of the corpus are filled by `push` of a record
+     through a handle, which stores references, and so most of the reports
+     are for arrays over which the cost does not arise. *Assumed,*
+     provisional (P21 as replaced): the compiler reports nothing, and the
+     runtime reports at the first such edit (question 301). Open for the
+     owner beside it: whether the subset should have a type or an
+     annotation that says that an array holds plain values in place, with
+     which a warning of the compiler would be right. Nothing is assumed on
+     that.
+292. **What a reference to a placed collection leaves open** (ES question
+     104; PL question 175). Provisional decision P22. (a) One collection that
+     is placed at two kept paths of a result. *Assumed:* its rows are stored
+     at both, and a change of one row writes both. The alternative stores them
+     once and has the second path hold a storage link. (b) A per-element
+     construct over a plain array generated from scratch, which the decision
+     does not name. *Assumed:* the same rule. The prototype forms the assembly
+     of such a construct whole at each change and did not test it. (c) The
+     interface of a value function: the reference is a value of the runtime
+     inside the value that the function returns, and
+     `execution-and-storage.md` §2.2 does not give it a type in `ConeResult`.
+     *Assumed:* none is needed, since the function builds it with
+     `host.output` and never reads it.
+293. **How a write below an array of plain values in place reports the keys it
+     touched** (SS question 60). Provisional decision P24 has the store report
+     them with the write. Not determined: in which record of a commit they are
+     reported, and what a client does, which cannot read the salt and so
+     cannot form the key of a plain value. *Assumed:* the server's store
+     reports the keys to the scheduler of its own process, a commit carries
+     none of them, and a client marks every reader through a key of the
+     array. Over an array of references the question does not arise.
+294. **Three dependencies that the address index has no entry for** (SS
+     question 61; the prototype's provisional choice 7 of the round). The
+     executor compares at every pull a memo entry that called `equals` on two
+     references, that demanded a cone with a static side-write, or that read
+     through a key into the document of a computed output, which is a plain
+     array generated from scratch, and every entry that used one. An instance
+     with such an entry is visited by every derivation transaction.
+     `scheduler-and-serving-loop.md` §3.1 gives none of the three a place in
+     the index. *What grows:* the checks of one change, in the length of a
+     plain array generated from scratch that rows read by key. Not determined,
+     and nothing is assumed.
+295. **What a re-key does with the stream documents of the old key** (ES
+     question 106). The case is an array of plain values in place with no
+     declared key. `execution-and-storage.md` §2.5 has the runtime move "the
+     state cells, the streams, the operation state and the children" to the
+     new key, by writing them under the identifiers of the new key and
+     retiring those of the old (PL question 112, assumed). The prototype
+     writes no stream document at the re-key: the stream of the new key gets a
+     document from its first event, and the document of the old key stays. 20
+     keystrokes in one row leave 20 stream documents. Not determined: whether
+     the move writes a stream document under the new key, when a document that
+     the move retired is deleted, and whether the retention rule that the
+     coordinator recommends under questions 254 and 255 covers it. Nothing is
+     assumed.
+296. **A source array that is stored in chunks, and its writers** (ES question
+     107). Provisional decisions P25 and P26 together. The case is an array of
+     plain values in place, or an array of references, in an argument document
+     or a state cell. (a) A mergeable `push` commits today without a read of
+     the array, so that two concurrent pushes merge. With the array in chunks
+     each push writes the last chunk and, by P25, the number of that chunk in
+     each list, so two concurrent pushes write the same number, and a push
+     that fills a chunk splits it. *Assumed:* the writer sends the operation on
+     the array at its path, and storage applies the layout where it applies
+     the operation, so that the pushes merge as today.
+
+     *What today's storage does,* read in source after prototype round 5.
+     Verified by reading:
+     - `Cell.push` records that it appended (`pushAll` in
+       `runtime/runner/src/cell.ts`, which calls `recordMergeableOp`), and
+       the commit carries the operation `append` with the path of the
+       array and the values pushed, read back from the end of the writer's
+       array (`buildMergeableIntent` in
+       `runtime/runner/src/storage/mergeable-ops.ts`). The writer does not
+       send the resulting array. `addUnique`, `removeByValue` and
+       `increment` are sent the same way, as `add-unique`,
+       `remove-by-value` and `increment`.
+     - The server applies the operation to the array that it holds at
+       that path of that document (`appendAtPath` in
+       `runtime/memory/v2/patch.ts`, through `applyPatchToDocument`), with
+       no position from the writer, so two pushes from two sessions both
+       land.
+     - An operation names one path of one document. Nothing in the server
+       applies an operation to an array that is stored across several
+       documents, and no table of `runtime/memory/v2/engine.ts` and no
+       kind of operation divides the value of a document by a rule about
+       size.
+     - Two things store one logical value in more than one place, and
+       neither is such a layout. A record that is pushed through a handle
+       is stored in a document of its own, with a link in the array
+       (`diffAndAppend` in `runtime/runner/src/data-updating.ts`); the
+       writer makes that layout, and a reader sees the links. A field that
+       takes collaborative text edits is kept by the server as a baseline,
+       the operations integrated since and checkpoints, in tables of their
+       own (`op_field_epoch`, `op_integrated`, `op_checkpoint`), which is
+       a representation of one field that storage maintains, in rows and
+       not in documents.
+
+     Inferred, and not verified by a test: everything under "what
+     follows". Not searched exhaustively: the runner outside
+     `runtime/runner/src/storage/` and `cell.ts`; a search of the runner
+     and the memory package for a layout in chunks found the compile
+     cache alone, which writes the modules of one program as documents of
+     their own in several transactions (`planCompileCacheWriteChunks` in
+     `runtime/runner/src/compilation-cache/cell-cache.ts`), again a layout
+     of the writer.
+
+     *What follows.* A chunked source array keeps merging pushes in one of
+     two ways. Either storage maintains the layout: the server resolves
+     the path of an operation through the chunk list, applies `append`,
+     `add-unique` and `remove-by-value` to the chunks, and writes the
+     lists, the numbers of P25 and any key index (question 299) in the
+     commit.
+     That is a change of storage, and nothing of it exists. Or the
+     runtime that writes maintains the layout with the operations that
+     exist: it sends `append` to the document of the last chunk and
+     `increment` for the number in each list, both of which the server
+     applies against what it holds, so two pushes merge, provided that a
+     split never changes which document is the last chunk. Then a split,
+     a merge and an entry of a key index are ordinary writes that
+     conflict with a concurrent push; the server applies an `append` to a
+     chunk that is over the maximum, since it knows none; and
+     `add-unique` and `remove-by-value`, which compare with every entry
+     of the array, cannot be sent to one chunk and stop merging. For P26
+     and P27 the same holds for a member of a record and a mergeable
+     `increment` below it. For P25: the numbers do not prevent merging
+     where they are written by `increment`.
+
+     *Recommended* by the author of the documents, and not adopted: that
+     storage maintain the layout, so that every writer names the path of
+     the array as today, all four operations merge as today, and one
+     party writes the lists and the index. Until that is decided the
+     assumption above stands, and it is a requirement that today's
+     storage does not meet. (b) A writer that is not
+     the compiled runtime, as a client, the command line and a runtime of the
+     validation period of a migration, finds a chunk list at the place of the
+     array. *Assumed:* each reads and writes through the list, and a write at
+     or below the place of the array by a writer that does not know the form
+     is refused. (c) The labels of a chunk of a source document: *assumed*
+     repeated in each chunk as for a result. (d) *Assumed:* no element of a
+     source array is a part, and a chunk of a source document takes the
+     scheme of that document. A `set` of the whole array, a `splice` and a
+     reference by key into the array were looked at and have no conflict that
+     was found.
+
+**From the prototype's notes 523 to 535.** At commit `3d33db2e4d` the
+prototype's executor keeps part documents as documents, and the copies of each
+callee in the plans of the corpus are compared. Questions 297 to 301 are what
+the provisional decisions P27 and P28, the withdrawn P29, the replacement
+of P21 and the points
+that P20 left incomplete leave undecided. The lists of these notes are a `map`
+over an array of references, over an array of plain values in place with a
+declared key and with none, and over the result of a `filter` of plain values
+in place; nothing was tried over a plain array generated from scratch or with
+a `flatMap`.
+
+297. **A record that is stored in chunks** (ES question 108). Provisional
+     decision P27. Not determined by the decision, each *assumed* in
+     `execution-and-storage.md` §4.10. (a) What the list holds beside each
+     link. The decision has "the first member name of each chunk". *Assumed:*
+     a bound that is fixed when the chunk is created and is not written when
+     that member is removed or a lesser name is inserted, so that an
+     insertion or a removal of a member writes one chunk and no list. (b)
+     The label under which the bounds are read: they are member names of the
+     record, and a reader of the document that holds the list sees them.
+     *Assumed:* the label of the record's set of names. (c) A record that
+     exceeds the maximum and holds arrays that are each under it. *Assumed:*
+     the largest arrays become chunk documents first, which is what the
+     prototype built for a document of several arrays, and the record is
+     divided if it still exceeds the maximum. The alternative is the
+     division of the record alone. (d) Whether a member of a record is a
+     part from `PART_MIN_BYTES` on, as a row is. *Assumed:* not; a member is
+     a split point only where it is the root of a kept output, a row or a
+     node. (e) A value that the codec stores as an instance, such as a
+     `FabricMap`: *assumed* not divided. (f) The order of the names is that
+     of P1, and the place of a name that reads as an integer is part of
+     question 218. (g) A mergeable `increment` below a member, and two
+     writers that add two members, merge today by path; in chunks they meet
+     the conflict of question 296. (h) The labels of a chunk: *assumed*
+     complete for its paths, with an entry that covers every member
+     repeated in each chunk. The prototype builds none of it.
+298. **The identifier that the part of a row is minted with** (ES question
+     109). Provisional decision P28. Not determined by the decision. (a)
+     Where the number comes from. *Assumed:* one counter at the root of the
+     result cell or of the source document, which each creation of a part
+     at or below a row writes; two transactions that each create one
+     conflict on it. A counter for each array has no place while the array
+     is stored in place and is not unique for an array inside a row of
+     another array. An identifier derived from the cause of the creating
+     transaction and an ordinal needs no counter, and requires an
+     identifier of every transaction that a retry repeats, which the
+     documents have for a handling and not for every cause. (b) What a
+     reader of a storage link learns: with a counter, the order in which
+     the parts of one document were created, beside which entries hold the
+     same part before and after a change of membership, as before. (c) A
+     row of the result of a per-element construct over an array of plain
+     values in place with no declared key, whose key changes at its
+     position. *Assumed,* by the decision's words that the identifier stays
+     with the entry of the position across re-keys: the entry keeps its
+     part and the transaction writes the part's content. The prototype
+     deletes the part and creates one, 2 documents more. (d) A part that
+     lies below a row and is no row. *Assumed:* minted as a row's is, so
+     that no part's identifier holds a key. (e) What gives the scheduler
+     the kept paths of a watch on such a part, which the key steps of the
+     identifier's record gave. *Assumed:* the same steps, held in the part
+     as data and written when the key changes. (f) Whether an element of a
+     source array is a part at all. *Assumed:* yes, from `PART_MIN_BYTES`
+     on, as the prototype built it. (g) What is lost: a server could form
+     the identifier of the part of a key from the path and the key and
+     read it with no chunk. A client could not, and is not affected. Over
+     an array of references, over a plain array generated from scratch and
+     over the result of another per-element construct the rule is the
+     same; the case that the decision was measured on is an array of plain
+     values in place.
+299. **The index from a key to its chunk** (ES question 110; SS §3.1).
+     Open, with no provisional decision: P29 is withdrawn, for point (b)
+     below. Until it is decided, a runtime that does not hold an array's
+     keys in memory reads the array's chunks to resolve a reference by
+     key. The points below are what any index has to settle. (a) What
+     "the stored schema of an array" is: by ruling no record of a stored
+     schema is kept, and a reader learns the key fields from the schema
+     traversed at its link. *Assumed:* the schema that the plan of the
+     owning instance has for the place, with the names of the key fields
+     written into the chunk list by the runtime that creates the index. An
+     array that a writer without that schema stored in chunks gets its
+     index later, by one read of the whole array. (b) What an entry names.
+     P29 had the chunk. Then a split or a merge of chunks writes the
+     entry of every row that moves to another chunk, about half the rows
+     of a chunk, and those entries are spread over the whole index by the
+     order of the hashes: one split can write every chunk of the index,
+     which is why P29 is withdrawn. For 10,000 small rows that is an index
+     of about a megabyte, larger than the rows, written for one insertion
+     in about 700; the figure is derived from the sizes of a hash and of a
+     storage link and is not measured. The bound of P20 on the bytes of
+     one change does not hold for that insertion. The
+     author of the documents recommends an entry that a split does not
+     write, which is not designed: a number minted for the row, with a
+     second record from that number to the chunk, or a record in the chunk
+     list of which chunk each chunk was divided from. (c) Two rows with
+     equal key fields, which differ in the occurrence count. *Assumed:* the
+     entry of a hash lists the chunks of its occurrences in order. (d) A
+     client that holds a stored reference by key holds the hash and can
+     find the chunk, and cannot tell which row of the chunk has the key,
+     since it cannot read the salt. Not determined; nothing is assumed
+     beyond PL question 113. (e) The label of the index documents.
+     *Assumed:* that of the array's membership, with resolution passing
+     through them as through a chunk list. (f) An array of references,
+     whose key is the identity of a cell, and an array with no declared
+     key. *Assumed:* no index, and a read of every chunk on a runtime that
+     holds no keys; for references the links are compared with no hash.
+     (g) The array of the result of a `map`, a `filter` or a `flatMap`
+     over an array of plain values in place with a declared key, and over
+     the result of another per-element construct, whose rows have the
+     upstream keys. *Assumed:* an index of its own under those keys,
+     whatever key fields the schema of the result names (question 213).
+     (h) A collection that a cone places at two kept paths (P22; question
+     292, point a) has two chunk lists and two indexes, and each change
+     writes both. (i) Demand: *assumed* that a lookup demands nothing,
+     and that a reader through a key demands the kept paths of the row it
+     resolved to, as before. The prototype builds no index.
+300. **Points that P20 left incomplete, as the prototype built them** (ES
+     question 111). Each is *assumed* in `execution-and-storage.md` §4.10
+     as the prototype chose it (its note 533, choices 1, 3 and 4). (a) A
+     chunk whose last row is removed: deleted, also beside a neighbor over
+     half the maximum. (b) When an array is stored in place again: when
+     one chunk of at most half the maximum is left. (c) A document that
+     holds several arrays and exceeds the maximum with each array under
+     it: the largest arrays become documents of their own. (d) An array
+     that is written whole: compared with what is stored, with the rows
+     that differ written as a `splice`, which reads the whole array; the
+     alternative writes every chunk. (e) The first write of a long array
+     creates every chunk and part in one transaction, 200,236 documents
+     for 100,000 rows of 2,000 bytes with their results; no rule avoids
+     it, and whether one transaction may hold that many documents is not
+     determined. (f) A chunk over the maximum: cut into equal shares,
+     more than two where many rows are written at once. (g) Rows inserted
+     one at a time at one end leave every chunk half full: 55 chunks for
+     40,000 small rows where 28 would hold them, 32 for insertions at
+     random positions, and 8 or 9 where 3 would do after nine tenths are
+     removed. Measured and not changed. Open: a split that leaves the
+     full chunk behind at the end where an array grows. (h)
+     `PART_MIN_BYTES` is 1,024 with a return in place under 512, a
+     placeholder. The lists are over an array of plain values in place;
+     the rule is the same over an array of references and over the result
+     of another per-element construct.
+301. **The runtime's report of state under a key formed from a whole value**
+     (ES question 112; LS question 47). Provisional decision P21 as
+     replaced. Not determined by the decision, each *assumed* in
+     `execution-and-storage.md` §2.5: the name
+     `array-by-key:state-under-value-key`; that the report is a warning of
+     the runtime that evaluated the transaction, in the channel of a
+     failed cone; what a session is for a transaction that a server
+     evaluates, *assumed* the lifetime of that runtime's loaded instance;
+     and what "strands" covers, *assumed* a change by which one
+     transaction removes a key at a position and enters another there,
+     and not a removal alone, which leaves state stored as well and is
+     what an author's handler does on purpose. The case is an array of
+     plain values in place, a plain array generated from scratch, and a
+     chain of per-element constructs whose first source is one of these,
+     each with no declared key.
+
+**From milestone 4 of the integration and the rulings of 2026-11-19.**
+Labels from templates at commit are built
+([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+"Milestone 4: labels from templates at commit"). These are what the build
+and the rulings leave open.
+
+302. **The minimum integrity a pattern declares on an input, as a
+     requirement on the link of the argument** (PL question 176). The
+     owner's design of 2026-11-19, recorded as a sketch, not built, and
+     needing a specification change of its own. Where a pattern declares a
+     minimum integrity on an input, that minimum is attached as a
+     requirement to the link written for the argument passed in, so every
+     later reader of the link evaluates it and it holds when the argument
+     changes later. The pattern's atom on a value it passes through from
+     that argument then never vouches for an input below the declared
+     minimum. Open: where the requirement is stored on the link, what a
+     reader does when it fails, whether a child compiled into its caller,
+     which has no stored argument, checks it at its slots, and its cost per
+     read. By ruling (2026-11-20, Z82; [Decided](#decided)) it is scheduled
+     after milestone 4 of the integration; the open points above stay open
+     until it is taken up. *Assumed meanwhile:* nothing is attached, and
+     question 120 stands.
+303. **Whether every commit of a compiled pattern is prepared** (PL
+     question 177). Settled by ruling (2026-11-19; [Decided](#decided)):
+     every commit of a compiled pattern is prepared when the option is on,
+     so every kept output carries the pattern's atom. Over the corpus in
+     milestone 4 of the integration that raised the preparations from 407
+     to 2,280 and the preparation time from 379 ms to 690 ms. Milestone 4
+     builds it: a transaction that records an authorized write record of a
+     plan is prepared.
+304. **Per-element label entries of an array are not moved when the array
+     is spliced** (a defect of today's runtime, found by reading and shown
+     by a test). Where an array of plain values in place is written whole,
+     the array diff writes only the positions whose value changed: for an
+     array, `normalizeAndDiff` in `runtime/runner/src/data-updating.ts`
+     visits each position and writes nothing where the new value equals
+     the current one at that position, and deletes the positions past the
+     new end. The persist step of `prepareBoundaryCommitSteps` in
+     `runtime/runner/src/cfc/prepare.ts` drops a stored `derived` or
+     `structure` entry only where a path this transaction wrote is at or
+     above the entry's path. So when a removal shifts the values, a
+     position that the diff did not write keeps the entry of the value that
+     was there before, and the entry of the value that moved to it is
+     dropped with the position it left. With `["x", "y", "y"]` stored under
+     a clause at position 1 and another at position 2, writing
+     `["y", "y"]` writes position 0 and deletes position 2, and position 1,
+     which holds the value that carried the second clause, keeps the first.
+     An entry of origin `link`, for an element that is a reference, is not
+     affected: it is cleared where the pointer at its slot is replaced and
+     minted again with the element (`linkEntrySuperseded`). The milestone's
+     branch has the case as an ignored test,
+     `runtime/runner/test/cfc-array-splice-element-labels.test.ts`. For the
+     compiled path P31 removes the `*` entry on a `splice`, which is wider
+     and not affected. *Assumed:* a finding against the runtime, not filed;
+     whether it is fixed, by writing every shifted position or by moving
+     the entries with the values, is the owner's decision. Pull request
+     9982 does not fix it (question 306). Pull request
+     commonfabric/labs#10080, merged to `main`, moves the entries with the
+     elements, by an alignment of the old and the new elements by value
+     (`elementEntryPlacements` of `runtime/runner/src/cfc/prepare.ts`), and
+     its test file replaces the ignored test at the catch-up merge. Whether
+     it closes every case of this question was not checked here.
+305. **What a slot under `*` binds when the collection is empty** (PL
+     question 178). A binding of the `uniform` form of P31 whose address
+     holds `*` covers no position of an empty array, and the `*` entry may
+     be absent. *Assumed:* the slot binds the label of the array's
+     membership alone and the body contributes nothing, the label of a
+     `fold` over no element. The alternative binds the last `*` entry
+     stored, which describes elements that no longer exist. The case is an
+     array of plain values in place, the case of the `uniform` form.
+306. **Pull request 9982 and the splice defect of question 304** (for the
+     owner, with question 304). Pull request 9982 was checked against the
+     defect: with the ignore mark removed,
+     `runtime/runner/test/cfc-array-splice-element-labels.test.ts` fails the
+     same way on that pull request's base and on its head, because the
+     label entries are decided before the commit's operations are encoded
+     (`normalizeAndDiff` in `runtime/runner/src/data-updating.ts` and the
+     persist step of `prepareBoundaryCommitSteps` in
+     `runtime/runner/src/cfc/prepare.ts`, as question 304 has them). It does
+     not fix the defect. The case is an array of plain values in place that
+     is spliced; an array of references and the result of another
+     per-element construct were not tested. The complete fix moves the
+     label entries along an edit script from the old positions to the new
+     ones, and the edit script that pull request adds could supply the
+     pairs of positions. The smaller fix, which treats the whole array as
+     written when a transaction writes its `length`, gives each element the
+     writer's join and does not cover a reorder of equal values that keeps
+     the length. Either fix changes what CFC decides, so it goes through the
+     specification procedure of `docs/development/cfc-spec-correspondence.md`
+     first. *Assumed:* neither fix is built, and question 304 stands.
+307. **Which path holds which entry of `Plan.closures`** (PL question
+     179). The prototype translates no pattern closure used as a value:
+     `Plan.closures` is empty, and a closure given to a language-model
+     built-in as a tool is left out of the request, so a rewritten
+     `patternTool` call compiles to a tool that is not sent. This and the
+     next three questions have to be decided before the translation is
+     built. *Assumed,* provisional (P33): a template node
+     `{ op: "closure", closure }` at the place of the closure expression.
+308. **The stored form of a factory value with copied captures** (PL
+     question 180; ES question 114). *Assumed,* provisional (P34): a
+     record in place, with the content address of the inline pattern and
+     the captures below a member `params`.
+309. **What value code writes for a closure expression** (PL question
+     181; ES question 113). *Assumed,* provisional (P35): a member
+     `closure` of the host object returns a marker, and the runtime
+     writes the record in its place.
+310. **A conditional between closures, and a closure through `inSpace`, as a
+     tool** (PL question 182). *Assumed,* provisional (P36), for the
+     conditional: a `select` over the nodes of the two closures, with the tool
+     rule applied to the selected factory value. P36 is not named in the owner's
+     answer of 2026-11-20 and stays provisional. For a closure through
+     `inSpace`, settled by ruling (2026-11-20, Z83; [Decided](#decided)): it is
+     refused where it is given as a tool, alternative (a) of the three that were
+     put. It costs the direct spelling only, since a closure whose body calls
+     `P.inSpace(space)(...)` makes the instance in the other space as a child of
+     its own plan. When the modifier is needed on a tool, alternative (b) is the
+     one to build, in the owner's words "whenever we need it, (b)": the modifier
+     is allowed and the captures stay with the factory value, so the runtime
+     that serves the other space has to read the space the factory value is
+     stored in for as long as the instance lives. Alternative (c), which copies
+     the captures into the target space when the instance is made, is not taken.
+     What the ruling leaves open: the identifier and the message of the
+     diagnostic, which `language-subset.md` §10 does not list; and nothing is
+     built, since the prototype translates no closure used as a value.
+311. **The groups of a scan's prefix** (PL question 183). P31 keeps no
+     order among the groups of a collection. *Assumed,* provisional
+     (P37): a scan keeps a count per group over its prefix with its memo
+     entry, and a move of the deciding position costs the elements
+     between the old and the new position.
+312. **W6 over a value whose type declares no structure** (FA §5.2).
+     *Assumed,* provisional (P38): a path widens where it ends in a
+     repeated sequence that holds a key or in three `*`, and where a key
+     is read again on such a value. Wider than W6 by type, never
+     narrower.
+313. **Whether the atom of a kept output on a link is a selection endorsement
+     with a scope, taken when the link is traversed** (PL question 72). Settled
+     by ruling (2026-11-20, Z81; [Decided](#decided)): no. The pattern's atom of
+     a kept output that passes a value on by reference is joined onto the
+     content, with no scope, so a read through the link takes it. The documents
+     assumed until the ruling that the atom stays on the link's entry and that a
+     read through the link does not take it, and the question put the
+     alternative of an endorsement scoped to the selection, under section 3.7.2
+     of the specification's core concepts chapter (`03-core-concepts.md`). The
+     owner chose neither, and accepts that a reader cannot tell "selected" from
+     "computed" by the atom, because what the atom means is the pattern author's
+     to define. Built in milestone 4 of the integration at its ninth corpus run:
+     the atom is in the `value` entry at the output's path in every case, and 74
+     output rows that were equal to today's are tighter, 52 of them in
+     `examples/cfc-spec-gallery/main.tsx`. What the ruling leaves open, each
+     *assumed* as built: the envelope of the document that the link names is not
+     written, so a reader that reaches the target another way does not take the
+     atom; a write edge that stores a reference keeps the atom of its body in
+     the label of the link; and whether the specification needs a sentence for
+     an atom with no scope at the path of a link.
+314. **Three choices of the implementer of the interim acceptance of
+     `patternTool`** (LS §4.4.3; for the owner to confirm). The ruling
+     accepts a direct call in a pattern body by a rewrite. Not part of
+     it, and built so: a call whose result is spread, read by a member
+     access or called is refused, because the closure is not the record
+     `{ pattern, extraParams }`; a pattern whose input is declared only
+     by an annotation of the callback's parameter is refused when keys
+     are bound; and `pattern` is added to the `commonfabric` import where
+     the name is not bound. The 2 calls of the corpus that are refused,
+     both in `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`,
+     spread the result into a record. Settled by ruling (2026-11-20, Z84;
+     [Decided](#decided)): the three stand.
+
+**From the sixth corpus run of milestone 4 of the integration.** The check of
+stored labels against the values and the measurement of the write records raise
+these
+([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+"Milestone 4: labels from templates at commit"). Rulings of 2026-11-20 settle
+questions 315, 316, 317 and 319, and the direction of question 318.
+
+315. **A handler run that leaves a value as it was stores no label of what it
+     read.** Settled by ruling (2026-11-20; [Decided](#decided)): a handler run
+     of a compiled pattern that leaves a value as it was still stores a label
+     for what it read. Found by the check of stored labels against the values of
+     milestone 4: in `patterns/product/primitives/counter.tsx` a handler writes
+     `clamp(value + step, min, max)` to `value`, and where the result equals the
+     stored value nothing is written, so 3 rows that depend on `min` store no
+     clause of it. Today's runtime stores the same label. Not determined by the
+     ruling, each *assumed* in `plan-and-label-templates.md` §3.12: the label of
+     such a write replaces the label at the path, as the label of a write that
+     changes the value does; and the rule covers what a handler itself writes,
+     and a derived write whose value comes out equal was not examined. It
+     changes what CFC decides against today's runtime, so it goes
+     through the specification procedure. Built in milestone 4 at its seventh
+     corpus run, where the 3 rows store the clause. As built the label replaces
+     the label at the path, and the rule is applied to every write of a compiled
+     pattern that leaves the value as it was, a derived write included; both
+     follow from the specification, which counts such a write among the
+     attempted writes (section 8.10.1, `08-10-validation-at-boundaries.md`) and
+     has the committing attempt's derivation replace the derived label (section
+     8.12.8, `08-12-store-label-monotonicity.md`). By ruling (2026-11-20, Z85;
+     [Decided](#decided)) both are agreed: the label stored for an unchanged
+     value replaces the stored one, and the rule applies to every write that
+     storage finds unchanged. The cost is question 324.
+316. **A removal through a handle: in place, or a read of the list.** Settled by
+     ruling (2026-11-20; [Decided](#decided)): a removal removes in place, as
+     `footprint-analysis.md` §6.1 describes, the kept elements are not labeled
+     again with what the removal read, and the label rule is derived from the
+     CFC specification and not from today's implementation. For the record of
+     today's implementation: `Cell.remove` and `Cell.removeAll` of
+     `runtime/runner/src/cell.ts` read the list with `get()`, and
+     `Cell.removeByValue` records a mergeable operation. Not determined by the
+     ruling: over an array of plain values in place, what the label entries of
+     the elements behind the removed one do when their values move to another
+     position, which is the defect of question 304 for today's runtime; over an
+     array of references the link at a position is written again with its entry.
+     Built in milestone 4: the executor removes in place. The label rule is
+     derived, and the three questions it left, 320 to 322, are settled by the
+     rulings Z71 to Z73.
+317. **Whether a state cell whose schema declares a label has a document from
+     the start.** Settled by ruling (2026-11-20; [Decided](#decided)): it has.
+     `plan-and-label-templates.md` §1.3 and `execution-and-storage.md` §4.1
+     state it, and milestone 4 builds it. Not covered: a schema whose declared
+     label the crate emits as the text of its type, which gets no document
+     ([Known limits](#known-limits-of-what-exists)). How many state cells of the
+     corpus it gives a document is not measured.
+318. **How the write records of a transaction are bounded when a slot or a write
+     covers many elements** (PL question 186). The direction is settled by
+     ruling (2026-11-20, Z75; [Decided](#decided)): the three changes of
+     representation of `plan-and-label-templates.md` §4.7 are built, each of
+     which leaves every stored label as it is. (a) One table of inputs per
+     transaction, named by index from the records. (b) One record with a `*`
+     target for equal writes into one container. (c) Groups with counts for any
+     read that covers a whole container, kept in memory with the collection
+     (Z85). They answer the three costs that were linear in the elements of an
+     array of references: the walk of every position for its label identifier,
+     the one chain of an `identity` slot (20,001 positions and 1.4 MB per record
+     in the measured module), and one write record per element of a write
+     (10,007 records of 11.9 MB). They also remove a growth that does not need
+     large data: a record copies the inputs of every output it names, once per
+     path, which the ruling on templates that name an output by reference had
+     removed from the plan; 14 of 276 corpus modules have a factor of 3 or more
+     for it. Measured by encoding the real records again, not by building: the
+     two large transactions of `dev/experimental/folksonomy-stress-test.tsx` go
+     from 11.9 MB and 13.0 MB to about 4 KB and 6.5 KB. Being built in milestone
+     4 of the integration; no result. *A second point, on soundness, is settled
+     by a fix:* equal labels for a read of the value at a position do not imply
+     equal labels for a link followed there, so chains and groups compare the
+     identifier of each observation the runtime makes at the position
+     (`Instance.#labelKey` of `base/pattern-compiler/exec/executor.ts`). Open
+     with it: what is not verified (question 338), the stored entries (question
+     342), and the collections whose members have labels of their own, where the
+     label of a whole read has as many clauses as members and no representation
+     removes it (questions 339 to 341). The measurement is over an array of
+     references; an array of plain values in place and the result of another
+     per-element construct were not measured.
+319. **The budget of `SPEC-PENDING` markers is used up.** Settled by ruling
+     (2026-11-20; [Decided](#decided)): the budget is raised to 80. On the
+     integration branch the budget is 80. The governed files held 46 markers at
+     the eighth corpus run of milestone 4, and the count at the head of the
+     branch was not taken.
+
+**From the seventh and the eighth corpus run of milestone 4 of the
+integration.** The removal in place and the label for a write that leaves the
+value as it was are built, and the label rule of a removal is derived from the
+CFC specification
+([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+"Milestone 4: labels from templates at commit"; `plan-and-label-templates.md`
+§2.5, "The label rule of a removal through a handle"). Questions 320 to 322 are
+the three that the derivation left, and the owner's rulings of 2026-11-20 settle
+them. Whenever a list is named below, the case is named with it: an array of
+references, an array of plain values in place, or the result of another
+per-element construct.
+
+320. **Whether the positions from the first removed one on take what the
+     removal's decision read, over an array of plain values in place** (PL
+     question 187). Settled by ruling (2026-11-20, Z71; [Decided](#decided)):
+     what decided the removal is stored once for the list, as one `*` entry in
+     the `value` class, and a read of a position joins it with the position's
+     own entry. It is alternative 3 of the three that were put: (1) each such
+     position stores its own label joined with the decision, at one `value`
+     entry written per kept element; (2) the decision on the enumeration alone,
+     with every read of a position of such a list consuming the list's order;
+     (3) the one entry at the list's `*` path. The reason the decision has to be
+     consumed at a position: after `words.removeByValue(secret)` over `["a",
+     "b"]`, a read of `words[0]` gives `"a"` or `"b"` by whether `secret` equals
+     `"a"`, and a static read of a position consumes nothing of the list's
+     enumeration (section 4.6.3, `04-label-representation.md`; section 8.9.5.1,
+     `08-09-runtime-label-propagation.md`). For an array of references the
+     specification states the `*` entry already, and the result of another
+     per-element construct has no handle to remove through. Not determined by
+     the ruling, and as built: the entry is stored in the classes `shape` and
+     `followRef` as well; it is kept for a list that a removal leaves empty; and
+     a read of a member before the first removed position consumes it too. The
+     specification sentence it needs is question 326.
+321. **Whether a kept element that a removal moves keeps its integrity, over an
+     array of plain values in place** (PL question 188). Settled by ruling
+     (2026-11-20, Z72; [Decided](#decided)): it keeps it. The runtime moves the
+     stored label entries with the members of an array it splices, and no
+     template is instantiated for the kept element. As built the entries of
+     origin `derived` and `structure` move, and the existence entries of the
+     class `shape` stay at their positions. For an array of references the
+     reference keeps its own restrictions and the target is not written; the
+     entries at the positions move the same way. Whether the specification needs
+     a rule that a runtime may move entries with the members of an array it
+     splices is part of question 326.
+322. **Whether a removal that finds nothing writes the enumeration** (PL
+     question 189). Settled by ruling (2026-11-20, Z73; [Decided](#decided)): it
+     does, as the ruling Z67 has a write that leaves a value as it was store its
+     label. As built the number of members and the enumeration of the list take
+     what the comparison read, over an array of references and over an array of
+     plain values in place alike, and `addUnique` of a member the list holds
+     does the same, which the ruling does not name and which follows by the same
+     argument. The enumeration label of a list that nothing was removed from
+     grows with every such event that reads something new.
+323. **Where the label of a list of plain values in place is stored when a
+     handler adds to it or removes from it** (PL question 190; for the owner;
+     P39). The seventh run stored one `value` label at the list's path, that of
+     its last write, which was unsound. *Assumed,* provisional (P39), and built
+     at the eighth run: the list has an enumeration entry at its path that an
+     addition or a removal replaces with the stored enumeration joined with what
+     decided the change, and an added element is recorded at its own position.
+     The adapter writes a splice as the number of members and the positions it
+     changed, so the labels of the positions before it stay. The defect was
+     wider than a `push` after a `push`: it held for `addUnique` and the three
+     removals, for the number of members of an array of references, for a list
+     that `set` replaced, and for a write at the position behind the last
+     member; each is fixed and has a test. It changes what the runtime stores
+     for a list of plain values in place, so it goes through the specification
+     procedure. For the owner: to ratify P39, or to decide otherwise.
+324. **What a label stored for a write that leaves the value as it was may
+     cost** (for the owner to accept or bound). Built by the ruling Z67, and by
+     the ruling Z85 for every write that storage finds unchanged. Measured over
+     the corpus at the ninth run with the option on: 2,297 write records of such
+     writes, which changed 22,625 label entries, where the eighth run had 756
+     records and 3,625 entries; 2,720 commits against 2,699 with the option off,
+     and 1,427 preparations against 652. The rise in records is part of the cost
+     regression of the ninth run (question 345): an evaluation that gives the
+     value an output already holds is reported as such a write, so that its
+     label is formed again. After a label changed alone the executor gives again
+     the records of the outputs whose inputs read it, and no others. What
+     remains: the records are found by position and not by class (question 333).
+     *Assumed:* the rule as built.
+325. **Findings of the seventh run, as they stand.** The 448 write records with
+     no label entry stored at their path were 80 in 31 modules at the eighth
+     run, of which 68 were read as the records of a list's membership and
+     number of members, which the evaluator cannot form. At the ninth run they
+     are 477 in 30 modules, among 9,039 records checked where the eighth run
+     checked 4,271; the 477 are not examined (question 345). The crash of the
+     preparation in `dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx` is
+     fixed, in the comparison adapter. Of the rows that became looser with the
+     label of an unchanged write, 28 were run again with and without those
+     records: 11 are looser by the rule of Z67, and 17 are no longer looser.
+     Over an array of references the comparison of a removal reads the
+     references and no target. A `shape` entry at a position that a removal
+     leaves without a member is dropped at the removal, and a later creation of
+     the position mints it again, which a test states. *Assumed:* the records
+     with no entry are no defect of the design until examined.
+326. **The specification sentence for the ruling Z71** (PL question 191; for the
+     owner, and for the specification pull request). Proposed for section 4.6.3
+     of `04-label-representation.md`, in the paragraph "Wildcard per-class
+     entries (conforming template representation)": where a writer changes the
+     membership of a container of values stored in place by removing members,
+     the runtime may store the join of what decided the removal once, as
+     per-class twins at the container's wildcard child path; such a twin is
+     additive in the `value` class, so the effective `value` label of a child is
+     the join of the twin and the child's own most specific `value` entry;
+     successive membership decisions join into it; and it is cleared only by a
+     write that replaces the container. It is a second exception to the rule
+     that a more specific entry replaces, beside "Frozen existence joins with
+     membership templates". `plan-and-label-templates.md` §2.5 has the sentence
+     in full. Open with it: whether the twin is cleared when a removal leaves
+     the container empty, which needs a read of a position that holds no member
+     to consume the container's enumeration (question 329); and whether the move
+     of entries with the members of a spliced array (Z72) needs a sentence of
+     its own, since the specification keys every entry by path and has no
+     operation that moves the members of an array. *Assumed:* the sentence as
+     proposed and the twin kept for an empty container, until the specification
+     pull request is reviewed. The site that moves the entries carries the
+     `SPEC-PENDING` marker for specs pull request 91, and whether it needs a
+     sentence is open.
+327. **How milestone 4 and `main` share the move of label entries.** Settled by
+     ruling (2026-11-20, Z76; [Decided](#decided)): the executor's record of a
+     splice wins for an array that has one, and the alignment by value covers
+     the rest. Pull request commonfabric/labs#10080, merged to `main`, moves
+     stored label entries with the elements of an array for today's runtime,
+     with no option, by aligning the old and the new elements by value.
+     Milestone 4 takes the alignment from the executor's record of the splice,
+     which is exact where two members are equal. Both changed one loop of
+     `prepareBoundaryCommitSteps` in `runtime/runner/src/cfc/prepare.ts`. As
+     built at the catch-up merge there is one type and one block that applies a
+     placement, and `elementEntryPlacement` picks the source for each stored
+     entry: an entry beneath an array that a membership record names is placed
+     by the record alone (`memberEntryPlacement`), and every other entry by the
+     alignment (`elementEntryPlacements`). The alignment is given the recorded
+     arrays and aligns none of them, and no array beneath or above one. With
+     `compiledPatterns` off no array has a record, and the alignment places
+     every entry, as on `main`. A test of
+     `runtime/runner/test/cfc-plan-labels.test.ts` has a list of two equal
+     members whose first a record removes: the entries of the second move to the
+     first position, where an alignment by value keeps the first and drops them.
+     What is not tested is question 346.
+328. **What a position of the result of another per-element construct carries of
+     the membership of its source** (PL question 192). Settled for an addition
+     by ruling (2026-11-20, Z74; [Decided](#decided)): nothing. An append puts
+     the membership of the list on no position, of the list or of a per-element
+     result over it. The check of milestone 4 with every event sent three times
+     reported 16 values of `examples/todo-list/todo-list.tsx` at the eighth run,
+     at the result of a `map` over the array that a `computed` returns; they
+     were an artifact of its criterion, which took a member appended at another
+     index for a dependency on the list. At the ninth run the position of an
+     added member holds nothing of the list's membership, and the check has a
+     criterion for it (`appendedElsewhere` of
+     `base/pattern-compiler/compare/perturbation.ts`): a position whose stored
+     label lacks an input's clause is no failure where the member there stands
+     at another position of the same list in the run with the input changed, and
+     additions at the end alone placed it where it stands in both runs. The
+     executor's store records that per array from each change as it is made
+     (`Store.appended`), so a removal or a reorder is not taken for a missing
+     addition. Not settled: what a position of the derived collection carries of
+     a removal from its source, where the removal's decision does choose which
+     element stands at the later positions. *Assumed* for that, as built and not
+     ruled: where the members of a kept result of a per-element construct change
+     otherwise than by an addition at its end, the label of the collection's
+     membership is stored once for its positions, at the result's `*` path
+     (`PlanWrite.membersChanged`). *The residue of the criterion:* a member
+     appended after a removal is counted as no failure and reported apart
+     (`afterOtherChange`). The ninth run counts 17 such positions in 2 modules,
+     16 at the positions 1 to 4 of `mentionable` in `examples/todo-list` and 1
+     write of `showcase/card-piles`, and every one of the 17 is appended after
+     another change of the list. Whether each stores a clause of what decided
+     that change is not established, so the 17 are not shown to be sound.
+
+329. **Whether a read of a position that holds no member consumes the list's
+     enumeration** (PL question 193; open finding 3). After additions alone,
+     `words[5] === undefined` reveals the number of members, and a static read
+     of a position consumes nothing of the list's enumeration; after a removal
+     the list's `*` entries cover it. The case is an array of plain values in
+     place and an array of references alike. *Alternatives:* (1) the resolver
+     consumes the enumeration entry of the container where the position holds no
+     member, which needs it to know that; (2) an addition joins what decided it
+     into the `*` entries as a removal does, which widens every read of a
+     member. *Assumed,* as built at the ninth run of milestone 4 and not ruled:
+     alternative 1. For a content read at a path through a position that holds
+     no member, the resolver joins the `enumerate` entry at the list's path and
+     the entries above it, with `compiledPatterns` on
+     (`ObservationLabelResolver.#membershipOfAbsent` of
+     `runtime/runner/src/cfc/observation-label.ts`; a test of
+     `runtime/runner/test/cfc-plan-labels.test.ts`). With the option off the
+     resolver reads nothing more.
+330. **An array inside a value written whole** (PL question 194; open finding
+     4). A write that replaces an array stores its label as the `enumerate`
+     entry of the array. An array at a path below the written one, inside a
+     record written whole, gets no such entry. *Alternatives:* (1) an
+     `enumerate` entry for every array inside the written value, linear in the
+     arrays written; (2) a read of the members, the order or the number of
+     members of an array with no entry of its own consumes the `value` entry of
+     the nearest written path above it. *Assumed,* as built at the ninth run of
+     milestone 4 and not ruled: alternative 1, behind `compiledPatterns`. The
+     entry is stored at the path of each array that a value written whole by a
+     compiled pattern holds, the target of a reference excepted, with the label
+     of the nearest path above it that stores a label in the commit.
+331. **The owner's concern about a label-only commit, answered.** The scheduler
+     document said that a label-only commit wakes no reader today, and the
+     owner's remark was that this "might be bad". Measured with the option off
+     and on, with one result: a commit that changes a declared label and writes
+     no value runs a sink that read the value again and conflicts with a
+     transaction that read the value before it, also where the changed label is
+     that of another value of the same document, because the labels are stored
+     in the document. So today's runtime does wake and refuse, and for more
+     readers than the label concerns. What today's runtime does not do is store
+     a label when a write leaves the value as it was; Z67 adds that for compiled
+     patterns. For soundness, a concurrent reader cannot commit on the earlier
+     label (section 8.10.1, `08-10-validation-at-boundaries.md`), and a label
+     derived earlier by a computation that does not run again keeps what it had,
+     which section 8.9.4 of `08-09-runtime-label-propagation.md` permits.
+     `scheduler-and-serving-loop.md` §3.6 states it. *For the owner:* whether
+     the wake of a reader of another value of the same document is to be
+     narrowed, in today's runtime or in the design. *Assumed:* the design's rule
+     of §3.6, by slot.
+332. **The executor's memory on a large result** (not for the owner until
+     examined). On `dev/experimental/folksonomy-stress-test.tsx`, an array of
+     10,000 references, a process that held the runs in memory beside the run in
+     storage ran out of memory at a heap of 4 GB. It is not fixed, and the cause
+     is not found. The time of an event, which was the other half of this
+     question, had one cause and is fixed at the ninth run: `Store.changedSince`
+     of `base/pattern-compiler/exec/store.ts` compared every entry of the log of
+     changes since an evaluation with every position the entry read. It reads
+     the time of the last change at each node along the path of a position, and
+     the events 14 to 16 of the run with generated events take 414, 3 and 53 ms
+     where they took 4,119, 3,720 and 14,945 ms. The log of changes still grows
+     by one entry per change for the life of an instance (`Store.log`), which
+     nothing but two tests reads. *Assumed:* a defect of the prototype's
+     executor, not of the design, until the cause is found.
+333. **After a label changed alone, which records are given again** (open
+     finding 6). As built the executor finds them by the positions that the
+     inputs of a record read, so an output that holds a link is given again when
+     any label of the document the link names changes, though its slot reads the
+     reference alone. `scheduler-and-serving-loop.md` §3.6 has the rule by the
+     slots that a template reaches, with the class of each slot. Not built at
+     the ninth run. The plan for it: the executor keys the readers of a record
+     by the class each slot observes beside the position, the adapter reports
+     the class of each changed entry, and a record is formed again only where a
+     changed entry's class is one its slot consumes. *Assumed:* the rule of §3.6
+     as the design, and the build narrowed to it.
+334. **Findings of the eighth run, as they stand at the ninth.** The 10 values
+     of `examples/map-demo/map-demo.tsx` and the 1 of `apps/base/person.tsx`
+     that stored no clause of an input they depend on had four causes, each
+     fixed with a test: the rows of a view, which are the result of a `map` held
+     in place under a kept output, took the label of the collection's membership
+     alone; a kept output that the plan has no template for took the label of
+     the kept output above it; the value of a cell stored in place as a branch
+     of a `select`, as `cell.get() ?? fallback` gives it, kept its slot in the
+     class `identity`; and an evaluation that gives the value an output already
+     holds stored no label. The atom of an output that holds a link is stored in
+     one place (ruling Z81). Of the points not verified for a change of a list's
+     members: a removal and an addition in one transaction at one position is
+     verified, with no change needed; `key(i).set(undefined)` stored no label
+     and is fixed; a write beyond the end of a list stopped the executor and is
+     fixed; and records in place with entries below them, under a `*` entry that
+     a more specific entry replaces, is question 343. The refused commits are 55
+     in 23 modules where they were 44 in 24, and the bounds taken 1,762 where
+     they were 499 (question 345). The comparison adapter reads the stored label
+     entries of a written document once less per transaction; the read after the
+     commit and the comparison of every entry remain. The 19 rows that were
+     looser at the eighth run and not before were not looked at again.
+335. **Whether the confidentiality ceiling of every path a handler can write is
+     declared ahead** (PL question 195; for the owner; not a ruling). The
+     owner's words (2026-11-20): "independently i think there is a soundness
+     argument that we have to pre-declare the confidentiality ceiling on any
+     writable to a handler which would make this example either not write a or
+     always increase confidentiality anyway". The example is a `push` under a
+     condition that a labeled input decides. The pointer is to a proposal that
+     is merged into the specification as proposed and changes no normative
+     chapter: sections 14.3.5 to 14.3.10 of `14-open-problems-and-proposals.md`,
+     and the proposal `proposals/label-changes-under-secret-context.md` (status:
+     proposed). Its problem: a write made after reading a secret labels the path
+     it writes and not the paths it could have written, so where the secret
+     decides which path is written, the difference between the labeled path and
+     its neighbors is observable without reading a label. Its rule in outline: a
+     handler declares a ceiling on what it may read; when the pattern is
+     instantiated, every path the handler can write is given, or checked to
+     have, a declared label that covers that ceiling; a call then changes no
+     label, and is refused whole where what it read does not fit the ceiling
+     (section 5.9 of the proposal). A computation whose output paths are fixed
+     by its wiring and restamped on every run is exempt, provided it runs again
+     when the label of a cell it read changes. *What the compiled plan gives
+     that rule:* the paths each handler can write are known from its footprint
+     before any call, as the write edges of the plan (`footprint-analysis.md`
+     §6), so the instantiation of a compiled pattern can set or check the
+     declared label of every such path with no annotation beyond the ceiling
+     itself; and the output paths of a cone are fixed by the plan, which is the
+     precondition of the exemption. *What milestone 4 has of the exemption's
+     conditions,* by the coordinator's reading and not checked against the
+     proposal's proofs: a write that leaves the value as it was stores its label
+     (Z67), and after a label changed alone the labels of the outputs that read
+     it are formed again. *What is built of the rule:* nothing. The plan holds
+     the ceiling that a body declares on its inputs as a `maxConfidentiality`
+     constraint, checked against the labels of those inputs
+     (`plan-and-label-templates.md` §4.4); no instantiation gives a handler's
+     writable paths a declared label from it, and a label is raised by a call.
+     Open with it: where the ceiling is authored, since the proposal requires an
+     authored one; what it does to the labels this design stores per written
+     path, which would sit under a declared ceiling; and the proposal's own
+     prior question, whether an absent declaration is an empty ceiling.
+     *Answered as far as what is built meanwhile, by ruling (2026-11-20, Z77;
+     [Decided](#decided)):* wait for the specification's ruling, and make no
+     investment in per-member audience labels of the lists a handler writes. The
+     owner's words: "assume the proposal or something equivalent eventually
+     lands and so don't worry about the potential for leaks now, but still make
+     sure things are sound in terms of just correctly computing the labels under
+     that relaxed condition". So the findings of milestone 4 divide. A stored
+     label that lacks a clause of what flowed into the value is a defect, fixed
+     where found. A label change that a write under a secret causes is a channel
+     of the write gate, recorded here and not fixed: a handler that makes no
+     write under a condition on a labeled input stores nothing, which
+     `initHandler` of `examples/map-demo/map-demo.tsx` shows at 16 values when
+     events are generated for it (the scenario of the corpus run sends it none,
+     so the run's tables do not hold them); a member appended at another index
+     (Z74); a hole that a write beyond the end of a list leaves before the
+     position it writes; and a removal that finds nothing, which leaves the
+     positions as they were. Not decided which of the two: 2 findings of
+     `examples/group-chat-room` with generated events, where a pushed message
+     depends on `users` and the member's `id` is drawn from the random source,
+     whose draws the runs make in different numbers. *What the plan lacks for
+     the proposal's rule,* read from the plans of the corpus (855 handler
+     bodies, 1,507 write targets, of which 1,464 are below a handle and 1,436 of
+     those below a handle the binding captured, so known at instantiation; 28
+     are below a handle that arrives in the event): an authored ceiling per
+     handler; the kind of a member change, since a write edge with `*` covers an
+     addition, a removal and a replacement alike and only the executor sees
+     which it is; and which targets exist before a call. *Which of the
+     proposal's refuted variants milestone 4 has,* by the coordinator's reading
+     and not checked against the proposal's proofs: it has no gate, so a
+     handler's write raises a derived label at the call and a created member is
+     labeled from the attempt; a write that leaves the value as it was restamps
+     its label (Z67), for a cone's output held in place as well since the ninth
+     run, and not for an output that holds a link, an output whose template
+     reads nothing, or a cone's side write; a label that changes alone forms the
+     labels of the records that read it again, and a record with no inputs is
+     not formed again; and a write edge that a body does not reach stores
+     nothing. *Assumed:* nothing changes until the proposal is ruled in the
+     specification.
+336. **A result schema that carries a key no type states** (LS question 48;
+     for the owner). By the owner's ruling of 2026-11-20 the forms of the API
+     that take a schema are refused, except a schema given to a language model
+     (`removed-form:schema-argument`, LS §4.4.3). The prototype reads none of
+     the schemas beside a builder's callback: it takes a definition's types
+     from its type arguments and the callback's annotations, types a schema
+     argument as an opaque `JSONSchema`, and emits the handler's body alone.
+     `Home` and `AgentQueue` pass `pattern` a result schema that carries the
+     runner's private key `__ctPreservePatternResultCell` on one property, and
+     no type states the key, so both are refused with no rewrite. *For the
+     owner:* a type of the API that states the key, or a runner that keeps
+     that link without one. Nothing is assumed. The crate does not report the
+     refusal: the catalog entry `removed-form:schema-argument` has the status
+     "not implemented", and a schema passed to a form of the API that takes
+     one is accepted without a report (`base/pattern-compiler/src/catalog.rs`).
+337. **The `tables` option of `sqliteDatabase`** (LS question 49; for the
+     owner). Whether the schemas built by `table(...)` stay beside the schemas
+     given to a language model. *Assumed:* they stay, since no type of the
+     program declares a table.
+
+**From the ninth corpus run of milestone 4 of the integration, the analysis of
+collections with many members, and the catch-up merge with `main`.** The owner's
+rulings of 2026-11-20 (Z75 to Z85) settle questions 313, 314 and 327, the
+direction of question 318 and the second part of question 310, and answer
+questions 302 and 335 as far as [Decided](#decided) says. The questions below
+are what they leave open and what the run found
+([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+"Milestone 4: labels from templates at commit"; `plan-and-label-templates.md`
+§4.7).
+
+338. **What is not verified of the three changes of representation** (PL
+     question 196). That (a), (b) and (c) of the ruling Z75 store byte-equal
+     labels is argued from the idempotence of join and meet and is not built.
+     The byte figures are an encoding of real records and no measurement of the
+     changes; for (c) a binding of more than 8 positions is counted as 300
+     bytes. What the 20,001 positions of the one `identity` chain are was not
+     read. Only an array of references was measured; an array of plain values in
+     place and the result of another per-element construct are reasoned. The
+     patterns that read a whole list of references that grows in use were named
+     by reading and not run at size: two lifts of `apps/topics/main.tsx`,
+     `system/summary-index`, `system/knowledge-graph`, `system/backlinks-index`
+     and `system/fabrichat/manager.tsx`. *Assumed:* the labels are equal, and
+     the corpus run with the changes is the check.
+339. **The diagnostic and the hard limit for a label of very many clauses** (PL
+     question 197; for the owner). The ruling Z79 has a diagnostic, and a
+     refusal above a hard limit set well above it. Not ruled: whether the limit
+     counts clauses or encoded bytes; the two numbers; and how the diagnostic is
+     reported, where the recommendation is once per collection and session with
+     a counter in the runtime's CFC statistics. *Assumed:* nothing is built and
+     no number is set.
+340. **How an author marks an output as stored at the declared ceiling** (PL
+     question 198; for the owner). The ruling Z80 has a body with a declared
+     maximum confidentiality store an output at the ceiling where the author
+     marks the output. Not ruled: the syntax of the mark; where it is written,
+     on the output, on the body or on the type of the result; and which ceiling
+     an output takes where the inputs of the body declare different ones. It
+     changes what CFC stores and goes through the specification procedure.
+     *Assumed:* nothing is built, and an output stores the exact join.
+341. **Whether the labels of members may be coarse once the write gate is
+     adopted, and how any threshold is measured** (PL question 199; for the
+     owner). The ruling Z78 leaves one exception possible, in the owner's words
+     "possibly (c) once the ceiling proposal is ratified". Not ruled: that
+     exception itself; the coordinator's condition for any threshold, that the
+     serving runtime measures it at preparation on committed state, in members
+     of the stored container and with no memory of earlier sizes; and a form
+     that marks a collection uniform with no declared label, which is
+     recommended against. *Assumed:* no threshold and no such form.
+342. **The stored entries where the members of a collection have several
+     labels** (PL question 200). Per-member entries by content address, and the
+     label of a `fold` stored once in place of three times inline, are not part
+     of the ruling Z75. Not verified: whether `CFC_LABEL_INLINE_LIMIT` applies
+     to the entries measured inline at 1.45 MB, and whether the normal form of a
+     label absorbs a clause that a declared clause implies, which a collection
+     with a declared label needs for its members to have one label identifier.
+     *Assumed:* the entries as built.
+343. **A removal's `*` entry that a more specific entry of origin `structure`
+     replaces** (PL question 201; for the specification pull request).
+     `resolvedEntryGroups` of `runtime/runner/src/cfc/consumed-label.ts`
+     resolves the classes `value` and `followRef` of origin `structure` by the
+     longest prefix, so a concrete entry of that origin at a slot below a list,
+     such as the stamp that a recorded link write mints, replaces the `*` entry
+     that holds what decided a removal (Z71), and a read of that slot does not
+     consume the decision. Unsound for that slot, not fixed, and no test
+     produces the pair, since the comparison adapter records no link write. The
+     fix resolves an entry that the runtime minted at a `*` path in a group of
+     its own, as the `shape` class is resolved. It changes the resolution with
+     the option off, so it needs the specification sentence of question 326
+     first. *Assumed:* not fixed until that sentence is reviewed.
+344. **The open soundness findings of the ninth run** (not for the owner until
+     examined). The check of the stored labels against the values reports 4
+     values in 2 modules with every event sent three times, and 1 of the 4 on
+     the scenario as given. In `examples/todo-list/todo-list.tsx`, 3 outputs at
+     position 0 of `mentionable`, which is the result of a `map` over the array
+     that a `computed` returns: `$NAME`, `summary` and a prop of the rendered
+     tree depend on the input `items` and store no confidentiality. In
+     `showcase/card-piles/main.tsx`, 1 write, at position 3 of the list that the
+     handler `moveToPile` adds to with a `push` after a `remove` from the other
+     list, an array of plain values in place: its value depends on the input
+     `pile2` and its label holds the clause of `pile1` alone. Neither is
+     examined. The commit that ends the round states that `examples/todo-list`
+     has no finding; the tables of the run have the 3. *Assumed:* unsound until
+     shown otherwise, or shown to be an artifact of the check.
+345. **The cost regression of the ninth run** (serious; not for the owner until
+     attributed). Against the eighth run, over the same 238 modules with the
+     option on: the preparation time 9,250 ms where it was 2,176 ms; the bounds
+     taken 1,762 in 70 modules where they were 499 in 53; the records of writes
+     that left the value as it was 2,297 where they were 756, and the label
+     entries they changed 22,625 where they were 3,625; the write records
+     checked against the evaluator 9,039 where they were 4,271, of which 477 in
+     30 modules have no entry stored at their path where 80 had none; the
+     commits refused with the option on and not off 55 in 23 modules where they
+     were 44 in 24; and the run 22 minutes where it took 10. Three modules
+     account for 6,744 ms of the preparation time:
+     `examples/cfc-trusted-component-examples/main.tsx` 3,453 ms where it took
+     189 ms, `send-publish-examples.tsx` of the same directory 1,464 ms, and
+     `dev/experimental/folksonomy-stress-test.tsx` 1,828 ms where it took 942
+     ms. The fixes of the round are the likely source, by reading and not by
+     measurement: each element entry of a per-element result held below a kept
+     output has a record of its own; a kept output with no template, an element
+     entry with a slot that has no stored position, and a member change under an
+     envelope are given as bound and take the transaction's join; and an
+     evaluation that gives the value an output already holds is reported as a
+     write that left the value as it was. The machine was under load (load
+     averages near 10), so the times are an upper bound. *Assumed:* a cost of
+     the build and not of the design, until attributed; the three changes of
+     representation (question 318) are expected to lower the first, and that is
+     not shown.
+346. **What the catch-up merge with `main` leaves untested.** The merge is made
+     on the integration branch, with the ruling Z76 built (question 327). Not
+     covered by a test: an array that has a membership record beneath an outer
+     array that has none, where the transaction also changes the members of the
+     outer array; by the rule as built the entries beneath the outer array's
+     elements then stay at their indices. And the commit dependency on a label
+     that a stored label rests on (`isLabelBasisRead`) lives in
+     `commitReadActivities()` of
+     `runtime/runner/src/storage/commit-read-activities.ts` since `main` moved
+     that function out of the replica; the same function tells the transaction's
+     patch encoder which reads pin an array before it sends a change of that
+     array as splices, and how the label dependency acts on that encoder is not
+     tested. The corpus on the source of current `main`, run with the code of
+     the eighth run, is 287 modules attempted and 244 run; no corpus run exists
+     with the code of the ninth run on that source. *Assumed:* the merge as
+     built.
 
 ## Open, and not needing the owner
 
-- **The pattern closure's remaining gaps** (K12): which output or argument
-  path holds which entry of `Plan.closures`, and a closure called through
-  `inSpace`. A conditional between two closures is a factory value
-  (`language-subset.md` §4.4.2).
+- **The pattern closure's remaining gaps** (K12) are questions 307 to 310
+  under [Open, and needing the owner](#open-and-needing-the-owner): which
+  path holds which entry of `Plan.closures`, the stored form of the
+  factory value, what value code writes, and a conditional between
+  closures. A closure through `inSpace` as a tool is refused by the ruling
+  Z83.
 - **The label of a model's output has no definition in the
   specification.** The rules for a tool closure and for a later send both
   rest on it, and specs pull request #91 refers to a contract rule for a
   language-model effect that no chapter states.
 - **A statically resolved pattern called with `inSpace`** in the reactive
-  tier of an element body is addressed by no document.
+  tier of an element body is an instance of its own, by the ruling on
+  `asInstance()`. No document says how the request of a space, which a
+  handler makes in its transaction, is made by an element body of the
+  reactive tier. The gap is the same over an array of references, an
+  array of plain values in place, and the result of another
+  per-element construct.
 - **`execution-and-storage.md` leaves two things unspecified:** how the
   arrangement of part documents is computed again when a conflict
   withdraws writes at the commit, after the size rule ran; and how the
@@ -1039,11 +12876,293 @@ as an assumption.
 - **Uneven wording.** `language-subset.md` says selector where the other
   documents say key function, and it cites open questions of the newer
   documents by number.
+- **Four assumptions `execution-and-storage.md` made from the
+  prototype's executor** (its questions 81 to 84): the text of the
+  value-code module, with one function per source module so that a
+  name of module scope resolves as in the source; what a value function
+  returns for a constructed value and for the constant paths of the
+  result; in which transaction the first value of a state cell is
+  written where it is not a constant; and what a write stores where a
+  value passed on unchanged refers into what the write replaces. The
+  last covers one array; by ruling a body that exchanges members
+  between two arrays of plain values in place stores copies
+  (question 163).
+- **Defects of the prototype that the value comparison depends on:** a
+  pattern compiled in at a call inside an initializer is evaluated in
+  the caller's cone; the cone of an array written in place lists no
+  slot of what its members hold; a constant captured by a handler that
+  is not a literal at the binding is held as `null`; no code is emitted
+  for a spread in the argument of a pattern (a `reduce` in the reactive
+  tier is emitted at commit `59055fd0c5`); and 8 modules whose value
+  code fails are not examined. Of
+  the 23 differing values that had no cause, 8 are equal at commit
+  `96f3b83a73` and 15 are classed, 7 of them by a reading that is not
+  verified. At that commit the crate also holds the kind of a cone
+  with side-writes as a member of the cone and a materializer's body
+  in a cone, where the documents have neither; applies a callee's
+  default only to a destructured name and a call written as a record;
+  gives a state cell declared without a type argument a schema that is
+  the default alone; and counts one document per state cell in its
+  cost model. Its executor finds no reader for a write edge without a
+  root and a path, lets a handler's read of a write target demand
+  nothing, and has no test for the keys of a derived collection passed
+  on unchanged. At commit `59055fd0c5` the crate evaluates a member
+  read with the key `UI` or `NAME` as a chosen child, where the key is
+  static; its executor keeps a `reduce` as one unit and not per key,
+  has no function for a `reduce` without an initial value, which the
+  language refuses, and does not compare a step that reads an outer
+  input, which the compiler of today's runtime refuses; it instantiates
+  no pattern and binds no handler in a function body, because the
+  artifact names a compiled pattern by hash and holds no plan of a
+  pattern from another module, and the executor has one instance over
+  one store; and it has no `linksOf` and no debug-string built-in. The
+  difference of `apps/person-workbench/main.tsx` and the 15 of
+  `product/primitives/demo/atoms-demo.tsx` are examined at commit
+  `77993077e4`: the first was a defect of the executor, since fixed,
+  and the 15 come from constants the crate holds as `null`. At that
+  commit the executor names the document of a record written into a
+  list by a counter; stores in place a record that is set at one
+  position of an array and the records of an array that a body creates
+  a cell with; writes no default of the argument into the argument
+  document; forms the key of a plain value with no salt; passes an
+  element of a `map` or `flatMap` result whose body computes a value
+  on as that value; stores a member of handle type of a computed first
+  value as a value; and starts a `push` below an empty path of the
+  argument from the empty array. The crate marks no output of a
+  `computed` with a block body or of a sandboxed body that passes a
+  derived collection on, and writes a caller's read of a path that a
+  callee passes on with no default. At commit `e63b3d305c` the crate
+  lists no result path for a stream that a promoted `computed` with a
+  block body places in a tree it returns
+  (`apps/base/contacts.tsx`, 3 evaluations that fail the check), and
+  none for a stream inside an element that a `filter` passes on;
+  records nothing for a stream bound to a formal of a body; has no
+  `callee` on `Child`; and counts a child written after a collection
+  as kind `member`, with the children of a view node flat. Its
+  executor keeps the nearest entry of `Plan.outputs` where a check
+  fails, and not the top-level property; compares the whole key at a
+  `*` of kind `element`, and not a prefix; does not re-key a plain
+  value that a write through its reference changes; stores a
+  reference by key where a function body moves a plain value; holds a
+  handle by position unequal to a reference by key; names an instance
+  and a binding that a function body makes by the run and an ordinal;
+  tears no instance down; and has no `asInstance()`. The comparison's
+  `values-corpus.ts` does not pass the type check. At commit
+  `e4f2fb3431` the crate and the executor have those rulings. The
+  crate lists `*/*` with two kinds `element` for a handler bound in
+  an inner `map` whose result the callback of a `flatMap` returns;
+  does not report `element-body:result-stored-outside` or the
+  diagnostic of a wrong declaration of a key, which that commit's
+  documents named `keyed-by:declaration` and the catalog names
+  `array-by-key:declaration`, because it follows the diagnostic
+  catalog of `language-subset.md` at an earlier commit; does not check that
+  a declared key field is a required property of type `string` or
+  `number`; writes a placeholder for the hash of an `asInstance()`
+  callee, with no schemas, and neither scope nor space where the
+  modifiers compose; reports a call through the modifier of a
+  factory value as unsupported; knows `[SELF]` by its spelling; and
+  gives the slot of a name that an `action` captures the schema of
+  the place and not the handle type the callee declares, so the
+  handler is handed a value where it calls `get()`
+  (`product/primitives/demo/atoms-demo.tsx`, 4 events). Its executor
+  hands a handler a reference by key at a state path of data type,
+  which is the ruling since;
+  does not move an instance or a binding that a function body made
+  when it re-keys; applies the default below an empty argument path
+  for `push` alone; forms the key of a declared key field with no
+  salt and no hash, and with the name of the field in it; forms a
+  reference by key outside the element table from the whole value;
+  keys the members of a `flatMap` segment with no declared field;
+  identifies an `asInstance()` instance by a table and never removes
+  one; and has no test for a write to the key field itself. The
+  comparison of labels was not run over the corpus with the nested
+  paths of the children, and the two forms of the value comparison
+  disagree by 5 compared values, which is not examined. At commit
+  `a462df710a` the crate records no result path, the executor checks
+  no position and replaces a marker by the link wherever it stores a
+  value, the comparison's harness finds a stream at the position the
+  executor recorded, a re-key moves an instance that a `lift` or a
+  `computed` of an element body made, and the two forms of the value
+  comparison give the same figures. Against the rulings since that
+  commit: the executor forms the key of a declared key field with no
+  field name, resolves a reference by key through the schema that
+  the array is stored under, and keeps a record of that schema,
+  where by ruling the key names its fields and is resolved with no
+  schema; and the crate and the executor have one key field and the
+  keyword `keyField`, where by ruling the declaration can name
+  several fields; and the crate reads the key from a marker
+  `KeyedBy` on the element type and the executor holds the value of
+  the field in the key, where by ruling the key is declared on the
+  array with `ArrayByKey` and the element part holds the names of
+  the fields and one salted hash of their values. The executor's
+  value code reads the spread of an array of
+  references as values, so a spread child over such an array holds
+  no links; and nothing removes an instance that a re-key replaced,
+  or the stream of a binding that the run of the old key made. At
+  commit `7774ba208c` the key names its declared fields, a reference
+  by key is resolved from the key alone, the store keeps no schema
+  for a document, the declaration can name several fields with the
+  keyword `keyFields`, the crate reports the two diagnostics of the
+  declaration, and a re-key removes the instance of a function body
+  that a moved one replaces. Against the rulings: the crate reads
+  the key from the marker `KeyedBy` on the element type and writes
+  the keyword into the schema of the items, where the key is
+  declared on the array with `ArrayByKey`; the executor writes a key
+  as a string with the prefixes `fields:`, `value:` and `cell:`, the
+  separators `=`, `,`, `#` and `/`, and an escaping with `\`, where
+  a key is a fabric value that the helpers of `base/data-model` hash
+  and write; the key holds the values of the fields with no salt and
+  no hash; a read of a whole array under a type that declares no key
+  forms the keys from the whole value, where the reader takes the
+  key fields from the schema traversed while the link is resolved;
+  and an element of a plain array generated from scratch has no
+  place, so a handler over it stores a copy, where it has a
+  reference by key. The two diagnostics have the names
+  `keyed-by:declaration` and `keyed-by:mismatch` and are provisional
+  in the crate's catalog; the mismatch is not checked at an
+  assignment or at the argument of a handle method, and its walk
+  stops at depth 6. The members of a segment of a `flatMap` are
+  keyed with no declared field. A `set` of a plain value on a cell
+  that holds a link writes through the link, which is not examined.
+  At commit `a4b4612b3b` the crate reads the key from the array type
+  `ArrayByKey` and writes the keyword into the schema of the array; a
+  key is a record that `jsonFromFabricValue` writes, with the names of
+  the declared fields and one salted hash; a reader whose type declares
+  no key takes the key fields from the schema of the link it resolves;
+  an element of a plain array generated from scratch has a reference by
+  key; and the two diagnostics have the names
+  `array-by-key:declaration` and `array-by-key:mismatch`. At that
+  commit the prototype differs from the documents in the form of its
+  keys, in the identifiers that it joins with separators of its own,
+  in the limits of the reference into a plain array generated from
+  scratch, and in the readers that do not learn the key fields.
+  At commit `682b918ed1` the crate and the executor follow the four
+  rulings on questions 207 to 210, a key and an identifier have the
+  record forms of the documents, and a `set` of a plain value on a
+  cell that holds a link is compared with today's runtime, which
+  overwrites the record that the link names as the executor does.
+  What differs from the documents at that commit is under [Known
+  limits](#known-limits-of-what-exists).
+  At commit `abd965cc37` the executor runs 212 of the 215 modules that
+  today's runtime runs, and every value that differs and every event
+  that is not handled has a class and a cause ([The corpus at commit
+  `abd965cc37`](#the-corpus-at-commit-abd965cc37)). What the executor
+  still lacks is under [Known limits](#known-limits-of-what-exists).
+  At commit `a84264daf2` the executor handles events in batches with a
+  transaction for each cause, bounds the evaluations of a cone instance, has the
+  error state, and requests and completes an effect with answers that a test
+  gives; it runs 214 of the 215 modules, and 44 of the 47 that need `wish` or an
+  effect with stubbed answers ([The corpus at commit
+  `a84264daf2`](#the-corpus-at-commit-a84264daf2)).
+  At commit `e63851c1ee` the work of the executor for one change of a list
+  follows the change and not the list, in the four cases measured, with the
+  values and the labels of the corpus as before ([The corpus at commit
+  `e63851c1ee`](#the-corpus-at-commit-e63851c1ee)).
+- **What the round of prototype commit `e63851c1ee` left without a cause.**
+  Each is about the prototype or about today's runtime, and none is a question
+  of the design. In one module of the table of run times the executor is
+  slower per event than today's runtime,
+  `showcase/battleship/pass-and-play/main.tsx`,
+  7.64 ms against 5.64; it was not investigated. Two modules of the stubbed
+  comparison store one document of kind `output` fewer than before, and the
+  cause given for it is a reading that was not verified. Today's runtime
+  logged `Link resolution iteration limit reached` for a prepend and for a
+  removal of the first element of 1,000 plain values in place, and its first
+  settle of a list of 10,000 elements had not ended after 100 seconds; neither
+  is reduced to a test or reported against the runtime. The time of a
+  keystroke in a row with no declared key follows the number of rows in the
+  executor, 0.46 ms at 100 and 5.4 ms at 10,000, because it passes over every
+  state cell and instance to find what is stored under the old key. The cause
+  of the time that grew faster than the list at commit `a84264daf2` is found:
+  the element of a key was found by a scan of the element table (its note
+  505).
 
 The open questions each document ends with stay where they are.
 
 ## Known limits of what exists
 
+- **Milestone 4 of the integration is built and its findings are open.** Labels
+  from templates at commit are built on the integration branch
+  (`claude/compiled-pattern-integration-m1`, pull request #9992), with every
+  commit of a compiled pattern prepared, and measured over the corpus with
+  `wish` simulated
+  ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+  "Milestone 4: labels from templates at commit"). The ninth corpus run is on
+  the source of `main` before the catch-up merge: of 271 modules 238 run. Beside
+  today's, of 1,695 output rows 1,041 are tighter, 287 equal, 265 have an atom
+  that names the pattern, 88 are looser and 14 incomparable; of 203 write rows
+  130 are equal, 61 looser, 9 tighter and 3 incomparable. Open, the unsound ones
+  first:
+  - 3 outputs of `examples/todo-list`, at position 0 of the result of another
+    per-element construct, and 1 write of `showcase/card-piles`, at a position
+    of an array of plain values in place that a `push` after a `remove` writes,
+    depend on an input and store no clause of it; not examined (question 344);
+  - a removal's `*` entry is replaced by a more specific entry of origin
+    `structure`, so a read of that slot does not consume what decided the
+    removal; not fixed, and it needs the specification sentence first (question
+    343);
+  - a handler that writes nothing under a condition on a labeled input stores
+    nothing, a channel of the write gate that the ruling Z77 has recorded and
+    not fixed (question 335);
+  - a member appended after a removal is counted as no failure by the check, 17
+    positions in 2 modules, and is not shown to be sound (question 328);
+  - the cost of the labels regressed at the ninth run: the preparation time with
+    the option on is 9,250 ms where it was 2,176 ms, the bounds taken 1,762
+    where they were 499, and the run takes 22 minutes where it took 10; not
+    attributed (question 345);
+  - the executor's memory on `dev/experimental/folksonomy-stress-test` is not
+    fixed: a process ran out of memory at 4 GB (question 332);
+  - the three changes of representation that bound the write records of a
+    transaction are adopted and being built, with no result, and until they are
+    in the records grow with the data (question 318);
+  - the diagnostic and the hard limit for a label of very many clauses, and an
+    output stored at a declared ceiling, are ruled and not built (questions 339
+    and 340);
+  - after a label changed alone the records to give again are found by position
+    and not by class (question 333);
+  - the specification sentence that the ruling Z71 needs is proposed and pending
+    the specification pull request (question 326);
+  - the catch-up merge with `main` is made, and two of its interactions have no
+    test; no corpus run exists with the code of the ninth run on the source of
+    current `main`, whose corpus is 287 modules of which 244 run with the code
+    of the eighth (question 346);
+  - the check of stored labels against the values is a lower bound: one change
+    per input, confidentiality alone, 206 of 238 modules on the scenarios as
+    given and 99 with every event sent three times, and 60 and 50 findings in
+    modules with a refused commit that are not counted and not examined;
+    "tighter" in the comparison remains no evidence of correctness;
+  - 477 write records in 30 modules have no label entry stored at their path,
+    not examined (question 325);
+  - 55 commits in 23 modules are refused with the option on and not off, each
+    with a stated reason, and a module with a refused commit holds the labels of
+    an earlier commit;
+  - the runtime took a bound 1,762 times, because a selection, a choice or the
+    addresses of a dynamic read are not reported, or because the executor gives
+    a record with no inputs as bound (`plan-and-label-templates.md` §4.2; P37);
+  - at the seventh run today's label held no clause at 4 rows where the
+    template's holds one, in `dev/scope-bug-ct1597-reduce/main.tsx`,
+    `dev/test/non-idempotent/accumulator.tsx` and
+    `showcase/battleship/multiplayer/room.tsx`, not reproduced outside the
+    corpus run and not looked at again;
+  - a schema whose declared integrity the crate emits as the text of its type,
+    as in `examples/cfc-authorship-chat`, stores no declared label: the runtime
+    refuses it as malformed integrity, and a state cell with such a schema gets
+    no document at the start.
+
+  The preparation times of the run were taken on a machine under load. Steps 11
+  and 12 of the milestone's plan, instantiation keys and verified units in the
+  prepared digest and a derived write dropped alone, are not built.
+- **A pattern closure used as a value is not translated by the
+  prototype.** `Plan.closures` is empty, and a closure given to a
+  language-model built-in as a tool is left out of the request. A
+  `patternTool` call that the interim acceptance rewrites is accepted and
+  compiles to a tool that is not sent (questions 307 to 310).
+- **The simulation of `wish` in the comparison is partial.** A seeded
+  profile, an empty list of mentionable pieces, an empty piece registry,
+  the clock and a search by tag that finds nothing are answered. The
+  profile is data and no running instance, and `#summaryIndex`,
+  `#learnedSummary`, `#default`, `#chatManager`, `#favorites`, `#journal`
+  and a computed query are not answered.
 - **Neither cross-read covered every section.** Each reader states what
   was not read in full at the end of its section of the record. In the
   second, no reader read `footprint-analysis.md` against the execution or
@@ -1094,11 +13213,493 @@ The open questions each document ends with stay where they are.
   that `scheduler-and-serving-loop.md` relies on source for, such as the
   name of the run budget and a fourth node status. That specification is
   outside this work and is not corrected here.
+- **The rulings on `asInstance()` and on a declared key are tested by
+  the prototype's executor alone.** At commit `682b918ed1` the
+  declared key is `ArrayByKey` on the array, as ruled. Today's
+  runtime has neither `asInstance()` nor `ArrayByKey`, so nothing of
+  the rulings on a key is compared with it: the
+  value comparison has no row for them, and no pattern of the corpus
+  uses either. The nested layout of the children of a view node is
+  compared with today's runtime through the paths that the events
+  take, and not as stored values. The label comparison has not been
+  run over the corpus with the nested paths.
+- **The prototype follows the rulings of 2026-11-17 on a key, with the
+  differences of the items below.** At commit `682b918ed1` the key is
+  declared on the array with `ArrayByKey`, the keyword `keyFields` is
+  on the array schema, the element part of a key with declared fields
+  holds the names and one salted hash of the record with `salt` and
+  `value`, a key is a record that `jsonFromFabricValue` writes, a
+  reader whose type declares no key takes the key fields from the
+  schema of the link it resolves, an element of a plain array generated
+  from scratch has a reference by key, also where a function body of an
+  element body returns the array, such an array that is given whole to
+  an instance of its own is given as a link, and the type of a `map`
+  result keeps the key fields of its receiver. It has neither `KeyedBy`
+  nor the plain form of the key. The statements of this plan that name
+  either, or that say that the prototype does not follow one of the
+  rulings on questions 207 to 210, describe the prototype at an earlier
+  commit. The case is an array of plain values in place, a plain array
+  generated from scratch included, and the result of another
+  per-element construct where the upstream position holds a value; an
+  array of references is keyed by its cells.
+- **The prototype's keys differ from the documents in four points**
+  (its notes 446 to 449 and 460). The secret is a string that the store
+  holds, and not a labeled document that `ensureRuntimeSecret` mints;
+  that is about plain values, in an array of plain values in place, a
+  plain array generated from scratch included, and in the result of
+  another per-element construct where the upstream position holds a
+  value. The record of the address that a link names, which is the
+  element part over an array of references, holds the space, the
+  document and the path and no scope, since the executor has no scope
+  (question 211). An element of an array of plain values in place that
+  holds a reference by key into its own array has the element part
+  `{ position }` while the keys of that array are formed, which the
+  documents do not have. And for an element that has no place, as one
+  of an array at a path below a value that a function body returns, the
+  executor hashes the stored form of the value, in which a marker of a
+  stream is the link to the stream and a function is left out. The memo
+  and the element tables use the salted key, which the documents allow
+  and do not require, and no identifier of a part document is formed.
+  The record forms of a key and of the salted hash, the hashing of a
+  whole value as the fabric value it is, the space in the address
+  record, and a key that enters an identifier as its record are as the
+  documents have them at this commit, and one test has the order in
+  which the codec writes the members of a record.
+- **In the prototype a key in a stored path is told from a property
+  name by decoding** (its note 454; question 214). The segment of a
+  path that holds a key is the text of the key, and a segment is a key
+  where it decodes to a key record, so a property whose name is exactly
+  the text of a key record cannot be addressed. The documents assume a
+  record in the path. That is about every case in which a reference by
+  key exists: an array of plain values in place, a plain array
+  generated from scratch included, and the result of another
+  per-element construct where the upstream position holds a value. The
+  store and the executor join no other parts with separators of their
+  own at this commit. Three things are left that name nothing in a
+  result: a JSON text with sorted members of the prototype's own, with
+  which it compares two stored values and two lists; the string `?`,
+  which stands for the key of a step whose collection the context has
+  no element for; and a cell that a body makes with `.for(cause)`,
+  which is found by the JSON text of the cause.
+- **The prototype's identifiers do not follow the documents' form in
+  eight points** (its note 450), each by a reading of the code and with
+  no test. An identifier is the tagged hash and has no scheme `of:`,
+  because `createRef` is in `runtime/runner`, which the executor does
+  not import. The instance that the executor is started with has the
+  identifier `result` unless it is given one. The document of an output
+  has the type `output`, and an output with no interim name is named by
+  its index in the plan (question 215). An instance that takes the
+  cause of one that was re-keyed away has `again` and a number in its
+  cause (question 216). The run of a `lift` or a `computed` is named by
+  the instance, the name of the body, and every element key of the
+  context, with no name of the child. The run of a handler is named by
+  the instance and the count of the events, with no receipt
+  (`execution-and-storage.md` §5.4 and §5.5). The ordinal of what a run
+  makes counts everything that the run makes, and not the
+  instantiations of one site. And a binding that a function body makes
+  is named by its run and its ordinal, where
+  `execution-and-storage.md` §5.5 has the handler and the bound keys.
+  The key in an `element` step of these causes is that of each case:
+  the address record over an array of references, the salted hash or
+  the record with `fields` over an array of plain values in place, a
+  plain array generated from scratch included, and the upstream key
+  over the result of another per-element construct.
+- **The prototype's crate does not follow the documents' form of a
+  name and of a hash in four points** (its note 455). `unhashed:schema/`
+  with a number, and `unhashed:pattern/` with the path, `#` and the
+  binding, stand where the documents have a hash: the value hasher has
+  no implementation in Rust in the crate's tree, so the crate cannot
+  form one. Inside the second, the steps of a binding are joined with
+  `/` and a line and a column with `:`. A state cell that a site of a
+  body creates under a constant cause is named `{ body, site }`, where
+  `plan-and-label-templates.md` §1.1 has the body and the cause: the
+  crate records the site and not the cause. And the `site` step of a
+  `within` holds the name of its call as a string; whether two calls of
+  one name in one body get an ordinal there was not examined. The other
+  names of several parts in a plan are records, as the documents have
+  them. None of this is about a per-element construct.
+- **The reference by key into a plain array generated from scratch has
+  two limits in the prototype, and one of them is a limit of the design
+  as well** (its notes 443 and 451; question 209). An array at a path
+  below a value that a function body returns, and an array written in
+  the reactive tier, are not stored, and their elements have no place.
+  The documents give the elements of such an array no place either, for
+  now: a body over one is given the value and stores a copy, and no
+  ruling says that such an array never gives its elements a place. And
+  each element is hashed once per element table and once more per
+  resolution of a reference by key, and a read that enters the document
+  of an output checks each enclosing collection and the cone of the
+  output for being current; the cost of those reads was not measured.
+  An output inside an element body is brought up to date on a read, and
+  the refusal of a write through a stored reference is tested in a
+  handler, at this commit. With no declared key such a reference reads
+  as nothing once the element changes, which is the ruling and no limit
+  of the prototype.
+- **Two questions about the key fields that a reader forms keys with
+  are open, and the prototype has the documents' assumption for one of
+  them alone** (its notes 452 and 453; questions 212 and 213). The
+  result of another
+  per-element construct over plain values with a declared key that is
+  given whole to an `asInstance()` instance is given as values, and the
+  instance keys its rows by the whole value; the documents assume that,
+  and the coordinator of this work recommends a link. The type of a
+  `map` result keeps the key fields of its receiver also where the
+  callback computes a value of another element type, so such a result
+  is reported as a mismatch and the record of its output has key fields
+  that its elements do not have; the documents assume that such a
+  result declares no key fields. A reader that is compiled in learns
+  the key fields of a plain array generated from scratch by every way
+  that the value reaches it, and an instance of its own that is given
+  such an array whole learns them from the link, at this commit. The
+  type of a `flatMap` result declares no key, as the documents assume,
+  and the members of a segment of a `flatMap` are keyed with no
+  declared field.
+- **A `set` of a plain value on a cell that holds a link is compared
+  for one case** (its note 457). It replaces the record that the link
+  names, in the executor and in today's runtime. The record is one of
+  the argument, stored in place. A link to an element of a per-element
+  construct was not tried, for an array of references, an array of
+  plain values in place, or the result of another per-element
+  construct.
+- **At commits `a4b4612b3b` and `682b918ed1` the corpus was run for
+  the comparison of values alone, by the prototype's author.** The
+  coordinator of this work ran the tests and the fixtures at each. The
+  counter of evaluations stale by their own write counts each element
+  table over a plain array generated from scratch once, with nothing
+  evaluated again ([The corpus at commit
+  `a4b4612b3b`](#the-corpus-at-commit-a4b4612b3b)). The two diagnostics
+  of `ArrayByKey` and `element-body:result-stored-outside` are
+  provisional in the crate's catalog, because the crate's tree does not
+  have the rows of `language-subset.md` for them. The first two are
+  tested on snippets alone, and the crate does not report the third,
+  which needs footprint analysis.
+- **At commit `abd965cc37` the prototype's executor lacks eight things
+  that the documents have** (its note 474), and 32 values of the corpus
+  run and three modules that are not executed are for them ([The corpus
+  at commit `abd965cc37`](#the-corpus-at-commit-abd965cc37)). It has no
+  error state, so a body that throws stops the instance
+  (`plan-and-label-templates.md` §5.2). It has no `linksOf`. It stores
+  nothing for a handler factory that is a value
+  (`plan-and-label-templates.md` §3.21). It reads the content of a
+  position of type `unknown`, which `language-subset.md` §7.8 has as a
+  reference that is not read. It evaluates a cone that writes a cell it
+  reads once (`execution-and-storage.md` §2.7). It validates no read
+  against its schema, where under the documents a read of data that does
+  not match gives `undefined` where the type admits it and fails the
+  cone otherwise. The crate's schema of a type that refers to itself has
+  `{}` at the reference. And the crate does not report
+  `binding:write-to-computed` for a write that an `action` makes. None
+  of this is about a per-element construct.
+- **Seven questions come from the differences of the corpus run that the
+  prototype's notes could not put down to a defect or to a deliberate
+  difference** (questions 217 to 223). For each the prototype does one
+  of the answers: it promotes a `computed` whose body computes another
+  value as a function body; it gives the members of a stored record in
+  the order in which they were written; it accepts a call that leaves
+  out a path that a handler writes, and refuses the write; `equals` of a
+  reference by key with a copy of the same element is false, over an
+  array of plain values in place; a record that is a member of a spread
+  in the reactive tier over an array of plain values in place is stored
+  as a copy; a label template holds the template of each input in place;
+  and an artifact holds the text of each file that `dataFile` names.
+- **The size of a plan is not bounded by the number of its outputs**
+  (its note 478; question 222). A value that two outputs read has its
+  template written once in each, so a chain of values that each read the
+  two before them has templates whose sizes follow the Fibonacci
+  numbers. The fixture that showed it holds eleven values, and no test
+  bounds the size of a plan. Whether a plan of the corpus is large for
+  this reason was not examined. By ruling a template names the template
+  of another output with a node of its own and holds no copy of it, so
+  the size of a plan is linear in the number of its outputs and of the
+  nodes of their templates ([Decided](#decided)). The prototype at
+  commit `abd965cc37` does not follow that ruling yet: its crate writes
+  no such node, and writes the copies. How its executor evaluates the
+  label of a template that holds copies was not examined.
+- **At commit `abd965cc37` the corpus was run by the prototype's author,
+  for the comparison of values and the comparison of labels.** The
+  coordinator of this work ran the tests and the fixtures. Neither run
+  was compared module by module with an earlier run of the comparison of
+  labels, and the cost measurement was not run. The times that the
+  prototype's note 467 gives for the checks of the memo are of one run.
+  The spread in the reactive tier is compared with nothing, because
+  today's runtime runs none of its forms in a pattern body. That today's
+  runtime gives the members of every stored record in the order of their
+  names rests on one module.
+- **At commit `a84264daf2` the prototype's executor has a serving loop for one
+  instance in one process, and does not have the rest** (its notes 490 and 493).
+  It instantiates no label, so no constraint of a plan is within its reach: an
+  option of a test stands for the check of what a handler writes. It stores the
+  result document whole when a derivation transaction ends, so a kept output of
+  a cone instance that was evaluated before a handler body is stored by the
+  derivation transaction behind the batch and not by the event's transaction,
+  and the withdrawal of such an output has nothing to withdraw and is not
+  tested. A cone that writes a position it read is still evaluated once:
+  following `execution-and-storage.md` §2.7 there was tried and put back,
+  because the executor makes a document for a held constant in every evaluation
+  and takes that write for a write of the cone. A materializer that reaches ten
+  evaluations has no test. Not built: a dropped derived write and what the memo
+  holds of it, the early step, a conflict at the commit and the requeue, the
+  receipt of a handling, demand as a cause, the promotion of a materializer, a
+  stream with no row in the stream index, and the budgets of time and memory of
+  a body. Of the effect layer, not built: the gates, the transaction that stores
+  a refusal, the send transaction of a language-model built-in, the budget of
+  request transactions per cycle, the claim, the recovery of a pending request,
+  and the rule that refuses a `navigateTo` which is no consequence of an event
+  of a client session. Of `wish`: hashtag search, the sidecars and the home
+  space. Of the storage layout the round built the stream document alone, and
+  its entries hold the event and no identifier, actor or attestation. An error
+  that says what the executor does not do, a name that the value code does not
+  bind, and a stack that ran out still stop the instance where the documents
+  have an error state. A `lift` or a `computed` that calls an effectful built-in
+  fails in the executor as something it does not do, and the crate does not
+  refuse it. Each of the missing parts needs labels, a second store with a
+  commit sequence, or instances that are not loaded.
+- **The provisional decisions P8 to P17 are the prototype's choices, and most
+  have a test of one reading alone.** P8, P9 and P10 have a test of each
+  reading. P11, P12, P13, P15 and P16 have a test of the reading taken, and P14
+  and P17 have no test that tells the readings apart. Every one of them was
+  tried on fixtures with no per-element construct, or with one `map` over an
+  array of plain values in place.
+- **The provisional decisions P18 and P19 are written into the documents and
+  built nowhere.** At prototype commit `e63851c1ee` the crate still compiles a
+  call of a visible pattern by walking the body of the callee again for the
+  site, resolves the paths of the callee's argument to the slots and outputs of
+  the caller while the plan is built, and writes value code per site
+  (`inline_pattern` and `inline_argument` in its `src/plan.rs`). The records of
+  `plan-and-label-templates.md` §1.1 need the callee compiled by itself with
+  slots of root `argument`, the binding carried by a record and resolved when a
+  cone instance is bound, the identifier of a cone instance formed from the
+  chain of sites, value code registered once per callee and given the site,
+  and the comparison of labels, the template evaluator and the label-flow
+  checks taken through `CallSite.argument`. That is a rework of plan emission,
+  of the emitter, of the executor's instancing and of the comparison harness,
+  and it was not begun, at commit `3d33db2e4d` either. So none of the points
+  of question 289 is tested by a build, no diagnostic of the corpus was
+  compared under P19, and the sizes of plans are unchanged. The test of two
+  sites per level bounded as linear exists in the crate, is ignored, and
+  fails when it is run. What stands in the place of the build is a
+  comparison of the copies of each callee in the written-out plans of the
+  corpus, by scripts that are not in the tree: it shows that one callee
+  record with the binding of each site can give the records of the
+  written-out form, with the rule that amends P18, and it shows nothing on
+  values, identifiers or stored documents. The crate gives two call sites
+  of one name in one body the same `site` step, with no ordinal, in 17 of
+  the 382 plans of the corpus, so a state cell of such a callee has one
+  identifier at both sites; no compared value shows it. The estimate of
+  what P18 gives takes 200 bytes for a call-site record and is no
+  measurement.
+  The record design of `plan-and-label-templates.md` §1.1 was
+  checked by reading the rules of that document against it, and by no test. Its
+  worked example (§6.2) and the examples of the other documents show the
+  written-out form. `footprint-analysis.md` was not changed for either
+  decision, and `language-subset.md` has one row of its diagnostics catalog
+  for P19.
+- **The growth measurements at commit `e63851c1ee` are of the prototype's
+  executor, and each time is of one run, a median of 7 or a mean of 40.** The
+  executor instantiates no label, has no storage transaction and no scheduler
+  across instances, so its counts are of its own marking and its own store.
+  Four cases were measured: a `map` over an array of references, over an array
+  of plain values in place with a declared key and with none, and over the
+  result of a `filter` of plain values in place. Not measured: a plain array
+  generated from scratch, a `flatMap`, a `filter` over an array of references,
+  a chain of more than two constructs, two levels of enclosing JSX, today's
+  runtime at 10,000 elements, and today's keystroke at 10,000 rows. Of the
+  questions on growth, 249, 251, 253, 258, 261 to 263, 265 to 270, 272, 273
+  and 275 have no measurement. The runs with today's runtime beside the
+  executor (the seeded corpus, the stubbed corpus and the labels) were made
+  before the last two commits of the round and not repeated after them. Most
+  tests of the round were written after the code or the measurement they
+  bound.
+- **What still follows the length of a list in the prototype's executor.** An
+  insertion or a removal that is not at the end gives every later position
+  another number. A `filter` whose membership changed forms its kept list
+  again. A `flatMap`, a `some`, an `every`, a `find`, a `findIndex`, a `filter`
+  whose body returns a record, and every construct over a plain array generated
+  from scratch form their assembly whole. A memo entry that depends on
+  something no index holds is compared at every pull (question 294). A `set`
+  of a whole new array is compared entry by entry. A keystroke in a row with no
+  declared key passes over every state cell and instance. The first change
+  after a settle builds an index that follows the length.
+- **The prototype has the part documents of P20, P25 and P26 beside its store,
+  and its value code does not read through them.** At commit `3d33db2e4d` the
+  executor's own reads go to the one value that the store holds for each
+  document. The part documents are kept beside it, change by change
+  (`exec/parts.ts`), and a test reads every document of an instance back from
+  them after each change and compares. So the rule that every resolution of
+  a path passes through a storage link is tested for a reader outside the
+  executor and not for value code. Not in the layout: a split point for a
+  record (P27), for an array inside a row, and for a node of the rendered tree
+  that is no row; an index from a key to its chunk (question 299); a part over
+  the maximum that is divided; and any label entry or provenance record in
+  a size. The identifier of a part is by the key of the reader that
+  declares the most key fields, and the minted identifier of P28 is an
+  option that is not the default. The layout was not run under a failed
+  transaction with a test of its own, and not under concurrent writers,
+  which the executor does not have. The accounting of the rule that P20
+  replaces stands beside it unchanged.
+- **Three choices of the prototype's author in round 5 are prototype matters
+  and have no provisional decision** (its note 533, choices 5 to 7): the
+  split points are the arrays that no other array holds, and their rows;
+  the part documents are kept beside the value that the store holds; and
+  for the withdrawn warning of P21 an element is taken as a record where
+  the body reads a member of it, and any child instance counts as state.
+  Its choices 1, 3 and 4 are assumed in `execution-and-storage.md` §4.10
+  (question 300), its choice 2 is superseded by P28, and its choice 8 is
+  the amendment of P18.
+- **What today's storage does with a patch and with a `push` was read in
+  source and not tested** (questions 290, point a, and 296). The statements
+  there are from a reading of `runtime/memory/v2.ts`,
+  `runtime/memory/v2/engine.ts`, `runtime/memory/v2/patch.ts`,
+  `runtime/memory/v2/server-sync.ts`,
+  `runtime/runner/src/storage/v2-transaction.ts`,
+  `runtime/runner/src/storage/mergeable-ops.ts` and `Cell.push` in
+  `runtime/runner/src/cell.ts`. No commit was sent and no frame was
+  captured. What a subscriber receives was read from the type of a sync and
+  from the two functions that fill it, and not from every path of
+  `runtime/memory/v2/server.ts` that sends one. The costs that the plan
+  derives from it, a tenth of a chunk for the store and the chunk for each
+  subscriber, are derived and not measured.
+- **Four choices of the prototype's author in that round are prototype matters
+  and have no provisional decision** (its note 520, choices 4 to 7). The bytes
+  of a split point are kept in memory and not measured from the documents at
+  each seal, which `execution-and-storage.md` §4.10 permits as it stands. The
+  split points that the prototype builds are the rows and the array of a
+  collection that stands in the result; a part that the rule on the size of a
+  document made goes back in place only where its holder then holds at most
+  half of 65,536 bytes, and any other part where it falls to 512 bytes. A write
+  of the same keys at the same positions is a write of rows and no `splice` of
+  the stored array, so that an edit of a row with a declared key writes the
+  part of the row alone. And a memo entry that depends on something no index
+  holds, `equals`, a cone with a static side-write, or a read by key into the
+  document of a computed output, is compared at every pull; question 294 has
+  what the documents do not say for it.
+- **The provisional decisions P20 to P28 and their tests** (P29 is
+  withdrawn). P20, P25 and P26
+  are built as documents beside the store, with tests that bound the bytes
+  of the documents that one change writes at two lengths for each case and
+  each size of row; the points that P20 left incomplete are tested as the
+  prototype chose them. P21 as replaced, the report of the runtime, has no
+  test; the crate has the withdrawn warning. P27 has no test and no build, and
+  no index from a key to its chunk is built. P28 has the minted identifier as an
+  option, measured, with the key as the default. P22, P23 and P24
+  are what the executor does, with tests of the executor that bound the
+  evaluations, the hashes, the checks and the bytes of one change at 100 and
+  1,000 elements; those tests were written after the measurements. For P23 the
+  other reading is built as an option and gives the same result. For P22 and
+  P24 the other reading is what the executor did at commit `a84264daf2`. None
+  was tried over a plain array generated from scratch or with a `flatMap`.
+- **The crate does not conform to `footprint-analysis.md` §2.2 on `identity`
+  entries per position.** For a read of a whole value whose type has handles
+  at many positions it writes one `value` entry, where the section has one
+  `identity` entry for each such position: 1 slot where the section gives
+  1,024 for the type of question 252 at depth 10. The growth of that question
+  cannot be measured until it does.
+- **`system/home/home.tsx` and most of FabriChat do not execute.** The crate
+  lists four constructs of `home.tsx` that it does not emit, the first a call
+  form in the reactive tier. Of `system/fabrichat/`, `adapter.tsx` and
+  `room-test-fixture.ts` are executed; `placement.tsx` is not, for the built-in
+  `spaceDeleted`; `message-row.tsx` has `resolveAsCell` in the reactive tier,
+  which the crate does not emit; and the crate emits no plan for the other
+  modules of the directory. So the table of run times has neither the largest
+  pattern of the corpus nor the reference pattern of the staging.
+- **The table of run times does not compare a compiled runtime with today's.**
+  The executor checks no label and no constraint, commits to no store, has no
+  scheduler across instances, no network and no sandbox, and today's figures
+  include the harness of the comparison; [The corpus at commit
+  `e63851c1ee`](#the-corpus-at-commit-e63851c1ee) has the paragraph in full.
+- **The two sides of the stubbed comparison were not given the same answers,**
+  except for a fetch of JSON from an address outside `/api/` (its note 498), and
+  the 100 values that differ there were classed by a reading of the two values
+  and not verified one by one; 17 are not determined.
+- **The stubbed comparison is not deterministic.** One value of
+  `examples/reactive-now/reactive-now.tsx` depends on the wall clock between
+  the run of the executor and the run of today's runtime: "0s ago" against
+  "1s ago". Two runs at commits that differ in two Markdown files gave 1,484
+  and 1,482 of 1,584 values equal. A difference in that module between two
+  runs is no finding, and the comparison needs a clock that both sides
+  share before its count can be held to a number.
+- **Fifteen questions come from a reading of the documents, and no test
+  of the prototype bears on them** (questions 224 to 238). They are
+  about what the prototype's executor does not have: the bound of ten
+  evaluations with the withdrawal of side-writes, scopes, effects and
+  their requests, a client, part documents, the cycle of the serving
+  loop, and a second space. The reading did not cover
+  `plan-and-label-templates.md`, `footprint-analysis.md` and
+  `language-subset.md` in full, so it is no review of those.
+- **At the commits before `a4b4612b3b` the prototype followed the
+  rulings on a key in part.** At commit `7774ba208c` the key names its
+  declared key fields, a reference by key is resolved from the key
+  alone with no schema, and the declaration can name several fields. It
+  has the marker `KeyedBy` on the element type and the plain form of
+  the key: a string with separators and an escaping of its own that
+  holds each field name with the value of the field. That commit does
+  not have the rulings since, which commit `a4b4612b3b` has:
+  `ArrayByKey` on the array with the keyword on the array schema, one
+  salted hash in the place of the values, a key and a name as fabric
+  values with no separators of the design's own, the schema traversed
+  at a link as the place a reader whose type declares no key learns the
+  key fields from, and a reference by key to an element of a plain
+  array generated from scratch. The rest of this item is of the earlier
+  commit. At commit `a462df710a` its executor forms the key of a
+  declared key field with no field name, so a key formed from a field
+  `id` with the value 7 is the key of a whole value that is 7. It
+  resolves a reference by key through the schema that the array is
+  stored under and keeps a record of that schema, and where a reader
+  and the place declare different keys it follows the place. Its crate
+  and its executor have one key field, with the keyword `keyField`. By
+  ruling the key names its fields, is resolved with no schema, and can
+  be formed across several fields. At that commit and at commit
+  `7774ba208c` the prototype has the marker `KeyedBy` on the element
+  type and the plain form of the key, which holds the value of the
+  field. By the rulings since, the key is declared on the array with
+  `ArrayByKey<T, "field">`, the schema keyword is on the array schema,
+  and the element part holds the names of the fields and one salted
+  hash of their combined values. The case is an array of plain values
+  in place, a plain array generated from scratch included, and the
+  result of another per-element construct where the upstream position
+  holds a value. The prototype follows the rulings that drop the listed
+  result paths and the check, and the rulings on a spread child, on a
+  state path of plain type, and on what a re-key moves. The figures of
+  this plan that count listed paths or failed checks are of commit
+  `e4f2fb3431` and earlier.
+- **The cost measurement was run over the corpus once, at commit
+  `7774ba208c`, and the comparison of labels there and at commit
+  `abd965cc37`, and neither was compared module by module with an
+  earlier run.** Both read the crate's `emit` output and run the
+  executor beside today's run to find the streams. No results file
+  of either at commit `a462df710a` exists, the figures this plan
+  held before are of an earlier corpus, crate and harness, and no
+  difference between the two sets of figures was examined. The times
+  were taken on a machine that was not idle. The cost measurement
+  gives the executor no artifact for a pattern that a function body
+  instantiates. A module that the executor does not run gets no
+  event in today's run.
+- **The ruling on a spread child is compared with nothing in the
+  reactive tier.** Today's runtime runs neither an array literal
+  with a spread among the children of a view node nor a JSX spread
+  child where a pattern's body writes it: the transformer refuses
+  the first, and the evaluation of the pattern throws at the second.
+  The forms are compared in a `computed`, where 15 of 15 values are
+  equal. The prototype tried a spread of a pattern value and does
+  not say what today's runtime does for each of the three cases of
+  a source.
+- **One module of the corpus has another record at commit
+  `7774ba208c` with no change of a figure.** In
+  `apps/base/contacts.tsx` three of the 17 differences name another
+  first path, because today's run stores the members of the rows of
+  a `map` over an array of references in another order than in the
+  earlier run. The cause of the other order was not examined.
+- **One difference between the two forms of the value comparison is
+  not examined.** At commit `a462df710a` the two forms give the same
+  figure in every row. `showcase/battleship/multiplayer/room.tsx` is
+  not executed for another reason in each, and the difference is in
+  the state of the process in which today's runtime ran.
 
 ## Next work
 
 1. **The owner rules** on the questions above. A ruling is added to
-   [Decided](#decided) and the question removed.
+   [Decided](#decided), and the question's entry says that it is
+   settled and keeps its number.
 2. **Stage 2 of the overview's staging,** on branch
    `claude/compiled-pattern-prototype`: after the front end, the subset
    type checker, then footprint analysis, and then the corpus numbers
@@ -1107,7 +13708,226 @@ The open questions each document ends with stay where they are.
    the rule.
 3. **Post the drafted description to specs pull request #91** and ask for
    its review, when the owner decides it leaves draft.
+4. **In the prototype:** compare the label comparison and the cost
+   measurement over the corpus module by module with a run of the same
+   crate and corpus, which no run so far was, run the cost measurement
+   at the commit of the last comparison of values, and take the times
+   on an idle machine; bring the
+   crate's diagnostic catalog to that of `language-subset.md`, which
+   has `element-body:result-stored-outside`,
+   `array-by-key:declaration` and `array-by-key:mismatch`, all three
+   of which the crate holds as provisional until the rows of that
+   document reach the crate's tree; report the first, which needs
+   footprint analysis; and give the executor what its note 474 lists
+   as not fixed at commit `abd965cc37`: an error state, with a stored
+   form that the comparison reads as today's "nothing stored";
+   `linksOf`; a stored form of a handler factory that is a value; a
+   position of type `unknown` as a reference that is not read; the
+   bounded iteration of a cone that writes a cell it reads; the
+   validation of a read against its schema; `$defs` in the schema of a
+   type that refers to itself; and the report of
+   `binding:write-to-computed` for a write that an `action` makes.
+   Also follow the ruling on question 222: have the crate write the
+   node that names an output and the executor evaluate the label of an
+   output once, with the provisional decisions P2 and P3, and bound the
+   size of a plan in a test. And have the generator of the comparison
+   give a value for a member of type `unknown` or `FabricBytes`.
+5. **In the prototype, for the rulings of 2026-11-17 on keys.** The
+   prototype at commit `682b918ed1` has the rulings, the four on
+   questions 207 to 210 included, and the record forms of the documents
+   for a key, an identifier and a name of several parts. It differs
+   from the documents in the points that [Known
+   limits](#known-limits-of-what-exists) lists. To do, where no
+   question is open: hold the secret as the documents have it, a
+   labeled document; form the crate's `unhashed:` identifiers as
+   hashes, which needs the value hasher in Rust; name a cell that a
+   body creates under a constant cause by the body and the cause;
+   examine whether two calls of one name in one body get an ordinal in
+   a `site` step; give the identifiers of what a function body makes
+   the causes of `execution-and-storage.md` §5.4 and §5.5, which are
+   the name of the child, the receipt of the handling, the ordinal
+   among the instantiations of one site, and the handler with the
+   bound keys for a binding; write an identifier with its scheme; and
+   give an element that holds a reference by key into its own array
+   the element part of the documents. To measure: the cost of the
+   reads that bring an output inside an element body up to date, and
+   the hashing per element table and per resolution. To try: a `set`
+   of a plain value on a cell that holds a link to an element, over an
+   array of references, over an array of plain values in place, and
+   over the result of another per-element construct. An array below a
+   value that a function body returns, and one written in the reactive
+   tier, stay without a place for their elements, which is a known
+   limit of the design for now. After the owner rules on questions 211
+   to 216: whether the address record of a position that holds a link
+   holds the scope; what the argument of an instance holds for the
+   result of another per-element construct that it is given whole;
+   which key fields the type of a `map` result declares where the
+   callback computes a value of another type, and with it what
+   `Output.keyFields` holds; whether a key in a stored path is a record
+   or a text; which document holds an output that has an address, and
+   under which cause; and which identifier a moved `asInstance()`
+   instance has, with the one made later under the key it left. Open
+   from before, and for the owner as well: how a reader that is
+   compiled in learns the key fields, and which key the type of a
+   `flatMap` result declares (questions 207 and 208). The comparison
+   of labels was run over the corpus at commit `abd965cc37`, and the
+   cost measurement was not. After the owner rules on questions 217
+   to 223: whether a `computed` whose body computes another value as a
+   function body is promoted; the order in which a read gives the
+   members of a stored record; what a call that leaves out a path
+   that a handler writes is; what a record that is a member of a
+   spread in the reactive tier holds, over an array of plain values in
+   place; whether a label template names another output; and where an
+   artifact holds the files that `dataFile` names. Questions 224 to
+   238 are about parts that the prototype's executor does not have,
+   and each has to be ruled before a test of its part means anything.
 
+6. **In the prototype, after commit `3d33db2e4d`.** In this order.
+   1. Correct the crate's `site` step: two call sites of one name in one body
+      take the name with its ordinal (`plan-and-label-templates.md` §1.3),
+      with a test of a state cell of the callee at two such sites. It is a
+      defect today, in 17 plans of the corpus, and P18 rests on it.
+   2. Build provisional decisions P18 and P19: one record for each pattern that
+      is compiled in, the call-site records, value code registered once per
+      callee, the label-flow checks once per callee and once per site for the
+      binding, and the ignored test of two sites per level made to pass. Build
+      the rule that amends P18, for a callee that passes an argument on at a
+      site that binds it by a literal, and compare the records, the values,
+      the identifiers and the stored documents of the corpus with those of
+      the written-out form. Examine the two points of question 289 that the
+      corpus plans left undetermined: the 100 kept outputs of callee copies,
+      and the 10 collections of callee copies whose source is a collection.
+      Compare the diagnostics of the corpus under P19 with those of the
+      written-out form.
+   3. Complete the part documents. Make the minted identifier of P28 the
+      default, with a row of a result whose key changes at its position
+      keeping its part (question 298). Build P27, a record stored in chunks,
+      and measure the keystroke of `fixtures/rows-state.tsx` over an array of
+      references again, which wrote 572,774 bytes at 10,000 rows. For
+      question 299, which has no provisional decision since P29 is
+      withdrawn, measure what a split writes into an index with an entry that a
+      split does not write. Have value code read through the part documents. Put
+      a stand-in for label entries and provenance records into the sizes. Run
+      the layout under a failed transaction with a test of its own.
+   4. Measure for question 290, point (a), with the cost that the source
+      shows: for each change the bytes of the patch, the bytes of each
+      document written whole, which is what each subscriber receives, and a
+      tenth of those, which is what the store adds for a snapshot; at
+      maxima of 4,096, 16,384 and 65,536. For question 296, try two
+      concurrent pushes on a source array in chunks in both ways that the
+      question names: with the layout applied where the operation is
+      applied, and with `append` to the last chunk and `increment` for the
+      numbers. That needs two writers, which the executor does not have.
+   5. Report `array-by-key:state-under-value-key` from the executor at the
+      first such edit of a collection (P21 as replaced), and count over the
+      corpus runs how often it is made. Remove the warning of the crate or
+      keep it behind an option.
+   6. Give both sides of the stubbed comparison one clock, so that its count
+      is the same in two runs.
+   7. Measure what the rounds did not: a construct over a plain array generated
+      from scratch, a `flatMap`, a `filter` over an array of references, two
+      levels of enclosing JSX around a `map`, and a collection that is placed
+      at two paths (question 292). Give the three dependencies of question 294
+      a place in the marking, form a `filter` result from the change, and keep
+      an index from a key to what is stored under it.
+   8. Write the `identity` entries of `footprint-analysis.md` §2.2 in the
+      crate, and then measure question 252.
+   9. Emit the constructs that keep `system/home/home.tsx` and the modules of
+      `system/fabrichat/` from executing, and add them to the table of run
+      times. Find why the executor is slower per event than today's runtime
+      on `showcase/battleship/pass-and-play/main.tsx`.
+   10. What stays from the rounds before: bring the two provisional choices
+      that differ from the documents in line once they are ruled, the request
+      of an effect by path (P16) and the depth to which each built-in follows
+      its references (P14); try every statement of the notes 479 to 497 over an
+      array of references and over the result of another per-element
+      construct; compare two orders of evaluation on the cycle of
+      `fixtures/bound.tsx` (question 286); make an error state of a stack that
+      ran out; and stub both sides of the comparison of the 47 modules
+      equally.
+
+   What stays out of reach until labels, a second store and unloaded instances
+   exist is under [Known limits](#known-limits-of-what-exists).
+7. **In the prototype, the measurements of the questions on growth**
+   (questions 243, 244 and 247 to 275, with the growth of questions 212,
+   237 and 241). No test of the prototype bounds the size of a plan or
+   the count of stored documents yet. Every
+   fixture below reports those three counts beside its own, and a test
+   holds each of them to a bound that is stated in the test. The
+   provisional decisions P6 and P7 are built at commit `a84264daf2`,
+   and that commit ran the first fixture, the second to a depth of 6,
+   and a part of the third. Commit `e63851c1ee` ran the third in four
+   cases, with tests that bound the evaluations, the hashes, the checks
+   and the bytes of one change; the first and the third part of the
+   fourth; and fixtures of two sizes for questions 248, 250 and 252.
+   Commit `3d33db2e4d` ran the third and the fourth in part documents,
+   to 100,000 rows, with tests that bound the bytes of the documents
+   that one change writes, and has the test of the second fixture, which
+   is ignored until P18 is built.
+   The fixtures, in
+   the order of the audit's ranking:
+   1. The fixture of twenty-five values that each read the two before
+      them, with sandboxed bodies and with a child's arguments, for the
+      size of the plan and at run time (questions 243, 245 and 248).
+   2. A pattern compiled in at two sites per level, to a depth of 1 to 8
+      (questions 247 and 250), and a chain of bodies with annotated
+      inputs (question 249).
+   3. A list of 100, 1,000 and 10,000 elements over an array of
+      references, over an array of plain values in place, and over the
+      result of another per-element construct: one element appended, one
+      prepended, one member edited, the first removed; the key
+      computations, hashes, cone evaluations, documents and bytes
+      written (questions 254, 256, 259, 260 and 264).
+   4. One row of plain values with state and an `asInstance()` child,
+      edited 20 times (question 254), `K` equal rows with the first
+      removed (question 258), and a plain array generated from scratch
+      `P` times (question 255); the stored documents.
+   5. `N` rows that each read one interim value computed over `N` cells
+      through handles (questions 241 and 251), and `N` rows that each
+      hold a reference by key to their own element in a pattern that
+      does not iterate the array (question 257).
+   6. The footprint of a type of depth 1 to 12 that uses each
+      declaration twice, and of helpers that call a helper with a
+      closure (question 252).
+   7. A read of one element by index, a `reduce` into an array, a
+      `filter` whose membership label changes, and a body that uses the
+      index, each over an array of references, over an array of plain
+      values in place, and over the result of another per-element
+      construct; a `oneOf` result of a sort, and the stores of one
+      document per instance (questions 261 to 263 and 265 to 267, with
+      244 and 212).
+   8. A restart with 10 of `N` rows demanded and nothing changed, and
+      the first change after a restart (questions 269 and 270).
+   9. A handler over `L` instances that are not loaded, on a server and
+      on a client (question 268).
+   10. One changed member among `N` demanded rows, a session that
+      closes, `S` sessions over one list, a cycle that does not settle,
+      and `E` pending insertions (questions 271 to 274 and 237), and the
+      smaller sizes of question 275 and the rounds of question 253.
+
+8. **In the runtime, the milestones of the integration**
+   ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)):
+   after milestones 1 and 4, the open findings of milestone 4, in this order:
+   the open soundness findings of the ninth run (question 344) and the `*` entry
+   of a removal that a more specific entry replaces, with its specification
+   sentence (questions 343 and 326); the cost regression of the ninth run
+   (question 345); the three changes of representation, which are being built,
+   with the corpus run that checks that the stored labels are equal (questions
+   318 and 338); a corpus run of the head of the integration branch on the
+   source of current `main`, and the two untested interactions of the catch-up
+   merge (question 346); the executor's memory on a large result (question 332);
+   the records given again after a label changed alone, by class (question 333);
+   the diagnostic and the hard limit for a label of many clauses and the mark
+   for an output stored at a ceiling, once their open points are decided
+   (questions 339 and 340); the findings of the check in modules with a refused
+   commit; the refused commits; the reports that remove the bounds, with the
+   groups of a scan's prefix (P37); and the four rows where today's label holds
+   no clause. Then its steps 11 and 12; the requirement on the link of an
+   argument, which the ruling Z82 schedules after milestone 4 (question 302);
+   the translation of a pattern closure used as a value, once the provisional
+   decisions P33 to P36 are ratified; then Topics at scale on the runtime's
+   storage, a compiled piece in the runner behind the experimental option, value
+   code in the sandbox, and server execution with the network.
 ### Briefing an author
 
 A brief that produced a usable document in the first round had these parts:

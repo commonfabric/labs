@@ -2,8 +2,8 @@
 
 A standalone Markdown document for a shared space or an embedded Loom panel. It
 uses `cf-code-editor` in collaborative prose mode, with the document title and
-body in `PerSpace` state, and a panel of comments on ranges of the body beside
-the editor. The same compact view is available as `UI` and `TILE_UI`.
+body in `PerSpace` state, and comments on ranges of the body in the editor's
+margin. The same compact view is available as `UI` and `TILE_UI`.
 
 Each viewer resolves their Fabric profile through `#profile` and `#profileName`.
 The header shows the live profile badge, and the editor uses the profile's name
@@ -133,16 +133,24 @@ body is that text, and nothing selected until the editor's next report
 otherwise, so a selection the body has changed under is never kept. The composer
 checks again that the body holds the selected text at its range before it adds
 the anchors, refusing a selection an edit has moved since. From then on
-everything typed while the person writes moves the anchors with their text. The
-panel lists comments in the order their text appears in the body.
+everything typed while the person writes moves the anchors with their text.
 `commentAnchors` gives every comment's two anchors.
+
+The comments sit in the editor's margin, under the header with the Comment
+button, each beside the line where its text starts, and the composer beside the
+text it is about. Where two comments would overlap, the lower one moves down,
+and the selected comment keeps its place beside its text where the comments
+above it have room to move up. The selected comment's reply field and actions
+sit under it. Where the note is too narrow for the margin beside the text, the
+comments sit below it, in the order their text appears in the body.
 
 The mark in the editor shows what a comment is about, so the row of a marked
 comment shows the comment, not its text. A row whose comment marks nothing — a
 draft, a resolved comment, or a comment whose text an edit deleted — also shows
 its quote, the text its author selected, which the comment stores. A comment
-whose text an edit deleted stays listed after the rest, and shows its quote
-struck through, beside "text no longer in note".
+whose text an edit deleted sits beside where its text was, and after the rest
+where the comments are below the note, and shows its quote struck through,
+beside "text no longer in note".
 
 Comments and replies are labeled `authored-by` the person each was written for,
 by the runtime, and only the handlers their write policies name can write them,
@@ -152,6 +160,44 @@ the quote, the comment and each reply only when they carry it. Replies and the
 resolved state are cells of their own, linked from the comment, so anyone who
 can write the note can reply or resolve while the comment itself stays its
 author's.
+
+## Activity
+
+The note tells what its members did under the `"[ACTIVITY]"` key of its result,
+so a host can let the other members of a shared space hear about an edit without
+reading the note or diffing it. The key is a plain string any pattern may use
+for the same purpose, not a runtime symbol like `[UI]` or `[NAME]`.
+
+Each row is `{ body, doneAt }`. `body` says what was done to the note, by its
+title as it stood then, and never who did it. `doneAt` is the handler's clock in
+nanoseconds since the epoch, a `FabricEpochNsec`; a comment's own `postedAt`
+predates that and stays in milliseconds. The runtime labels each row
+`authored-by` the person whose handler run wrote it, and only the handlers the
+row type's write policy names can write one, so a host reads who acted from the
+label rather than from the row.
+
+| What happened                                                  | Row                                 |
+| -------------------------------------------------------------- | ----------------------------------- |
+| An editing session of the body or of the title that changed it | `edited "<title>"`                  |
+| A call of `appendLine`, `prependLine` or `replaceText`         | `edited "<title>"`                  |
+| A comment posted, from the composer or `addComment`            | `commented on "<title>"`            |
+| A reply, from the reply field or `replyToComment`              | `replied to a comment on "<title>"` |
+
+An editing session is everything a viewer types into one field between giving it
+focus and taking focus away: the body's editor and the title field each keep a
+per-session flag that their own changes set, and losing focus reports one row if
+the flag is set and clears it. A burst of keystrokes is one row, and leaving a
+field unchanged reports nothing. Only the viewer's own changes set the flag: the
+editor's `cf-edit` and the title field's `cf-input` never tell another member's
+typing or a value the field's cell pushed. A title longer than 80 characters is
+cut short in the row. A session whose tab closes before the field loses focus is
+not reported. Resolving, reopening and deleting a comment, and opening or
+discarding a draft, report nothing.
+
+Name every handler that will ever write a row now. Once a row is stored, a later
+version of the note can only re-bind a writer it already lists, to the same
+handler in a module the space attests succeeds this one; it cannot add a new
+writer, and a writer it leaves out is kept as stored.
 
 ## Editing failures
 
@@ -177,4 +223,6 @@ The pattern test covers initial text, the filesystem projection, compact views,
 profile setup, editor bindings, error display, recovery, the live-cursor notice,
 the verbs, and comments: posting from a selection, anchors moving through the
 verbs' edits, an anchor whose text is deleted, replies, resolving, and deleting.
-Browser integration covers multiple identities and the actual editor protocol.
+`activity.test.tsx` covers the activity rows, and `multi-user.test.tsx` checks
+that each row is labeled with the person who acted. Browser integration covers
+multiple identities and the actual editor protocol.

@@ -74,7 +74,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/is-edited.tsx#default"
+            "sha256:974f201d7778cfe36f3b53bb83a94fe389708ba3ff92884bb0d25ac586baaad7"
           ],
           "picks": [],
           "selectors": [

@@ -29,10 +29,17 @@
 // posture re-resolves the `actingAs: "space-owner"` binding against the
 // ACL AS IT NOW STANDS.
 //
+// A serving session no longer starts that way. The memory server now binds
+// a pre-genesis serving session to the owner the genesis ACL names, in place
+// (`#bindToNewOwner`), because the serving runtime may be in another process,
+// which no ACL-change notice reaches. The remount still heals every session
+// an ACL commit does revoke: a plain session the genesis leaves without READ,
+// and a serving session bound to an owner the ACL no longer names.
+//
 // The pins:
-//   1. the reproduction — pre-genesis session, genesis revokes it, eight
-//      reads fail with zero successes, the ACL-change notice heals it and
-//      the durable doc reads through;
+//   1. the genesis — a pre-genesis serving session reads the durable doc as
+//      the owner once the genesis lands, with no notice and no new
+//      `session.open`;
 //   2. fail-closed — the remount RE-RUNS `session.open`, it does not
 //      decide it: one trigger, two outcomes, and only the ACL chooses
 //      between them;
@@ -391,70 +398,39 @@ describe("the session remount (profile-starvation fifth face)", () => {
       .getAsNormalizedFullLink().id as URI;
   };
 
-  it("a session revoked by the genesis ACL is REMOUNTED when a commit touches the ACL doc, and the starved cross-space read lands", async () => {
+  /** Moves ownership of the home space from the user to the stranger, which
+   * revokes a serving session bound to the user. */
+  const moveOwnership = (): Promise<void> =>
+    setAcl(homeSigner, homeSpace, {
+      [strangerSigner.did()]: "OWNER",
+      [homeSigner.did()]: "READ",
+    });
+
+  it("a serving session opened before the genesis ACL reads the space as its owner once the genesis lands, with no remount", async () => {
     const serving = servingManager();
 
     // (1) Activation before genesis: the serving plane opens its session
     // on a space with no ACL at all. Admitted — a fresh space grants
     // authenticated READ, and OW31's binding resolves nothing to bind.
     await mountSession(serving, homeSpace);
+    const opens = servingOpens();
 
-    // (2) The genesis ACL lands, naming the user OWNER and no `"*"`.
-    // `#revokeDeauthorizedSessions` de-authorizes the pre-genesis
-    // session: correct, by design, and the whole defect's premise.
+    // (2) The genesis ACL lands, naming the user OWNER and no `"*"`. The
+    // memory server binds the open session to that owner rather than
+    // revoking it, so no ACL-change notice is needed to read on.
     await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
 
-    // (3) The doc the starved read wants — durable, present, refused.
+    // (3) The doc the read wants — durable and present.
     const docId = await seedDoc(homeSigner, homeSpace, "remount-target", "v1");
 
-    // (4) The pre-fix steady state, bounded: every re-drain's load fails
-    // identically. The capture observed 350 of these over 5m47s with
-    // ZERO successes; eight is enough to prove there is no self-heal
-    // hiding in the retry path.
-    const failures: string[] = [];
-    let successes = 0;
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const result = await probeRead(serving, homeSpace, docId);
-      if (result.error === undefined) successes += 1;
-      else failures.push(`${result.error.name}: ${result.error.message}`);
-    }
-    expect(successes, "no load may succeed while the session is revoked")
-      .toBe(0);
-    expect(failures.length).toBe(8);
+    const read = await probeRead(serving, homeSpace, docId);
     expect(
-      failures.every((message) => message.includes("revoked")),
-      `every failure is the revoked session, got: ${failures[0]}`,
-    ).toBe(true);
-
-    // (5) THE FIX. An admitted commit touched `of:<space>` — the ACL
-    // this space's authorization is a function of — so the verdict that
-    // killed the session can have changed. Re-establish it. Post-fix the
-    // very next load opens a fresh session, whose OW31 binding now
-    // resolves the landed ACL's OWNER (the user), and reads through.
-    (serving as AclChangeNotifier).noteSpaceAclChanged?.(homeSpace);
-
-    const healed = await probeRead(serving, homeSpace, docId);
-    expect(
-      healed.error,
-      `the remounted session must read the durable doc; got ` +
-        `${healed.error?.name}: ${healed.error?.message}`,
+      read.error,
+      `the pre-genesis session must read the durable doc; got ` +
+        `${read.error?.name}: ${read.error?.message}`,
     ).toBeUndefined();
-    const document = (serving.open(homeSpace) as unknown as {
-      get(uri: URI): unknown;
-    }).get(docId);
-    expect(document, "the durable doc materialized on the replica")
-      .toBeDefined();
-
-    // The remount is not a one-shot: the healed session keeps serving a
-    // FRESH address (one the replica has never pulled, so the read has to
-    // reach the wire rather than the watch tracker).
-    const minter = clientRuntime(homeSigner);
-    const again = await probeRead(
-      serving,
-      homeSpace,
-      mintProbeId(minter, homeSpace),
-    );
-    expect(again.error, "the healed session keeps serving").toBeUndefined();
+    expect(materialized(serving, homeSpace, docId)).toBe("v1");
+    expect(servingOpens(), "the session survived the genesis").toBe(opens);
   });
 
   it("FAIL-CLOSED: the remount re-runs session.open, it does not decide it — an unauthorized principal is denied there and the read keeps failing, while the SAME trigger heals it the moment the ACL grants READ", async () => {
@@ -527,10 +503,9 @@ describe("the session remount (profile-starvation fifth face)", () => {
     const serving = servingManager();
     const minter = clientRuntime(homeSigner);
     await mountSession(serving, homeSpace);
+    // The genesis binds the open session to the user, with no notice.
     await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
     const docId = await seedDoc(homeSigner, homeSpace, "rebind", "v1");
-
-    (serving as AclChangeNotifier).noteSpaceAclChanged?.(homeSpace);
     expect((await probeRead(serving, homeSpace, docId)).error).toBeUndefined();
 
     // Ownership moves. The session bound to the OLD owner is revoked.
@@ -566,6 +541,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
         if (frame.includes('"session/revoked"')) revocations.record();
       });
       cleanups.push(() => serving.close());
+      await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
       const writer = clientRuntime(homeSigner);
       const cell = writer.getCell<string>(homeSpace, "late profile", undefined);
       const docId = cell.getAsNormalizedFullLink().id as URI;
@@ -573,17 +549,21 @@ describe("the session remount (profile-starvation fifth face)", () => {
         .toBeUndefined();
       expect(materialized(serving, homeSpace, docId)).toBeUndefined();
 
+      // Ownership moves, which revokes the session bound to the old owner.
       if (noticeFirst) serving.noteSpaceAclChanged(homeSpace);
-      await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
+      await setAcl(homeSigner, homeSpace, {
+        [strangerSigner.did()]: "OWNER",
+        [homeSigner.did()]: "READ",
+      });
       await revocations.reached(1);
-      await seedDoc(homeSigner, homeSpace, "late profile", "selected");
+      await seedDoc(strangerSigner, homeSpace, "late profile", "selected");
       if (!noticeFirst) serving.noteSpaceAclChanged(homeSpace);
 
       // A standing watch supplies the new value without another pull.
       await serving.inputSynced();
       expect(materialized(serving, homeSpace, docId)).toBe("selected");
       const opens = servingOpens();
-      await writeDoc(homeSigner, homeSpace, "late profile", "renamed");
+      await writeDoc(strangerSigner, homeSpace, "late profile", "renamed");
       await serving.inputSynced();
       expect(materialized(serving, homeSpace, docId)).toBe("renamed");
       expect(servingOpens()).toBe(opens);
@@ -820,13 +800,13 @@ describe("the session remount (profile-starvation fifth face)", () => {
     ).toBe(0);
   });
 
-  it("HOST GLUE: the genesis ACL rides the host's OWN admission feed and heals a registered space server's foreign session — nothing hand-fed", async () => {
+  it("HOST GLUE: an ownership change rides the host's OWN admission feed and heals a registered space server's foreign session — nothing hand-fed", async () => {
     // The wiring pin. A real ExecutorHost, a real SpaceServer for the
     // SERVING space, and the starved session on a FOREIGN space (the
-    // viewer's home). The only thing that happens after the revocation
-    // is a client committing the genesis ACL: the host's own
-    // `commitAdmitted` observer has to carry it to the serving
-    // runtime's storage manager.
+    // viewer's home). The only thing that happens is a client committing
+    // an ownership change, which revokes the session: the host's own
+    // `commitAdmitted` observer has to carry it to the serving runtime's
+    // storage manager.
     // The construction hook is the event that says the host activated a
     // serving runtime.
     const servingUp = new ArrivalLog<LoopbackStorageManager>();
@@ -871,12 +851,17 @@ describe("the session remount (profile-starvation fifth face)", () => {
     );
     const serving = await servingUp.matching(() => true);
 
-    // Activation before genesis, on the FOREIGN home space.
-    await mountSession(serving, homeSpace);
-    // The genesis lands through a real client transact — the host's own
-    // admission observer is the only thing that learns of it.
+    // The serving runtime's session on the FOREIGN home space, bound to its
+    // owner.
     await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
     const docId = await seedDoc(homeSigner, homeSpace, "host-glue", "v1");
+    await mountSession(serving, homeSpace);
+    // Ownership moves through a real client transact — the host's own
+    // admission observer is the only thing that learns of it.
+    await setAcl(homeSigner, homeSpace, {
+      [strangerSigner.did()]: "OWNER",
+      [homeSigner.did()]: "READ",
+    });
 
     // The host's observer runs with the ACL commit's own admission, which
     // `setAcl` flushed, so the heal is already owed by the time the load
@@ -887,12 +872,13 @@ describe("the session remount (profile-starvation fifth face)", () => {
     ).toBeUndefined();
   });
 
-  it("lands a read that was in flight when the genesis ACL revoked its session", async () => {
-    // The read is issued on the pre-genesis session and reaches the memory
-    // server only after the genesis ACL has revoked that session and the ACL
-    // notice has latched the remount. The server refuses it as a request on
-    // a session it no longer holds. Nothing else reads the space, so the
-    // read that failed is the only load that can consume the latch.
+  it("lands a read that was in flight when an ownership change revoked its session", async () => {
+    // The read is issued on the session bound to the old owner and reaches
+    // the memory server only after the ownership change has revoked that
+    // session and the ACL notice has latched the remount. The server refuses
+    // it as a request on a session it no longer holds. Nothing else reads
+    // the space, so the read that failed is the only load that can consume
+    // the latch.
 
     const gate = new RequestGate();
     const serving = GatedLoopbackManager.connect(server, gate, {
@@ -902,12 +888,13 @@ describe("the session remount (profile-starvation fifth face)", () => {
     cleanups.push(() => serving.close());
     const docId = mintProbeId(clientRuntime(homeSigner), homeSpace);
 
+    await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
     await mountSession(serving, homeSpace);
     gate.hold();
     const read = probeRead(serving, homeSpace, docId);
     await gate.heldFrames.reached(1);
 
-    await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
+    await moveOwnership();
     (serving as AclChangeNotifier).noteSpaceAclChanged?.(homeSpace);
     gate.release();
 
@@ -919,7 +906,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     ).toBeUndefined();
     expect(
       servingOpens(),
-      "one session before the genesis and one remount after it",
+      "one session before the ownership change and one remount after it",
     ).toBe(2);
   });
 
@@ -954,7 +941,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     ).toBe(2);
   });
 
-  it("lands every read that joined a fetch in flight when the genesis ACL revoked its session", async () => {
+  it("lands every read that joined a fetch in flight when an ownership change revoked its session", async () => {
     // The second read of the same document joins the first read's fetch, so
     // both see it fail, and only one of them can be the one that consumes the
     // latch.
@@ -967,6 +954,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     cleanups.push(() => serving.close());
     const docId = mintProbeId(clientRuntime(homeSigner), homeSpace);
 
+    await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
     await mountSession(serving, homeSpace);
     gate.hold();
     const reads = [
@@ -975,7 +963,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     ];
     await gate.heldFrames.reached(1);
 
-    await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
+    await moveOwnership();
     (serving as AclChangeNotifier).noteSpaceAclChanged?.(homeSpace);
     gate.release();
 
@@ -997,12 +985,13 @@ describe("the session remount (profile-starvation fifth face)", () => {
     cleanups.push(() => serving.close());
     const docId = mintProbeId(clientRuntime(homeSigner), homeSpace);
 
+    await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
     await mountSession(serving, homeSpace);
     gate.hold();
     const read = probeRead(serving, homeSpace, docId);
     await gate.heldFrames.reached(1);
 
-    await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
+    await moveOwnership();
     gate.release();
 
     expect((await read).error?.message).toBe(

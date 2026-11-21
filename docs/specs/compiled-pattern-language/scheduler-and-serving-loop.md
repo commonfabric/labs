@@ -91,7 +91,12 @@ The terms of the sibling documents are used unchanged: *instance*, *cone*,
   *label-dirty* (section 3.6).
 - **Cone instance.** One cone of the plan as it is evaluated for one scope
   key and, inside element bodies, one element key per enclosing collection
-  (`execution-and-storage.md`, Terms).
+  (`execution-and-storage.md`, Terms). The enclosing collections are the
+  ones `Cone.within` lists, and an instance exists for each combination
+  of their keys, also for a cone that reads neither the element nor the
+  index (`plan-and-label-templates.md` §1.4). That holds for a
+  collection over an array of references, over an array of plain values
+  in place, and over the result of another per-element construct.
 - **Evaluation.** One run of a cone's value function for one cone instance.
 - **Stale.** A cone instance is stale when something its last evaluation
   read has changed, or when it has never been evaluated. What an evaluation
@@ -112,7 +117,9 @@ The terms of the sibling documents are used unchanged: *instance*, *cone*,
 - **Demanded.** A kept output is demanded when something outside its cone
   needs its current value (section 4). A cone instance is demanded when one
   of its kept outputs is, or when something demanded reads the target of
-  one of its write edges.
+  one of its write edges or passes that target on by reference: by
+  ruling the write targets of a cone count as its outputs for demand
+  (section 4.3).
 - **Handling.** One event on one stream, identified by its receipt
   (section 5.5).
 - **Scope instance.** One instance of a scoped document: the space's, one
@@ -184,7 +191,7 @@ recorded here because the tables depend on them.
 | --- | --- | --- |
 | P1, one change channel | Kept | Committed changes arrive through the storage subscription only. The writes the open transaction has staged are matched against the same index (section 3.5), so that a cone instance reads what its own transaction staged before the transaction seals. That is one matching mechanism with two sources, not a second channel with rules of its own |
 | P2, value-accurate invalidation | Kept | A slot becomes dirty only when what its observation class observes at its bound address changed (section 3.3). Reachability is used for order and for demand, never to decide that something is stale |
-| P3, demand gates execution | Kept | A cone instance is evaluated only when it is stale and demanded: one of its kept outputs is demanded, or something demanded reads the target of one of its write edges, or a demanded cone instance pulls one of its outputs |
+| P3, demand gates execution | Kept | A cone instance is evaluated only when it is stale and demanded: one of its kept outputs is demanded, or something demanded reads the target of one of its write edges or passes that target on by reference, or a demanded cone instance pulls one of its outputs. A materializer is the exception: by ruling it is evaluated whenever one of its inputs changes (section 7) |
 | P4, one static write surface | Kept, and stricter | The plan lists every write edge and every write envelope, and the runtime refuses a write that neither covers (`plan-and-label-templates.md`, §3.11 and §7.4). The registration-time log that could seed a write surface is not carried over. A handler received as a factory value is the exception: its write edges are known when the binding is made, not when the binder is compiled |
 | P5, self-identification through the transaction | Changed | The source of a commit is a cause's transaction, not a node (`sourceAction` today, set in `runSchedulerAction`). The index has already been applied to that transaction's staged writes, so its own commit notification marks nothing. Materializers and effect operations keep suppression per unit |
 | P6, subscriptions are durable and runs apply deltas | Removed for slots; kept for dynamic reads | Slot entries change only when a slot is rebound, element entries when a collection's membership changes, and the entries of a slot whose path holds `*` when the children of its container change. The journaled reads of a `dynamic` node are diffed against the registered ones after each evaluation, as a node's read log is today |
@@ -844,6 +851,26 @@ Three kinds of read have no entry.
   entry at the document that stores the path after the move. That is not a
   rebinding: the bound address names the result cell and the path, which
   did not change, and the slot is dirty only if what it observes changed.
+  The same holds for a chunk list and for the link to a chunk of an array
+  that is stored in chunks (`execution-and-storage.md` §4.10;
+  provisional, P20 of the continuation plan): an entry for a path of a
+  row is registered at the chunk that stores the row, and a split or a
+  merge of chunks registers it at the chunk that stores the row
+  afterwards. Provisional (P27 of the continuation plan): the same for
+  the chunk list and the chunks of a record that is stored in chunks,
+  where an entry for a path below a member is registered at the chunk
+  that stores the member. An index from a key to its chunk is open, with
+  no provisional decision (`execution-and-storage.md` §4.10, "Finding
+  the chunk of a key", and its question 110; question 299 of the
+  continuation plan), and no index is stored. A reader through a key is
+  registered at the collection's membership and at the path it resolved
+  to, as section 3.2 has it, and is marked by the keys that a write
+  touched; the chunks a runtime reads to find the key are read by
+  resolution and have no entry of their own. Chunked storage of long
+  arrays is a requirement on the storage layer and is decided there;
+  this design keeps the split points, P22 and the bound on what the
+  change of one row writes (the coordinator's recommendation on the
+  scope of the storage decisions, not an owner ruling).
 
 ### 3.2 Entries from the plan and the bindings
 
@@ -861,7 +888,7 @@ beyond link structure.
    | `state` | The state cell's document. Its identifier derives from the instance, the steps of `within` with the element keys, and the cell's name. For a migrated instance, the carry-over record in the result document names the stored document of a cell declared inside a compiled-in sub-pattern, and the scheme of a cell declared directly in the body, and the binding takes both from it (`execution-and-storage.md` §5.2 and §9.3) |
    | `operation` | The result path of the operation's state document, named the same way. For an operation inside an element body, the element key is a step of `within` in the document's identifier (`execution-and-storage.md` §6). The result of a materializer is read through such a slot (section 7.1) |
    | `child` | The child's result cell, named the same way |
-   | `params` | For an instance whose callee is an inline pattern written at an instantiation in a function body: the instance's parameters document. For a closure called as a factory value: the factory value, at the address the `identity` slot of the factory is bound to (`plan-and-label-templates.md` §3.15; `execution-and-storage.md` §4.6) |
+   | `params` | For an instance whose callee is an inline pattern written at an instantiation in a function body: the instance's parameters document. For a closure called as a factory value: the factory value, at the address the `identity` slot of the factory is bound to, where the captures are stored below its member `params` (provisional, P34 of the continuation plan; `plan-and-label-templates.md` §3.15; `execution-and-storage.md` §4.6) |
    | `binding` | Bound when an event is dispatched, for the length of its transaction. For a binding of the reactive tier each state path resolves to what the member `place` of its entry of `Binding.state` names: a slot of the instance, an output of the instance, the stream of another binding, or a constant written at the binding (`plan-and-label-templates.md` §1.1). For a binding made in a function body the root is the binding state document: a copied path is a path of that document, and a path bound by reference crosses the link the document holds. No index entry |
    | `event`, `cause` | The event, for the length of its transaction. No index entry |
    | `element` | Per element key, the address the element was read from at the position that holds the key, and for a linked element the cell it links to. Bound from the element table, not at load (below) |
@@ -910,6 +937,68 @@ evaluated. Cone evaluation builds the element table of a collection when it
 evaluates it (`execution-and-storage.md` §2.5). The table holds, per
 key, the position and the binding of each element slot.
 
+**A reference by key.** By ruling an element that is a plain value in
+place is named by its collection and its key, and a reference to it or
+to a member of it resolves to the current position at each read and
+each write (`plan-and-label-templates.md` §1.3). The case is an array
+of plain values in place, and the result of another per-element
+construct where the upstream position holds a value; over an array of
+references a reference to an element is a link to its cell and is
+resolved as any link. A slot whose path crosses a stored reference by
+key is resolved through it: the scheduler takes the position of the
+key from the collection's element table, or computes the keys of the
+array where no loaded instance iterates it
+(`execution-and-storage.md` §2.5), and binds the slot at the path
+below that position. It registers the slot at the collection's
+membership as well as at the bound address, so a move rebinds the
+slot, which makes no reader stale where the value at the path is the
+same, and a removal or an edit of the element in place leaves the
+slot unbound, reading as nothing. A write through such a reference is
+resolved the same way when it is made. By ruling a write through it
+that changes the element's value re-keys the element in the same
+transaction (`execution-and-storage.md` §2.5): the entries registered
+for the old key are registered for the new key, the writer's
+reference is updated, and a slot bound through a reference stored
+elsewhere under the old key is left unbound. A handle by position, as
+`items.key(i)` yields, is no reference by key: by ruling nothing
+rewrites it, and a slot whose path crosses a stored one is bound at
+the position, whichever element stands there.
+
+**Which keys a write touched.** Provisional (P24 of the continuation
+plan; section 12, question 60). A reference by key into an array of
+plain values in place has no address of its own. Every element is at a
+path below the one array, and a write to the title of the element at
+position 3 is below what every reader through a key of that array
+read, so marking by the address alone marks all of them. The store
+therefore reports, with each write at or below such an array, the keys
+that the write touched, and the scheduler marks the readers that are
+registered under those keys and no reader through another key.
+
+| Write | Keys reported |
+| --- | --- |
+| Below one position | The key that the position held before the write, and the key it holds after where the write changed it |
+| A `splice` of the array | The keys of the entries it removed and of those it put in |
+| The array written whole | The keys that left and the keys that entered. The keys of entries that are equal before and after are not reported |
+
+A key is found from the position that was written and the key that the
+position held, which the element table or the kept keys of the array
+give (`execution-and-storage.md` §2.5). Where the array has neither,
+because no loaded instance iterates it and no key of it was formed, the
+store reports no key and the scheduler marks every reader through a key
+of the array. The entries of such readers
+are those "tagged with the element's key", below. A key that left,
+entered or moved is also a change of the collection's membership, and
+marks the readers registered there. Over an array of references a
+reference to an element is a link to its cell, the write is to that
+cell, and the address is enough. For a reference into the result of
+another per-element construct whose upstream position holds a plain
+value, the keys are those of the upstream array, and the report is that
+of the write to it. For a reference into a plain array generated from
+scratch, which a cone computes and stores as the document of an
+output, the report is made when that output is stored; the prototype
+does not build it and compares such a reader at every pull (section
+12, question 61).
+
 - After the first evaluation of a collection, and after each change of its
   membership, the scheduler registers one entry per key and element
   slot from the table, tagged with the element's key, and removes the
@@ -919,9 +1008,27 @@ key, the position and the binding of each element slot.
 - A membership change arrives as a change to the collection's `enumeration`
   slot, which is a slot of the plan and has its entry from load. The
   evaluation it causes rebuilds the table, and the scheduler then replaces
-  the entries of the positions that changed. An element that moved keeps
+  the entries of the positions that changed. Provisional (P23 of the
+  continuation plan; section 12, question 60): "rebuilds" states the
+  table that results and no algorithm. A runtime may keep the key of
+  each position that no write touched and bring the table up to date
+  from the splices of the source (`execution-and-storage.md` §2.5, "The
+  steps state the result, and not an algorithm"), so that the work of
+  one change of membership does not follow the length of the
+  collection, except for the positions behind an insertion or a
+  removal, whose slots of root `index` get another value. An element
+  that moved keeps
   its key, so its cone instances that read element slots alone are not
-  stale, which is the property the element-key rule exists for.
+  stale, which is the property the element-key rule exists for. By
+  ruling the runtime moves what the key holds, its stored results
+  included, to the new position, and evaluates nothing for the element
+  (`execution-and-storage.md` §2.6).
+- A collection that is the result of a per-element construct has, by
+  ruling, the keys of the elements it came from: an element of a `map`
+  or a `filter` result has the key of its source element
+  (`plan-and-label-templates.md` §1.3). A change to one source element
+  therefore marks dirty the element slots of that key in each body of a
+  chain of such constructs, and of no other key.
 - The position is in no key. A cone that reads the index lists a slot of
   root `index` (`plan-and-label-templates.md` §1.3). When the rebuilt
   table gives a key another position, the scheduler marks that slot dirty
@@ -1227,14 +1334,41 @@ own notification.
 
 ### 3.6 A write that changes only a label
 
-A commit can change the label stored for a path and leave the value alone,
-for example when a later write to a document adds a confidentiality clause
-to an entry. The label is stored at a reserved member of the document beside
-its value ([CFC stored envelope](../cfc-stored-envelope.md)), and readers
-register paths under the value, so today such a commit matches no reader.
-The inventory records one consequence: `inspectConfLabel` is the one
-structural built-in a re-run does not reproduce, because the label it read
-changes without its inputs changing
+A commit can change the label stored for a path and leave the value alone, for
+example when a later write to a document adds a confidentiality clause to an
+entry, or when a write of a compiled pattern leaves the value as it was and
+stores its label (`plan-and-label-templates.md` §3.12). The label is stored at a
+reserved member of the document beside its value ([CFC stored
+envelope](../cfc-stored-envelope.md)), and a read of a labeled value consumes
+the label entries.
+
+**What today's runtime does.** Measured with the experimental option
+`compiledPatterns` off and with it on, with the same result
+(`runtime/runner/test/cfc-plan-labels.test.ts`, "a commit that changes a
+declared label and no value"): a commit that changes a declared label entry at a
+path and writes no value runs a sink that read the value again, and a
+transaction that read the value before the commit fails with a conflict
+(`StorageTransactionInconsistent`). Both also hold where the changed label is
+that of another value of the same document, because the labels are stored in the
+document: a reader of one value is run again, and an earlier reader refused, for
+a label that does not concern what it read. A label-only commit therefore does
+wake a reader today, and today's runtime wakes more readers than the label
+concerns. What today's runtime does not do is store a label when a write leaves
+the value as it was; that is the rule of `plan-and-label-templates.md` §3.12,
+for compiled patterns. Under that rule, a commit that would store the label the
+path holds already writes nothing, runs no reader and conflicts with nothing
+("for a write that left the value as it was" in the same file).
+
+For soundness the conflict is what is required: a transaction that read a value
+under the earlier label cannot commit on it, since a label read remains a
+dependency of the commit (section 8.10.1, `08-10-validation-at-boundaries.md`).
+A label that a computation derived earlier and that does not run again keeps
+what it had, which section 8.9.4 of `08-09-runtime-label-propagation.md`
+permits.
+
+The inventory records one consequence of a label that changes without a value:
+`inspectConfLabel` is the one structural built-in a re-run does not reproduce,
+because the label it read changes without its inputs changing
 (`REPLAYABLE_BUILTIN_REFS` in
 `runtime/runner/src/builder/builtin-replayability.ts`).
 
@@ -1251,7 +1385,12 @@ In this design a label-only change does the following.
 - For a kept output or a write edge that is demanded and whose template
   reaches a label-dirty slot under its last selections, a derivation
   transaction instantiates the template again, from the memo's value and
-  the last selections. This is the second of the three conditions of
+  the last selections. A slot that the template reaches through an
+  output it names counts: a template names the template of another
+  output and holds no copy of it, and the label of a named output is
+  formed once in the transaction and used at every template that names
+  it (`plan-and-label-templates.md` §3.2 and §4.1). This is the second
+  of the three conditions of
   `plan-and-label-templates.md` §4.1. The instantiation key differs, so
   steps 2 to 4 of that section run: the label is rewritten and the
   constraints are checked again. The cycle runs a derivation transaction
@@ -1261,6 +1400,22 @@ In this design a label-only change does the following.
   label-dirty, and the next evaluation of the cone instance instantiates
   with the current label. §8.9.4 permits the delay: "There is **no
   retroactive relabeling obligation**".
+
+As built in milestone 4 of the integration, the prototype's executor keeps, for
+each record of an output it gave, the positions that the inputs of the record
+read, and the collections its template folds over (`Instance.#noteRecord` of
+`base/pattern-compiler/exec/executor.ts`). After a commit changed a label and no
+value, it gives again, in a derivation transaction of its own, the records whose
+inputs read a position at, above or below the changed entry and those that fold
+over a collection with an element whose group changed
+(`Instance.#recordsReading`, `Instance.#relabel`). One changed label among 10
+elements and among 1,000 gives the same records again, measured over an array of
+references; an array of plain values in place and the result of another
+per-element construct were not measured. The records are found by position and
+not by the class of the slot, so an output that holds a link is given again when
+any label of the document the link names changes, although its slot reads the
+reference alone. The rule above limits the work further, to the demanded outputs
+whose template reaches the changed slot in a class that the change concerns.
 
 The rule changes when a label is derived again, not what it is. It is
 *assumed*, pending the owner (question 11 of the continuation plan; open
@@ -1324,7 +1479,10 @@ not depend on it.
   link at the part's root gives the instance, and the `within` steps and
   the path stored there give the kept path of the part's root
   (`execution-and-storage.md` §4.10). The watch then demands the kept paths
-  below that root that its schema reaches. A part's envelope is complete
+  below that root that its schema reaches. A watch that names a chunk
+  document of an array that is stored in chunks (provisional, P20) is
+  mapped the same way, to the kept paths of the rows in its run. A part's
+  envelope is complete
   for its paths (`plan-and-label-templates.md` §2.3), so a session that is
   served a part document by its address is served every path under the
   label a read through the result consumes.
@@ -1359,6 +1517,27 @@ producers. Three cases of step 1 are worth naming.
   the parent, or of the computation that made the instance (section 2.7).
 - A slot bound to a cell that a cone side-writes, a state cell or a cell
   reached through a handle, has that cone's write edge as its writer.
+- That holds for a slot that passes the cell on and reads nothing of
+  it: the `identity` slot at the root of a state cell, and the one at a
+  handle's own position. A write to the cell does not make such a slot
+  dirty, and the plan lists no `ConeEdge` to its cone
+  (`plan-and-label-templates.md` §3.11). For demand it counts, by
+  ruling: step 1 looks up the address of the cell the slot names, and
+  the write edges the writer map holds at or below that address have
+  their demand counts raised. So where a kept path of a result passes
+  on a state cell that a cone of the pattern side-writes, and that
+  cone has no kept output, demand on the path is demand on the cone,
+  and the cone is evaluated before the path is stored
+  (`execution-and-storage.md` §2.3). A body that holds such a slot in
+  order to write through the handle, and neither reads the cell nor
+  passes it on, demands nothing by it.
+
+These cases are one rule. By ruling a cone whose writes go to a small,
+fixed set of targets that the compiler names is an ordinary node, and
+its write targets count as its outputs for demand. A cone whose write
+set is dynamic or very large is a materializer, which is not demanded
+by its readers and is evaluated whenever one of its inputs changes
+(section 7).
 
 A slot's value is supplied when the value function first asks for it, and
 a slot the function does not ask for is not recorded as read
@@ -1676,7 +1855,13 @@ registration that a start makes today.
 - **When a row is deleted.** When its element key leaves the collection,
   and when its instance is torn down (section 2.7) or retired. A source
   update deletes no row: a stream identifier holds no compiled identity,
-  so the row still names the stream.
+  so the row still names the stream. The row is an index entry of the
+  scheduler and nothing stored under the key. By ruling the removal of
+  an element deletes no state cell and no operation state of its key
+  (`execution-and-storage.md` §2.6), in each of the three cases of a
+  per-element source. A key that returns has the same stream
+  identifier, and the evaluation that adds the key writes the row
+  again.
 - **What it is.** Identifiers only, overwritten in place, written inside the
   wave's store transaction or a setup transaction's, never pushed to a client,
   and never read at admission. Those are the properties of a basis row. Only
@@ -1714,7 +1899,10 @@ in the place of the walk.
    equal plain values, or links to one cell, have two keys and two
    streams. The handler's element slots are bound at the position that
    holds the key, and each resolves to the value and the label at that
-   position (`execution-and-storage.md` §2.5). By the ruling that labels
+   position (`execution-and-storage.md` §2.5). Where the element is a
+   plain value in place, a state path that holds the element as a
+   handle is given the reference by key, which a write through it
+   resolves to that position when the write is made. By the ruling that labels
    flow per value through the callback of a per-element construct, a
    handler that closes over the element alone writes under the event and
    that element, and under nothing of another element, an equal one
@@ -1757,8 +1945,24 @@ An event that cannot be routed is treated as today.
     earliest pending entry always spends the budget.
   - When the budget is spent, the event is dropped: the entry records
     the dropped-event notice, and the `eventWatermark` passes it.
-- **A key no position holds.** An event on a stream of an element whose key
-  left its collection is unrunnable, and is dropped in the same way.
+- **A key no position holds.** By ruling an event on a stream of a
+  binding of an element body whose key left its collection is refused:
+  it is unrunnable, and is dropped in the same way, also where a link
+  to the stream is stored outside the collection. Once the key
+  returns, the binding has the stream it had, and a later event is
+  handled. That is the same over an array of references, over an array
+  of plain values in place, and over the result of another per-element
+  construct.
+- **A stream of an instance called through `asInstance()`** is not such
+  a stream. By ruling a pattern call through `asInstance()` in an
+  element body is an instance of its own, which stays when its key
+  leaves the collection (`execution-and-storage.md` §2.5, "Children of
+  an element body"). Its bindings are bindings of its own plan, and
+  the row of each of its streams names that instance. An event for
+  one is routed and handled as for any instance, whether or not the
+  element is in the collection, and the enclosing instance is not
+  loaded on its account. The same in each of the three cases of a
+  source.
 - **A binding the plan does not have.** After a source update, a row can
   name a binding that the plan the instance runs does not have. An event
   on its stream is unrunnable.
@@ -1820,6 +2024,23 @@ Before the transaction opens:
 Then the transaction opens, and the `event`, `binding`, and `cause` slots
 are bound.
 
+**A slot that observes the reference alone.** Provisional (P8; open question
+54). A handle that a handler body reads through has two slots, one of class
+`identity` and one of class `value`, and a handle that the body only writes
+through, or only passes on, has the `identity` slot alone. A slot of class
+`identity` observes the reference and not the content of the cell. It does not
+make the cone instance that writes the cell be evaluated before the body: the
+cone instances evaluated before the body are those that compute a value the
+handler reads (`execution-and-storage.md` §1.3). In the prototype's fixture
+`batch.tsx` the cone `_join` writes the cell `joined` from the list `items`, an
+array of plain values in place, and the handler `overwrite` writes `joined` and
+reads nothing. In the batch `add`, `overwrite`, the cone `_join` is not
+evaluated before the body of `overwrite`. It is evaluated in the derivation
+transaction behind the batch and writes over what the handler wrote, so `joined`
+holds `a`, which is the value today's runtime stores. Under the other reading
+any bound slot counts: `_join` is evaluated before the body, is current behind
+the batch, and `joined` holds what the handler wrote.
+
 **What the `binding` root resolves to.** It depends on where the binding
 was made (`plan-and-label-templates.md` §3.14).
 
@@ -1868,7 +2089,7 @@ and §4.6; `execution-and-storage.md` §1.6). This is the **early step**.
   instance whose value the handler receives, directly or through any
   number of `output` edges. A value the handler receives for a state path
   that names an output of its own instance is not read by address: the
-  handler's template holds the output's template, and the handler
+  handler's template names the output's template, and the handler
   receives the computed value whether or not the output's write is
   stored. But the cone instance that computed it read addresses, and a
   write staged at one of them is among these.
@@ -2070,6 +2291,23 @@ Two things follow for what is observable.
 - **How many events a batch holds depends on arrival times.** It decides
   which states are derived from, and `plan-and-label-templates.md` §5.5
   lists it with the residual channels.
+- **What a cell holds that a cone and a handler both write can depend on the
+  batch.** Provisional (P9; open question 55), and the first thing for the owner
+  to look at among the provisional decisions. A cone instance with a static
+  side-write is stale when something it read changed, and not when another
+  writer writes the cell that it writes (`execution-and-storage.md` §2.7). In
+  the prototype's fixture `batch.tsx`, the events `add` and `overwrite` in one
+  batch leave `joined` holding `a`: the cone `_join` is stale by the `add`, is
+  evaluated behind the batch, and writes over the handler's value. The same two
+  events, each a batch of its own, leave what the handler wrote: `_join` was
+  evaluated behind `add`, and nothing it read changed with `overwrite`. So the
+  stored value differs with the size of the batch, which depends on arrival
+  times. Today's runtime stores `a` in both cases: it runs the writing
+  computation again behind the handler's write. Under the other reading a write
+  to the target of a write edge makes the writing cone instance stale, as today,
+  and a batch and its events one at a time store the same value. The list
+  `items` of the fixture is an array of plain values in place, and the rule does
+  not depend on a per-element construct.
 
 ### 5.5 Rejection, failure, and conflict
 
@@ -2187,7 +2425,12 @@ constraint never rejects a derivation transaction.
   constraint, and the instantiation key of the write's template, which is
   the label identifiers of the slots the template reaches under the
   reported selections, with those selections
-  (`plan-and-label-templates.md` §4.1, step 2). A constraint on a write,
+  (`plan-and-label-templates.md` §4.1, step 2). Where the template names
+  another output, the key holds the identifier of the label of that
+  output's template in place of the slots that template reaches
+  (provisional, P2; question 163 there), and the same for an entry of
+  the plan's template table that the template names (provisional, P6;
+  question 168 there). A constraint on a write,
   such as writer-fit or a write floor, lists no slot of its own, and its
   verdict is a function of that key.
 - It does not advance the basis rows of the cone instance.
@@ -2332,6 +2575,9 @@ followed below a reference changed.
 1. Read the stored request and its label. A request path whose cone failed
    holds an error state. Such a request is not made, and the operation's
    result is that error state (`plan-and-label-templates.md` §5.2).
+   Provisional (P16): where the cone that computes the request failed, the
+   stored request holds one error state for the whole request, and not one at
+   each path whose cone failed (`execution-and-storage.md` §6.4).
 2. Follow the references the request holds, as far as the built-in
    serializes or hashes them. The "Request operands" paragraph of the
    built-in's entry in `builtin-inventory.md` says which operands are read
@@ -2357,6 +2603,28 @@ followed below a reference changed.
 So a change of content behind a reference the request holds runs the
 request transaction again, and it requests the effect again exactly when
 the hash differs.
+
+**What a reader reads around a request.** Provisional (P12; open question 56).
+The request transaction runs behind the derivation transaction that staged the
+request (section 10.2). In that first derivation transaction the state document
+holds the request alone, and a reader of `pending`, of `result` or of `error`
+reads nothing. The derivation transaction behind the request transaction reads
+`pending` as `true`. Step 6 writes the hash and the pending mark and nothing
+else, so while a newer request is outstanding the result or the error of the
+request before it stays readable, beside `pending`. Under the other reading
+`pending` is `true` from the derivation transaction that staged the request, and
+a new request clears `result` and `error`.
+
+**A request that comes back while it is outstanding.** Provisional (P13; open
+question 57). Steps 4 to 6 compare the hash with the one hash that the state
+document holds. With a request A outstanding, a change of the request to B and
+back to A finds the stored hash to be B's, so A is handed to the outbox a second
+time: the outbox holds A, B, A. The completion of each A is then that of the
+selected request, and each is written. The sentence of section 6.6, that a
+request is made at most once per distinct request hash and state document, holds
+for the hash that the document holds and not for a hash it held before. Under
+the other reading the state document holds the set of the hashes that are
+outstanding, and A is not made again.
 
 **In a handler** the request is staged in the event's transaction. Each
 path of it is a write edge of the body with the target `request`, and it
@@ -2532,7 +2800,10 @@ after the request left (section 2.7).
 ### 6.6 One request across re-evaluations
 
 A request is made at most once per distinct request hash and state document,
-whatever is evaluated again.
+whatever is evaluated again. Provisional (P13): the state document holds
+one hash, so a request that is replaced while it is outstanding and then
+selected again is made a second time (section 6.2, "A request that comes
+back while it is outstanding").
 
 - A cone instance that computes a request is evaluated again whenever
   something it read changed. If the request's value is unchanged, nothing
@@ -2581,6 +2852,24 @@ one such write is a materializer for all of its writes. The plan records an
 `Operation` of kind `materializer` whose `implementation` names the body,
 and the body's `writes` and `envelopes` are its declared write envelope
 (`plan-and-label-templates.md` §3.11; section 2.4).
+
+By ruling a cone with side-writes is of one of two kinds. One whose
+writes go to a small, fixed set of targets that the compiler names is
+an ordinary node, whose write targets count as its outputs for demand
+(section 4.3). One whose write set is dynamic or very large is the
+materializer of this section: it is evaluated eagerly whenever one of
+its inputs changes, as a rule after the rest of the wave has been
+evaluated, and its writes make their readers stale, which a further
+wave evaluates. The rules of section 7.2 are that ruling in this
+document's terms. "Standing demand" is the eager evaluation. "Idle
+priority" is the run after the events of a cycle and the derivation
+transaction behind them. "Its writes are a cause" is the further wave.
+Promotion is the one case in which a materializer runs ahead of the
+rest: a reader whose bound address is inside its envelope would
+otherwise read what the run is about to replace. *Assumed*
+(`execution-and-storage.md` §11, question 80): which kind a body is
+follows from its footprint, by `footprint-analysis.md` §6.3, and no
+number is set for "very large".
 
 A materializer is not part of the compiled evaluation of its instance. It
 keeps a transaction per run and today's label rule: every path it writes
@@ -2737,7 +3026,9 @@ The bound is one rule, and it is ruled:
   means and not a setting of a deployment. Changing it is a new version.
 - **Who counts.** Cone evaluation keeps the count, per cone instance and
   transaction (`execution-and-storage.md` §2.7). The instance record holds
-  no second count.
+  no second count. Provisional (P17): a cone with several value
+  functions has a count for each value function of a cone instance
+  (`plan-and-label-templates.md` §8, question 173).
 - **Why a count per cone instance.** A cycle within one plan is visible in
   `Plan.edges`, and a count per cycle would do for it. A cycle through links
   between instances exists only in data, and a count per cone instance
@@ -2757,7 +3048,10 @@ The bound is one rule, and it is ruled:
   inputs a later cause would reach the bound again. Its failed evaluation
   is an evaluation. Its memo entry holds the error state and the reads made
   up to the failure, its error state is stored, and its basis rows advance
-  (section 3.5). This differs from today, where the work that remains is
+  (section 3.5). Provisional (P10; open question 43): the entry is
+  current against what is stored when the transaction ends, after the
+  withdrawals of section 8.2, and not against what its last evaluation
+  read. This differs from today, where the work that remains is
   deferred behind a backoff gate and tried again
   (`planBudgetBackoff` in `scheduler/execution.ts`), so that a graph that
   needs more than ten iterations still converges. A cone instance has no
@@ -2788,6 +3082,17 @@ The bound is one rule, and it is ruled:
   This rule is the same for a cycle inside one instance and for one through
   links between instances, so that the server and a client fail the same
   cone instances.
+- **Which cone instances of a cycle fail depends on the order of evaluation**
+  (open question 58). In a cycle of two cone instances that does not settle,
+  both fail where both were evaluated ten times when the first reached the
+  bound. Had the second been evaluated nine times, it would be evaluated once
+  more against the earlier value and leave its write, and one cell of the cycle
+  would hold one step of the cycle. A reader of the cells is evaluated once for
+  each state it is pulled in, and under an order that pulls it after every write
+  it reaches the bound itself and fails, though it writes nothing. Section 10.2
+  fixes the order of the demanded outputs so that a client and the server
+  evaluate in one order. No section says that the order of the pulls inside one
+  transaction is fixed as well, which this outcome needs.
 - **The diagnostic.** For each evaluation after the first, the scheduler
   records which slot or registered address made the cone instance stale and
   which cone instance or body staged the write that changed it. When the
@@ -3237,7 +3542,11 @@ with its own context (section 10.3). Every write in it is a derived write,
 so no constraint rejects it.
 
 **Order across instances.** A derivation transaction evaluates the demanded
-stale outputs in a fixed order, by instance identifier and output index. A
+stale outputs in a fixed order, by instance identifier and output index.
+*Assumed,* with the provisional record of a pattern that is compiled in
+(P18; open question 59): an output of such a pattern is ordered by the
+chain of its call sites, each by its index in `sites`, and then by its
+index in the `outputs` of its record. A
 cone instance that reads a slot whose bound address a stale cone instance
 writes causes that one to be evaluated first, in the same transaction,
 whichever instance it belongs to. A cone instance that is read while it is
@@ -3673,8 +3982,17 @@ document. Three kinds of thing are affected.
 | What | Why a client cannot name it | What the client does until a stored link arrives |
 | --- | --- | --- |
 | A state cell declared in an element body over plain values; the state of an operation declared in such a body; a child instantiated there; and the stream of a handler bound there (`execution-and-storage.md` §2.5) | The `element` step of its cause holds a salted value hash | The `state` or `operation` slot has no bound address. The cone instances that read it are pending, and what they feed renders its committed value or its loading state |
-| A part document at or below a row of a kept collection | Its identifier is derived under the secret of the space for every key, a cell's identity included (`plan-and-label-templates.md` §2.3) | Nothing: a client names a kept path by the result cell and the path, never a part document, and its overlay entries are per kept path (section 11.6) |
+| A part document at or below a row of a kept collection | Its identifier is a number that the runtime mints, derived from nothing that a client holds (`execution-and-storage.md` §4.10; provisional, P28 of the continuation plan) | Nothing: a client names a kept path by the result cell and the path, never a part document, and its overlay entries are per kept path (section 11.6) |
 | A binding made in a function body that has a copied path | The stream's identifier holds the salted hash of the copy | The stream is pending. A control the speculative run rendered for it sends nothing until the server's link to the stream arrives. A speculative handler that makes such a binding stores no link to it in its overlay entry |
+
+A reference by key, to an element that is a plain value in place,
+holds a key of this kind, and resolving it to a position needs the
+salt. *Assumed* (`plan-and-label-templates.md` §8, question 113): a
+client does not resolve one, and a read through it is pending on the
+client until the server's result arrives. The case is an array of
+plain values in place, and the result of another per-element construct
+where the upstream position holds a value. A reference to an element
+of an array of references is a link, which a client resolves.
 
 A client learns such an identifier from a link the server stored: a kept
 output that passes the state cell on, or the stream link in the rendered
@@ -3687,6 +4005,15 @@ holds, before the server's result arrives.
 
 - A binding of the reactive tier copies nothing, so its stream is named by
   the binding's name and `within` steps. A client derives it, unless an
+  enclosing element key is a salted value hash. The client's run of the
+  value code places the marker of `host.stream` where the server's run
+  does, and the client's runtime puts the link to the stream it derived
+  in the marker's place (`execution-and-storage.md` §2.2). By ruling
+  no position is checked, on a client as on the server, and the plan
+  does not say where a stream is stored. The same for a binding of an
+  element body over an array of references, over an array of plain
+  values in place, and over the result of another per-element
+  construct, except that a client cannot derive a stream whose
   enclosing element key is a salted value hash.
 - A binding made in a function body whose paths are all links, to cells or
   to containers bound by reference, is named by the identities of those
@@ -4106,6 +4433,224 @@ space, and no space runs the builder path beside the compiled path
     the space's mark, with the per-space event order of question 10. The
     alternative has a client speculate only in switched spaces during the
     validation period.
+43. **The memo entry of a cone instance that failed at the bound, after
+    its side-writes are withdrawn** (sections 3.5, 8.1 and 8.2). By
+    ruling such a cone instance is not evaluated again until one of its
+    inputs changes. Section 8.2 withdraws its side-writes. In a cycle
+    through a side-write its last reads were of values that the
+    transaction staged, so what is stored after the withdrawal differs
+    from what its entry recorded, and by the check of
+    `execution-and-storage.md` §3.3 the entry is not current. Section
+    3.5 drops the entry of a cone instance whose side-write was
+    withdrawn, and names a conflict and a handler's write as the
+    reasons. The ruling governs the outcome. *Assumed:* the entry of a
+    cone instance that failed at the bound is kept, and it is taken as
+    current against what is stored after the withdrawal, so that only a
+    change after that transaction evaluates the cone instance again.
+    The assumption is provisional (P10 of the continuation plan, the
+    choice of the prototype's author, adopted by the coordinator of
+    this work and not ruled). The alternative: the entry is current
+    against what its last evaluation read, which is what the
+    fingerprint check gives. The prototype has a test for each reading
+    on `fixtures/bound.tsx`, for a later event that writes a cell no
+    cone of the cycle reads: under the first neither cone is evaluated,
+    and under the second each cause evaluates each cone ten times and
+    fails both again. It is question 224 of the continuation plan.
+44. **A `navigateTo` of the reactive tier behind a batch of events of
+    several sessions** (section 6.2). Such a request is demanded
+    whenever its instance is, and is refused where it is not a
+    consequence of an event that a client session fired. It is staged by
+    a derivation transaction, and one derivation transaction runs behind
+    a batch that can hold events of several sessions, with the changes
+    drained from storage (section 10.2). No section says how that
+    transaction, or the request transaction after it, finds the session
+    whose event the request is a consequence of. Nothing is assumed. It
+    is question 226 of the continuation plan.
+45. **A speculative handler that holds a reference by key** (section
+    11.1). A client does not resolve a reference by key, and a read
+    through it is pending, which is assumed. No section says what a
+    speculative handler does where it writes through such a reference or
+    compares one with a handle by position: whether its whole
+    transaction is abandoned, the one write is left out of the overlay
+    entry, or nothing is shown until the server's result arrives. The
+    case is an element body over an array of plain values in place, and
+    over the result of another per-element construct where the upstream
+    position holds a value; over an array of references the element is a
+    link, which a client resolves. Nothing is assumed. It is question
+    227 of the continuation plan.
+46. **What "pending" is for value code on a client** (sections 6.7 and
+    11.1). The word is used of a cone instance, of the result of an
+    effect, of a stream, and of a read through a reference by key. No
+    section says what value code receives from the host for a pending
+    input, whether a cone instance with a pending input is evaluated, or
+    whether such an evaluation counts toward the bound of section 8.1.
+    For a row of an element body over an array of plain values in place,
+    whose cones a client can evaluate and whose handler's stream it
+    cannot derive, no section says whether the whole kept path of the
+    row is pending. Nothing is assumed beyond section 11.1. It is
+    question 228 of the continuation plan.
+47. **Which transaction evaluates what became demanded since the last
+    cycle** (section 10.2). The cycle runs the derivation transaction
+    behind the batch for a demanded output that is stale, and then one
+    derivation transaction for each change of demand.
+    `execution-and-storage.md` §1.1 has the transaction behind the batch
+    evaluate "where the demand already stands". *Assumed:* demand that
+    changed since the last cycle does not stand for the transaction
+    behind the batch, and what it reaches is evaluated in the
+    transaction of the change of demand, as the demanding principal
+    (section 4.5). It is question 230 of the continuation plan.
+48. **A request of the reactive tier that is refused** (sections 6.2 and
+    6.3). The operation's result takes the refusal as an error state "in
+    a following transaction". No section says which transaction that is
+    or whether its commit is a cause, where for a refused later send it
+    is the completion transaction. And no section says whether the
+    refusal shows as a value of the field `error` of the result or as an
+    error state in the sense of `plan-and-label-templates.md` §5.2,
+    which fails every cone instance that reads it. Nothing is assumed.
+    It is question 231 of the continuation plan.
+49. **The batch on a runtime without a serving loop** (sections 5.1 and
+    10.7). There a batch is the events queued when the runtime begins to
+    handle them, and no section says whether an event that a handler of
+    the batch sends joins it. *Assumed:* it does, as with a serving
+    loop. It is question 233 of the continuation plan.
+50. **When a write that was withdrawn for a conflict on its target is
+    stored again** (sections 3.5 and 5.5). It is stored again from the
+    memo by the next transaction that demands it. *Assumed:* once the
+    replica holds the commit that it conflicted with, as a requeued
+    event waits for that commit. It is question 234 of the continuation
+    plan.
+51. **The requeue of an event whose handler read something that is stale
+    at the commit** (section 5.5). The rule is proposed in the
+    serving-loop specification and awaits a ruling there, and the
+    requeue after a withdrawal that reaches a handler's own writes rests
+    on it. *Assumed:* the proposal. It is question 235 of the
+    continuation plan.
+52. **How an overlay entry holds a change of membership** (section
+    11.6). An entry carries each kept path that its transaction wrote as
+    a whole value, and an insertion is a `splice` of the stored array
+    (`execution-and-storage.md` §4.2). Where the kept path of an
+    insertion is the collection, the entry holds the whole array and
+    hides a committed change of membership that arrives meanwhile. Where
+    it is the row, the entry needs a position. Nothing is assumed. It is
+    question 237 of the continuation plan.
+53. **The batches for another space behind a derivation transaction that
+    evaluates for several scope keys** (section 9.3). A batch for
+    another space is authored under the acting principal of the
+    requesting evaluation, and one derivation transaction can hold
+    evaluations for several scope keys. No section says whether a wave
+    then carries one batch for each principal for one target space, or
+    in which order. Nothing is assumed. It is question 238 of the
+    continuation plan, and extends question 34.
+
+54. **A slot of a handler that observes the reference alone, and the cone that
+    writes its cell** (section 5.2). `execution-and-storage.md` §1.3 has "a slot
+    of the handler" bound to the target of a static side-write, and the writing
+    cone instance evaluated first. The plan gives a handle that the body reads
+    through two slots, of class `identity` and of class `value`, and a handle
+    that the body only writes through the `identity` slot alone. *Assumed,*
+    provisional (P8 of the continuation plan, the choice of the prototype's
+    author, adopted by the coordinator of this work and not ruled): a slot of
+    class `identity` alone is no read, and the writing cone instance is not
+    evaluated before the body on its account. The alternative: any bound slot
+    counts. The prototype has a test for each reading on `fixtures/batch.tsx`
+    (the batch `add`, `overwrite`; the second reading under the option
+    `beforeBody: "bound"`), and today's runtime gives the value of the first. If
+    the owner decides for the alternative, the paragraph "A slot that observes
+    the reference alone" of section 5.2 and the bullet of
+    `execution-and-storage.md` §1.3 change. It is question 276 of the
+    continuation plan.
+55. **Whether a cone with a static side-write is stale when another writer
+    writes its target** (section 5.4). `execution-and-storage.md` §2.7 makes a
+    cone instance stale by a write to a cell that it read, and no rule makes it
+    stale by a write to a cell that it writes. Section 8.2 speaks of "a state
+    cell that a handler also writes" beside "a computation that normalizes it",
+    which is this case. *Assumed,* provisional (P9 of the continuation plan,
+    adopted by the coordinator so that the work continues, and flagged for the
+    owner to look at first): it is not stale. A batch and the same events one at
+    a time can then store different values, and today's runtime, which runs the
+    writer again, stores one value in both. By a reading of the source that is
+    not verified, today's `set` of a cell reads the cell to compare, so the
+    writing action has its target among its reads. The alternative: a write to
+    the target of a write edge makes the writing cone instance stale. The
+    prototype has a test for each outcome on `fixtures/batch.tsx` (`add` then
+    `overwrite`, in one batch and in two), and its comparison with today's
+    runtime differs in 2 values for it. If the owner decides for the
+    alternative, the third item of "Two things follow" in section 5.4 is
+    removed, and `execution-and-storage.md` §2.7 lists the staleness. It is
+    question 277 of the continuation plan.
+56. **What `pending`, `result` and `error` read as before the first request
+    transaction, and while a newer request is outstanding** (section 6.2).
+    *Assumed,* provisional (P12 of the continuation plan): nothing before the
+    first request transaction, and the earlier result stays readable while a
+    newer request is outstanding. The alternative: `pending` is `true` from the
+    derivation transaction that staged the request, and a new request clears the
+    result. The prototype tests the first reading on `fixtures/effects.tsx`,
+    which has no per-element construct. If the owner decides for the
+    alternative, the staging evaluation writes the pending mark, or the request
+    transaction clears `result` and `error`. It is question 279 of the
+    continuation plan.
+57. **A request that comes back while it is outstanding** (sections 6.2 and
+    6.6). Section 6.6 says that a request is made at most once per distinct
+    request hash and state document, and steps 4 to 6 of section 6.2 compare
+    with the one hash that the document holds. *Assumed,* provisional (P13 of
+    the continuation plan): the steps govern, and such a request is made a
+    second time. The alternative: the state document holds the set of the
+    outstanding hashes. The prototype has a test that shows the outbox holding
+    A, B, A. If the owner decides for the alternative, the state document of
+    `execution-and-storage.md` §6.4 gains that set, and step 5 compares with it.
+    It is question 280 of the continuation plan.
+58. **Whether the order of the pulls inside one transaction is fixed** (section
+    8.2). Which cone instances of a cycle fail at the bound, and whether a
+    reader of the cycle fails, depends on the order in which the cone instances
+    are evaluated. Section 10.2 fixes the order of the demanded outputs, and has
+    a client and the server evaluate in that order. Nothing is assumed for the
+    order of the pulls that one demanded output causes. The prototype's executor
+    has the order of its own pull, and no test compares two orders. It is
+    question 286 of the continuation plan.
+59. **The order of the outputs of a pattern that is compiled in** (section
+    10.2). With one record for each such pattern (`plan-and-label-templates.md`
+    §1.1, provisional, P18), an output index names an output of a record and not
+    of an instance. *Assumed:* the order is by the chain of call sites and then
+    the index. It is part of question 247 of the continuation plan.
+60. **Keys kept for the positions a write did not touch, and readers
+    marked by the key a write touched** (section 3.2). Two provisional
+    decisions of the coordinator, each the choice of the prototype's
+    author, and neither ruled. P23: "The evaluation it causes rebuilds
+    the table" states the table that results, and a runtime may keep
+    keys and apply splices; the alternative is that every change of
+    membership forms the key of every position, which the prototype
+    measured at 10,000 salted hashes for one change of an array of
+    10,000 plain values in place, against 1. P24: the store reports
+    with each write below an array of plain values in place the keys
+    that the write touched, and a reader through a reference by key is
+    marked by its key; the alternative is to mark every reader through
+    a key of the array, which is one check for each of them for one
+    edit. No value differs under either. Open under P24: in which
+    record of a commit the store reports the keys, and whether a client,
+    which cannot form a key of a plain value because it cannot read the
+    salt, is told the keys or marks every reader of the array.
+    *Assumed:* the server's store reports them to the scheduler of the
+    same process and a commit carries none of them, so a client marks
+    by the array. If the owner decides against P23 or P24, the
+    provisional sentences of section 3.2 and of
+    `execution-and-storage.md` §2.5 are removed. It is questions 256
+    and 293 of the continuation plan.
+61. **Three dependencies that the address index has no entry for**
+    (section 3.1). The prototype marks what a write reaches and compares
+    nothing else, except for an entry of the memo that depends on one
+    of these, which it compares at every pull, with every entry that
+    used it: the result of `equals` on two references; a cone that has
+    a static side-write, which another writer of its target can
+    overtake (question 55); and a read through a key into the document
+    of a computed output, which is a plain array generated from
+    scratch, where the read itself brings the output up to date and no
+    write announces the change. An instance with such an entry is
+    visited by every derivation transaction, and over a plain array
+    generated from scratch the checks of one change follow the length
+    of the list. Not determined: what the index registers for each of
+    the three. Nothing is assumed. It is question 294 of the
+    continuation plan.
+
 
 ### For another document or the prototype
 

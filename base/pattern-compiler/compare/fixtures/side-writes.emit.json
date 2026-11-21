@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/side-writes.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst setValue = handler(\n  (event, { value }) => {\n    value.set(event.to);\n  },\n);\nconst tally = lift(\n  (x) => {\n    x.counts.key(x.flavor).set(x.flavor.length);\n    return x.flavor;\n  },\n);\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/side-writes.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { last, value } = $a; return (() => {\n    last.set(value.get().toUpperCase());\n  })(); });\n$rt.body(1, ($a) => { const { seen, value } = $a; return (() => {\n    seen.set(value.get() + \"!\");\n  })(); });\n$rt.body(2, ($a) => ((x) => {\n    x.counts.key(x.flavor).set(x.flavor.length);\n    return x.flavor;\n  })($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, {  })));\n$rt.value(1, ($h) => ($h.invoke(1, {  })));\n$rt.value(3, ($h) => (((\"seen \") + $h.v($h.slot(4)))));\n$rt.value(4, ($h) => ($h.invoke(2, ({ counts: $h.slot(5), flavor: $h.slot(6) }))));\n$rt.value(6, ($h) => ($h.at(((Object).keys($h.v($h.slot(7)))), [\"length\"])));\nreturn $rt.thunk(($h) => (({ last: $h.slot(0), shown: $h.output(0), tallied: $h.output(1), counts: $h.slot(5), total: $h.output(2), setValue: $h.stream(0) })));\n});\n$rt.body(3, ($e, $s) => ((event, { value }) => {\n    value.set(event.to);\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst setValue = handler(\n  (event, { value }) => {\n    value.set(event.to);\n  },\n);\nconst tally = lift(\n  (x) => {\n    x.counts.key(x.flavor).set(x.flavor.length);\n    return x.flavor;\n  },\n);\n\nconst $default = (pattern(\"sha256:20c93a471b8265b707ecf7f798c2a0088437549dfede60ca38fb77394fbc3b90\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { last, value } = $a; return (() => {\n    last.set(value.get().toUpperCase());\n  })(); });\n$rt.body(1, ($a) => { const { seen, value } = $a; return (() => {\n    seen.set(value.get() + \"!\");\n  })(); });\n$rt.body(2, ($a) => ((x) => {\n    x.counts.key(x.flavor).set(x.flavor.length);\n    return x.flavor;\n  })($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, {  })));\n$rt.value(1, ($h) => ($h.invoke(1, {  })));\n$rt.value(3, ($h) => (((\"seen \") + $h.v($h.slot(4)))));\n$rt.value(4, ($h) => ($h.invoke(2, ({ counts: $h.slot(5), flavor: $h.slot(6) }))));\n$rt.value(6, ($h) => ($h.at(((Object).keys($h.v($h.slot(7)))), [\"length\"])));\nreturn $rt.thunk(($h) => (({ last: $h.slot(0), shown: $h.output(0), tallied: $h.output(1), counts: $h.slot(5), total: $h.output(2), setValue: $h.stream(0) })));\n});\n$rt.body(3, ($e, $s) => ((event, { value }) => {\n    value.set(event.to);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -543,7 +543,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/side-writes.tsx#default"
+            "sha256:20c93a471b8265b707ecf7f798c2a0088437549dfede60ca38fb77394fbc3b90"
           ],
           "picks": [],
           "selectors": [],

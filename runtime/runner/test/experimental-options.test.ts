@@ -71,6 +71,7 @@ describe("ExperimentalOptions", () => {
         serverExecution: false,
         localSessionDocuments: false,
         syncCidReferences: false,
+        compiledPatterns: false,
       });
       await runtime.dispose();
       await sm.close();
@@ -100,6 +101,7 @@ describe("ExperimentalOptions", () => {
         serverExecution: false,
         localSessionDocuments: false,
         syncCidReferences: false,
+        compiledPatterns: false,
       });
       await runtime.dispose();
       await sm.close();
@@ -127,6 +129,7 @@ describe("ExperimentalOptions", () => {
         serverExecution: false,
         localSessionDocuments: false,
         syncCidReferences: false,
+        compiledPatterns: false,
       });
       await runtime.dispose();
       await sm.close();

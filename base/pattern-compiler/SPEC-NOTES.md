@@ -1509,17 +1509,22 @@ numbers have gaps.
      §1.5, §3.2 "The atom of the pattern"). `Plan.patterns` lists the pattern
      the plan is compiled from and each pattern compiled in, in the order of its
      first site. A `derive` by expression code and a `fold` hold `pattern` where
-     the pattern is not entry 0. PL has the hash of `{ module, binding }` as an
-     entry, with the module's identity in it. The crate has neither, so an entry
-     is the placeholder `unhashed:pattern/`, the path of the module, `#`, and
-     the binding: `unhashed:pattern/row.tsx#default`. For an inline
-     `pattern(...)` that no `const` names, PL forms the binding from the
-     enclosing pattern's, the `within` steps and the name of the site. The crate
-     writes the enclosing binding, `/`, and the line and column of the inline
-     pattern, which names the same pattern and is not PL's form. The emitter
-     makes a `derive` and a `fold` in functions that hold no emitter state, so
-     the pattern being evaluated is a thread-local that the evaluation of a
-     compiled-in pattern sets.
+     the pattern is not entry 0. An entry is the hash of `{ module, binding }`,
+     as PL §1.5 has it (`pattern_identity` in `src/plan.rs`): `module` is the
+     content-addressed identity of the module the `pattern(...)` call is written
+     in, formed from its path, its source text and the identities of the modules
+     it imports, an import cycle as one (`module_identity` in `src/program.rs`),
+     and `binding` the steps of the pattern's binding. The hash is SHA-256 over
+     the JSON text of the record, written `sha256:` and hex; the runtime's value
+     hasher has no Rust implementation, so it is not the string
+     `computeModuleHashes` forms. For an inline `pattern(...)` that no `const`
+     names, PL forms the binding from the enclosing pattern's, the `within`
+     steps and the name of the site. The crate writes the enclosing binding and
+     the line and column of the inline pattern as the last step, which names the
+     same pattern and is not PL's form. The emitter makes a `derive` and a
+     `fold` in functions that hold no emitter state, so the pattern being
+     evaluated is a thread-local that the evaluation of a compiled-in pattern
+     sets.
 209. **The atom of a kept output in the comparison** (PL §3.1 "An atom that
      names code", §3.2 "Every kept output"; closes notes 202 and 197's
      `isEdited` row). The evaluator mints the atom of the pattern for expression
@@ -2911,9 +2916,10 @@ numbers have gaps.
        that runs, with source maps. The crate's output is the plan: the records,
        the label templates, and the schemas. An emitter of value code will add
        time that is not in the crate's figure.
-     - The crate forms no hash. A plan names its schemas, bodies and patterns
-       `unhashed:…`. Today's figure includes the content identity of every
-       module.
+     - The crate forms no hash of a schema: a plan names its schemas
+       `unhashed:schema/` and a number. It forms the identity of every module
+       and pattern (note 208), as today's figure includes the content identity
+       of every module.
      - The crate's type checker is its own and does less than TypeScript's: it
        does not check a generic function per instantiation, and it applies
        assignability at four kinds of site (README, "What it does not cover").
@@ -6451,10 +6457,10 @@ pin.
      makes; and `stream:`, the instance, `:` and the binding. The lists of keys
      in these are written with the prototype's `canonical`, a JSON text with
      sorted members, and not with the codec. In the crate: `unhashed:schema/`
-     and a number, `unhashed:pattern/`, the path, `#` and the binding, the steps
-     of a binding joined with `/`, a line and a column joined with `:`, the name
-     of a record with `#` and an ordinal, and `/` before the sidecar of
-     `$ofOperation`. The first two stand where the documents have a hash.
+     and a number, which stands where the documents have a hash, a pattern's
+     identity as note 208 forms it, a line and a column joined with `:` for the
+     step of an inline pattern, the name of a record with `#` and an ordinal,
+     and `/` before the sidecar of `$ofOperation`.
 441. **Z50: an `asInstance()` instance that a re-key replaces** (answers the
      request of note 426). The executor did this already, and one test on
      `fixtures/as-instance.tsx` pins it: over an array of plain values in place
@@ -6811,17 +6817,14 @@ result of another per-element construct.
      into a cause, and `compare/values.ts`, `compare/harness.ts` and
      `compare/corpus.ts` write a name of several parts into a report as the text
      of the codec (`nameText` in `exec/store.ts`). Not converted:
-     `unhashed:schema/` and a number and `unhashed:pattern/` with the path, `#`
-     and the binding stand where the documents have a hash, which the crate
-     cannot form, since the value hasher has no implementation in Rust in this
-     tree; a record in their place would change every reader for a form the
-     documents do not have either. Inside the second, the steps of a binding are
-     joined with `/` and a line and a column with `:`. A state cell that a site
-     of a body creates under a constant cause is named `{ body, site }`, where
-     PL §1.1 has `{ body, cause }`: the crate records the site and not the
-     cause. The `site` step of a `within` holds the name of its call as a
-     string, and whether two calls of one name in one body get an ordinal there
-     was not examined.
+     `unhashed:schema/` and a number stands where the documents have the hash of
+     a schema, which the crate does not form, since the value hasher has no
+     implementation in Rust in this tree. A pattern's identity is a hash the
+     crate forms (note 208). A state cell that a site of a body creates under a
+     constant cause is named `{ body, site }`, where PL §1.1 has
+     `{ body, cause }`: the crate records the site and not the cause. The `site`
+     step of a `within` holds the name of its call as a string, and whether two
+     calls of one name in one body get an ordinal there was not examined.
 456. **The key fields reach a reader that is compiled in by every way**
      (replaces the limit of note 434). The crate notes the key fields of a
      computed value wherever an expression of a type that declares them denotes
@@ -6899,7 +6902,7 @@ result of another per-element construct.
      the test of the result of another per-element construct given to an
      instance passed when they were written and pin what existed. The names of
      the memo have no test of their own. Not done: the secret is still a string
-     that the store holds and not a labeled document; the `unhashed:`
+     that the store holds and not a labeled document; the `unhashed:schema/`
      identifiers of the crate; and the cost measurement and the comparison of
      labels over the corpus. Not verified: nothing of rulings Z54 to Z57 is
      compared with today's runtime, which has neither `ArrayByKey` nor
@@ -9354,14 +9357,31 @@ generated from scratch, and none of a `flatMap`.
      undone in the part documents as in the store, with no test of its own; a
      part document or a chunk under concurrent writers, which the executor does
      not have.
+536. **W6 over a value whose type declares no structure** (FA §5.2). FA states
+     W6 by type: a path that enters a recursive type a second time widens below
+     the position of the second entry. A body that walks a value of type
+     `unknown` through helpers, as `patterns/apps/weekly-calendar/view-walk.ts`
+     walks a view, reaches no type that says where it re-enters, and recorded
+     every interleaving of `children` and `*` its composed calls reach
+     (`headerOf`: 28,799 read entries). Chosen, and needing a rule in FA: a path
+     widens, as below a second entry, where it ends in a sequence of segments
+     repeated at once that holds a key, or in three `*` at once (`square_end` in
+     `src/footprint.rs`), and where a key is read again on a value whose type
+     declares no structure for it, which is no type, `unknown`, or an object
+     type with an index signature (`holds_key`). The entry is `value` at the
+     position, without a last `*`. On a declared recursive type W6 by type
+     decides first. Both rules are wider than W6 and never narrower: a path
+     through no recursive type that repeats a sequence with a key, or that holds
+     three `*` at once, widens where W6 does not. Over the corpus no plan
+     changed; `headerOf` records 45 entries.
 
 ## The corpus of the main branch, and Topics
 
-Notes 536 on are about emitting the corpus of the main branch at `6e9ff5a381`,
+Notes 537 on are about emitting the corpus of the main branch at `6e9ff5a381`,
 which the crate did not finish, and about Topics (`patterns/apps/topics/`) on
 the executor. `FA` is `footprint-analysis.md`.
 
-536. **What the body of another module returns was read in the calling module:
+537. **What the body of another module returns was read in the calling module:
      fixed.** `use_body` hands `returned_origin` a function of the module the
      body is written in, and `passed_on` resolved a name it returns with
      `value_def` in the module of the call. The name's reference indexes the
@@ -9374,7 +9394,7 @@ the executor. `FA` is `footprint-analysis.md`.
      reads the names of the reactive tier around the call only for a function of
      the calling module (`tests/plan.rs`,
      `what_a_body_of_another_module_returns_is_resolved_in_that_module`).
-537. **Footprint analysis did not finish on
+538. **Footprint analysis did not finish on
      `patterns/apps/weekly-calendar/view-walk.ts`: two causes, both fixed.** The
      module walks a rendered tree with helpers that call each other at several
      sites, and the walk recurses.
@@ -9410,7 +9430,7 @@ the executor. `FA` is `footprint-analysis.md`.
        corpus of the prototype at `3d33db2e4d` and on the corpus of the main
        branch without `view-walk.ts`. `view-walk.ts` with the three modules it
        imports emits in 2.7 s.
-538. **The corpus of the main branch, emitted.** `emit --corpus` on `patterns/`
+539. **The corpus of the main branch, emitted.** `emit --corpus` on `patterns/`
      of the main branch at `6e9ff5a381` finishes in 10.4 s (the prototype's
      corpus: 5.4 s). 432 modules are parsed and 343 accepted, 286 of them with a
      pattern; a plan with no unsupported construct is emitted for 271 of the 286
@@ -9423,14 +9443,14 @@ the executor. `FA` is `footprint-analysis.md`.
      first two follow from the design branch merged into this one, the last two
      from `system/fabrichat/room.tsx` of the main branch.
 
-539. **The program of Topics is seven files, and the crate accepts it after a
+540. **The program of Topics is seven files, and the crate accepts it after a
      rewrite that the documents require.** Besides the five files of
      `apps/topics/` and `product/collection-naming/` the board names, the topic
      imports `product/collection-naming/allocator.ts` and
      `system/profile-face/profile-face.ts`; without the last, `profileFace` is a
      call the emitter does not resolve. With all seven the board had 6 type
      errors, the topic 34, `mentionable.ts` 1, and the topic 72 writes through a
-     handle the emitter cannot name. The crate fixes of notes 540 and 541
+     handle the emitter cannot name. The crate fixes of notes 541 and 542
      removed 3 of them. The rest are refused by rulings, and
      `compare/topics/rewrite.patch` (88 lines added, 105 removed, in six of the
      files) is the smallest rewrite of the source that removes them;
@@ -9474,7 +9494,7 @@ the executor. `FA` is `footprint-analysis.md`.
        change. So the comparison runs the rewritten source on the executor and
        the source of the repository on today's runtime (`COMPARE_TODAY_ROOT`),
        which also shows that the rewrite keeps the values.
-540. **Crate defects that Topics found, fixed.** Each with a test.
+541. **Crate defects that Topics found, fixed.** Each with a test.
      - A condition narrowed nothing in the branch where it fails when the other
        branch assigns the `let`
        (`if (!target) { target = ... } else
@@ -9495,17 +9515,17 @@ the executor. `FA` is `footprint-analysis.md`.
        in the body's text and declared outside it (`tests/footprint_calls.rs`).
        The output of `emit --corpus` on the main branch is the same before and
        after.
-541. **Provisional decisions P31 and P32.** P31: an entry of `Body.reads` at a
+542. **Provisional decisions P40 and P41.** P40: an entry of `Body.reads` at a
      position the body declares as a handle has `handle: true`
-     (`docs/plans/compiled-pattern-language.md`, P31). ES §2.4 takes that type
+     (`docs/plans/compiled-pattern-language.md`, P40). ES §2.4 takes that type
      from `Slot.schema`, and the crate's slot holds the type of the place,
      shared by every body that reads the place one way: in Topics
      `migrateTopicState` declares a handle at `createdBy` and `createdByOf` a
-     value, and the executor handed `createdByOf` a handle. P32: `equalsKey`,
+     value, and the executor handed `createdByOf` a handle. P41: `equalsKey`,
      which `base/api` exports and `builtin-inventory.md` does not list, is a
      built-in of tier F with the footprint of one operand of `equals` and the
      type `string | undefined`.
-542. **Executor defects that Topics found, fixed.** Each with a test in
+543. **Executor defects that Topics found, fixed.** Each with a test in
      `exec/test/`.
      - An entry at `*` where the body declares a handle (`ReadonlyCell<T>[]` of
        `crossrefTable`, `cardRowsByActivity` and `mentionableIndex`, and
@@ -9535,7 +9555,7 @@ the executor. `FA` is `footprint-analysis.md`.
        unnarrowed read of the pivot followed every topic along its mentions and
        overflowed the stack.
      - `equalsKey` and `Writable.for` of a reference (keyed by its identity).
-543. **Topics at 100, 1,000 and 2,000 topics, on the executor and on today's
+544. **Topics at 100, 1,000 and 2,000 topics, on the executor and on today's
      runtime** (`compare/topics/scale.ts`). Each topic is a document with what
      the board demands of a topic and references to the two topics before it as
      its mentions; the namespace holds each number. One run per arm and size, in
@@ -9548,7 +9568,7 @@ the executor. `FA` is `footprint-analysis.md`.
      documents again; the creates of the first run wrote every topic and are
      left out). The counts are those of the second run. "Settle" is from the
      change until the board is up to date; the read of the result after that is
-     apart. The executor runs the rewritten program (note 539) in memory,
+     apart. The executor runs the rewritten program (note 540) in memory,
      today's runtime the program of the repository on emulated storage in the
      client posture: a bare `Runtime` resolves server-side execution to off
      (`getServerExecutionConfig` in `runtime/memory/v2.ts`), so it derives and
@@ -9571,7 +9591,7 @@ the executor. `FA` is `footprint-analysis.md`.
      size and step: the number of topics, of names, of rows of the index, the
      pivot, the mention universe and the names table, the inbound references of
      the pivot (197, 1,997 and 3,997), and the first titles of the index.
-544. **First: the cost of one change grows with the board on both paths, because
+545. **First: the cost of one change grows with the board on both paths, because
      the board is whole-list `lift`s.** Topics derives the cards, the mention
      pivot, the mention universe, the names table and the pivot's index with
      `lift`s over the whole list of topics (`cardRowsByActivity`,
@@ -9591,7 +9611,7 @@ the executor. `FA` is `footprint-analysis.md`.
      does not hold on the compiled path either. A board that mapped its topics
      to its cards would keep the cards per element, and the order, the pivot and
      the index would still be passes over the board.
-545. **Second: what one change costs at 1,000 topics, against today.** One edit:
+546. **Second: what one change costs at 1,000 topics, against today.** One edit:
      285 to 425 (341 to 519 in the second run) ms on the executor against 3,804
      to 4,664 ms today, 9 to 13 times less. One create: 784 to 1,684 ms against
      8,060 to 10,274 ms. The load: 742 ms (1,552 in the second run) against
@@ -9600,7 +9620,7 @@ the executor. `FA` is `footprint-analysis.md`.
      are lower bounds of the integrated path, which adds the runtime's commits
      (about 3.3 ms each in milestone 1) and the CFC preparation per commit; with
      1 commit per edit that does not change the order.
-546. **The values of the generated scenario** (`values-corpus.ts stubbed`, with
+547. **The values of the generated scenario** (`values-corpus.ts stubbed`, with
      `COMPARE_TODAY_ROOT`): today's runtime runs the source of the repository,
      the executor the rewritten one. The board: 64 values compared, 39 equal;
      the topic: 440 compared, 424 equal. Of the 41 that differ, 33 are one
@@ -9613,21 +9633,21 @@ the executor. `FA` is `footprint-analysis.md`.
      value that differs; not looked into. One event is not handled:
      `submitComment` of the topic calls `profileOwnerOf`, which the executor
      does not have. The values of the scale runs are compared by the facts of
-     note 543.
-547. **The labels** (`corpus.ts run --stubbed` on the rewritten tree): outputs:
+     note 544.
+548. **The labels** (`corpus.ts run --stubbed` on the rewritten tree): outputs:
      53 compared and 5 bounds, 52 tighter and 6 whose atom names the pattern
      where today's names other code, none looser or incomparable; write edges: 7
      compared, 3 equal and 4 tighter, none looser. Not compared: 74 write edges
      of events today's runtime did not commit (10 of 24 events were refused: the
      handler threw on a generated event, as "unsupported topic state version 3"
      and "url must be http(s)"), and 41 writes the event's run did not make.
-548. **Not done, and not verified.** The executor's creates still copy the
+549. **Not done, and not verified.** The executor's creates still copy the
      board's mention universe into the argument of each new topic, inline, where
      the documents store a value passed on unchanged as a reference (ES §2.4):
      one create stores a document whose size follows the board. The integrated
      arm (the executor on the runtime's storage) was not run on Topics; that is
-     the integration track's figure. P31 and P32 are provisional. The store's
-     two read rules of note 542 have tests in `exec/test/store-read.test.ts`;
+     the integration track's figure. P40 and P41 are provisional. The store's
+     two read rules of note 543 have tests in `exec/test/store-read.test.ts`;
      the narrowing of the computed part has none of its own and is tested by the
      Topics run alone. The fix of an instance made by a body re-creating the
      documents the executor was started with was found by the scale run, and its
@@ -9641,7 +9661,7 @@ At the owner's direction of 2026-11-18 ("it's ok and even desired to modify the
 patterns to fit our tighter syntax. let's do that and learn from it"), the
 source of Topics in `patterns/` is rewritten to the subset, and
 `compare/topics/rewrite.patch` with `compare/topics/tree.ts` are removed: one
-source now runs on both sides. Notes 549 to 559 record each rewrite: the
+source now runs on both sides. Notes 550 to 560 record each rewrite: the
 construct, the rule that refuses it, the rewrite, whether it was mechanical or
 changed the program's design, and what the diagnostic said. A rewrite marked
 _today's `base/api`_ is a workaround: in `base/api/index.ts` `Cell<T>` is not
@@ -9649,15 +9669,15 @@ assignable to `ReadonlyCell<T>` (`CELL_BRAND` "cell" against "readonly"), where
 LS §7.5.1 says it is, so the form the documents ask for does not compile in
 today's runtime; the site returns to that form if the declarations change.
 
-549. **An import of `commonfabric/schema` with no bindings** (`topic.tsx`).
+550. **An import of `commonfabric/schema` with no bindings** (`topic.tsx`).
      Rule: `module-scope:import-form`. Rewrite: removed; nothing in the module
      needed it, and today's type check passes without it. Mechanical. The
      diagnostic ("An import of `commonfabric/schema` with no bindings. Import a
      named binding from `commonfabric`, ...") was enough.
-550. **A mapped type** (`StampsRead<K>` of `topic.tsx`). Rule:
+551. **A mapped type** (`StampsRead<K>` of `topic.tsx`). Rule:
      `subset-type:mapped`. Rewrite: `Readonly<Record<K, number | undefined>>`.
      Mechanical. The diagnostic, which lists `Record<K, T>`, was enough.
-551. **A helper that declares `{ get(); key(i): { equals() } }` and is given a
+552. **A helper that declares `{ get(); key(i): { equals() } }` and is given a
      cell** (`isElementOf` of `topic.tsx`, five calls). Rule: a structural type
      is not a handle (LS §7.5.1, open question 23), reported as
      `subset-type:mismatch`. Rewrite:
@@ -9669,12 +9689,12 @@ today's runtime; the site returns to that form if the declarations change.
      binds `A` to the array's own type in the crate (an exact cell type) and is
      covariant in today's declarations. Mechanical. The diagnostic was enough
      for the subset and not for today's runtime.
-552. **Helpers that declare `{ get(): T | undefined }` so that the mid-sync
+553. **Helpers that declare `{ get(): T | undefined }` so that the mid-sync
      guard is compile-checked** (`mentionListsOf` and `cardRowsOf` of
      `main.tsx`, `mentionableRowsOf` of `mentionable.ts`). The structural type
      was the authors' design: `get()` of a cell is declared to return the value
      alone, so against a cell type a missing `?.` type-checks, and the
-     structural `| undefined` made it an error. Rule: as in note 551. Rewrite:
+     structural `| undefined` made it an error. Rule: as in note 552. Rewrite:
      `ReadonlyCell<T | undefined>`, which the diagnostic suggested and which
      keeps the check: its `get()` returns the value or `undefined`.
      `mentionableRowsOf` takes a named `MentionableMember`. Mechanical in the
@@ -9683,9 +9703,9 @@ today's runtime; the site returns to that form if the declarations change.
      pattern test, so they cast with `as never`. The diagnostic was enough, and
      for these three it compiles today (the elements are `ReadonlyCell`
      already).
-553. **A helper that declares the members of a collection and the namespace
+554. **A helper that declares the members of a collection and the namespace
      structurally, the member's verb as a method chain** (`recordNames` of
-     `naming.ts`). Rule: as in note 551. Rewrite:
+     `naming.ts`). Rule: as in note 552. Rewrite:
      `recordNames<A extends readonly (RecordNameMember | undefined)[]>(members:
      Writable<A>, names: Writable<NamesMap>)`,
      with `RecordNameMember` declaring `shortName?: string` and
@@ -9699,8 +9719,8 @@ today's runtime; the site returns to that form if the declarations change.
      array type with the wrong precedence and leaves out the verb, so following
      it gives `schema:path-not-in-type` at `recordName`, and it suggested a
      read-only cell for `names`, which the helper writes.
-554. **`createNamed(names, create)` takes the namespace as the structural
-     `NamesMapCell`** (two calls of `main.tsx`). Rule: as in note 551. The
+555. **`createNamed(names, create)` takes the namespace as the structural
+     `NamesMapCell`** (two calls of `main.tsx`). Rule: as in note 552. The
      structural type is `allocator.ts`'s design: the module imports no value
      from `commonfabric`, so that a plain `deno test` can import it and hand it
      a stand-in. Rewrite: Topics calls `nextNameAmong` of the allocator, a
@@ -9713,7 +9733,7 @@ today's runtime; the site returns to that form if the declarations change.
      suggested `ReadonlyCell<{ [key: string]:
      unknown } | undefined>` for a
      parameter the helper writes through.
-555. **`profileFace(profile: Cell<ProfileFaceFields>)` given a cell of a profile
+556. **`profileFace(profile: Cell<ProfileFaceFields>)` given a cell of a profile
      with more fields** (`profile-face.ts`). Rule: a cell that can be read and
      written holds exactly its type (LS §7.5). Rewrite:
      `<P extends ProfileFaceFields>(profile: Cell<P> | undefined)`, with the two
@@ -9722,7 +9742,7 @@ today's runtime; the site returns to that form if the declarations change.
      `P["picture"]`. _Today's `base/api`_: the diagnostic's
      `ReadonlyCell<{ picture?: FabricBytes; avatar?: string }>` is the subset
      form. Mechanical; every other caller compiles unchanged.
-556. **Keys of older data declared `unknown` and read after a kind test**
+557. **Keys of older data declared `unknown` and read after a kind test**
      (`createdByName` of `TopicInput`, `authorName` of a stored comment). Rule:
      by ruling, a kind test narrows nothing on a data position typed `unknown`
      (LS §7.8), `schema:unknown-type-access`; a key of older data that code
@@ -9739,7 +9759,7 @@ today's runtime; the site returns to that form if the declarations change.
      to change ("Replace `unknown` with a type that declares the properties
      read") and not why the `typeof` before the read does not count, which is
      what a reader of this code asks.
-557. **A record built in the body handed to handlers that declare a cell of it**
+558. **A record built in the body handed to handlers that declare a cell of it**
      (`upgrade` of `topic.tsx`, ten handlers and the `lift` `migrateTopicState`,
      each reading it with `upgrade.get()`). Rule: a record written in the
      reactive tier is no place; each path is bound to the place it denotes (LS
@@ -9751,7 +9771,7 @@ today's runtime; the site returns to that form if the declarations change.
      is what made the 72 writes nameable. The diagnostic ("a cell of the value's
      type would not be assignable to the declared handle") named the mismatch
      and not the fix.
-558. **Handles that read older, partially populated records through a writable
+559. **Handles that read older, partially populated records through a writable
      handle of a looser type than the place**
      (`createdBy:
      Writable<Partial<TopicAuthor> | undefined>` and
@@ -9768,7 +9788,7 @@ today's runtime; the site returns to that form if the declarations change.
      A design change, and a change of the contract of the exported handlers: a
      caller that binds one gives both members, as the pattern tests' fixtures
      now do. The diagnostic named the mismatch and not the split.
-559. **What the rewrite left as it was, and the results.** Unchanged:
+560. **What the rewrite left as it was, and the results.** Unchanged:
      `allocator.ts` and its test; `backfillNames` and `assignName`, which Topics
      does not call; `product/collection-naming/board.tsx`. After the rewrite the
      crate reports no error for the seven files and emits both patterns with no
@@ -9781,11 +9801,11 @@ today's runtime; the site returns to that form if the declarations change.
      `multi-user`, one in `render-shape`, five in `topics`, one in
      `topics-shape`, all present on the merged branch before any change);
      `allocator.test.ts` passes. The value comparison on the one source gives
-     the figures of note 546 (463 of 504 equal; 33 of the 41 differences are the
+     the figures of note 547 (463 of 504 equal; 33 of the 41 differences are the
      stubbed `wish`'s `[UI]` and 8 are `referencedBy`), and the labels those of
-     note 547 (52 outputs tighter and 6 whose atom names the pattern, none
+     note 548 (52 outputs tighter and 6 whose atom names the pattern, none
      looser; 7 write edges, 3 equal and 4 tighter).
-560. **The rewrite of note 556 is refused by the pattern-update compatibility
+561. **The rewrite of note 557 is refused by the pattern-update compatibility
      gate.** `deno task pattern-compat` refuses `topic.tsx` over all 12 of its
      recorded baselines (20260911T185348Z to 20261116T101720Z), each with the
      same two findings: `argument.createdByName` and
@@ -9840,7 +9860,7 @@ today's runtime; the site returns to that form if the declarations change.
      `dev/factory-outputs/lot-watch/main.tsx`); that is the routine finding
      `pattern-compat --update` records, left until the question above is
      settled.
-561. **The owner accepted the break of note 560** (2026-11-19). An entry in
+562. **The owner accepted the break of note 561** (2026-11-19). An entry in
      `tasks/pattern-compat-accepted-breaks.ts` forgives the two paths over the
      12 baselines, with the decision record
      `docs/history/topics-legacy-author-names-string-break.md`.
@@ -9856,8 +9876,8 @@ today's runtime; the site returns to that form if the declarations change.
      change of their own. `compare/topics/scale.ts` reads Topics from
      `patterns/`, so the Topics runs need that change on the branch they run
      from.
-562. **Since #10018 a `Writable` is assignable to a `ReadonlyCell` in
-     `base/api`, and two of the three sites of notes 551, 553 and 555 take the
+563. **Since #10018 a `Writable` is assignable to a `ReadonlyCell` in
+     `base/api`, and two of the three sites of notes 552, 554 and 556 take the
      subset's form.** In #10036, a branch from the main branch at `bab53c61dc`,
      which has #10018, `isElementOf` takes `ReadonlyCell<readonly unknown[]>`
      and `profileFace` takes `ReadonlyCell<ProfileFaceFields> | undefined`, with
@@ -9870,20 +9890,20 @@ today's runtime; the site returns to that form if the declarations change.
      undefined>'"). The crate accepts it, as footprint analysis does (FA §7.1:
      `h.resolveAsCell()` of any handle `h`). That is a second difference between
      today's declarations and the subset, smaller than the first. The branch of
-     this track keeps the forms of notes 551 and 555, since it is based on a
+     this track keeps the forms of notes 552 and 556, since it is based on a
      main branch without #10018.
-563. **Topics at 100, 1,000 and 2,000 topics again, on one source and on a quiet
+564. **Topics at 100, 1,000 and 2,000 topics again, on one source and on a quiet
      machine, with the heap** (`compare/topics/scale.ts`). Both arms read the
-     Topics source of `patterns/` rewritten to the subset (notes 549 to 559, the
+     Topics source of `patterns/` rewritten to the subset (notes 550 to 560, the
      change of #10036), at commit `9fc17e146e`, so they run one program; the
-     runs of note 543 ran a patched copy on the executor. One process per arm
+     runs of note 544 ran a patched copy on the executor. One process per arm
      and size, the arms one after the other, at load averages of 4.4 to 7.3,
-     where those of note 543 were 12 to 134. Today's runtime is in the client
-     posture, as in note 543, and the executor runs in memory. The heap is the
+     where those of note 544 were 12 to 134. Today's runtime is in the client
+     posture, as in note 544, and the executor runs in memory. The heap is the
      heap in use after a full collection (`--v8-flags=--expose-gc`) less a
      baseline taken once the program is emitted or compiled and before any topic
      exists: 59.6 MB for the executor and 106.2 MB for today's runtime. The
-     counts of evaluations, actions, commits and documents are those of note 543
+     counts of evaluations, actions, commits and documents are those of note 544
      at every size and step, and so are the facts both arms read of the board
      after each step.
 
@@ -9911,10 +9931,10 @@ today's runtime; the site returns to that form if the declarations change.
      - **One change at 1,000 topics: 20 to 23 times less than today.** An edit
        takes 150 to 153 ms against 3,290 to 3,494 ms, a create 295 to 316 ms
        against 6,313 to 6,683 ms, and the load 516 ms against 12,917 ms. Note
-       545's ratio of 9 to 13 for an edit was measured under the load of other
+       546's ratio of 9 to 13 for an edit was measured under the load of other
        sessions.
      - **The cost of one change is still linear in the board on both arms**, as
-       note 544 says: from 100 to 2,000 topics an edit grows 15 to 18 times on
+       note 545 says: from 100 to 2,000 topics an edit grows 15 to 18 times on
        the executor and 19 times today, about 0.15 ms per topic on the executor
        and 3.3 to 4.0 ms today.
      - **On the executor, reading the board's result costs more than the
@@ -9932,14 +9952,14 @@ today's runtime; the site returns to that form if the declarations change.
        19.5 MB today once, an edit adds less than 0.3 MB. A create adds 2.8 to
        4.7 MB on the executor at 1,000 topics and 5.2 to 7.9 MB at 2,000,
        consistent with the copy of the board's mention universe in the argument
-       of each created topic (note 548), not attributed further; today the heap
+       of each created topic (note 549), not attributed further; today the heap
        after a create moves by -10.9 to 46.1 MB, with no trend that three
        creates show.
 
      These remain figures of the executor in memory and of today's runtime in
      the client posture on emulated storage; the integrated arm and server
-     execution are not run on Topics (note 548).
-564. **Topics on the real board's 3,281 topics**
+     execution are not run on Topics (note 549).
+565. **Topics on the real board's 3,281 topics**
      (`compare/topics/board-seed.ts`, `compare/topics/scale.ts --seed`). The
      board is the team's board
      (`of:fid1:rMKK3pYbF5IWa7KQL5oe-nd7WyFceQhXjOl2lyWwPVo`), read from the copy
@@ -9956,7 +9976,7 @@ today's runtime; the site returns to that form if the declarations change.
      content and is kept beside the snapshot, not in the repository. Both arms
      start on the seed as on a generated board: the topics are documents, and
      nothing runs a topic. One process per arm, at load averages of 7.7 to 11.9;
-     the same postures as note 563, and the same heap measure, with baselines of
+     the same postures as note 564, and the same heap measure, with baselines of
      76.6 MB for the executor and 123.3 MB for today's runtime, which include
      the seed read into memory.
 
@@ -9984,31 +10004,31 @@ today's runtime; the site returns to that form if the declarations change.
        to 486 ms against 13,660 to 15,543 ms. A create takes 26 to 29 times
        less, and the load 20 times less.
      - **The real content changes little against a generated board of the same
-       size.** By the slopes of note 563, a generated board of 3,281 topics
+       size.** By the slopes of note 564, a generated board of 3,281 topics
        would take about 490 ms per edit on the executor and 11 to 13 s today;
        the real board takes 419 to 486 ms and 13.7 to 15.5 s. The cost of a
        change follows the number of topics, through the whole-list `lift`s of
-       note 544, more than the size of what they hold.
+       note 545, more than the size of what they hold.
      - **The board keeps 6 times less heap on the executor:** 182.7 MB against
        1,100.4 MB, about 56 KB and 335 KB a topic; on the executor that is less
        per topic than on a generated board (64 KB), although each body is about
        45 times larger, so the bodies are not what the heap per topic consists
        of. A create keeps 5.8 to 6.2 MB on the executor, in line with the
-       2,000-topic board of note 563 and the copy of note 548.
+       2,000-topic board of note 564 and the copy of note 549.
      - **On the executor the read of the result is again more than the change:**
        709 to 810 ms against 419 to 486 ms for an edit.
 
      Not covered: the topics' own instances, their comments and threads, which
      the board does not read; the integrated arm; and server execution, which is
      how the board runs on Estuary.
-565. **Where the heap of the real board goes, on the executor and in today's
+566. **Where the heap of the real board goes, on the executor and in today's
      runtime on the real store** (`scale.ts` with `SCALE_HEAP_SNAPSHOTS`,
      `compare/topics/board-load.ts`, and
      `skills/perf-investigation/scripts/heap-removal.ts`, which groups what a
      load adds by the shortest path that retains it, the self size of each
      object charged once).
 
-     **The executor's 56 KB a topic** (note 564), from snapshots at the baseline
+     **The executor's 56 KB a topic** (note 565), from snapshots at the baseline
      and after the load:
 
      | What                                                                                                      | KB a topic |
@@ -10022,17 +10042,17 @@ today's runtime; the site returns to that form if the declarations change.
      The load adds 3,295 strings of 1 KB or more, about 4.5 KB each: the
      serialized `stored` copy of each topic's row, body included. The body
      strings themselves are the seed's, which both arms read before their
-     baseline, so note 564's sentence that the bodies are not what the heap per
+     baseline, so note 565's sentence that the bodies are not what the heap per
      topic consists of is wrong: each body is in it once, serialized, and not at
      all as the string the seed holds.
 
      **Today's runtime on the real store.** `board-load.ts` loads the board out
-     of a copy of the snapshot of note 564, with the memory server in the same
+     of a copy of the snapshot of note 565, with the memory server in the same
      process as `scale.ts` has it, in the client posture:
 
      | Run                                                  | Heap kept, GB | Resident, GB |
      | ---------------------------------------------------- | ------------: | -----------: |
-     | `scale.ts --seed`, today's runtime (note 564)        |          1.10 |              |
+     | `scale.ts --seed`, today's runtime (note 565)        |          1.10 |              |
      | the board's result read under its schema (`pull`)    |     1.54–1.57 |    5.07–7.16 |
      | the stored board piece started and settled (`start`) |          2.33 |         7.21 |
 
@@ -10063,8 +10083,8 @@ today's runtime; the site returns to that form if the declarations change.
      server execution and view-scoped replication.
 
      So the difference between the executor's 183 MB and a runner's 6 to 7 GB is
-     mostly not what the two paths do with the same data: the runs of notes 563
-     and 564 give both arms documents of the demanded fields alone. A runner
+     mostly not what the two paths do with the same data: the runs of notes 564
+     and 565 give both arms documents of the demanded fields alone. A runner
      reads each topic's whole document, holds it in the replica, and in one
      process the memory server holds it twice more. The executor on the
      runtime's storage (the integrated arm, milestone 2) would read what that

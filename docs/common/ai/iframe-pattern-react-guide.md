@@ -584,7 +584,10 @@ guest receives the `--cf-theme-*` variables and the `cf-*` classes described in
 [Style with the ambient theme](./iframe-pattern-guide.md#style-with-the-ambient-theme),
 so components spell no color or font of their own. The required structural
 rules still belong in `guest.html` so the document stays self-contained under
-the iframe CSP. Give `html`, `body`, `#root`, and every intermediate layout
+the iframe CSP. An image or a font a component shows comes from
+`fabric.asset(name).url`, which the pattern hands over through `cf-iframe`'s
+`assets`; see
+[Images and other assets](./iframe-pattern-guide.md#images-and-other-assets). Give `html`, `body`, `#root`, and every intermediate layout
 container an explicit height, and give custom measured items a stable width or
 size when the library expects one.
 

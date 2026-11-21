@@ -16,6 +16,7 @@ import {
   startupGate,
   verifyInternalApiOrigin,
 } from "@/lib/internal-api-origin.ts";
+import { Exited } from "@/test/support/exited.ts";
 
 const PUBLIC = "https://toolshed.example";
 const INTERNAL = "http://127.0.0.1:8007";
@@ -86,6 +87,21 @@ Deno.test("rewritingFetch reads the platform fetch at call time, and selfDirecte
     selfDirectedFetch({ API_URL: PUBLIC, API_INTERNAL_URL: INTERNAL }) !==
       undefined,
   );
+});
+
+Deno.test("rewritingFetch passes a request that names no absolute URL to the platform fetch as given", async () => {
+  const seen: (RequestInfo | URL)[] = [];
+  const platform = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    seen.push(input);
+    return Promise.resolve(new Response("ok"));
+  }) as typeof fetch;
+  try {
+    await rewritingFetch(PUBLIC, INTERNAL)("/api/meta");
+  } finally {
+    globalThis.fetch = platform;
+  }
+  assertEquals(seen, ["/api/meta"]);
 });
 
 /** A fetch answering with `respond`, recording what it was asked. */
@@ -266,12 +282,6 @@ Deno.test("startupGate passes only the token-bearing probe until admitted, and r
   assertEquals(admitted.status, 200);
   assertEquals(served[1], "GET /api/storage/memory p");
 });
-
-class Exited extends Error {
-  constructor(readonly code: number) {
-    super(`exit ${code}`);
-  }
-}
 
 /** Runs the startup sequence with recorders for every effect. */
 function runSequence(

@@ -94,7 +94,7 @@ describe("CFPicker", () => {
           const value = runtime.getCellFromLink(subscription, undefined, tx)
             .get();
           expect(value).toHaveLength(2);
-          const reads = tx.tx.getReactivityLog!().reads.map((read) => read.id);
+          const reads = tx.tx.getReactivityLog().reads.map((read) => read.id);
           expect(reads).toContain(list.getAsNormalizedFullLink().id);
           for (const unused of [...items, ...ui, ...hidden]) {
             expect(reads).not.toContain(unused.getAsNormalizedFullLink().id);
@@ -113,7 +113,7 @@ describe("CFPicker", () => {
             .key("$UI").asSchema(rendererVDOMSchema).get({
               traverseCells: true,
             });
-          const reads = selectedTx.tx.getReactivityLog!().reads.map((read) =>
+          const reads = selectedTx.tx.getReactivityLog().reads.map((read) =>
             read.id
           );
           expect(reads).toContain(ui[0].getAsNormalizedFullLink().id);

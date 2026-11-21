@@ -106,6 +106,47 @@ const b = ext();`;
   }
 });
 
+Deno.test("semantics: a nearer config's import wins over the same key in a config above it", () => {
+  // Both configs map `ext`, to modules whose function returns different types,
+  // so the type the name resolves to says which config supplied the mapping.
+
+  const root = Deno.makeTempDirSync();
+  try {
+    const sub = join(root, "sub");
+    Deno.mkdirSync(sub);
+    Deno.writeTextFileSync(
+      join(root, "deno.json"),
+      JSON.stringify({ imports: { ext: "./outer.ts" } }),
+    );
+    Deno.writeTextFileSync(
+      join(root, "outer.ts"),
+      "export function ext(): string { return 'outer'; }\n",
+    );
+    Deno.writeTextFileSync(
+      join(sub, "deno.json"),
+      JSON.stringify({ imports: { ext: "./inner.ts" } }),
+    );
+    Deno.writeTextFileSync(
+      join(sub, "inner.ts"),
+      "export function ext(): number { return 1; }\n",
+    );
+    const blob = `// transformed: /main.ts
+import { ext } from "ext";
+const a = ext();`;
+    const doc = parseDocument(blob);
+
+    const nearer = createSemantics(blob, { cwd: sub })!;
+    nearer.prewarm();
+    assertEquals(nearer.typeAt(nameOffsetOf(doc, "a")), "number");
+
+    const outer = createSemantics(blob, { cwd: root })!;
+    outer.prewarm();
+    assertEquals(outer.typeAt(nameOffsetOf(doc, "a")), "string");
+  } finally {
+    Deno.removeSync(root, { recursive: true });
+  }
+});
+
 //
 // within()/realDir: the child resolves first, and the root only after
 //

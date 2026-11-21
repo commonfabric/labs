@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/logger";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { maxOf } from "@commonfabric/collections/math";
@@ -47,7 +48,12 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import type { ReconcileOutcome } from "../src/source-reconciler.ts";
-import { type Cell, EventDeliveryError, sendEvent } from "../src/cell.ts";
+import {
+  type Cell,
+  EventDeliveryError,
+  isWithheldDelivery,
+  sendEvent,
+} from "../src/cell.ts";
 import { handlingCommittedBy } from "../src/handling-commit.ts";
 import type {
   IExtendedStorageTransaction,
@@ -83,6 +89,11 @@ import {
   markRendererTrustedEvent,
 } from "../src/cfc/ui-contract.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 import {
   admittedCommits,
   ArrivalLog,
@@ -2465,6 +2476,397 @@ describe("Phase 3 events-down (serving side)", () => {
       expect(sidecarValue()?.eventWatermark).toBe(
         entryByKind("follower")!.seq,
       );
+    } finally {
+      cancelProbe();
+      cancelDemand();
+    }
+  });
+
+  it("records the same withheld outcome for a served handling that read another space's label, whether it committed, was refused or threw, and tells its sender it is withheld", async () => {
+    // A probe on the pattern's stream reads a document of another space whose
+    // label this space doesn't admit. For `commits` it writes nothing more;
+    // for `refuses` it also copies the value into this space, which the
+    // writer-fit gate refuses; for `throws` it throws an error whose message
+    // is the foreign secret; for `aborts` it aborts its transaction; for
+    // `acl` it writes the space's ACL document, which no served run may; for
+    // `plain` it reads nothing labeled; for `abortsPlain` it reads nothing
+    // labeled and aborts; for `releases` it reads a document of this space
+    // labeled outside it, waits while that label is released, and aborts. The
+    // processed claim (`processed-claim.ts`) takes nothing of the join, so
+    // the foreign-read handlings are delivered, and each records the outcome
+    // withheld, not how it ended, so no failure message carries the secret.
+    const foreignSigner = await Identity.fromPassphrase(
+      "events down withheld foreign",
+    );
+    const foreign = foreignSigner.did() as MemorySpace;
+    const foreignManager = EmulatedStorageManager.connectTo(server, {
+      as: foreignSigner,
+    });
+    extraManagers.push(foreignManager);
+    const foreignRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: foreignManager,
+    });
+    extraRuntimes.push(foreignRuntime);
+    const secretId = foreignRuntime.getCell(foreign, "withheld-secret")
+      .getAsNormalizedFullLink().id;
+    const seed = foreignRuntime.edit();
+    writeSeedEnvelopeDoc(seed, foreign);
+    seedStoredEnvelope(seed, {
+      space: foreign,
+      scope: "space",
+      id: secretId,
+      path: [],
+    }, {
+      value: { secret: "s3cr3t" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["secret"],
+            label: {
+              confidentiality: [
+                "https://commonfabric.org/cfc/atom/Public/withheld-secret",
+              ],
+            },
+          }],
+        },
+      },
+    });
+    expect((await seed.commit().settled).error).toBeUndefined();
+
+    // A document of this space, written by its owner, whose `secret` is
+    // labeled outside the space until `seedLocal()` writes it unlabeled.
+    const ownerManager = EmulatedStorageManager.connectTo(server, {
+      as: spaceSigner,
+    });
+    extraManagers.push(ownerManager);
+    const ownerRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: ownerManager,
+    });
+    extraRuntimes.push(ownerRuntime);
+    const localId = ownerRuntime.getCell(space, "withheld-local")
+      .getAsNormalizedFullLink().id;
+    const seedLocal = async (secret: string, labeled: boolean) => {
+      const write = ownerRuntime.edit();
+      writeSeedEnvelopeDoc(write, space);
+      seedStoredEnvelope(write, {
+        space,
+        scope: "space",
+        id: localId,
+        path: [],
+      }, {
+        value: { secret },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: labeled
+              ? [{
+                path: ["secret"],
+                label: {
+                  confidentiality: [
+                    "https://commonfabric.org/cfc/atom/Public/withheld-local",
+                  ],
+                },
+              }]
+              : [],
+          },
+        },
+      });
+      expect((await write.commit().settled).error).toBeUndefined();
+    };
+    await seedLocal("l0cal", true);
+
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { result } = await standUp(clientRuntime, BUMP_PATTERN, {
+      arg: "withheld-arg",
+      result: "withheld-result",
+    });
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+
+    host = newHost();
+    result.key("bump").send({ kind: "warmup" });
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    const sidecarId = sidecarIdsIn(engine)[0];
+    const entryByKind = (kind: string) =>
+      ((Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined)?.entries ?? []).find((entry) =>
+          (entry.payload as { kind?: string } | undefined)?.kind === kind
+        );
+    await awaitAdmitted(
+      server,
+      () => entryByKind("warmup")?.consequenced === true,
+    );
+    await awaitActive();
+
+    const warmup = entryByKind("warmup")!;
+    const streamLink = {
+      space,
+      id: warmup.stream.id as never,
+      path: [...warmup.stream.path],
+      scope: (warmup.stream.scope ?? "space") as never,
+    };
+    const secretLink = {
+      space: foreign,
+      id: secretId,
+      path: [],
+      scope: "space" as const,
+    };
+    /** The commit outcome of every served run of the probe, by event kind. */
+    const commitOutcomes = new ArrivalLog<{ kind: string; error: unknown }>();
+    /** The message of every error the probe threw for `throws`. */
+    const thrownMessages: (string | undefined)[] = [];
+    const localLink = {
+      space,
+      id: localId,
+      path: [],
+      scope: "space" as const,
+    };
+    /** Resolved once the `releases` run has read the labeled document. */
+    const releasesRead = Promise.withResolvers<void>();
+    /** Resolved by the case once that document's label is released. */
+    const released = Promise.withResolvers<void>();
+    const cancelProbe = servingRuntime!.scheduler.addEventHandler(
+      (tx, event) => {
+        const kind = (event as { kind?: string }).kind ?? "unknown";
+        tx.addCommitCallback((_tx, outcome) =>
+          commitOutcomes.record({ kind, error: outcome.error })
+        );
+        if (kind === "plain") return;
+        if (kind === "loads") {
+          servingRuntime!.getCellFromLink(localLink, undefined, tx).getRaw();
+        }
+        if (kind === "abortsPlain") {
+          tx.abort(new Error("the probe aborted"));
+          return;
+        }
+        if (kind === "releases") {
+          servingRuntime!.getCellFromLink(localLink, undefined, tx).getRaw();
+          releasesRead.resolve();
+          return released.promise.then(() => {
+            tx.abort(new Error("the probe aborted"));
+          });
+        }
+        const read = servingRuntime!.getCellFromLink(
+          secretLink,
+          undefined,
+          tx,
+        ).getRaw() as { secret?: string } | undefined;
+        if (kind === "throws") {
+          thrownMessages.push(read?.secret);
+          throw new Error(read?.secret);
+        }
+        if (kind === "aborts") {
+          tx.abort(new Error("the probe aborted"));
+          return;
+        }
+        if (kind === "notrun") {
+          // As a load wait names the document it reached, which can be one
+          // the foreign value chose.
+          tx.dispatchedHandlerNotRun = {
+            reason: `the document \`${read?.secret}\` was still loading`,
+          };
+          return;
+        }
+        if (kind === "acl") {
+          // The space's ACL document, which no served run may write.
+          servingRuntime!.getCellFromLink(
+            { space, id: `of:${space}` as never, path: [], scope: "space" },
+            undefined,
+            tx,
+          ).set({ [foreign]: "OWNER" } as never);
+          return;
+        }
+        if (kind !== "refuses") return;
+        servingRuntime!.getCell<{ copied?: string }>(
+          space,
+          "withheld-sink",
+          undefined,
+          tx,
+        ).set({ copied: read?.secret });
+      },
+      streamLink,
+    );
+    try {
+      // A first read of the foreign document, and of this space's labeled
+      // one, loads them into the serving runtime, so that the cases below
+      // read them on their first run.
+      result.key("bump").send({ kind: "loads" });
+      await clientRuntime.idle();
+      await awaitAdmitted(
+        server,
+        () => entryByKind("loads")?.consequenced === true,
+      );
+      const fired = {
+        commits: fireVerb(result, "bump", { kind: "commits" }, "withheld-1"),
+        refuses: fireVerb(result, "bump", { kind: "refuses" }, "withheld-2"),
+        throws: fireVerb(result, "bump", { kind: "throws" }, "withheld-4"),
+        aborts: fireVerb(result, "bump", { kind: "aborts" }, "withheld-5"),
+        acl: fireVerb(result, "bump", { kind: "acl" }, "withheld-6"),
+        plain: fireVerb(result, "bump", { kind: "plain" }, "withheld-3"),
+      };
+      await clientRuntime.idle();
+      await awaitAdmitted(
+        server,
+        () =>
+          ["commits", "refuses", "throws", "aborts", "acl", "plain"].every((
+            kind,
+          ) => entryByKind(kind)?.consequenced === true),
+      );
+      // The `commits` handling committed, after the load of the foreign
+      // document its first run waited on; the `refuses` one was refused.
+      await commitOutcomes.matching((outcome) =>
+        outcome.kind === "commits" && outcome.error === undefined
+      );
+      const refusal = (await commitOutcomes.matching((outcome) =>
+        outcome.kind === "refuses"
+      )).error as { name?: string; message?: string } | undefined;
+      expect(refusal?.name).toBe("CfcCommitRefusalError");
+      expect(refusal?.message).toContain("writer-fit confidentiality misfit");
+
+      /** What an entry says of how its handling ended. */
+      const outcomeOf = (kind: string) => {
+        const entry = entryByKind(kind)!;
+        return {
+          consequenced: entry.consequenced,
+          withheld: entry.withheld,
+          error: entry.error,
+          status: entry.status,
+          reason: entry.reason,
+        };
+      };
+      const withheld = {
+        consequenced: true,
+        withheld: true,
+        error: undefined,
+        status: undefined,
+        reason: undefined,
+      };
+      expect(outcomeOf("commits")).toEqual(withheld);
+      expect(outcomeOf("refuses")).toEqual(withheld);
+      expect(outcomeOf("throws")).toEqual(withheld);
+      expect(outcomeOf("aborts")).toEqual(withheld);
+      expect(outcomeOf("acl")).toEqual(withheld);
+      expect(outcomeOf("plain")).toEqual({ ...withheld, withheld: undefined });
+      // The `throws` handling threw the foreign secret as its message, and
+      // nothing of it reached the entry.
+      expect(thrownMessages.length).toBeGreaterThan(0);
+      expect(thrownMessages.every((message) => message === "s3cr3t")).toBe(
+        true,
+      );
+      expect(JSON.stringify(entryByKind("throws"))).not.toContain("s3cr3t");
+
+      // Each sender is told the same: done, with the outcome withheld,
+      // whether the handling committed or not.
+      // The `acl` handling was refused for its write to the access list, not
+      // by a CFC verdict.
+      const aclRefusal = (await commitOutcomes.matching((outcome) =>
+        outcome.kind === "acl"
+      )).error as { name?: string; reason?: unknown } | undefined;
+      expect(aclRefusal?.name).toBe("StorageTransactionAborted");
+      expect(String(aclRefusal?.reason)).toContain(
+        "is the space ACL document",
+      );
+      for (
+        const kind of ["commits", "refuses", "throws", "aborts", "acl"] as const
+      ) {
+        await fired[kind].reached(1);
+        const { status, tx } = fired[kind].entries[0];
+        expect([kind, status, isWithheldDelivery(tx)]).toEqual([
+          kind,
+          "done",
+          true,
+        ]);
+      }
+      await fired.plain.reached(1);
+      const plain = fired.plain.entries[0];
+      expect(plain.status).not.toBe("error");
+      expect(isWithheldDelivery(plain.tx)).toBe(false);
+
+      // A handling that reads nothing labeled and aborts keeps its outcome,
+      // as one with no foreign join does.
+      fireVerb(result, "bump", { kind: "abortsPlain" }, "withheld-8");
+      await clientRuntime.idle();
+      await awaitAdmitted(
+        server,
+        () => entryByKind("abortsPlain")?.consequenced === true,
+      );
+      expect(entryByKind("abortsPlain")?.withheld).toBeUndefined();
+      expect(entryByKind("abortsPlain")?.error).toBe(
+        "Event handler aborted its transaction",
+      );
+
+      // A handling that read a label of this space's own document outside
+      // it, which is then released before the handling aborts, is withheld
+      // for what it read, not for what the store holds once it has ended.
+      const servingSeesRelease = Promise.withResolvers<void>();
+      const cancelRelease = servingRuntime!.getCellFromLink<
+        { secret?: string }
+      >(localLink).sink((value) => {
+        if (value?.secret === "released") servingSeesRelease.resolve();
+      });
+      try {
+        fireVerb(result, "bump", { kind: "releases" }, "withheld-9");
+        await clientRuntime.idle();
+        await releasesRead.promise;
+        await seedLocal("released", false);
+        await servingSeesRelease.promise;
+        released.resolve();
+        await awaitAdmitted(
+          server,
+          () => entryByKind("releases")?.consequenced === true,
+        );
+      } finally {
+        cancelRelease();
+      }
+      expect(outcomeOf("releases")).toEqual(withheld);
+
+      // A handling whose body records that it did not run is withdrawn and
+      // re-delivered until its deferrals harden into a drop, whose notice
+      // names nothing a foreign join's run reached. Fired last, since each
+      // deferral holds the same space's later entries behind it: the
+      // `behind` entry fired after it is held behind it, and the scheduler's
+      // debug log, the one place the reason for that hold goes, says it
+      // without the reason the run recorded.
+      const schedulerLogger = getLogger("scheduler");
+      const loggedLevel = schedulerLogger.level;
+      const originalDebug = console.debug;
+      const debugLines: string[] = [];
+      schedulerLogger.level = "debug";
+      console.debug = (...args: unknown[]) => {
+        debugLines.push(args.map(String).join(" "));
+      };
+      try {
+        fireVerb(result, "bump", { kind: "notrun" }, "withheld-7");
+        fireVerb(result, "bump", { kind: "plain" }, "withheld-behind");
+        await clientRuntime.idle();
+        await awaitAdmitted(
+          server,
+          () => entryByKind("notrun")?.status === "dropped",
+        );
+      } finally {
+        console.debug = originalDebug;
+        schedulerLogger.level = loggedLevel;
+      }
+      const dropped = entryByKind("notrun")!;
+      expect(dropped.reason).toContain("handler did not run after");
+      expect(JSON.stringify(dropped)).not.toContain("s3cr3t");
+      const held = debugLines.filter((line) => line.includes("held behind"));
+      expect(held.length).toBeGreaterThan(0);
+      expect(held.every((line) => line.includes("its outcome withheld")))
+        .toBe(true);
+      expect(held.some((line) => line.includes("s3cr3t"))).toBe(false);
     } finally {
       cancelProbe();
       cancelDemand();

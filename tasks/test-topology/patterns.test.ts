@@ -424,20 +424,23 @@ describe("the pattern and package suites", () => {
     expect(listed.trim().split("\n")).toEqual(chosen);
   });
 
-  it("hands the pattern unit tests the cost of each file that has one", async () => {
+  it("hands the pattern unit tests the files they are to run", async () => {
     const suite = byId("pattern-unit");
     const out = await outputDir();
-    const [priced, unpriced] = suite.units;
+    const [first, second] = suite.units;
     const [invocation] = await suite.command(
-      [{ unit: priced!, skip: [], cost: 12.5 }, { unit: unpriced!, skip: [] }],
+      [{ unit: first!, skip: [] }, { unit: "no/such.test.tsx", skip: [] }, {
+        unit: second!,
+        skip: [],
+      }],
       { root, outputDir: out, spoolDir: "/spool" },
     );
     const flag = invocation!.command.find((arg) => arg.startsWith("--files="))!;
-    const listed = readPatternTestList(
-      await Deno.readTextFile(flag.slice("--files=".length)),
-    );
-    expect(listed.files).toEqual([priced, unpriced]);
-    expect([...listed.costs]).toEqual([[priced, 12.5]]);
+    expect(
+      readPatternTestList(
+        await Deno.readTextFile(flag.slice("--files=".length)),
+      ),
+    ).toEqual([first, second]);
   });
 
   it("names a pattern test by its own path", () => {

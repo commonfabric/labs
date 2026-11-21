@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/record-of-handles.tsx",
-              "source": "const { \"Default\": Default, \"equalsKey\": equalsKey, \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst named = lift(\n  (\n    { byName },\n  ) =>\n    Object.entries(byName).map(([key, member]) =>\n      `${key}:${member.get()?.name}:${equalsKey(member) === equalsKey(byName.a)}`\n    ),\n);\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/record-of-handles.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((\n    { byName },\n  ) =>\n    Object.entries(byName).map(([key, member]) =>\n      `${key}:${member.get()?.name}:${equalsKey(member) === equalsKey(byName.a)}`\n    ))($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ byName: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ listed: $h.output(0) })));\n});"
+              "source": "const { \"Default\": Default, \"equalsKey\": equalsKey, \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst named = lift(\n  (\n    { byName },\n  ) =>\n    Object.entries(byName).map(([key, member]) =>\n      `${key}:${member.get()?.name}:${\n        equalsKey(member) === equalsKey(byName.a)\n      }`\n    ),\n);\nconst $default = (pattern(\"sha256:a800a94cdfacce76b38226c4d5a55583b3767e329f33296b968ab735085270e5\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((\n    { byName },\n  ) =>\n    Object.entries(byName).map(([key, member]) =>\n      `${key}:${member.get()?.name}:${\n        equalsKey(member) === equalsKey(byName.a)\n      }`\n    ))($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ byName: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ listed: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -29,7 +29,7 @@
           ],
           "valuesWithoutOutput": []
         },
-        "line": 22,
+        "line": 30,
         "name": "default",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -92,7 +92,7 @@
             {
               "at": {
                 "file": "compare/fixtures/record-of-handles.tsx",
-                "start": 679
+                "start": 706
               },
               "bodies": [
                 0
@@ -181,7 +181,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/record-of-handles.tsx#default"
+            "sha256:a800a94cdfacce76b38226c4d5a55583b3767e329f33296b968ab735085270e5"
           ],
           "picks": [],
           "selectors": [],

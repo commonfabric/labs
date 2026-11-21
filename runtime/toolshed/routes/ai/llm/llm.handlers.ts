@@ -24,28 +24,37 @@ import type {
   GenerateTextRoute,
   GetModelsRoute,
 } from "./llm.routes.ts";
-import {
-  ALIAS_NAMES,
-  findModel,
-  ModelList,
-  MODELS,
-  resolveModel,
-  TASK_MODELS,
-  whenModelsReady,
-} from "./models.ts";
+import type { ModelList, ModelRegistry } from "./models.ts";
 import type { AppRouteHandler } from "@/lib/types.ts";
 
-const removeNonCacheableFields = (
-  obj: object,
-): CacheItem => {
-  const { cache: _cache, metadata: _metadata, ...rest } = obj as Record<
-    string,
-    unknown
-  >;
-  // FIXME: typing
-  // No guarantee that `messages` exists here.
-  return rest as unknown as CacheItem;
+/** Where the routes keep the responses a request asked to have cached. */
+export interface ResponseCache {
+  load(key: string): Promise<CacheItem | null>;
+  save(key: string, item: CacheItem): Promise<void>;
+}
+
+/** The response cache on disk under `CACHE_DIR`. */
+export const diskResponseCache: ResponseCache = {
+  load: loadFromCache,
+  save: saveToCache,
 };
+
+export interface LLMHandlerDeps {
+  models: ModelRegistry;
+  cache: ResponseCache;
+}
+
+/** The request without the fields that do not decide its response. */
+function removeNonCacheableFields<
+  T extends { cache?: boolean; metadata?: unknown },
+>({ cache: _cache, metadata: _metadata, ...rest }: T) {
+  return rest;
+}
+
+/** The message a failed generation reports to the caller. */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown error";
+}
 
 /**
  * Reads the request body as JSON. A body that is not JSON at all reaches the
@@ -65,285 +74,249 @@ async function readJsonBody(
 }
 
 /**
- * Validates that the model and JSON mode settings are compatible
- * @returns An error response object if validation fails, or null if validation passes
+ * The model a text request names, or the response refusing it: a name that is
+ * no model, or JSON mode streamed from Groq, which Groq does not support.
  */
-async function validateModelAndJsonMode(
+async function modelForTextRequest(
   c: Context,
+  models: ModelRegistry,
   modelString: string | undefined,
   mode: string | undefined,
 ) {
-  const model = modelString ? await resolveModel(modelString) : null;
+  const model = modelString ? await models.resolve(modelString) : undefined;
 
   if (!model) {
-    return c.json(
-      {
-        error:
-          `Unknown model '${modelString}'. GET /api/ai/llm/models for available models.`,
-      },
-      HttpStatusCodes.BAD_REQUEST,
-    );
+    return {
+      refusal: c.json(
+        {
+          error:
+            `Unknown model '${modelString}'. GET /api/ai/llm/models for available models.`,
+        },
+        HttpStatusCodes.BAD_REQUEST,
+      ),
+    };
   }
 
-  // Validate JSON mode support if requested
-  const isJsonMode = mode === "json";
-
-  // Groq models don't support streaming with JSON mode
   if (
-    isJsonMode && c.req.query("stream") === "true" &&
+    mode === "json" && c.req.query("stream") === "true" &&
     modelString?.startsWith("groq:")
   ) {
-    return c.json(
-      {
-        error:
-          "Groq models don't support streaming in JSON mode. Please set stream to false.",
-      },
-      HttpStatusCodes.BAD_REQUEST,
-    );
+    return {
+      refusal: c.json(
+        {
+          error:
+            "Groq models don't support streaming in JSON mode. Please set stream to false.",
+        },
+        HttpStatusCodes.BAD_REQUEST,
+      ),
+    };
   }
 
-  return null;
+  return { model };
 }
 
-/**
- * Handler for GET /models endpoint
- * Returns filtered list of available LLM models based on search criteria
- */
-export const getModels: AppRouteHandler<GetModelsRoute> = async (c) => {
-  // The list is what this route answers for, so it waits for the whole of it.
-  // A route naming one model asks `resolveModel`, which waits only when the
-  // name is not registered yet; there is no such shortcut for all of them, and
-  // a list quietly missing every gateway model is a wrong answer rather than
-  // an early one.
-  await whenModelsReady();
-  const { search, capability, task } = c.req.query();
-  const capabilities = capability?.split(",");
+/** The handlers for the LLM routes, serving the models in `deps.models`. */
+export function createLLMHandlers({ models, cache }: LLMHandlerDeps): {
+  getModels: AppRouteHandler<GetModelsRoute>;
+  generateText: AppRouteHandler<GenerateTextRoute>;
+  generateObject: AppRouteHandler<GenerateObjectRoute>;
+} {
+  return {
+    /** Lists the models, narrowed by name, capability, and task. */
+    getModels: async (c) => {
+      // The list is what this route answers for, so it waits for the whole of
+      // it. A route naming one model asks `models.resolve`, which waits only
+      // when the name is not registered yet; there is no such shortcut for
+      // all of them, and a list quietly missing every gateway model is a
+      // wrong answer rather than an early one.
+      await models.whenReady();
+      const { search, capability, task } = c.req.query();
+      const capabilities = capability?.split(",");
 
-  const modelInfo = Object.entries(MODELS).reduce(
-    (acc, [name, modelConfig]) => {
-      // Skip alias names, we only want primary model names
-      if (!ALIAS_NAMES.includes(name)) {
-        // Apply filters: name search, capabilities, and task matching
+      const modelInfo: ModelList = {};
+      for (const [name, modelConfig] of Object.entries(models.models)) {
+        // Only primary names are listed; each carries its aliases.
+        if (models.aliasNames.has(name)) continue;
         const nameMatches = !search ||
           name.toLowerCase().includes(search.toLowerCase());
         const capabilitiesMatch = !capabilities ||
-          capabilities.every(
-            (cap) =>
-              modelConfig
-                .capabilities[cap as keyof typeof modelConfig.capabilities],
+          capabilities.every((cap) =>
+            modelConfig
+              .capabilities[cap as keyof typeof modelConfig.capabilities]
           );
         const taskMatches = !task ||
-          TASK_MODELS[task as keyof typeof TASK_MODELS] === name;
-
-        // Include model if it passes all filters
+          models.taskModels[task as keyof typeof models.taskModels] === name;
         if (nameMatches && capabilitiesMatch && taskMatches) {
-          acc[name] = {
+          modelInfo[name] = {
             name,
             model: modelConfig.model,
             capabilities: modelConfig.capabilities,
-            aliases: Object.entries(MODELS)
-              .filter(([_, m]) => m === modelConfig && name !== _)
+            aliases: Object.entries(models.models)
+              .filter(([alias, m]) => m === modelConfig && alias !== name)
               .map(([alias]) => alias),
           };
         }
       }
-      return acc;
+
+      return c.json(modelInfo);
     },
-    {} as ModelList,
-  );
 
-  return c.json(modelInfo);
-};
-
-/**
- * Handler for POST / endpoint
- * Generates text using specified LLM model or task
- */
-export const generateText: AppRouteHandler<GenerateTextRoute> = async (c) => {
-  const body = await readJsonBody(c);
-  if (!body.ok) {
-    return c.json({ error: body.error }, HttpStatusCodes.BAD_REQUEST);
-  }
-  const problem = llmRequestProblem(body.payload);
-  if (problem !== undefined) {
-    return c.json(
-      { error: `Invalid request: ${problem}` },
-      HttpStatusCodes.BAD_REQUEST,
-    );
-  }
-  // `llmRequestProblem()` answering `undefined` is what makes this hold, and
-  // it is the only thing that does: `body.payload` is whatever the JSON
-  // parser returned.
-  const payload: LLMRequest = body.payload;
-
-  if (!payload.metadata) {
-    payload.metadata = {};
-  }
-
-  const user = c.req.header("Tailscale-User-Login");
-  if (user) {
-    payload.metadata.user = user;
-  }
-
-  // Enable caching for deterministic requests including client-side tools.
-  // With the sequential request architecture, each request includes complete context
-  // (including tool results from previous rounds), making each response cacheable.
-  //
-  // Cache key naturally includes:
-  // - Original user message
-  // - Tool definitions
-  // - Tool results (in messages array for subsequent rounds)
-  // - Full conversation history
-  //
-  // Provider-native tools such as Google Search are intentionally time-sensitive.
-  // Treat them as live requests until we have a freshness-aware cache policy.
-  const shouldCache = requestsCaching(payload) &&
-    (payload.nativeModelToolIds?.length ?? 0) === 0;
-
-  let cacheKey: string | undefined;
-  if (shouldCache) {
-    cacheKey = await hashKey(
-      JSON.stringify(removeNonCacheableFields(payload)),
-    );
-    // First, check whether the request is cached, if so return the cached result
-    const cachedResult = await loadFromCache(cacheKey);
-    if (cachedResult) {
-      const lastMessage =
-        cachedResult.messages[cachedResult.messages.length - 1];
-      return c.json(lastMessage);
-    }
-  }
-
-  const persistCache = async (
-    messages: BuiltInLLMMessage[],
-  ) => {
-    if (!shouldCache || !cacheKey) {
-      return;
-    }
-    try {
-      await saveToCache(cacheKey, {
-        ...removeNonCacheableFields(payload),
-        messages,
-      });
-    } catch (e) {
-      console.error("Error saving response to cache:", e);
-    }
-  };
-
-  const validationError = await validateModelAndJsonMode(
-    c,
-    payload.model,
-    payload.mode,
-  );
-  if (validationError) {
-    return validationError;
-  }
-
-  const model = findModel(payload.model);
-  payload.metadata.model = model.name;
-  payload.maxTokens = payload.maxTokens ||
-    model?.capabilities.maxOutputTokens || 8000;
-
-  try {
-    const result = await generateTextCore({
-      ...payload,
-      abortSignal: c.req.raw.signal,
-      // If response is streaming, save to cache after the stream is complete
-      onStreamComplete: async (result) => await persistCache(result.messages),
-    });
-
-    // If response is not streaming, save to cache and return the message
-    if (!payload.stream) {
-      await persistCache(result.messages);
-      const response = c.json(result.message);
-      if (result.spanId) {
-        response.headers.set("x-cf-llm-trace-id", result.spanId);
+    /** Generates text with the model the request names. */
+    generateText: async (c) => {
+      const body = await readJsonBody(c);
+      if (!body.ok) {
+        return c.json({ error: body.error }, HttpStatusCodes.BAD_REQUEST);
       }
-      return response;
-    }
+      const problem = llmRequestProblem(body.payload);
+      if (problem !== undefined) {
+        return c.json(
+          { error: `Invalid request: ${problem}` },
+          HttpStatusCodes.BAD_REQUEST,
+        );
+      }
+      // `llmRequestProblem()` returning `undefined` is what makes this hold,
+      // and it is the only thing that does: `body.payload` is whatever the
+      // JSON parser returned.
+      const payload: LLMRequest = body.payload;
 
-    return new Response(result.stream, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Transfer-Encoding": "chunked",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        ...(result.spanId ? { "x-cf-llm-trace-id": result.spanId } : {}),
-      },
-    });
-  } catch (error) {
-    console.error("Error in generateText:", error);
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return c.json({ error: message }, httpStatusForError(error));
-  }
-};
+      payload.metadata ??= {};
+      const user = c.req.header("Tailscale-User-Login");
+      if (user) {
+        payload.metadata.user = user;
+      }
 
-/**
- * Handler for POST /generateObject endpoint
- * Generates structured JSON objects using specified LLM model
- */
-export const generateObject: AppRouteHandler<GenerateObjectRoute> = async (
-  c,
-) => {
-  const body = await readJsonBody(c);
-  if (!body.ok) {
-    return c.json({ error: body.error }, HttpStatusCodes.BAD_REQUEST);
-  }
-  const problem = llmGenerateObjectRequestProblem(body.payload);
-  if (problem !== undefined) {
-    return c.json(
-      { error: `Invalid request: ${problem}` },
-      HttpStatusCodes.BAD_REQUEST,
-    );
-  }
-  // `llmGenerateObjectRequestProblem()` answering `undefined` is what makes
-  // this hold, and it is the only thing that does: `body.payload` is whatever
-  // the JSON parser returned.
-  const payload: LLMGenerateObjectRequest = body.payload;
+      // Each request carries its complete context — the conversation, the
+      // tool definitions, and the results of earlier tool rounds — so its
+      // response is cacheable, client-side tools included.
+      //
+      // Provider-native tools such as Google Search are time-sensitive, so a
+      // request using one is answered live.
+      const cacheKey = requestsCaching(payload) &&
+          (payload.nativeModelToolIds?.length ?? 0) === 0
+        ? await hashKey(JSON.stringify(removeNonCacheableFields(payload)))
+        : undefined;
+      if (cacheKey !== undefined) {
+        const cachedResult = await cache.load(cacheKey);
+        if (cachedResult) {
+          return c.json(
+            cachedResult.messages[cachedResult.messages.length - 1],
+          );
+        }
+      }
 
-  if (!payload.metadata) {
-    payload.metadata = {};
-  }
+      const persistCache = async (messages: BuiltInLLMMessage[]) => {
+        if (cacheKey === undefined) return;
+        try {
+          await cache.save(cacheKey, {
+            ...removeNonCacheableFields(payload),
+            messages,
+          });
+        } catch (e) {
+          console.error("Error saving response to cache:", e);
+        }
+      };
 
-  const user = c.req.header("Tailscale-User-Login");
-  if (user) {
-    payload.metadata.user = user;
-  }
+      const { model, refusal } = await modelForTextRequest(
+        c,
+        models,
+        payload.model,
+        payload.mode,
+      );
+      if (refusal) {
+        return refusal;
+      }
 
-  const cacheKey = await hashKey(
-    JSON.stringify(removeNonCacheableFields(payload)),
-  );
-  const shouldCache = requestsCaching(payload);
+      payload.metadata.model = model.name;
+      payload.maxTokens ||= model.capabilities.maxOutputTokens || 8000;
 
-  // Check cache if enabled
-  if (shouldCache) {
-    const cachedResult = await loadFromCache(cacheKey);
-    if (cachedResult) {
-      return c.json({
-        object: cachedResult.object,
-      }, HttpStatusCodes.OK);
-    }
-  }
-
-  try {
-    const result = await generateObjectCore(payload);
-
-    // Save to cache if enabled
-    if (shouldCache) {
       try {
-        await saveToCache(cacheKey, {
-          ...removeNonCacheableFields(payload),
-          object: result.object,
-        });
-      } catch (e) {
-        console.error("Error saving generateObject response to cache:", e);
-      }
-    }
+        const result = await generateTextCore({
+          ...payload,
+          abortSignal: c.req.raw.signal,
+          // A streamed response is cached once the stream is complete.
+          onStreamComplete: (result) => persistCache(result.messages),
+        }, models);
 
-    return c.json(result, HttpStatusCodes.OK);
-  } catch (error) {
-    console.error("Error in generateObject:", error);
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return c.json({ error: message }, httpStatusForError(error));
-  }
-};
+        const traceHeaders: Record<string, string> = result.spanId
+          ? { "x-cf-llm-trace-id": result.spanId }
+          : {};
+        if (!payload.stream) {
+          await persistCache(result.messages);
+          return c.json(result.message, HttpStatusCodes.OK, traceHeaders);
+        }
+
+        return new Response(result.stream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Transfer-Encoding": "chunked",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+            ...traceHeaders,
+          },
+        });
+      } catch (error) {
+        console.error("Error in generateText:", error);
+        return c.json(
+          { error: errorMessage(error) },
+          httpStatusForError(error),
+        );
+      }
+    },
+
+    /** Generates a JSON object satisfying the request's schema. */
+    generateObject: async (c) => {
+      const body = await readJsonBody(c);
+      if (!body.ok) {
+        return c.json({ error: body.error }, HttpStatusCodes.BAD_REQUEST);
+      }
+      const problem = llmGenerateObjectRequestProblem(body.payload);
+      if (problem !== undefined) {
+        return c.json(
+          { error: `Invalid request: ${problem}` },
+          HttpStatusCodes.BAD_REQUEST,
+        );
+      }
+      // `llmGenerateObjectRequestProblem()` returning `undefined` is what
+      // makes this hold, and it is the only thing that does: `body.payload` is
+      // whatever the JSON parser returned.
+      const payload: LLMGenerateObjectRequest = body.payload;
+
+      payload.metadata ??= {};
+      const user = c.req.header("Tailscale-User-Login");
+      if (user) {
+        payload.metadata.user = user;
+      }
+
+      const cacheKey = requestsCaching(payload)
+        ? await hashKey(JSON.stringify(removeNonCacheableFields(payload)))
+        : undefined;
+      if (cacheKey !== undefined) {
+        const cachedResult = await cache.load(cacheKey);
+        if (cachedResult) {
+          return c.json({ object: cachedResult.object }, HttpStatusCodes.OK);
+        }
+      }
+
+      try {
+        const result = await generateObjectCore(payload, models);
+        if (cacheKey !== undefined) {
+          try {
+            await cache.save(cacheKey, {
+              ...removeNonCacheableFields(payload),
+              object: result.object,
+            });
+          } catch (e) {
+            console.error("Error saving generateObject response to cache:", e);
+          }
+        }
+        return c.json(result, HttpStatusCodes.OK);
+      } catch (error) {
+        console.error("Error in generateObject:", error);
+        return c.json(
+          { error: errorMessage(error) },
+          httpStatusForError(error),
+        );
+      }
+    },
+  };
+}

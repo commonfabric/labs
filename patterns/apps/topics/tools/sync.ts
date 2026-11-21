@@ -415,11 +415,16 @@ export interface DocSourceDeps {
 
   /**
    * Opens sessions signed by `signer`, each on the storage endpoint `address`
-   * resolves its space to.
+   * resolves its space to, and each demand or not as `demand` says. The two
+   * arguments between are a `RemoteSessionFactory`'s socket and client
+   * build, which are left at their defaults.
    */
   Sessions: new (
     address: (space: MemorySpace) => URL,
     signer: Signer,
+    createSocket: undefined,
+    clientBuild: undefined,
+    demand: boolean,
   ) => SessionFactory;
 }
 
@@ -469,9 +474,19 @@ export async function openSession(
   setModernCellRepConfig(experimental.modernCellRep);
   const space = await spaceDid(config.space);
   const session = await createSession({ identity, spaceDid: space });
+  // This tool copies documents and derives nothing from them on the server:
+  // its writes go through `cf piece call`, which waits on its own session.
+  // So its sessions declare that they are not demand
+  // (`SessionDescriptor.demand`). A demanding session's watches are demand
+  // roots, and a copy of a whole board watches every document it holds,
+  // which would have the server start every topic for a client that waits
+  // on none of them.
   const factory = new deps.Sessions(
     () => storageAddressForHost(memoryHost),
     session.as,
+    undefined,
+    undefined,
+    false,
   );
   // The server admits a session by the naming mode it declares (INV-16), and
   // no runtime is here to declare one, so the session declares the mode a

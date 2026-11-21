@@ -75,7 +75,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/handle-passed.tsx#Child"
+            "sha256:91076405c16b0e6d176d565dbc26d0b6a7862165bde049bdeb97d64292a562df"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",
@@ -326,7 +326,7 @@
           "operations": [],
           "outputs": [],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/handle-passed.tsx#default"
+            "sha256:e36016dc35e7036d08bf421c352de9b955f98a59c311503fb3dd0ad50fa98258"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

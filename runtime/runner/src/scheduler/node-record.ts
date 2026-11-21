@@ -1,7 +1,7 @@
 import type { IMemorySpaceAddress } from "../storage/interface.ts";
 import { endLocalReadValidationStretch } from "../storage/local-read-policy.ts";
 import type { FanOutNodeState } from "./fan-out.ts";
-import type { Action, ReactivityLog } from "./types.ts";
+import type { Action, ReactivityLog, TelemetryAnnotations } from "./types.ts";
 
 export type NodeKind = "computation" | "effect";
 export type NodeStatus = "never-ran" | "clean" | "invalid" | "unavailable";
@@ -48,6 +48,10 @@ export interface SchedulerNode {
   readonly action: Action;
   /** Whether this registration has an accepted result to retain while gated. */
   hasCommittedResult?: boolean;
+  /** Whether a run of this registration has finished without being withdrawn
+   * for a read it could not take as state: its output, absent or not, is what
+   * it produced. */
+  produced?: boolean;
   /** The latest sealed run that can still owe dependency-withdrawal recovery. */
   pendingWaveRun?: object;
 
@@ -87,6 +91,14 @@ export interface SchedulerNode {
    * a retry — is recorded once. Taken by the run that consumes them.
    */
   invalidCauses: Map<string, IMemorySpaceAddress>;
+
+  /**
+   * Where the node stands among the invalid nodes: taken from a counter each
+   * time it joins them, so ascending ordinals are the order
+   * `NodeRegistry.getInvalidNodes()` iterates in. Meaningless while the node
+   * is not one of them.
+   */
+  invalidOrdinal: number;
   liveRefs: number;
   provisionalDemand: boolean;
   provisionalDemandPass?: number;
@@ -120,6 +132,27 @@ export class NodeRegistry {
    */
   #invalidNodes = new Set<Action>();
 
+  /** Source of `SchedulerNode.invalidOrdinal`. */
+  #nextInvalidOrdinal = 0;
+
+  /**
+   * The invalid nodes a pull seed scan still has to look at: every invalid
+   * node except those a scan found dormant (neither live nor pending) and
+   * parked with `parkSeedCandidate()`. A dormant node contributes nothing to
+   * a seed scan, and under lazy materialization nearly every invalid node of
+   * a large graph is dormant, so the scans walk this set and not
+   * `#invalidNodes`.
+   *
+   * A parked node returns when it joins the invalid nodes again, when its
+   * status is written, and when whoever maintains liveness reports that it
+   * may have become live (`noteMayBeLive()`). Reporting too often only costs
+   * a scan one more look; a liveness change that is NOT reported leaves a
+   * runnable node unseen, so every site that can make a node live reports
+   * it. Pending nodes are not tracked here: the scans read the pending set
+   * themselves.
+   */
+  #seedCandidates = new Set<Action>();
+
   /**
    * Active nodes whose gate holds convergence-backoff state
    * (`holdsBackoffState()`). The pass-end clearing and the idle-episode reset
@@ -134,12 +167,70 @@ export class NodeRegistry {
   #backedOffNodes = new Set<SchedulerNode>();
 
   /**
+   * Active nodes by each demand root their action's observation identity
+   * names: its `demandRootIds`, or its `pieceRootId` where it names none. The
+   * arrival re-arm reads the nodes beneath the roots that arrived from here
+   * (`nodesUnderDemandRoots()`) instead of walking every registered node,
+   * which it is asked to do once for each demand key a session brings.
+   * A node is filed when it joins the active set (`activate()`) and unfiled
+   * when it leaves (`remove()`), so like `#invalidNodes` membership tracks
+   * active membership, and a reactivated node re-enters under the roots its
+   * action names then. An identity set on a node that is already active moves
+   * it only through `noteObservationIdentity()`, which the scheduler calls
+   * wherever it sets one.
+   */
+  #nodesByDemandRoot = new Map<string, Set<SchedulerNode>>();
+
+  /**
+   * The roots whose set in `#nodesByDemandRoot` is not in joining order. A
+   * node is filed as it joins, which is already that order; only a node
+   * filed again while active (`noteObservationIdentity()`) lands after nodes
+   * that joined later. `nodesUnderDemandRoots()` puts such a set back in
+   * order the next time it reads it, so a root with thousands of nodes
+   * beneath it is not sorted on every lookup.
+   */
+  #unorderedDemandRoots = new Set<string>();
+
+  /**
+   * The roots each node is filed under in `#nodesByDemandRoot`, as they were
+   * read off its action when it was filed. Unfiling goes by these, so it does
+   * not depend on what the action names by then.
+   */
+  #filedDemandRoots = new Map<SchedulerNode, readonly string[]>();
+
+  /**
+   * When each active node joined the active set, as a count. `nodes()` yields
+   * active nodes in this order, and `nodesUnderDemandRoots()` returns its
+   * matches in it too.
+   */
+  #joinedAt = new Map<SchedulerNode, number>();
+  #nextJoin = 0;
+
+  /**
    * Source of monotonic registration ordinals (see `SchedulerNode.ordinal`).
    */
   #nextOrdinal = 0;
 
   /** Advances each time a node joins or leaves the active set. */
   #membership = 0;
+
+  /**
+   * The pieces a node of which joined or left the active set, or had its
+   * status written, since `takeChangedPieces()` last ran: each one named by
+   * the `pieceRootId` of the node's action, or, for a node that names none,
+   * each piece that answers for it. `undefined` until `trackChangedPieces()`
+   * asks for the record, so a runtime nothing reads it from keeps none.
+   */
+  #changedPieces: Set<string> | undefined;
+
+  /**
+   * The pieces that answer for each computation that names no piece, as
+   * `setAnsweredFor()` was last told of them.
+   */
+  readonly #answering = new WeakMap<Action, Set<string>>();
+
+  /** The computations each piece answers for, which is `#answering` inverted. */
+  readonly #answeredBy = new Map<string, ReadonlySet<Action>>();
 
   readonly effects: ReadonlySet<Action> = this.#activeEffects;
   readonly computations: ReadonlySet<Action> = this.#activeComputations;
@@ -210,6 +301,7 @@ export class NodeRegistry {
       registrationToken: {},
       declaredReads: [],
       invalidCauses: new Map(),
+      invalidOrdinal: 0,
       liveRefs: 0,
       provisionalDemand: false,
       gate: { backoffStreak: 0, convergenceHoldPasses: 0 },
@@ -235,6 +327,7 @@ export class NodeRegistry {
     endLocalReadValidationStretch();
     record.registrationToken = {};
     delete record.hasCommittedResult;
+    delete record.produced;
     delete record.gate.retryOwed;
     delete record.pendingWaveRun;
     record.adoptedViewIdentity = undefined;
@@ -242,10 +335,14 @@ export class NodeRegistry {
     record.cancelLocalReadWake?.();
     record.cancelLocalReadWake = undefined;
     if (this.#all.delete(record)) this.#membership++;
+    this.#noteChangedPiece(record);
     this.#activeEffects.delete(action);
     this.#activeComputations.delete(action);
     this.#invalidNodes.delete(action);
+    this.#seedCandidates.delete(action);
     this.#backedOffNodes.delete(record);
+    this.#unfileFromDemandRoots(record);
+    this.#joinedAt.delete(record);
     // Drop the child from its parent's index. The index holds actions
     // strongly, so a child left in it is retained by the parent — along with
     // the frame of the child's last run, that run's storage transaction, and
@@ -293,6 +390,67 @@ export class NodeRegistry {
     }
     record.status = status;
     this.#syncInvalidIndex(record);
+    this.#noteChangedPiece(record);
+  }
+
+  /**
+   * Starts recording the pieces whose nodes change, which
+   * `takeChangedPieces()` reads.
+   */
+  trackChangedPieces(): void {
+    this.#changedPieces ??= new Set();
+  }
+
+  /**
+   * The pieces a node of which joined or left the active set, or had its
+   * status written, since this was last called, each named by the
+   * `pieceRootId` of the node's action. A node that names no piece counts
+   * for each piece `setAnsweredFor()` said answers for it. A run writes its
+   * node's status as it starts, so every piece a run touched is among them.
+   * Empty unless `trackChangedPieces()` was called.
+   */
+  takeChangedPieces(): string[] {
+    const changed = this.#changedPieces;
+    if (changed === undefined || changed.size === 0) return [];
+    const taken = [...changed];
+    changed.clear();
+    return taken;
+  }
+
+  /**
+   * Records that `piece` answers for `actions`, computations that name no
+   * piece, and for no other: `piece` is among the changed pieces whenever
+   * one of them is the node that changed.
+   */
+  setAnsweredFor(piece: string, actions: ReadonlySet<Action>): void {
+    for (const action of this.#answeredBy.get(piece) ?? []) {
+      if (!actions.has(action)) this.#answering.get(action)?.delete(piece);
+    }
+    if (actions.size === 0) this.#answeredBy.delete(piece);
+    else this.#answeredBy.set(piece, actions);
+    for (const action of actions) {
+      const pieces = this.#answering.get(action);
+      if (pieces === undefined) this.#answering.set(action, new Set([piece]));
+      else pieces.add(piece);
+    }
+  }
+
+  /**
+   * Helper for the members above, which records the piece of `record`, or
+   * the pieces that answer for it where it names none.
+   */
+  #noteChangedPiece(record: SchedulerNode): void {
+    const changed = this.#changedPieces;
+    if (changed === undefined) return;
+    const pieceRootId = (record.action as Partial<TelemetryAnnotations>)
+      .schedulerObservationIdentity?.pieceRootId;
+    if (pieceRootId !== undefined) {
+      changed.add(pieceRootId);
+      return;
+    }
+    for (const piece of this.#answering.get(record.action) ?? []) {
+      changed.add(piece);
+    }
   }
 
   /**
@@ -301,6 +459,43 @@ export class NodeRegistry {
    */
   getInvalidNodes(): ReadonlySet<Action> {
     return this.#invalidNodes;
+  }
+
+  /** Whether `action` is an active node that is `invalid` or `never-ran`. */
+  isInvalid(action: Action): boolean {
+    return this.#invalidNodes.has(action);
+  }
+
+  /**
+   * The invalid nodes no scan has parked: the ones a pull seed scan has to
+   * look at. In no particular order; `SchedulerNode.invalidOrdinal` restores
+   * the order of `getInvalidNodes()`.
+   */
+  getSeedCandidates(): ReadonlySet<Action> {
+    return this.#seedCandidates;
+  }
+
+  /**
+   * Takes `action` out of the seed candidates. For a scan that found the
+   * node dormant: neither live nor pending. Safe to call while iterating
+   * `getSeedCandidates()`.
+   */
+  parkSeedCandidate(action: Action): void {
+    this.#seedCandidates.delete(action);
+  }
+
+  /**
+   * Reports that `action` may have become live, so the next seed scan looks
+   * at it again if it is invalid. Every site that can turn a node live calls
+   * this; a call for a node that did not become live is harmless.
+   */
+  noteMayBeLive(action: Action): void {
+    if (this.#invalidNodes.has(action)) this.#seedCandidates.add(action);
+  }
+
+  /** `noteMayBeLive()` for every node, after liveness was rebuilt wholesale. */
+  noteAllMayBeLive(): void {
+    for (const action of this.#invalidNodes) this.#seedCandidates.add(action);
   }
 
   /** Active nodes whose gate holds convergence-backoff state. */
@@ -323,9 +518,16 @@ export class NodeRegistry {
       this.#all.has(record) &&
       (record.status === "invalid" || record.status === "never-ran")
     ) {
-      this.#invalidNodes.add(record.action);
+      if (!this.#invalidNodes.has(record.action)) {
+        record.invalidOrdinal = this.#nextInvalidOrdinal++;
+        this.#invalidNodes.add(record.action);
+      }
+      // A status write is also a fresh look: cheap, and it keeps a node that
+      // was parked as `never-ran` from staying parked through an invalidation.
+      this.#seedCandidates.add(record.action);
     } else {
       this.#invalidNodes.delete(record.action);
+      this.#seedCandidates.delete(record.action);
     }
   }
 
@@ -397,6 +599,95 @@ export class NodeRegistry {
     }
   }
 
+  /**
+   * The active nodes whose action names any of `rootIds` as a demand root,
+   * each once, in the order `nodes()` yields them. A node's roots are its
+   * action's `demandRootIds`, or its `pieceRootId` where it names none; a
+   * node whose action names neither is beneath no root.
+   */
+  nodesUnderDemandRoots(rootIds: Iterable<string>): SchedulerNode[] {
+    const byJoining = (a: SchedulerNode, b: SchedulerNode) =>
+      this.#joinedAt.get(a)! - this.#joinedAt.get(b)!;
+    const sets: Set<SchedulerNode>[] = [];
+    for (const id of new Set(rootIds)) {
+      const filed = this.#nodesByDemandRoot.get(id);
+      if (filed === undefined) continue;
+      if (this.#unorderedDemandRoots.delete(id)) {
+        const ordered = [...filed].sort(byJoining);
+        filed.clear();
+        for (const record of ordered) filed.add(record);
+      }
+      sets.push(filed);
+    }
+    if (sets.length === 0) return [];
+    // One root's set is already in joining order, which is the usual lookup:
+    // the space server asks about one root at a time.
+    if (sets.length === 1) return [...sets[0]];
+    const found = new Set<SchedulerNode>();
+    for (const filed of sets) {
+      for (const record of filed) found.add(record);
+    }
+    return [...found].sort(byJoining);
+  }
+
+  /** Whether any active node names `rootId` as a demand root. */
+  hasNodesUnderDemandRoot(rootId: string): boolean {
+    return this.#nodesByDemandRoot.has(rootId);
+  }
+
+  /**
+   * Files `action`'s node under the demand roots its observation identity
+   * names now, in place of the ones it was filed under. The scheduler calls
+   * this after it sets an identity: an active node stays filed under the
+   * roots its action named when it joined until then. A no-op for an action
+   * with no active node, which joining files.
+   */
+  noteObservationIdentity(action: Action): void {
+    const record = this.#records.get(action);
+    if (record !== undefined && this.#all.has(record)) {
+      this.#fileUnderDemandRoots(record, { joining: false });
+    }
+  }
+
+  #fileUnderDemandRoots(
+    record: SchedulerNode,
+    { joining }: { joining: boolean },
+  ): void {
+    this.#unfileFromDemandRoots(record);
+    const identity = (record.action as Partial<TelemetryAnnotations>)
+      .schedulerObservationIdentity;
+    const named = identity?.demandRootIds ??
+      (identity?.pieceRootId !== undefined ? [identity.pieceRootId] : []);
+    if (named.length === 0) return;
+    const roots = [...new Set(named)];
+    for (const id of roots) {
+      const filed = this.#nodesByDemandRoot.get(id);
+      if (filed === undefined) {
+        this.#nodesByDemandRoot.set(id, new Set([record]));
+        continue;
+      }
+      filed.add(record);
+      // A node that joined earlier now sits after ones that joined later.
+      if (!joining) this.#unorderedDemandRoots.add(id);
+    }
+    this.#filedDemandRoots.set(record, roots);
+  }
+
+  #unfileFromDemandRoots(record: SchedulerNode): void {
+    const roots = this.#filedDemandRoots.get(record);
+    if (roots === undefined) return;
+    for (const id of roots) {
+      const filed = this.#nodesByDemandRoot.get(id);
+      if (filed === undefined) continue;
+      filed.delete(record);
+      if (filed.size === 0) {
+        this.#nodesByDemandRoot.delete(id);
+        this.#unorderedDemandRoots.delete(id);
+      }
+    }
+    this.#filedDemandRoots.delete(record);
+  }
+
   #captureParentAction(
     child: SchedulerNode,
     parentAction: Action,
@@ -420,6 +711,9 @@ export class NodeRegistry {
     if (!this.#all.has(record)) {
       record.registrationToken = {};
       this.#membership++;
+      this.#joinedAt.set(record, this.#nextJoin++);
+      this.#fileUnderDemandRoots(record, { joining: true });
+      this.#noteChangedPiece(record);
     }
     this.#all.add(record);
     if (record.kind === "effect") {

@@ -135,9 +135,9 @@ or a batch of independent calls, each of the same shape:
 ```
 
 A batch carries one to sixteen calls, and one that names `command` as well as
-`calls` is refused. Each call's arguments are bounded at 16 KiB of JSON. The
-host decides admission, including for names absent from the catalog, and checks
-each call's arguments against its schema.
+`calls` is refused. Each call's arguments are bounded at 2 MiB of serialized
+UTF-8 JSON. The host decides admission, including for names absent from the
+catalog, and checks each call's arguments against its schema.
 
 A batch's calls run concurrently, at most four in flight to the host at once,
 and one call's failure does not stop the others.

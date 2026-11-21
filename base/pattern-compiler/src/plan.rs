@@ -25,7 +25,7 @@ use crate::footprint::{
     UseRecord, WriteRec, WriteTarget,
 };
 use crate::module::{symbol_of, Binding, DefKind};
-use crate::program::Resolver;
+use crate::program::{content_hash, Resolver};
 use crate::syntax::{static_key_name, unwrap, FunctionLike};
 use crate::tiers::{Body, BodyKind};
 use crate::types::{Annotation, Property, Shape, TypeId};
@@ -318,7 +318,20 @@ struct Computed {
     step: bool,
     /// What the value holds, where the emitter decided it (ruling T3).
     origin: Option<Declared>,
+    /// For a `select` that passes an operand on: its selector, its
+    /// condition, and the place and the template of each branch. A read
+    /// below the selected operand, or of its content, observes the
+    /// branch's place at the read's path (`passed_template`).
+    passed: Option<Passed>,
     order: usize,
+}
+
+/// The branches of a `select` that passes an operand on (`Computed.passed`).
+#[derive(Clone)]
+struct Passed {
+    selector: usize,
+    condition: Option<Value>,
+    branches: Vec<(Place, Option<Value>)>,
 }
 
 /// The children that an expression written among the children of a view
@@ -392,6 +405,27 @@ fn entries_whole(entries: &Entries, path: &[String]) -> Option<Value> {
         .map(|(_, template)| template.clone())
         .collect();
     Some(joined(below?))
+}
+
+/// The template of a path of a constructed value, from its entries: the
+/// nearest entry at or above the path, and where the value is observed
+/// whole there, the join of the entries at and below it. An observation of
+/// class `shape`, `enumeration` or `identity` at a container has the
+/// container entry's template alone (PL §3.4).
+fn entries_template(entries: &Entries, path: &[String], class: &'static str) -> Option<Value> {
+    let below = entries
+        .iter()
+        .any(|(at, _)| at.len() > path.len() && at.starts_with(path));
+    if !below {
+        return entry_at(entries, path);
+    }
+    if class == "value" {
+        return entries_whole(entries, path);
+    }
+    match entries.iter().find(|(at, _)| at == path) {
+        Some((_, template)) => template.clone(),
+        None => Some(json!({ "op": "const" })),
+    }
 }
 
 /// A static target of a side-write: the slot of the handle, its root and
@@ -535,6 +569,9 @@ struct Emitter<'r, 'm, 'a> {
     /// The entries of the constructed value the expression code being
     /// built computes, for the value `build` makes.
     pending_entries: Option<Entries>,
+    /// Each call of a pattern compiled in, in source order: the `within`
+    /// that the call is written under, as text, and the name of the call.
+    site_steps: Vec<(String, String)>,
     /// What the value-code emitter reads of this walk (`crate::emit`).
     facts: crate::emit::Facts,
 }
@@ -1112,6 +1149,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             step: false,
             referred: false,
             origin: None,
+            passed: None,
             order,
         });
         order
@@ -1208,9 +1246,67 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
     }
 
+    /// The class of a branch of a `select` that passes an operand on
+    /// (PL §3.5): "its `value` where it is a scalar, and the `slot` node
+    /// of its reference where it is a container or a handle". A type
+    /// the resolver does not know is passed on as a reference, as
+    /// `test_class` reads it as a container.
+    fn branch_class(&self, expression: &Expression<'a>) -> &'static str {
+        match self.test_class(expression) {
+            "value" => "value",
+            _ => "identity",
+        }
+    }
+
     /// A `select` over the condition `test` and two branches (PL §3.5).
     /// `first` and `second` say what each branch is: an expression, or
     /// the condition itself.
+    /// `a && b` is `select(a, [b, a])`, and `a || b` and `a ?? b` are
+    /// `select(a, [a, b])` (PL §3.5); `??` tests whether `a` is present.
+    fn logical(&mut self, logical: &LogicalExpression<'a>, hint: &str, at: u32) -> Place {
+        match logical.operator {
+            LogicalOperator::And => {
+                self.select(hint, at, &logical.left, None, [Some(&logical.right), None])
+            }
+            LogicalOperator::Or => {
+                self.select(hint, at, &logical.left, None, [None, Some(&logical.right)])
+            }
+            LogicalOperator::Coalesce => self.select(
+                hint,
+                at,
+                &logical.left,
+                Some("shape"),
+                [None, Some(&logical.right)],
+            ),
+        }
+    }
+
+    /// Evaluates a member read with a computed key, and records, for the
+    /// value code, the pick it made whose key the value code chooses
+    /// (`chosenBy: "valueCode"`, PL §3.18).
+    fn reported_pick(
+        &mut self,
+        span: oxc_span::Span,
+        evaluate: impl FnOnce(&mut Self) -> Place,
+    ) -> Place {
+        let first = self.picks.len();
+        let place = evaluate(self);
+        if self.picks.get(first) == Some(&"valueCode") {
+            self.facts.pick((span.start, span.end), first);
+        }
+        place
+    }
+
+    /// Records, for the value code, that the selection at `span` has the
+    /// selector numbered `first` where evaluating it made one: the first
+    /// selector it made is its own, and those after it are of its
+    /// operands.
+    fn reported_selector(&mut self, span: oxc_span::Span, first: usize, presence: bool) {
+        if self.selectors.len() > first {
+            self.facts.selector((span.start, span.end), first, presence);
+        }
+    }
+
     fn select(
         &mut self,
         hint: &str,
@@ -1219,12 +1315,12 @@ impl<'a> Emitter<'_, '_, 'a> {
         class: Option<&'static str>,
         branches: [Option<&Expression<'a>>; 2],
     ) -> Place {
-        let mut origins: Vec<Option<Declared>> = Vec::new();
-        let place = self.select_in(hint, at, test, class, branches, &mut origins);
+        let (place, origins, passed) = self.select_in(hint, at, test, class, branches);
         // A selection passes the selected branch on: it is a reference
         // where every branch is one (ruling T3).
         if let Place::Value(value, _) = &place {
             self.values[*value].origin = combine(origins);
+            self.values[*value].passed = passed;
         }
         place
     }
@@ -1236,33 +1332,46 @@ impl<'a> Emitter<'_, '_, 'a> {
         test: &Expression<'a>,
         class: Option<&'static str>,
         branches: [Option<&Expression<'a>>; 2],
-        origins: &mut Vec<Option<Declared>>,
-    ) -> Place {
-        self.build(hint, at, |emitter, _| {
+    ) -> (Place, Vec<Option<Declared>>, Option<Passed>) {
+        let mut origins: Vec<Option<Declared>> = Vec::new();
+        let mut passed = None;
+        let place = self.build(hint, at, |emitter, _| {
             let selector = emitter.selector(2);
             let class = class.unwrap_or_else(|| emitter.test_class(test));
             let (tested, condition) = emitter.one(class, |emitter| emitter.eval(test, "condition"));
             let mut templates = Vec::new();
             let mut constructed = Vec::new();
+            let mut kept = Vec::new();
             for branch in branches {
                 let (place, template) = match branch {
                     Some(branch) => {
-                        emitter.one("identity", |emitter| emitter.eval(branch, "branch"))
+                        let class = emitter.branch_class(branch);
+                        emitter.one(class, |emitter| emitter.eval(branch, "branch"))
                     }
                     // "When the selected arm of `&&` or `||` is the
                     // condition, the result carries that operand's full
                     // template, not only its truthiness."
-                    None => emitter.one("identity", |_| tested.clone()),
+                    None => {
+                        let class = emitter.branch_class(test);
+                        emitter.one(class, |_| tested.clone())
+                    }
                 };
                 origins.push(emitter.declared_of(&place));
                 constructed.push((emitter.entries_of(&place), template.clone()));
-                templates.push(template);
+                templates.push(template.clone());
+                kept.push((place, template));
             }
+            passed = Some(Passed {
+                selector,
+                condition: condition.clone(),
+                branches: kept,
+            });
             emitter.per_path(&constructed, |at| {
                 select_node(selector, condition.clone(), at)
             });
             select_node(selector, condition, templates)
-        })
+        });
+        (place, origins, passed)
     }
 
     /// A dynamic key in the reactive tier: a `pick` whose choice the value
@@ -1466,25 +1575,145 @@ impl<'a> Emitter<'_, '_, 'a> {
             node["body"] = json!({ "op": "slot", "slot": slot });
             return Some(node);
         }
+        if !(path.is_empty() && class == "identity") {
+            let here = self.cone.is_none_or(|cone| cone == self.values[value].cone);
+            if let (Some(passed), true) = (self.values[value].passed.clone(), here) {
+                return self.passed_template(&passed, path, class);
+            }
+            if !here && self.holds_reference(value) {
+                return Some(joined(vec![
+                    self.template_by_reference(value)?,
+                    self.through_output(value),
+                ]));
+            }
+        }
         let Some(entries) = &self.values[value].entries else {
             return self.template_by_reference(value);
         };
         if path.is_empty() && class == "value" {
             return self.values[value].template.clone();
         }
-        let below = entries
-            .iter()
-            .any(|(at, _)| at.len() > path.len() && at.starts_with(path));
-        if !below {
-            return entry_at(entries, path);
+        entries_template(entries, path, class)
+    }
+
+    /// The template of a read of a `select` that passes an operand on,
+    /// where the read observes more than which reference the selection
+    /// holds: a path below the selected operand, or its content (PL §3.5,
+    /// "The result is the selected operand itself"; §2.5, "A slot path
+    /// may cross a link"). Each branch is its own template joined with
+    /// the template of its place read at `path` with `class`, which is
+    /// what a read through the reference the branch passes on observes.
+    /// Only a reader in the cone of the `select` has it: the slots of a
+    /// branch are read by that cone's value code, and the write record
+    /// of another cone binds none of them.
+    fn passed_template(
+        &mut self,
+        passed: &Passed,
+        path: &[String],
+        class: &'static str,
+    ) -> Option<Value> {
+        let mut branches = Vec::new();
+        for (place, template) in &passed.branches {
+            let branch = match place {
+                Place::Slot(..) | Place::Read(..) | Place::Record(_) => {
+                    let read = self.read_through(place, path, class)?;
+                    joined(vec![template.clone()?, read])
+                }
+                // A `select` nested in a branch is read through in turn.
+                Place::Value(inner, _) if self.values[*inner].passed.is_some() => {
+                    let read = self.read_through(place, path, class)?;
+                    joined(vec![template.clone()?, read])
+                }
+                // Any other value the cone computed has a template that
+                // covers its content: a `pick` reads its chosen child
+                // for `value` where it is passed on (`chosen_slot`), and
+                // expression code joins what it observed.
+                _ => template.clone()?,
+            };
+            branches.push(Some(branch));
         }
-        if class == "value" {
-            return entries_whole(entries, path);
+        select_node(passed.selector, passed.condition.clone(), branches)
+    }
+
+    /// Whether a value can hold a reference it passes on: its template is
+    /// an `identity` slot, a `select` with such a branch, or the output of
+    /// a value that holds one.
+    fn holds_reference(&self, value: usize) -> bool {
+        fn passes(emitter: &Emitter<'_, '_, '_>, template: &Value, depth: u32) -> bool {
+            if depth > 16 {
+                return true;
+            }
+            match template["op"].as_str() {
+                Some("slot") => template["slot"]
+                    .as_u64()
+                    .and_then(|slot| emitter.slots.get(slot as usize))
+                    .is_some_and(|slot| slot.2 == "identity"),
+                Some("select") => template["branches"]
+                    .as_array()
+                    .is_some_and(|branches| branches.iter().any(|b| passes(emitter, b, depth + 1))),
+                Some("shared") => match template["$held"].as_u64() {
+                    Some(held) => HELD_TWICE.with(|known| {
+                        let found = known.borrow().get(held as usize).cloned();
+                        found.is_some_and(|found| passes(emitter, &found, depth + 1))
+                    }),
+                    None => false,
+                },
+                Some("output") => template["$template"]
+                    .as_u64()
+                    .and_then(|other| emitter.values.get(other as usize))
+                    .and_then(|other| other.template.as_ref())
+                    .is_some_and(|other| passes(emitter, other, depth + 1)),
+                _ => false,
+            }
         }
-        match entries.iter().find(|(at, _)| at == path) {
-            Some((_, template)) => template.clone(),
-            None => Some(json!({ "op": "const" })),
+        self.values[value]
+            .template
+            .as_ref()
+            .is_some_and(|template| passes(self, template, 0))
+    }
+
+    /// The `dynamic` node of the reads that follow the reference the
+    /// output of `value` holds (PL §1.1, `DynamicReads`, "one that is an
+    /// output of the instance"). A reader in another cone than the
+    /// `select` that chose the reference, or a kept output at a path below
+    /// it, reads through the link the output stores, at addresses no slot
+    /// of the plan names. The executor reports no address for it, so the
+    /// runtime takes the transaction's join as its bound.
+    fn through_output(&mut self, value: usize) -> Value {
+        let reads = self.dynamic(json!({
+            "why": { "kind": "link", "through": { "output": { "$value": value } } },
+        }));
+        json!({ "op": "dynamic", "reads": reads })
+    }
+
+    /// The template of `place` read at `path` below it with `class`, with
+    /// the slots of that read listed in the cone being evaluated. A read
+    /// below the place is its `value`: the slot stays at the position the
+    /// value code reads the branch at, so the write record binds it there
+    /// (`#samePositionBound` of `exec/executor.ts`), and a path below a
+    /// reference, `.length` of a collection among them, is covered by the
+    /// `value` of what the reference names.
+    fn read_through(
+        &mut self,
+        place: &Place,
+        path: &[String],
+        class: &'static str,
+    ) -> Option<Value> {
+        if let Place::Record(_) = place {
+            let entries = self.entries_of(place)?;
+            return entries_template(&entries, path, class);
         }
+        if let Place::Value(..) = place {
+            let mut at = place.clone();
+            for key in path {
+                at = Self::extend(&at, key);
+            }
+            self.observe_slots(&at, class);
+            return self.template_of(&at, class);
+        }
+        let class = if path.is_empty() { class } else { "value" };
+        self.observe_slots(place, class);
+        self.template_of(place, class)
     }
 
     /// The template of a value the instance computed, as the template of
@@ -1619,6 +1848,12 @@ impl<'a> Emitter<'_, '_, 'a> {
             let template = self.template_of(place, class);
             self.operand(template);
         }
+        self.observe_slots(place, class);
+    }
+
+    /// Lists, in the cone being evaluated, the slots an observation of
+    /// `place` with `class` makes.
+    fn observe_slots(&mut self, place: &Place, class: &'static str) {
         match place {
             Place::Slot(root, path) => {
                 let slot = self.slot(root, path, class);
@@ -1836,6 +2071,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 Statement::IfStatement(statement) => {
                     let selector = self.selector(2);
+                    self.facts.selector(
+                        (statement.span.start, statement.span.end),
+                        selector,
+                        false,
+                    );
                     let class = self.test_class(&statement.test);
                     let (_, condition) =
                         self.one(class, |emitter| emitter.eval(&statement.test, "condition"));
@@ -1887,10 +2127,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                         return returned;
                     }
                 }
+                // The value code of a statement body reads what it
+                // returns (`$h.v` of `src/emit.rs`), so the result is a
+                // copy, and its template is the `value` of the place
+                // returned, not the `identity` slot of a reference
+                // (PL §3.5, a branch that passes an operand on).
                 Statement::ReturnStatement(statement) => {
                     return Ok(match &statement.argument {
                         Some(argument) => {
-                            self.one("identity", |emitter| emitter.eval(argument, "branch"))
+                            self.one("value", |emitter| emitter.eval(argument, "branch"))
                                 .1
                         }
                         None => Some(json!({ "op": "const" })),
@@ -1958,20 +2203,16 @@ impl<'a> Emitter<'_, '_, 'a> {
         self.inline_argument(home, start, name, argument, at)
     }
 
-    /// The identity of a pattern (PL §1.5): the record `{ module,
-    /// binding }`, where `binding` is the name of the `const` the
-    /// `pattern(...)` call initializes, `default` for the operand of
-    /// `export default`, and for an inline pattern the binding of the
-    /// enclosing pattern and its own position. PL has the hash of the
-    /// record there, and the module's identity in it. The crate has
-    /// neither, so the entry is a placeholder, `unhashed:pattern/`, the
-    /// path of the module, `#`, and the binding.
+    /// The identity of a pattern (PL §1.5): the hash of the record
+    /// `{ module, binding }`, where `module` is the identity of the module
+    /// the `pattern(...)` call is written in (`Resolver::module_identity`) and
+    /// `binding` the path of the pattern's binding in it: the name of the
+    /// `const` the call initializes, `default` for the operand of `export
+    /// default`, and for an inline pattern the binding of the enclosing
+    /// pattern followed by its own position. It is formed from the
+    /// pattern's own module and what that module imports, so one pattern
+    /// has one identity whether it is compiled alone or into another.
     fn pattern_identity(&self, home: usize, start: u32) -> String {
-        let path = self
-            .resolver
-            .parsed(home)
-            .map(|parsed| parsed.path.clone())
-            .unwrap_or_default();
         let bodies = &self.bodies[home];
         let found = body_functions(self.resolver, home, bodies)
             .into_iter()
@@ -1997,7 +2238,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         if binding.is_empty() {
             binding = "default".to_string();
         }
-        format!("unhashed:pattern/{path}#{binding}")
+        let steps: Vec<&str> = binding.split('/').collect();
+        let module = self.resolver.module_identity(home);
+        content_hash(&json!({ "module": module, "binding": steps }))
     }
 
     /// The same, with the argument as the place it is bound to.
@@ -2023,7 +2266,12 @@ impl<'a> Emitter<'_, '_, 'a> {
             .enter(at, home, start, argument.clone(), self.cone);
         let saved_env = std::mem::take(&mut self.env);
         let saved_module = std::mem::replace(&mut self.module, home);
-        self.within.push(json!({ "site": name }));
+        // The step holds the call's own number until the plan is finished,
+        // which tells two calls of one name apart (`name_sites`).
+        let enclosing = Value::Array(self.within.clone()).to_string();
+        self.within
+            .push(json!({ "site": name, "$site": self.site_steps.len() }));
+        self.site_steps.push((enclosing, name.to_string()));
         let pattern = self
             .patterns
             .iter()
@@ -2222,7 +2470,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                         if matches!(object, Place::Const) && matches!(key, Place::Const) {
                             return Place::Const;
                         }
-                        self.pick(&object, &key, hint, at)
+                        self.reported_pick(member.span, |emitter| {
+                            emitter.pick(&object, &key, hint, at)
+                        })
                     }
                 }
             }
@@ -2236,7 +2486,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                         Expression::StringLiteral(key) => Self::extend(&object, key.value.as_str()),
                         key => {
                             let key = self.eval(key, hint);
-                            self.pick(&object, &key, hint, at)
+                            self.reported_pick(member.span, |emitter| {
+                                emitter.pick(&object, &key, hint, at)
+                            })
                         }
                     }
                 }
@@ -2476,30 +2728,27 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 built
             }
-            Expression::ConditionalExpression(conditional) => self.select(
-                hint,
-                at,
-                &conditional.test,
-                None,
-                [Some(&conditional.consequent), Some(&conditional.alternate)],
-            ),
-            // "`a && b` is `select(a, [b, a])` ... `a || b` and `??` are
-            // analogous" (PL §3.5). `??` tests whether `a` is present.
-            Expression::LogicalExpression(logical) => match logical.operator {
-                LogicalOperator::And => {
-                    self.select(hint, at, &logical.left, None, [Some(&logical.right), None])
-                }
-                LogicalOperator::Or => {
-                    self.select(hint, at, &logical.left, None, [None, Some(&logical.right)])
-                }
-                LogicalOperator::Coalesce => self.select(
+            Expression::ConditionalExpression(conditional) => {
+                let first = self.selectors.len();
+                let place = self.select(
                     hint,
                     at,
-                    &logical.left,
-                    Some("shape"),
-                    [None, Some(&logical.right)],
-                ),
-            },
+                    &conditional.test,
+                    None,
+                    [Some(&conditional.consequent), Some(&conditional.alternate)],
+                );
+                self.reported_selector(conditional.span, first, false);
+                place
+            }
+            // "`a && b` is `select(a, [b, a])` ... `a || b` and `??` are
+            // analogous" (PL §3.5). `??` tests whether `a` is present.
+            Expression::LogicalExpression(logical) => {
+                let first = self.selectors.len();
+                let place = self.logical(logical, hint, at);
+                let presence = logical.operator == LogicalOperator::Coalesce;
+                self.reported_selector(logical.span, first, presence);
+                place
+            }
             Expression::BinaryExpression(binary) => self.derived(hint, at, |emitter, _| {
                 let equality = matches!(
                     binary.operator,
@@ -4678,7 +4927,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         // (PL §1.1, `ReadInput`).
         let mut reads: Vec<(usize, Vec<String>)> = Vec::new();
         // The entries of `reads` at a position the body declares as a
-        // handle (provisional decision P31).
+        // handle (provisional decision P40).
         let mut handle_reads: BTreeSet<(usize, Vec<String>)> = BTreeSet::new();
         let mut computed_inputs: Vec<Value> = Vec::new();
         let mut names: Names = HashMap::new();
@@ -5151,7 +5400,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                     // `ReadInput.handle`: the body declares a handle at
                     // `at`, which the slot's schema, the type of the
-                    // place, does not say (provisional decision P31).
+                    // place, does not say (provisional decision P40).
                     if handle_reads.contains(&(*slot, at.clone())) {
                         entry["handle"] = json!(true);
                     }
@@ -5719,7 +5968,6 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// an element or a selection of elements of one (ruling T3: "an
     /// element that a `filter` (or another construct that passes elements
     /// on) in a `computed` yields, or a handle that a `computed` returns").
-    /// `module` is the module the function is written in.
     fn returned_origin(&self, module: usize, function: FunctionLike<'_, 'a>) -> Option<Declared> {
         fn gather<'e, 'a>(
             statements: &'e [Statement<'a>],
@@ -5831,8 +6079,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                     // A parameter returned unchanged.
                     return Some(Declared::Mixed);
                 }
-                // A body of another module captures no name of the
-                // reactive tier of this one.
+                // The environment is of the module being emitted; a body
+                // of another module names none of its bindings.
                 let place = if module == self.module {
                     self.env.get(name)
                 } else {
@@ -6122,8 +6370,17 @@ impl<'a> Emitter<'_, '_, 'a> {
 
     fn keep(&mut self, path: &mut Vec<String>, place: &Place) {
         match place {
-            Place::Value(value, _) => {
+            Place::Value(value, below) => {
                 self.values[*value].kept.push(path.clone());
+                // The output is kept at a path below the reference a
+                // `select` passed on: what is stored there is read
+                // through the link.
+                if !below.is_empty() && self.holds_reference(*value) {
+                    let through = self.through_output(*value);
+                    if let Some(template) = self.values[*value].template.take() {
+                        self.values[*value].template = Some(joined(vec![template, through]));
+                    }
+                }
             }
             Place::Record(fields) => {
                 for (name, member) in fields {
@@ -6737,6 +6994,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         );
         let flows = self.constraints(&mut plan);
         crate::flow::forget_named();
+        name_sites(&mut plan, &self.site_steps);
         name_ordinals(&mut plan);
         // A state path that resolves to an output has the output's
         // template (PL §1.1, `Binding.state.place`).
@@ -7973,6 +8231,45 @@ fn resolve_values(
     }
 }
 
+/// Gives each `site` step the name of its call: the name alone for the
+/// one call of that name under its `within`, and the record of the name
+/// and the ordinal of the call among those of the name, in source order,
+/// for one of several (PL §1.3, "A `site` step holds the name of its call
+/// by the same rules"). A step of the walk holds the number of its call
+/// under `$site`, an index of `calls`, which this removes.
+fn name_sites(plan: &mut Value, calls: &[(String, String)]) {
+    let mut counts: HashMap<&(String, String), u64> = HashMap::new();
+    for call in calls {
+        *counts.entry(call).or_default() += 1;
+    }
+    let mut seen: HashMap<&(String, String), u64> = HashMap::new();
+    let names: Vec<Value> = calls
+        .iter()
+        .map(|call| {
+            let ordinal = seen.entry(call).or_default();
+            *ordinal += 1;
+            match counts[call] {
+                1 => json!(call.1),
+                _ => json!({ "name": call.1, "ordinal": *ordinal }),
+            }
+        })
+        .collect();
+    fn rename(value: &mut Value, names: &[Value]) {
+        match value {
+            Value::Object(node) => {
+                if let Some(call) = node.remove("$site") {
+                    let call = call.as_u64().unwrap_or(0) as usize;
+                    node.insert("site".to_string(), names[call].clone());
+                }
+                node.values_mut().for_each(|member| rename(member, names));
+            }
+            Value::Array(members) => members.iter_mut().for_each(|member| rename(member, names)),
+            _ => {}
+        }
+    }
+    rename(plan, &names);
+}
+
 /// Where two declarations of one pattern body have the same name, each
 /// takes the name and its ordinal among them, in source order (PL §1.3).
 /// A name of several parts is the record of its parts, and no string
@@ -8131,6 +8428,7 @@ pub fn emit_module<'a>(
             ui_chain: Vec::new(),
             ui_bound: Vec::new(),
             pending_entries: None,
+            site_steps: Vec::new(),
             facts: crate::emit::Facts::new(module, *start),
         };
         // The type the pattern declares for its result: the second type

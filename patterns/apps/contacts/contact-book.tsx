@@ -1,14 +1,20 @@
+/**
+ * A contact book listing people with their email and company, searchable by
+ * name, email, or company. You add contacts, open one to edit its details, and
+ * record labeled relationships between two contacts, which show on each
+ * contact's card.
+ */
 import {
   action,
   computed,
   Default,
-  equals,
   ifElse,
   NAME,
   navigateTo,
   pattern,
   Stream,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 
@@ -35,6 +41,8 @@ interface ContactBookInput {
 }
 
 export interface ContactBookOutput {
+  [NAME]: string;
+  [UI]: VNode;
   contacts: Contact[];
   relationships: Relationship[];
   mentionable: Contact[];
@@ -74,6 +82,11 @@ export default pattern<ContactBookInput, ContactBookOutput>(
       });
     });
 
+    // Removes the contact at `index`; each card's × sends its own index.
+    const onDelete = action(({ index }: { index: number }) => {
+      contacts.set(contacts.get().toSpliced(index, 1));
+    });
+
     const newRelationFrom = new Writable("");
     const newRelationTo = new Writable("");
     const newRelationLabel = new Writable("");
@@ -108,7 +121,7 @@ export default pattern<ContactBookInput, ContactBookOutput>(
 
           <cf-vscroll flex showScrollbar fadeEdges>
             <cf-vstack gap="2" style="padding: 1rem;">
-              {contacts.map((contact) => {
+              {contacts.map((contact, index) => {
                 const isVisible = computed(() =>
                   matchesSearch(contact, searchQuery.get())
                 );
@@ -126,14 +139,6 @@ export default pattern<ContactBookInput, ContactBookOutput>(
                 const onClick = action(() => {
                   const detail = ContactDetail({ contact });
                   return navigateTo(detail);
-                });
-
-                const onDelete = action(() => {
-                  const current = contacts.get();
-                  const idx = current.findIndex((c) => equals(contact, c));
-                  if (idx >= 0) {
-                    contacts.set(current.toSpliced(idx, 1));
-                  }
                 });
 
                 return ifElse(
@@ -169,7 +174,7 @@ export default pattern<ContactBookInput, ContactBookOutput>(
                       </cf-vstack>
                       <cf-button
                         variant="ghost"
-                        onClick={onDelete}
+                        onClick={() => onDelete.send({ index })}
                       >
                         ×
                       </cf-button>

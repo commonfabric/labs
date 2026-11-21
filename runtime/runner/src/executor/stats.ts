@@ -349,6 +349,58 @@ export type ServingLoopStats = {
     warmWakes: number;
   };
 
+  /** The currency index (serving-loop.md §3b), which says which stored
+   * outputs are current. All zero where `SpaceServerPolicy.currencyIndex`
+   * is unset. */
+  currency: {
+    /** Piece records the loops sent to the store. */
+    recordsStored: number;
+
+    /** Records sent of a piece the loop could not vouch for, by reason:
+     * `not-clean` (a live computation was not clean), `foreign-read` (a read
+     * in another space that the snapshot cannot name the instance or the seq
+     * of), `foreign-write` (another space), `unattributed-writer` (it read a
+     * document whose writer names no piece and is not live, not clean, or
+     * runs once for each viewer), `clock-read` (it read a document a clock
+     * writes), `scoped-root`, `source-origin` and `no-pattern`. A record with
+     * two reasons counts under both. */
+    unvouched: Record<string, number>;
+
+    /** Roots put to a judgment, counted at each judgment made. */
+    judged: number;
+
+    /** Roots a judgment found the store could serve with no piece started,
+     * counted at each judgment that found it so. */
+    servable: number;
+
+    /** Roots a judgment found the store could not serve, by the first reason
+     * found: `no-record`, `marked`, `other-epoch` (the root's piece), and
+     * `unvouched-instance`, `absent-owned`,
+     * `owner-not-clean` (a demanded instance of the piece or of one beneath
+     * it). */
+    refused: Record<string, number>;
+
+    /** Roots left unloaded and unstarted on that judgment, which only the
+     * `skip` mode does, counted once each time a root is first left. */
+    servedFromStore: number;
+
+    /** Roots a judgment had left unloaded that were then loaded: an input
+     * marked the piece, or a session's demand reached an instance the
+     * piece does not vouch for. */
+    rearmed: number;
+
+    /** Times the loop was woken to judge a root it had left unloaded
+     * because the index changed from outside it: a space a slice read told
+     * this one of a change, or a request made for another space marked a
+     * slice here. */
+    indexWakes: number;
+
+    /** Pieces the index held clean that wrote an instance they vouched for
+     * again with no input of theirs changed. Each one is a judgment that
+     * would have served a stale value. */
+    falseClean: number;
+  };
+
   /** SERVER SETTLE per authored input (serving-loop.md §7; stage-C design
    * §6 W4's metric): from the authored commit's ADMISSION on the server
    * (its seq, `enqueueCommit`) to W COVERING it (the wave commit whose
@@ -541,6 +593,15 @@ export type ServingLoopStats = {
      * that grows without `processed` settling names a handler whose
      * argument never resolves. */
     handlerNotRunDeferrals: number;
+
+    /**
+     * Of `handlerNotRunDeferrals`, the withdrawals that waited on a document
+     * rather than spending the deferral budget (events.md §5): the run read
+     * a scoped instance of it the serving loop had not produced, and a writer
+     * that owes it will still run. A commit writing the document re-drains
+     * the entry.
+     */
+    handlerNotRunWaits: number;
 
     /**
      * Events requeued at a wave commit because a recorded read of the handler
@@ -764,8 +825,11 @@ export type ServingLoopStats = {
    * those closed once their host held nothing, `evicted` those closed while
    * parked to stay within the parked-worker cap or the heap budget,
    * `failed` those that reported an error, failed to start or were killed
-   * by the watchdog, and `shared` the placements that joined a worker
-   * already serving another space because the pool was at its cap.
+   * by the watchdog, `shared` the placements that joined a worker
+   * already serving another space because the pool was at its cap, and
+   * `heapLimited` the workers, among the `failed` ones, that reached their
+   * heap limit. `heapStopped` is how many spaces are on no worker now because
+   * a worker they were alone on reached its heap limit.
    */
   workers: {
     serving: number;
@@ -777,6 +841,8 @@ export type ServingLoopStats = {
     evicted: number;
     failed: number;
     shared: number;
+    heapLimited: number;
+    heapStopped: number;
   };
 };
 
@@ -835,6 +901,17 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     watchWakes: 0,
     warmWakes: 0,
   },
+  currency: {
+    recordsStored: 0,
+    unvouched: {},
+    judged: 0,
+    servable: 0,
+    refused: {},
+    servedFromStore: 0,
+    rearmed: 0,
+    indexWakes: 0,
+    falseClean: 0,
+  },
   settle: { series: [], dropped: 0 },
   settleAdvances: { count: 0, lastDelta: 0, series: [], dropped: 0 },
   events: {
@@ -853,6 +930,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     lt1LateSealsRefused: 0,
     orphanDeliveriesRefused: 0,
     handlerNotRunDeferrals: 0,
+    handlerNotRunWaits: 0,
     staleReadRequeues: 0,
     arrivalHeldDeferrals: 0,
     originPendingDeferrals: 0,
@@ -905,6 +983,8 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     evicted: 0,
     failed: 0,
     shared: 0,
+    heapLimited: 0,
+    heapStopped: 0,
   },
 });
 

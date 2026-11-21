@@ -437,7 +437,7 @@ describe("an instance", () => {
   });
 
   it("gives two references to one cell one `equalsKey`, and a reference to another cell another", async () => {
-    // Provisional decision P32: `equalsKey` returns what `equals`
+    // Provisional decision P41: `equalsKey` returns what `equals`
     // compares.
     const link = (index: number) => ({
       $link: { doc: ARGUMENT, path: ["pool", `${index}`] },
@@ -4518,17 +4518,26 @@ describe("a pattern called through `asInstance()` in an element body", () => {
   it("is a child of the plan with the mark, and no code of the callee is compiled in for it", async () => {
     const instance = await start(references());
 
+    // Each callee is named by the identity of its own source, one for
+    // `Row` at its three sites and another for `Word`.
+    const [row, word] = [
+      instance.plan.children?.[0].callee.compiled,
+      instance.plan.children?.[1].callee.compiled,
+    ];
+    expect(row).toMatch(/^sha256:/);
+    expect(word).toMatch(/^sha256:/);
+    expect(row).not.toBe(word);
     expect(
       instance.plan.children?.map((child) => [
         child.asInstance,
-        child.callee.compiled?.split("#")[1],
+        child.callee.compiled,
         child.within,
       ]),
     ).toEqual([
-      [true, "Row", [{ element: 0 }]],
-      [true, "Word", [{ element: 1 }]],
-      [true, "Row", [{ element: 3 }]],
-      [true, "Row", []],
+      [true, row, [{ element: 0 }]],
+      [true, word, [{ element: 1 }]],
+      [true, row, [{ element: 3 }]],
+      [true, row, []],
     ]);
     // The one binding of the plan is that of `plain`, which is compiled
     // in under a `site` step.
@@ -4567,13 +4576,11 @@ describe("a pattern called through `asInstance()` in an element body", () => {
 
     // A change of the element's value changes no key and writes no
     // argument: the instance reads through the reference.
-    const before = instance.store.log.length;
+    const log: { doc: string }[] = instance.store.log = [];
     instance.writeArgument(["pool", "a", "title"], "renamed");
     expect(result(instance).rows[0].title).toBe("renamed");
     expect(
-      instance.store.log.slice(before).some((write) =>
-        write.doc === argumentDocument(first.$link.doc)
-      ),
+      log.some((write) => write.doc === argumentDocument(first.$link.doc)),
     ).toBe(false);
     expect(instance.childInstances().length).toBe(7);
   });
@@ -4622,13 +4629,13 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     const documents = instance.documents();
 
     // The element leaves: nothing of the instance is written or removed.
-    const before = instance.store.log.length;
+    const log: { doc: string }[] = instance.store.log = [];
     instance.writeArgument(["items"], [link("a")]);
 
     expect(result(instance).rows.length).toBe(1);
     expect(instance.documents()).toEqual(documents);
     expect(
-      instance.store.log.slice(before).some((write) =>
+      log.some((write) =>
         instance.childInstances().find(({ instance: made }) =>
           made.id === second.$link.doc
         )?.instance.documentIds().includes(write.doc)

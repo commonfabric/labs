@@ -27,6 +27,16 @@ describe("empty-reply", () => {
     );
   });
 
+  it("throws for an empty reply whose payload is not an object", () => {
+    expect(() =>
+      emptyReplyDiagnostic(
+        { role: "assistant", content: " " },
+        "chat-completions",
+        "not a response",
+      )
+    ).toThrow("Empty-reply evidence requires a provider response object");
+  });
+
   it("omits evidence for a tool-only reply", () => {
     expect(emptyReplyDiagnostic(
       {

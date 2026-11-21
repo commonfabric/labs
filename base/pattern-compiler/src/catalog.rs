@@ -22,6 +22,10 @@ pub enum Status {
     NeedsFootprint(&'static str),
     /// The entry is not decided when a module is compiled.
     NotCompileTime(&'static str),
+    /// The document lists the entry and the front end has no check for it,
+    /// though syntax and name resolution could decide it. The text names
+    /// what the front end does with the form in the meantime.
+    NotImplemented(&'static str),
     /// The catalog lists the identifier as no longer reported.
     Retired,
 }
@@ -35,6 +39,7 @@ impl Status {
             Status::NeedsTypes(_) => "needs the type checker",
             Status::NeedsFootprint(_) => "needs footprint analysis",
             Status::NotCompileTime(_) => "not a compile-time rule",
+            Status::NotImplemented(_) => "not implemented",
             Status::Retired => "retired",
         }
     }
@@ -45,7 +50,8 @@ impl Status {
             Status::Implemented { rest } => rest,
             Status::NeedsTypes(text)
             | Status::NeedsFootprint(text)
-            | Status::NotCompileTime(text) => Some(text),
+            | Status::NotCompileTime(text)
+            | Status::NotImplemented(text) => Some(text),
             Status::Retired => None,
         }
     }
@@ -166,6 +172,15 @@ pub const CATALOG: &[Entry] = &[
         "reported where the receiver's type comes from a declaration; a receiver whose type needs expression inference is not decided",
     ),
     done("pattern-context:self-access", Error),
+    Entry {
+        id: "element-body:result-stored-outside",
+        severity: Some(Error),
+        status: Status::NeedsFootprint(
+            "not reported: needs, for each function body, whether what it stores outside \
+             the collection holds a reference to the result of a pattern call of an \
+             element body",
+        ),
+    },
     part(
         "ses-callback:callable-capture",
         Error,
@@ -174,8 +189,23 @@ pub const CATALOG: &[Entry] = &[
     ),
     done("removed-form:helper", Warning),
     done("removed-form:helper-unsupported", Error),
+    part(
+        "removed-form:pattern-tool-interim",
+        Warning,
+        "reported for a call that is rewritten to a pattern closure; a call whose result \
+         is bound to a name is rewritten also where other code reads the members `pattern` \
+         or `extraParams` of that name, which the closure does not have",
+    ),
     done("removed-form:pattern-tool", Error),
     done("removed-form:builtin", Error),
+    Entry {
+        id: "removed-form:schema-argument",
+        severity: Some(Error),
+        status: Status::NotImplemented(
+            "a schema passed to a form of the API that takes one is accepted without a \
+             report",
+        ),
+    },
     done("collection:callback-parameters", Error),
     done("collection:reduce-callback", Error),
     done("collection:reduce-initial", Error),
@@ -499,25 +529,6 @@ pub const CATALOG: &[Entry] = &[
         "reported for a value that is not literal-like; whether the value is assignable to the type is not checked",
     ),
     done("scope:union-member", Error),
-];
-
-/// The entries of the catalog that `language-subset.md` in this tree
-/// does not have, in the order of the table that has them:
-/// `element-body:result-stored-outside` follows
-/// `pattern-context:self-access`, and the two of `ArrayByKey` follow
-/// `scope:union-member`. `tests/catalog.rs` reads the document in this
-/// tree and fails once it has one of these, so that it moves into
-/// [`CATALOG`] and `catalog-ids.txt`.
-pub const PROVISIONAL: &[Entry] = &[
-    Entry {
-        id: "element-body:result-stored-outside",
-        severity: Some(Error),
-        status: Status::NeedsFootprint(
-            "not reported: needs, for each function body, whether what it stores outside \
-             the collection holds a reference to the result of a pattern call of an \
-             element body",
-        ),
-    },
     part(
         "array-by-key:declaration",
         Error,
@@ -531,14 +542,20 @@ pub const PROVISIONAL: &[Entry] = &[
          not a literal, the result of a `filter` or a `map` over an array with a declared \
          key included; an assignment and the argument of a handle method are not checked",
     ),
-    part(
-        "array-by-key:state-without-key",
-        Warning,
-        "reported from the plan, for an array whose elements have a member that the body \
+];
+
+/// The entry of the catalog that `language-subset.md` in this tree does
+/// not have: `array-by-key:state-without-key`, which follows
+/// `array-by-key:mismatch` in the table that has it. `tests/catalog.rs`
+/// reads the document in this tree and fails once it has an entry of this
+/// list, so that the entry moves into [`CATALOG`] and `catalog-ids.txt`.
+pub const PROVISIONAL: &[Entry] = &[part(
+    "array-by-key:state-without-key",
+    Warning,
+    "reported from the plan, for an array whose elements have a member that the body \
          reads; the type does not say whether the array holds plain values in place or \
          references, and the report is made for both",
-    ),
-];
+)];
 
 /// The entry for `id`, if the catalog has one.
 pub fn entry(id: &str) -> Option<&'static Entry> {
@@ -559,12 +576,13 @@ pub fn implemented_severity(id: &str) -> Option<Severity> {
 }
 
 /// The status labels, in the order the `catalog` command prints their counts.
-pub const STATUS_LABELS: [&str; 6] = [
+pub const STATUS_LABELS: [&str; 7] = [
     "implemented",
     "implemented in part",
     "needs the type checker",
     "needs footprint analysis",
     "not a compile-time rule",
+    "not implemented",
     "retired",
 ];
 

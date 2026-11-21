@@ -45,6 +45,19 @@ export type ProfileBadgeTooltip = {
   pinnedCount: number;
 };
 
+const { picture: _picture, avatar: _avatar, ...namedProperties } =
+  ProfileBadgeSchema.properties;
+
+/**
+ * The fields of a profile the badge reads from the profile's own cell: all
+ * it shows but the face, which it reads from the cell holding each face
+ * field, so that the face's bytes are delivered once.
+ */
+const ProfileNamedSchema = {
+  ...ProfileBadgeSchema,
+  properties: namedProperties,
+} as const;
+
 /**
  * Extracts the tooltip details (bio + pinned-piece count) from a subscribed
  * profile-cell value. `bio` is the owner-authored free-text description;
@@ -208,10 +221,10 @@ export const profileSpaceOf = async (
  *
  * The badge draws the face of the principal its seal names: the picture, or
  * else the avatar text, only when the label of the cell holding it names that
- * principal alone (`observeWrittenPrincipal()`). Anyone can write a profile's
- * picture, so a picture a visitor set, or one stored without a label, is not
- * drawn, and a badge whose cell's label names no single principal draws no
- * face.
+ * principal alone (`observeWrittenPrincipal()`). A picture someone other
+ * than the owner set, which earlier releases allowed, or one stored without a
+ * label, is not drawn, and a badge whose cell's label names no single
+ * principal draws no face.
  *
  * @element cf-profile-badge
  * @attr {string} size - avatar size: xs | sm | md | lg | xl (default md)
@@ -917,11 +930,12 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
         {
           [NAME]?: string;
           name?: string;
-          picture?: FabricBytes;
-          avatar?: string;
           bio?: string;
           elements?: Array<{ title?: string }>;
         }
+      >(ProfileNamedSchema);
+      const face = resolved.asSchema<
+        { picture?: FabricBytes; avatar?: string }
       >(ProfileBadgeSchema);
       // The runtime-attested label rides each subscription update
       // (`includeCfcLabel`), read on the sink's tracked tx — so verification
@@ -944,14 +958,14 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       // Only a face field whose own cell represents the principal the label
       // names is drawn.
       const cancelPicture = observeWrittenPrincipal(
-        named.key("picture"),
+        face.key("picture"),
         (picture) => {
           this.#written = { ...this.#written, picture };
           this.#applyFace();
         },
       );
       const cancelAvatar = observeWrittenPrincipal(
-        named.key("avatar"),
+        face.key("avatar"),
         (avatar) => {
           this.#written = { ...this.#written, avatar };
           this.#applyFace();

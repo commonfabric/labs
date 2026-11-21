@@ -274,7 +274,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/action-constant.tsx#Counter"
+            "sha256:c402daac80b36e98a484c861a486565f2d58f9048a10bfb376422ab3e6ad5f2d"
           ],
           "picks": [],
           "selectors": [],
@@ -782,8 +782,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/action-constant.tsx#default",
-            "unhashed:pattern/compare/fixtures/action-constant.tsx#Counter"
+            "sha256:e00a96c6b4f0d31abffad26347bd9cef5bb503096bb2252e65a1aa5594ff29eb",
+            "sha256:c402daac80b36e98a484c861a486565f2d58f9048a10bfb376422ab3e6ad5f2d"
           ],
           "picks": [],
           "selectors": [],

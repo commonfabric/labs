@@ -1,7 +1,11 @@
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 import { assert, assertEquals } from "@std/assert";
 import ts from "typescript";
 
 import { createDataFlowAnalyzer } from "../../src/ast/dataflow.ts";
+import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { createInMemoryProgram } from "../utils.ts";
 
 // Branded-cell prelude so `state.*` reads resolve to a reactive (opaque) type
 // under `noLib`, mirroring the reactive harness prelude in dataflow.test.ts.
@@ -645,4 +649,118 @@ Deno.test("synthetic element access unwraps through findRootIdentifier", () => {
   const synthetic = f.createPropertyAccessExpression(elem, "price");
   const analysis = createDataFlowAnalyzer(checker)(synthetic);
   assert(analysis.containsReactive, "element-access-rooted read is reactive");
+});
+
+describe("dataflow", () => {
+  describe("createDataFlowAnalyzer()", () => {
+    /** A checker for `main`, which may import the real Common Fabric types. */
+    function checkerFor(main: string) {
+      const program = createInMemoryProgram({
+        "/main.ts": main,
+        "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+        "/cfc.ts": COMMONFABRIC_TYPES["cfc.ts"]!,
+      }, {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
+        strict: true,
+        noLib: true,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      if (!sourceFile) throw new Error("`/main.ts` was not loaded.");
+      const statement = (name: string): ts.Identifier => {
+        let found: ts.Identifier | undefined;
+        const visit = (node: ts.Node): void => {
+          if (
+            ts.isExpressionStatement(node) &&
+            ts.isIdentifier(node.expression) &&
+            node.expression.text === name
+          ) {
+            found = node.expression;
+          }
+          ts.forEachChild(node, visit);
+        };
+        visit(sourceFile);
+        if (!found) throw new Error(`No statement reads \`${name}\`.`);
+        return found;
+      };
+      return { checker: program.getTypeChecker(), statement };
+    }
+
+    function detachedExpression(source: string): ts.Expression {
+      // Parsed without parent pointers, the expression makes the checker
+      // throw when asked for its symbol or type.
+      const sourceFile = ts.createSourceFile(
+        "/detached.ts",
+        source,
+        ts.ScriptTarget.ESNext,
+        false,
+      );
+      const [statement] = sourceFile.statements;
+      assert(statement && ts.isExpressionStatement(statement));
+      return statement.expression;
+    }
+
+    it("records an identifier the checker cannot resolve as an opaque parameter", () => {
+      const { checker } = checkerFor("export {};");
+      const detached = detachedExpression("unresolved;");
+
+      expect(() => checker.getSymbolAtLocation(detached)).toThrow();
+      const analysis = createDataFlowAnalyzer(checker)(detached);
+      expect(analysis.containsReactive).toBe(true);
+      expect(analysis.dataFlows).toEqual([detached]);
+    });
+
+    it("records a property read the checker cannot type when its root is an element binding", () => {
+      const { checker } = checkerFor("export {};");
+      const detached = detachedExpression("element.price;");
+
+      expect(() => checker.getTypeAtLocation(detached)).toThrow();
+      const analysis = createDataFlowAnalyzer(checker, {
+        isArrayMethodElementBindingReference: () => true,
+      })(detached);
+      expect(analysis.containsReactive).toBe(true);
+      expect(analysis.dataFlows).toEqual([detached]);
+    });
+
+    it("records a synthetic read through a call on a reactive root as a rewrite", () => {
+      // The synthetic root carries an original node, so it resolves to the
+      // pattern parameter, while the call in the chain keeps the read from
+      // being typed or classified as a structural path.
+      const { checker, statement } = checkerFor(`
+        import { pattern } from "commonfabric";
+        declare const plain: { make: () => { price: number } };
+        plain;
+        export default pattern((input: { make: () => { price: number } }) => {
+          input;
+          return {};
+        });
+      `);
+      const f = ts.factory;
+      const readThroughCall = (rootName: string) => {
+        const root = ts.setOriginalNode(
+          f.createIdentifier(rootName),
+          statement(rootName),
+        );
+        const access = f.createPropertyAccessExpression(
+          f.createCallExpression(
+            f.createPropertyAccessExpression(root, "make"),
+            undefined,
+            [],
+          ),
+          "price",
+        );
+        return { access, analysis: createDataFlowAnalyzer(checker)(access) };
+      };
+
+      const reactive = readThroughCall("input");
+      expect(reactive.analysis.containsReactive).toBe(true);
+      expect(reactive.analysis.requiresRewrite).toBe(true);
+      expect(reactive.analysis.dataFlows).toEqual([reactive.access]);
+
+      const inert = readThroughCall("plain");
+      expect(inert.analysis.containsReactive).toBe(false);
+      expect(inert.analysis.dataFlows).toEqual([]);
+    });
+  });
 });

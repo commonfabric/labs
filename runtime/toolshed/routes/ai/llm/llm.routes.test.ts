@@ -4,8 +4,22 @@ import { expect } from "@std/expect";
 import type { BuiltInLLMMessage } from "@commonfabric/api";
 
 import createApp from "@/lib/create-app.ts";
-import router from "./llm.index.ts";
+import { createLLMRouter } from "./llm.router.ts";
 import { MessageSchema } from "./llm.routes.ts";
+import { createModelRegistry } from "./models.ts";
+import {
+  memoryCache,
+  recordingLogger,
+  refusingFetch,
+} from "@/test/fixtures/llm-models.ts";
+
+const router = createLLMRouter({
+  models: createModelRegistry({
+    fetch: refusingFetch,
+    logger: recordingLogger(),
+  }),
+  cache: memoryCache(),
+});
 
 /** The request body schema this route publishes, as JSON Schema. */
 function publishedRequestSchema(path: string): Record<string, any> {

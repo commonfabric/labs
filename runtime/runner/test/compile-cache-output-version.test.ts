@@ -9,6 +9,7 @@ import {
   type CompiledVariant,
   computeCompilerOutputVersion,
   CORPUS_ENTRIES,
+  type CorpusEntryCompiled,
   outputFingerprintOf,
 } from "../src/compilation-cache/compile-cache-output-version.deno.ts";
 import { CORPUS_DIR } from "../src/compilation-cache/compile-cache-output-memo.deno.ts";
@@ -240,10 +241,29 @@ describe("compile-cache-output-version", () => {
       expect(entryBody(named)).toContain("nameInstance");
     });
 
-    it("compiles the corpus once per persisted variant", async () => {
-      const variants = await compileCorpusVariants(corpus, ["main.tsx"]);
+    it("compiles the corpus once per persisted variant, reporting each entry as it finishes", async () => {
+      const entries = ["main.tsx", "double.tsx"];
+      const reported: CorpusEntryCompiled[] = [];
+      const variants = await compileCorpusVariants(
+        corpus,
+        entries,
+        (compiled) => reported.push(compiled),
+      );
+
       expect(variants.map((variant) => variant.variant)).toEqual(
         PERSISTED_CACHE_VARIANTS.map(cacheVariantName),
+      );
+      const variantCount = PERSISTED_CACHE_VARIANTS.length;
+      expect(reported).toEqual(
+        PERSISTED_CACHE_VARIANTS.flatMap((_, variant) =>
+          entries.map((entry, index) => ({
+            entry,
+            variantNumber: variant + 1,
+            variantCount,
+            entryNumber: index + 1,
+            entryCount: entries.length,
+          }))
+        ),
       );
     });
 
@@ -283,9 +303,12 @@ describe("compile-cache-output-version", () => {
     });
 
     it("returns the namespaced output fingerprint, under the epoch given, of the corpus under the repository", async () => {
-      const version = await computeCompilerOutputVersion(repoRoot, 7, [
-        "main.tsx",
-      ]);
+      const reported: string[] = [];
+      const version = await computeCompilerOutputVersion(repoRoot, {
+        epoch: 7,
+        entries: ["main.tsx"],
+        onCompiled: ({ entry }) => reported.push(entry),
+      });
       const variants = await compileCorpusVariants(
         join(repoRoot, CORPUS_DIR),
         ["main.tsx"],
@@ -293,6 +316,9 @@ describe("compile-cache-output-version", () => {
 
       expect(version).toBe(
         `${VERSION_NAMESPACE}/${outputFingerprintOf(variants, 7)}`,
+      );
+      expect(reported).toEqual(
+        PERSISTED_CACHE_VARIANTS.map(() => "main.tsx"),
       );
     });
   });

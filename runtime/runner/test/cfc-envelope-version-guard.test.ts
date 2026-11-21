@@ -1,3 +1,4 @@
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -635,6 +636,10 @@ describe("CFC envelope version guard", () => {
       "a path segment that is not a string": entriesHolding([{
         path: [1],
         label: { confidentiality: ["vaulted"] },
+      }]),
+      "a class instance where a label belongs": entriesHolding([{
+        path: ["secret"],
+        label: new FabricBytes(new Uint8Array([1, 2, 3])),
       }]),
       "clauses that are not a list": entriesHolding([{
         path: ["secret"],

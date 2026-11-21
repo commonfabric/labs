@@ -1,3 +1,9 @@
+/**
+ * Asks a language model for an ASCII diagram of a topic and shows it in a
+ * monospace block. It uses `generateText` and makes no request until a topic
+ * is given.
+ */
+
 import {
   computed,
   Default,
@@ -8,6 +14,7 @@ import {
   UI,
   type VNode,
 } from "commonfabric";
+import { promptAbout } from "./suggestion.ts";
 
 // ===== Types =====
 
@@ -35,10 +42,9 @@ const Diagram = pattern<DiagramInput, DiagramOutput>(({ topic, context }) => {
   // An empty prompt holds the request back: `generateText` clears its state
   // and makes no call until one arrives. A diagram with no topic has nothing
   // to draw, so the model is asked only once a caller names the subject.
-  const prompt = computed(() => {
-    if (!topic) return "";
-    return `Create a clear ASCII diagram illustrating: ${topic}`;
-  });
+  const prompt = computed(() =>
+    promptAbout(topic, "Create a clear ASCII diagram illustrating: ")
+  );
 
   const response = generateText({
     system:
@@ -61,7 +67,7 @@ const Diagram = pattern<DiagramInput, DiagramOutput>(({ topic, context }) => {
           {ifElse(
             response.pending,
             <div style="color: var(--cf-theme-color-text-secondary);">
-              <cf-loader show-elapsed /> Generating diagram...
+              <cf-loader showElapsed /> Generating diagram...
             </div>,
             <pre style="font-family: monospace; font-size: 0.85rem; line-height: 1.4; overflow-x: auto; white-space: pre; background: var(--cf-theme-color-surface, #f5f5f5); padding: 1rem; border-radius: 0.5rem;">
               {response.result}

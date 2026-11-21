@@ -47,17 +47,10 @@ interface ShoppingItem {
 // Handlers at module scope
 const removeItem = handler<
   unknown,
-  {
-    items: Writable<Array<Writable<ShoppingItem>>>;
-    item: Writable<ShoppingItem>;
-  }
+  { items: Writable<ShoppingItem[]>; index: number }
 >(
-  (_event, { items: itemsList, item }) => {
-    const current = itemsList.get();
-    const index = current.findIndex((el) => el.equals(item));
-    if (index >= 0) {
-      itemsList.set(current.toSpliced(index, 1));
-    }
+  (_event, { items: itemsList, index }) => {
+    itemsList.set(itemsList.get().toSpliced(index, 1));
   },
 );
 
@@ -98,7 +91,7 @@ const BasicList = pattern<BasicListInput>(({ items }) => {
           Basic List View
         </h3>
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          {items.map((item) => (
+          {items.map((item, index) => (
             <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
               <cf-checkbox $checked={item.done}>
                 <span
@@ -109,7 +102,7 @@ const BasicList = pattern<BasicListInput>(({ items }) => {
                   {item.title} ({item.category})
                 </span>
               </cf-checkbox>
-              <cf-button onClick={removeItem({ items, item })}>x</cf-button>
+              <cf-button onClick={removeItem({ items, index })}>x</cf-button>
             </div>
           ))}
         </div>
@@ -155,7 +148,7 @@ const CategoryList = pattern<CategoryListInput>(({ items }) => {
         {categories.map((category) => (
           <div style={{ marginBottom: "12px" }}>
             <h4 style={{ margin: "0 0 8px 0", color: "#666" }}>{category}</h4>
-            {items.map((item) =>
+            {items.map((item, index) =>
               ifElse(
                 computed(() => (item.category || "Uncategorized") === category),
                 <div
@@ -176,7 +169,9 @@ const CategoryList = pattern<CategoryListInput>(({ items }) => {
                       {item.title}
                     </span>
                   </cf-checkbox>
-                  <cf-button onClick={removeItem({ items, item })}>x</cf-button>
+                  <cf-button onClick={removeItem({ items, index })}>
+                    x
+                  </cf-button>
                 </div>,
                 null,
               )

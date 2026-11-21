@@ -21,7 +21,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/effects.tsx",
-              "source": "const { \"computed\": computed, \"fetchJson\": fetchJson, \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst setSite = handler(\n  (event, { site }) => {\n    site.set(event.to);\n  },\n);\nconst setPayload = handler(\n  (event, { payload }) => {\n    payload.set({ id: event.id });\n  },\n);\nconst guard = lift((address) => {\n  if (address.startsWith(\"bad:\")) throw new Error(\"a bad address\");\n  return address;\n});\nconst strict = lift((item) => {\n  if (item !== undefined && item.title === \"\") throw new Error(\"no title\");\n  return item === undefined ? \"nothing\" : `titled ${item.title}`;\n});\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/effects.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((item) => {\n  if (item !== undefined && item.title === \"\") throw new Error(\"no title\");\n  return item === undefined ? \"nothing\" : `titled ${item.title}`;\n})($a));\n$rt.body(1, ($a) => { const { fetched } = $a; return (() => {\n    let text = \"nothing yet\";\n    if (fetched.result) text = `got ${fetched.result.title}`;\n    return text;\n  })(); });\n$rt.body(2, ($a) => ((address) => {\n  if (address.startsWith(\"bad:\")) throw new Error(\"a bad address\");\n  return address;\n})($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).toLowerCase())));\n$rt.request(0, ($h) => ([({ url: $h.output(0), options: ({ method: (\"POST\"), body: $h.slot(1) }) })]));\n$rt.request(1, ($h) => ([({ url: $h.output(0) })]));\n$rt.value(3, ($h) => (($h.v($h.slot(4)) ?? (\"none\"))));\n$rt.value(6, ($h) => (($h.v($h.slot(5)) ? (\"pending\") : ($h.v($h.slot(6)) ? (\"failed\") : (\"settled\")))));\n$rt.value(7, ($h) => ($h.invoke(0, undefined)));\n$rt.value(8, ($h) => ($h.invoke(1, {  })));\n$rt.request(2, ($h) => ([({ url: $h.invoke(2, $h.output(0)) })]));\n$rt.value(11, ($h) => (($h.v($h.slot(8)) ? (\"pending\") : (\"not pending\"))));\nreturn $rt.thunk(($h) => (({ note: $h.slot(14), title: $h.output(1), status: $h.output(2), checked: $h.output(3), inBody: $h.output(4), guardedStatus: $h.output(5), setSite: $h.stream(0), setPayload: $h.stream(1) })));\n});\n$rt.body(3, ($e, $s) => ((event, { site }) => {\n    site.set(event.to);\n  })($e, $s));\n$rt.body(4, ($e, $s) => ((event, { payload }) => {\n    payload.set({ id: event.id });\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"fetchJson\": fetchJson, \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst setSite = handler(\n  (event, { site }) => {\n    site.set(event.to);\n  },\n);\nconst setPayload = handler(\n  (event, { payload }) => {\n    payload.set({ id: event.id });\n  },\n);\nconst guard = lift((address) => {\n  if (address.startsWith(\"bad:\")) throw new Error(\"a bad address\");\n  return address;\n});\nconst strict = lift((item) => {\n  if (item !== undefined && item.title === \"\") throw new Error(\"no title\");\n  return item === undefined ? \"nothing\" : `titled ${item.title}`;\n});\nconst $default = (pattern(\"sha256:22c5d8f1988ae5af097acdeaf3217d2e5eb5ba029bb81493c8936f77efdf7958\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((item) => {\n  if (item !== undefined && item.title === \"\") throw new Error(\"no title\");\n  return item === undefined ? \"nothing\" : `titled ${item.title}`;\n})($a));\n$rt.body(1, ($a) => { const { fetched } = $a; return (() => {\n    let text = \"nothing yet\";\n    if (fetched.result) text = `got ${fetched.result.title}`;\n    return text;\n  })(); });\n$rt.body(2, ($a) => ((address) => {\n  if (address.startsWith(\"bad:\")) throw new Error(\"a bad address\");\n  return address;\n})($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).toLowerCase())));\n$rt.request(0, ($h) => ([({ url: $h.output(0), options: ({ method: (\"POST\"), body: $h.slot(1) }) })]));\n$rt.request(1, ($h) => ([({ url: $h.output(0) })]));\n$rt.value(3, ($h) => (($h.select(0, $h.v($h.slot(4)), true) ?? (\"none\"))));\n$rt.value(6, ($h) => (($h.select(1, $h.v($h.slot(5))) ? (\"pending\") : ($h.select(2, $h.v($h.slot(6))) ? (\"failed\") : (\"settled\")))));\n$rt.value(7, ($h) => ($h.invoke(0, undefined)));\n$rt.value(8, ($h) => ($h.invoke(1, {  })));\n$rt.request(2, ($h) => ([({ url: $h.invoke(2, $h.output(0)) })]));\n$rt.value(11, ($h) => (($h.select(3, $h.v($h.slot(7))) ? (\"pending\") : (\"not pending\"))));\nreturn $rt.thunk(($h) => (({ note: $h.slot(13), title: $h.output(1), status: $h.output(2), checked: $h.output(3), inBody: $h.output(4), guardedStatus: $h.output(5), setSite: $h.stream(0), setPayload: $h.stream(1) })));\n});\n$rt.body(3, ($e, $s) => ((event, { site }) => {\n    site.set(event.to);\n  })($e, $s));\n$rt.body(4, ($e, $s) => ((event, { payload }) => {\n    payload.set({ id: event.id });\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -124,11 +124,11 @@
                     "site"
                   ],
                   "place": {
-                    "slot": 11
+                    "slot": 10
                   },
                   "template": {
                     "op": "slot",
-                    "slot": 11
+                    "slot": 10
                   }
                 }
               ],
@@ -176,7 +176,7 @@
                   "at": [
                     "title"
                   ],
-                  "slot": 7
+                  "slot": 4
                 }
               ],
               "widenings": [],
@@ -205,7 +205,7 @@
                     "result",
                     "title"
                   ],
-                  "slot": 7
+                  "slot": 4
                 }
               ],
               "widenings": [],
@@ -248,7 +248,7 @@
                     "event",
                     "to"
                   ],
-                  "slot": 9
+                  "slot": 8
                 },
                 {
                   "at": [
@@ -256,7 +256,7 @@
                     "site"
                   ],
                   "handle": true,
-                  "slot": 10
+                  "slot": 9
                 }
               ],
               "widenings": [],
@@ -267,7 +267,7 @@
                   "target": {
                     "kind": "handle",
                     "path": [],
-                    "slot": 10
+                    "slot": 9
                   },
                   "template": {
                     "by": {
@@ -276,11 +276,11 @@
                     "inputs": [
                       {
                         "op": "slot",
-                        "slot": 9
+                        "slot": 8
                       },
                       {
                         "op": "slot",
-                        "slot": 10
+                        "slot": 9
                       }
                     ],
                     "op": "derive"
@@ -302,7 +302,7 @@
                     "event",
                     "id"
                   ],
-                  "slot": 12
+                  "slot": 11
                 },
                 {
                   "at": [
@@ -310,7 +310,7 @@
                     "payload"
                   ],
                   "handle": true,
-                  "slot": 13
+                  "slot": 12
                 }
               ],
               "widenings": [],
@@ -321,7 +321,7 @@
                   "target": {
                     "kind": "handle",
                     "path": [],
-                    "slot": 13
+                    "slot": 12
                   },
                   "template": {
                     "by": {
@@ -330,11 +330,11 @@
                     "inputs": [
                       {
                         "op": "slot",
-                        "slot": 12
+                        "slot": 11
                       },
                       {
                         "op": "slot",
-                        "slot": 13
+                        "slot": 12
                       }
                     ],
                     "op": "derive"
@@ -508,7 +508,7 @@
               "selectors": [],
               "slots": [
                 2,
-                7
+                4
               ],
               "within": [],
               "writes": []
@@ -526,7 +526,7 @@
               "selectors": [],
               "slots": [
                 2,
-                7
+                4
               ],
               "within": [],
               "writes": []
@@ -575,7 +575,7 @@
                 3
               ],
               "slots": [
-                8
+                7
               ],
               "within": [],
               "writes": []
@@ -590,7 +590,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                14
+                13
               ],
               "within": [],
               "writes": []
@@ -786,7 +786,7 @@
                   },
                   {
                     "op": "slot",
-                    "slot": 7
+                    "slot": 4
                   }
                 ],
                 "op": "derive"
@@ -810,7 +810,7 @@
                   },
                   {
                     "op": "slot",
-                    "slot": 7
+                    "slot": 4
                   }
                 ],
                 "op": "derive"
@@ -834,7 +834,7 @@
                 ],
                 "condition": {
                   "op": "slot",
-                  "slot": 8
+                  "slot": 7
                 },
                 "op": "select",
                 "selector": 3
@@ -849,12 +849,12 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 14
+                "slot": 13
               }
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/effects.tsx#default"
+            "sha256:22c5d8f1988ae5af097acdeaf3217d2e5eb5ba029bb81493c8936f77efdf7958"
           ],
           "picks": [],
           "selectors": [
@@ -910,7 +910,7 @@
               }
             },
             {
-              "observes": "identity",
+              "observes": "value",
               "path": [
                 "result",
                 "title"
@@ -934,17 +934,6 @@
               "observes": "value",
               "path": [
                 "error"
-              ],
-              "root": {
-                "kind": "operation",
-                "operation": 0
-              }
-            },
-            {
-              "observes": "value",
-              "path": [
-                "result",
-                "title"
               ],
               "root": {
                 "kind": "operation",

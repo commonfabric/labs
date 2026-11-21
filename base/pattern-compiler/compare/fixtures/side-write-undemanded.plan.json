@@ -120,7 +120,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/side-write-undemanded.tsx#default"
+            "sha256:e9196ea806cf2f8591de765838b34694262f1c9cda0830f0f30a8c46218a209d"
           ],
           "picks": [],
           "selectors": [],

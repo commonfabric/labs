@@ -45,6 +45,7 @@ import {
   type Name,
   OUTPUT,
   type Position,
+  type ReadThrough,
   recordOfKey,
   Ref,
   rekeyed,
@@ -60,6 +61,21 @@ import {
   withDefaults,
 } from "./store.ts";
 import type { PartsOptions, Sealed } from "./parts.ts";
+import {
+  type Address,
+  type FoldElements,
+  InputsTable,
+  isUniformBody,
+  type NamedOutputInputs,
+  type Observed,
+  type PlanInputs,
+  type PlanRecord,
+  type PlanWrite,
+  reachedBy,
+  type SlotBinding,
+  type SlotBindings,
+  type Template,
+} from "./plan-write.ts";
 
 /** One step of where a declaration sits (PL §1.1, `WithinStep`). */
 type Step = { element?: number; site?: Name };
@@ -101,6 +117,24 @@ export type Plan = {
      * is reached through data.
      */
     sideWrites?: "static" | "materializer";
+    /**
+     * The write edges of the cone: to the argument of a child, to the
+     * request of an operation, and the first value of a state cell.
+     */
+    writes?: {
+      target: {
+        kind: string;
+        cell?: number;
+        child?: number;
+        of?: { operation?: number };
+        path?: string[];
+      };
+      template?: Template;
+    }[];
+    /** The entries of `Plan.selectors` whose branch the cone decides. */
+    selectors?: number[];
+    /** The entries of `Plan.picks` whose child the cone chooses. */
+    picks?: number[];
   }[];
   outputs: {
     path: string[];
@@ -121,6 +155,8 @@ export type Plan = {
     keyFields?: string[];
     kept: boolean;
     interim?: string;
+    /** The label template of the output (PL §1.1, `Output.template`). */
+    template?: Template;
   }[];
   edges: { from: number; to: number; via: { kind: string; output?: number } }[];
   collections: {
@@ -128,6 +164,8 @@ export type Plan = {
     construct: string;
     within: Step[];
     source: { slot?: number; collection?: number; output?: number };
+    /** The label template of what the collection iterates (PL §3.2). */
+    membership?: Template;
     /**
      * The key fields that the array type of the receiver declares with
      * `ArrayByKey`, in the order of their names, for a source that is a
@@ -150,8 +188,15 @@ export type Plan = {
     computed: { at: string[]; observes: string }[];
     writes: {
       target: { kind: string; slot?: number; cell?: number; path?: string[] };
+      /** The label template of the write (PL §1.1, `WriteEdge.template`). */
+      template?: Template;
     }[];
     envelopes: { kind: string; slot?: number; path?: string[] }[];
+    /**
+     * The handles the body is given: an entry of a slot names the
+     * `identity` slot of the handle (PL §1.1, `Body.handles`).
+     */
+    handles?: { handle?: { slot?: number } }[];
   }[];
   stateCells: {
     name: Name;
@@ -189,6 +234,8 @@ export type Plan = {
     /** For a `reduce`: the cone of its step. For an effect and a `wish`:
      * the built-in. */
     implementation?: { cone?: number; builtin?: string };
+    /** The template of the operands. */
+    input?: Template;
   }[];
   bindings: {
     name?: Name;
@@ -212,6 +259,19 @@ export type Plan = {
       default?: unknown;
     }[];
   }[];
+  /**
+   * The templates the plan holds at more than one position, each written
+   * once (provisional decision P6): a node of `op` `shared` names one.
+   */
+  templates?: Template[];
+  /** The constraints of the plan (PL §1.1); the executor checks none. */
+  constraints?: unknown[];
+  /** The reads through handles that a `dynamic` node names (PL §1.1). */
+  dynamicReads?: unknown[];
+  /** Each branch selector, with the number of its branches. */
+  selectors?: { arity: number }[];
+  /** Each pick, and what chooses its child: value code or the runtime. */
+  picks?: { chosenBy: string }[];
 };
 
 /**
@@ -408,8 +468,11 @@ type Dependency = {
   on?: string;
 };
 
+/** What the name that stands for an element table begins with. */
+const TABLE_PREFIX = "table ";
+
 /** The name that stands for the element table of an assembly. */
-const tableName = (assembly: string): string => `table ${assembly}`;
+const tableName = (assembly: string): string => `${TABLE_PREFIX}${assembly}`;
 
 /**
  * What the assembly of a `map` or a `filter` over a stored array keeps
@@ -567,6 +630,224 @@ const handleVariant = (schema: Schema | undefined): Schema | undefined => {
 /** Brings the instances of a side-writing cone up to date. */
 type Writer = (context: Context) => void;
 
+/**
+ * What an evaluation bound a slot to: the positions its read went through,
+ * and for an `identity` slot the reference it gave, which are turned into
+ * addresses when a write record is made, so that an element that moved
+ * since is found where it stands. The slot of an element of the result of
+ * another per-element construct is bound to that upstream element.
+ */
+type Bound =
+  | { observes: string; at: (Position | Ref)[] }
+  | { upstream: { collection: number; keys: [number, string][] } }
+  /** A constant of the plan, such as a literal a binding gives its state. */
+  | { constant: true }
+  /**
+   * An output of the pattern, such as the value a binding gives its state
+   * that the pattern computes: a value in memory, at no stored position.
+   */
+  | { output: number }
+  /**
+   * The slot a binding takes a member of its state from, with the path
+   * below it, where the handler's read of the member went through no
+   * stored position: the index of an element, or an element of the result
+   * of another per-element construct.
+   */
+  | { place: { slot: number; rest: string[] } };
+
+/**
+ * The slots that each cone instance last bound, by the instance's name
+ * (`Instance.#noteInputs`), and the identifier of what those bindings
+ * consumed, formed when a group asks for it.
+ */
+/**
+ * Where a write record finds what a template's slots, selectors and picks
+ * were bound to: a cone instance's kept inputs, or the host of the code
+ * that is writing. The first of a list that has an entry gives it.
+ */
+type Inputs = Pick<ConeInputs, "slots" | "selections" | "picks" | "dynamic">;
+
+type ConeInputs = {
+  slots: Map<number, Bound>;
+  selections: Map<number, number>;
+  picks: Map<number, string | null>;
+  dynamic: Map<number, Address[]>;
+  /** The identifier of what the bindings consumed (`#idOf`). */
+  id?: string;
+  /** The positions whose labels `id` holds, with those of upstream elements. */
+  positions?: Address[];
+};
+
+/**
+ * The elements of a `fold` that read positions of one document, by path:
+ * the elements whose group reads a position at the node, and the nodes of
+ * the paths below.
+ */
+type LabelReaders = {
+  readers: Set<string>;
+  children: Map<string, LabelReaders>;
+};
+
+/** The paths of the label entries of a document that changed. */
+export type LabelChange = {
+  doc: string;
+  paths: readonly (readonly string[])[];
+};
+
+/**
+ * The groups of the elements of one assembly of a collection that a
+ * `fold` names (provisional decision P31): the group of each element
+ * key, the elements of each group, and the keys of the elements that are
+ * not plain values in place, for which no `*` path stands.
+ */
+type Groups = {
+  byKey: Map<string, string>;
+  groups: Map<string, Set<string>>;
+  notInPlace: Set<string>;
+};
+
+/**
+ * One member of a container that `MemberGroups` groups: the links a read of
+ * the member crosses, the positions it ends at, each position as text, and
+ * the key of the labels the positions hold, absent where the store names no
+ * identifier for one of them.
+ */
+type Member = {
+  links: Address[];
+  ends: Address[];
+  texts: string[];
+  key: string | undefined;
+};
+
+/**
+ * The groups of the members of one stored array of references, for the
+ * reads of one observation class that reach, of what each member's link
+ * leads to, the positions at `fields` (provisional decision P31, extended
+ * from the elements of a `fold` to any read that covers the members of a
+ * container; ruling Z85). Two members are in one group where the labels the
+ * runtime observes at their positions are equal, so the label of a read
+ * that covers the container is the join over one member of each group. The
+ * table is formed by one walk of the members, and then brought up to date
+ * for the members whose positions or labels changed, and for no other.
+ */
+type MemberGroups = {
+  doc: string;
+  path: readonly string[];
+  observes: string;
+  /** The paths read below the position each member's link leads to. */
+  fields: readonly (readonly string[])[];
+  members: Map<string, Member>;
+  /** The members of each group, by the key of their labels. */
+  groups: Map<string, Set<string>>;
+  /** The members with no key: each is reported by itself. */
+  unknown: Set<string>;
+  /** The members whose positions or labels changed since they were placed. */
+  dirty: Set<string>;
+  /** The container changed otherwise than at a member: formed again whole. */
+  stale: boolean;
+  /** A member is no reference the table can place: the table covers none. */
+  declined: boolean;
+  /** The number of times the set of members changed. */
+  membership: number;
+  /** The members that have a position in each document other than `doc`. */
+  byDoc: Map<string, Set<string>>;
+  /** The records of outputs whose bindings name the container. */
+  records: Set<string>;
+};
+
+/**
+ * What a read that went through a list of positions covered of the
+ * containers among them (`Instance.#coveredMembers`): the positions that
+ * are of no covered member, and each container's table with the members
+ * the read did not go through every position of, whose positions stay
+ * among `rest`.
+ */
+type Cover = {
+  rest: Address[];
+  covers: { table: MemberGroups; uncovered: ReadonlySet<string> }[];
+  /** The position the read ended at. */
+  last: Address | undefined;
+};
+
+/**
+ * The cover found for what an evaluation bound a slot to, with what it is
+ * current against: the number of positions bound, the clock of the store,
+ * and for each table the number of changes of its set of members.
+ */
+type KeptCover = {
+  cover: Cover;
+  positions: number;
+  clock: number;
+  memberships: number[];
+};
+
+/**
+ * The records of the plan that the writes being made belong to: each with
+ * its template, and the document and path of its target where the record
+ * names one. A record with no `doc` covers whatever is written.
+ */
+type Writing = {
+  instance: Instance;
+  host: Host;
+  records: {
+    record: PlanRecord;
+    template: Template | undefined;
+    doc?: string;
+    path?: readonly string[];
+  }[];
+  /**
+   * The writes are made through a handle, with what the method that makes
+   * them compared to decide which members a list keeps or gains: a splice
+   * of a stored list is then recorded by position (`#memberWrites`).
+   */
+  members?: {
+    decided: Observed[];
+    /**
+     * For each position of the list being changed, the position its member
+     * stood at before the first splice of these writes, or `undefined` for
+     * a member they added. Absent until a splice moves a member.
+     */
+    origin?: (number | undefined)[];
+    /** A splice of these writes removed a member. */
+    removes?: true;
+    /** The first position a splice of these writes started at. */
+    start?: number;
+  };
+};
+
+/** A position of a document, as text. */
+const positionText = (doc: string, path: readonly string[]): string =>
+  JSON.stringify([doc, path]);
+
+/** The name of the place of a container, by which its tables are found. */
+const memberGroupsPlace = (doc: string, path: readonly string[]): string =>
+  positionText(doc, path);
+
+/**
+ * Whether a schema declares a label, at its root or below it, with every
+ * atom written out. The crate leaves a declaration it did not resolve to
+ * atoms as the text of its type (`$source`), which no store can take: a
+ * schema that holds one declares nothing here.
+ */
+const declaresLabel = (schema: unknown): boolean => {
+  let declared = false;
+  let unresolved = false;
+  const visit = (value: unknown, inLabel: boolean, depth: number) => {
+    if (typeof value !== "object" || value === null || depth > 32) return;
+    if (Array.isArray(value)) {
+      for (const member of value) visit(member, inLabel, depth + 1);
+      return;
+    }
+    for (const [name, member] of Object.entries(value)) {
+      if (name === "ifc") declared = true;
+      if (inLabel && name === "$source") unresolved = true;
+      visit(member, inLabel || name === "ifc", depth + 1);
+    }
+  };
+  visit(schema, false, 0);
+  return declared && !unresolved;
+};
+
 const sameRoot = (a: Root, b: Root): boolean =>
   a.kind === b.kind && a.cell === b.cell && a.collection === b.collection &&
   a.handler === b.handler && a.operation === b.operation &&
@@ -599,6 +880,12 @@ export type Counts = {
   staleByOwnWrite: number;
   /** Evaluations that ended in an error state (PL §5.2). */
   failures: number;
+  /**
+   * Updates of the group of an element of a collection that a `fold`
+   * names, one per evaluation of the element's cone instance and one per
+   * element that leaves (provisional decision P31).
+   */
+  groupUpdates: number;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -685,7 +972,11 @@ export class Handle {
 
   get(): unknown {
     if (this.target instanceof StreamRef) return { $stream: true };
-    return this.#typed(this.target, this.declared, this.host?.reads, 0);
+    const target = this.target;
+    return this.instance.readThrough(
+      this,
+      () => this.#typed(target, this.declared, this.host?.reads, 0),
+    );
   }
 
   sample(): unknown {
@@ -768,16 +1059,20 @@ export class Handle {
         "a write through a handle to a value the instance holds no address for",
       );
     }
-    this.instance.written(this);
-    this.instance.store.write(
-      this.target,
-      this.instance.detached(
+    const recorded = this.instance.written(this);
+    try {
+      this.instance.store.write(
         this.target,
-        this.instance.anchored(
-          this.instance.stored(this.instance.returned(value)),
+        this.instance.detached(
+          this.target,
+          this.instance.anchored(
+            this.instance.stored(this.instance.returned(value)),
+          ),
         ),
-      ),
-    );
+      );
+    } finally {
+      recorded();
+    }
     return this;
   }
 
@@ -810,6 +1105,14 @@ export class Handle {
   }
 
   push(...members: unknown[]): void {
+    this.#append(members);
+  }
+
+  /**
+   * Appends `members` to the list. `decided` is what the caller compared
+   * to decide that they are added, which the records of the write hold.
+   */
+  #append(members: unknown[], decided?: Observed[]): void {
     if (this.target instanceof StreamRef) return;
     if (this.fixed) {
       throw new Unsupported(
@@ -830,45 +1133,134 @@ export class Handle {
       : Array.isArray(declared)
       ? structuredClone(declared)
       : [];
-    this.instance.written(this.key("*"));
-    // A record that is pushed gets a document of its own, as a record in
-    // a list that is set does (`Instance.anchored`).
-    const pushed = this.instance.anchored(
-      members.map((member) =>
-        this.instance.stored(this.instance.returned(member))
-      ),
-    ) as unknown[];
-    // An array that is stored is changed in place, as a splice.
-    if (Array.isArray(located.value)) {
-      this.instance.store.splice(this.target, held.length, 0, pushed);
-    } else {
-      this.instance.store.write(this.target, [...held, ...pushed]);
+    const recorded = this.instance.written(this.key("*"), decided);
+    try {
+      // A record that is pushed gets a document of its own, as a record
+      // in a list that is set does (`Instance.anchored`).
+      const pushed = this.instance.anchored(
+        members.map((member) =>
+          this.instance.stored(this.instance.returned(member))
+        ),
+      ) as unknown[];
+      // An array that is stored is changed in place, as a splice.
+      if (Array.isArray(located.value)) {
+        this.instance.store.splice(this.target, held.length, 0, pushed);
+      } else {
+        this.instance.store.write(this.target, [...held, ...pushed]);
+      }
+    } finally {
+      recorded();
     }
   }
 
   /**
-   * The positions of this list that hold `member`: the positions a
-   * reference names, for a handle, a reference stand-in or a value read
-   * from a cell, and the positions that hold an equal value, for a copy
-   * of a plain value (ruling Z25).
+   * The positions of this list that hold `member`, the first of them alone
+   * with `first`: the positions a reference names, for a handle, a
+   * reference stand-in or a value read from a cell, and the positions that
+   * hold an equal value, for a copy of a plain value (ruling Z25). `read`
+   * is what the comparison observed of the stored list: which positions it
+   * has, the reference at each compared position that holds a link, whose
+   * target it does not read, and the value at each compared position that
+   * holds a plain value in place.
    */
-  #positionsOf(member: unknown): number[] {
-    if (this.target instanceof StreamRef) return [];
-    const held = this.get();
-    if (!Array.isArray(held)) return [];
+  #positionsOf(
+    member: unknown,
+    first = false,
+  ): { positions: number[]; read: Observed[]; list?: Address } {
+    if (this.target instanceof StreamRef) return { positions: [], read: [] };
+    const { store } = this.instance;
     const list = this.target;
-    return held.flatMap((other, index) =>
-      this.instance.same(list.key(`${index}`), member) ||
-        this.instance.same(other, member)
-        ? [index]
-        : []
-    );
+    const located = store.locate(list, true);
+    if (!Array.isArray(located.value)) return { positions: [], read: [] };
+    const { doc, path } = located.ref;
+    const read: Observed[] = [{
+      address: { doc, path: [...path] },
+      observes: "enumeration",
+    }];
+    const positions: number[] = [];
+    for (let index = 0; index < located.value.length; index++) {
+      const held = located.value[index];
+      const at = list.key(`${index}`);
+      // A position that holds a link is compared as the reference it
+      // holds, which reads nothing of the document the link names.
+      let same = this.instance.unreported(() => this.instance.same(at, member));
+      if (isLink(held)) {
+        read.push({
+          address: { doc, path: [...path, `${index}`] },
+          observes: "identity",
+        });
+      } else {
+        read.push({
+          address: { doc, path: [...path, `${index}`] },
+          observes: "value",
+        });
+        same ||= this.instance.same(
+          store.read(located.ref.key(`${index}`), undefined, true),
+          member,
+        );
+      }
+      if (!same) continue;
+      positions.push(index);
+      if (first) break;
+    }
+    return { positions, read, list: { doc, path: [...path] } };
+  }
+
+  /**
+   * Reports that a method left the members of the stored list at `list`
+   * as they were, because of what it compared (`decided`): a removal that
+   * found no member to remove, and `addUnique` of a member the list holds.
+   * `through` is the handle the method would have written through. The
+   * membership of the list then stores what decided that it stays (ruling
+   * Z67).
+   */
+  #kept(through: Handle, decided: Observed[], list: Address | undefined): void {
+    if (list === undefined) return;
+    const recorded = this.instance.written(through, decided, false);
+    try {
+      this.instance.membersKept(list);
+    } finally {
+      recorded();
+    }
+  }
+
+  /**
+   * Removes the members at `positions` from the stored list in place, each
+   * as a splice of the list: no member the list keeps is written, and one
+   * that is a reference stays the reference it was, to a document the
+   * removal does not write. `decided` is what the comparison that found
+   * the positions read, which the records of the removal hold.
+   */
+  #removeAt(positions: readonly number[], decided: Observed[]): void {
+    if (this.target instanceof StreamRef || positions.length === 0) return;
+    if (this.fixed) {
+      throw new Unsupported(
+        "a write through a handle to a value the instance holds no address for",
+      );
+    }
+    const recorded = this.instance.written(this, decided);
+    try {
+      // From the last position on, so that each position named is the one
+      // the member holds when it is removed, and each run of positions next
+      // to each other as one splice.
+      const last = [...positions].sort((a, b) => b - a);
+      for (let run = 0; run < last.length;) {
+        let end = run;
+        while (end + 1 < last.length && last[end + 1] === last[end] - 1) {
+          end++;
+        }
+        this.instance.store.splice(this.target, last[end], end - run + 1, []);
+        run = end + 1;
+      }
+    } finally {
+      recorded();
+    }
   }
 
   remove(member: unknown): void {
-    const [at] = this.#positionsOf(member);
-    if (at === undefined) return;
-    this.set((this.get() as unknown[]).filter((_, index) => index !== at));
+    const { positions, read, list } = this.#positionsOf(member, true);
+    if (positions.length === 0) this.#kept(this, read, list);
+    else this.#removeAt(positions, read);
   }
 
   send(event: unknown): void {
@@ -889,18 +1281,16 @@ export class Handle {
       located.value === undefined &&
       isStreamSchema(located.ref.schema ?? this.declared)
     ) {
-      this.instance.written(this);
+      this.instance.written(this)();
       return;
     }
     this.set(event);
   }
 
   removeAll(member: unknown): void {
-    const found = this.#positionsOf(member);
-    if (found.length === 0) return;
-    this.set(
-      (this.get() as unknown[]).filter((_, index) => !found.includes(index)),
-    );
+    const { positions, read, list } = this.#positionsOf(member);
+    if (positions.length === 0) this.#kept(this, read, list);
+    else this.#removeAt(positions, read);
   }
 
   /** Removes each member that is `member` (`removeByValue` of a cell). */
@@ -910,8 +1300,9 @@ export class Handle {
 
   /** Appends `member` unless the list holds it (`addUnique` of a cell). */
   addUnique(member: unknown): void {
-    if (this.#positionsOf(member).length > 0) return;
-    this.push(member);
+    const { positions, read, list } = this.#positionsOf(member, true);
+    if (positions.length > 0) this.#kept(this.key("*"), read, list);
+    else this.#append([member], read);
   }
 
   /**
@@ -980,6 +1371,17 @@ export class Host {
    * had been evaluated: the clock, and how many reads it had made.
    */
   demandedAt: { clock: number; reads: number } | undefined;
+  /** What the evaluation bound each slot it read to, by the slot. */
+  readonly bound = new Map<number, Bound>();
+  /** The branch each selector took, as the value code reported it. */
+  readonly selections = new Map<number, number>();
+  /** The key each pick chose, as the value code reported it. */
+  readonly picks = new Map<number, string | null>();
+  /**
+   * The positions read through the handle each entry of
+   * `Plan.dynamicReads` names, by the entry.
+   */
+  readonly dynamic = new Map<number, Address[]>();
 
   constructor(
     readonly instance: Instance,
@@ -1006,6 +1408,7 @@ export class Host {
       ? slot.path.slice(0, -1)
       : slot.path;
     this.demand(slot.root, [...path, ...rest]);
+    const from = this.reads.length;
     const found = this.at(
       instance.rootOf(slot.root, this, [...path, ...rest]),
       [...path, ...rest],
@@ -1019,9 +1422,37 @@ export class Host {
       // A stream that is an input of the pattern is a reference like any
       // other: what passes it on stores a link to its place (ES §2.2, "A
       // stream that is an input of the pattern").
+      instance.bindSlot(this, index, from, found);
       return found instanceof Ref ? found.withSchema(schema) : found;
     }
-    return withDefaults(this.v(found, schema), schema);
+    const value = withDefaults(this.v(found, schema), schema);
+    instance.bindSlot(this, index, from, found);
+    return value;
+  }
+
+  /**
+   * Records the branch a selector of the cone took (PL §3.5), from the
+   * value of its test: the first branch where the test is truthy, or
+   * with `presence` where it holds something, and the second otherwise.
+   * Gives the value back, so the test reads as it is written.
+   */
+  select(selector: number, test: unknown, presence = false): unknown {
+    const taken = presence ? test !== undefined && test !== null : !!test;
+    this.selections.set(selector, taken ? 0 : 1);
+    return test;
+  }
+
+  /**
+   * Records the key a pick of the cone chose (PL §3.18), with
+   * `chosenBy: "valueCode"`: the key as a text, and `null` for none.
+   * Gives the key back.
+   */
+  pick(pick: number, key: unknown): unknown {
+    this.picks.set(
+      pick,
+      key === undefined || key === null ? null : `${key as string}`,
+    );
+    return key;
   }
 
   /**
@@ -1422,7 +1853,16 @@ export class Host {
     }
     const keyed = { body, keys: instance.contextKeys(this.context) };
     return instance.returned(
-      instance.during(instance.runCause(keyed), () => run(argument), keyed),
+      instance.runBody(
+        body,
+        this,
+        () =>
+          instance.during(
+            instance.runCause(keyed),
+            () => run(argument),
+            keyed,
+          ),
+      ),
     );
   }
 
@@ -1665,9 +2105,40 @@ export type TransactionHooks = {
 
   /**
    * The transaction in progress read a position of a document: one a
-   * link the read followed was at, or the one the read ended at.
+   * link the read followed was at, or the one the read ended at. `by` is
+   * the body and the entry of its `Body.handles` that a read through a
+   * handle was made through, which a `dynamic` node of a template names
+   * (PL §1.1, `DynamicRead`).
    */
-  read(doc: string, path: readonly string[]): void;
+  read(doc: string, path: readonly string[], by?: ReadThrough): void;
+
+  /**
+   * The identifier of the label at a position, where the store knows one:
+   * equal labels have one identifier (provisional decision P31). The
+   * executor groups the elements of a `fold` by it, and the positions a
+   * slot's read reached through links; without it, every position is a
+   * group of its own. A position the transaction in progress wrote has no
+   * identifier: its label is the one the write stages. `observes` is the
+   * class the position is observed in, `value` where it is absent: the
+   * label of a link observed as a reference (`identity`) is not part of
+   * the label of a read of the value at the link's position.
+   */
+  labelOf?(
+    doc: string,
+    path: readonly string[],
+    observes?: string,
+  ): string | undefined;
+
+  /**
+   * Registers what the store calls when the labels of documents changed
+   * while their values may not have: for each document, the paths of the
+   * label entries that changed. The executor then updates the group of
+   * each element of a `fold` that read a position at, above or below one
+   * of them, and of no other element.
+   */
+  watchLabels?(
+    changed: (changes: readonly LabelChange[], alone?: boolean) => void,
+  ): void;
 
   /**
    * The transaction in progress changed a path of a document, which
@@ -1675,13 +2146,46 @@ export type TransactionHooks = {
    * array's path, a document that was removed is a change of its root, and
    * a write below a value that held no container is a change of the
    * shortest path whose value it replaced. `schema` is the schema of the
-   * reference the write was made through, where it has one.
+   * reference the write was made through, where it has one. `writes`
+   * holds the record of each path of the plan the change wrote
+   * (`plan-write.ts`): one for a path that one record covers, several for
+   * a change that wrote the paths of several, and none where no record of
+   * the plan covers the path. `splice` is the splice of a change whose
+   * records are those of the positions it changed and of the membership of
+   * the array (`PlanWrite.enumeration`), and of a write through a handle
+   * that added a member behind the last one: the position it starts at,
+   * and how many members of the array it removed and put there. Whoever
+   * stores the array then writes those positions and the number of
+   * members, and no other position. `inputs` is the table the records name
+   * their inputs in, one for the transaction, which gains entries as
+   * records are given.
    */
   change(
     doc: string,
     path: readonly string[],
     store: Store,
     schema?: Schema,
+    writes?: readonly PlanWrite[],
+    splice?: { start: number; removed: number; inserted: number },
+    inputs?: InputsTable,
+  ): void;
+
+  /**
+   * A write of a body of the transaction in progress left the value at a
+   * path of a document as it was. `writes` holds the record of each path of
+   * the plan the write covers, and `inputs` the table they name their inputs
+   * in, as `change` has them. The value is not written
+   * again; whoever stores labels stores the label of the records for the
+   * value the path holds, since what the body read decided that the value
+   * stays (ruling Z67).
+   */
+  unchanged?(
+    doc: string,
+    path: readonly string[],
+    store: Store,
+    schema: Schema | undefined,
+    writes: readonly PlanWrite[],
+    inputs: InputsTable,
   ): void;
 
   /**
@@ -1770,6 +2274,13 @@ const holdsErrorState = (value: unknown): ErrorState | undefined => {
   }
   return undefined;
 };
+
+/**
+ * The name the bindings of the evaluation of the result are kept under
+ * (`Instance.#inputs`): the value code of an output that has no value
+ * function of its own runs there.
+ */
+const RESULT_INPUTS = "result";
 
 /** The name that the writes of a handler body are kept under. */
 const HANDLER = "handler";
@@ -1876,6 +2387,7 @@ export class Instance {
     pendingOperations: 0,
     staleByOwnWrite: 0,
     failures: 0,
+    groupUpdates: 0,
   };
   readonly valueOfOutput = new Map<number, number>();
   readonly bodies = new Map<number, (...given: unknown[]) => unknown>();
@@ -2184,12 +2696,36 @@ export class Instance {
     },
   ): void {
     const open = this.#tx;
-    if (open !== undefined || this.#outside) {
-      this.options.transactions?.change(
+    const hooks = this.options.transactions;
+    this.#memberDocumentChanged(change.doc, change.path, change.splice);
+    if (hooks !== undefined && (open !== undefined || this.#outside)) {
+      let path = change.covers ?? change.path;
+      let { splice } = change;
+      // A write through a handle at the position behind the last one of a
+      // stored list adds a member, as a splice there does.
+      if (
+        splice === undefined && this.#writing?.members !== undefined &&
+        change.old === undefined && /^\d+$/.test(path.at(-1) ?? "")
+      ) {
+        const list = this.store.peek(change.doc, path.slice(0, -1));
+        const start = Number(path.at(-1));
+        if (Array.isArray(list) && start === list.length - 1) {
+          splice = { start, removed: 0, inserted: 1 };
+          path = path.slice(0, -1);
+        }
+      }
+      const added = splice !== change.splice;
+      const writes = this.#writesOf(change.doc, path, splice);
+      hooks.change(
         change.doc,
-        change.covers ?? change.path,
+        path,
         this.store,
         change.schema,
+        writes.length === 0 ? undefined : writes,
+        added || writes.some(({ enumeration }) => enumeration)
+          ? splice
+          : undefined,
+        this.#inputsTable,
       );
     }
     if (open !== undefined) {
@@ -2381,10 +2917,22 @@ export class Instance {
        * What each `wish` resolves to, by its operands: a test's stand-in
        * for the targets of a space. `result` is stored in a document of
        * its own, and the result of the `wish` is a reference to it.
+       * `outcome` is what the state document holds as the outcome, member
+       * by member, for a target that is a document of `documents`: a
+       * link in it is stored as the reference it is.
        */
       wishes?: (
         operands: Record<string, unknown>,
-      ) => { result?: unknown; error?: unknown } | undefined;
+      ) => {
+        result?: unknown;
+        error?: unknown;
+        outcome?: Record<string, unknown>;
+        /**
+         * The positions the resolution read to find the outcome, which
+         * the write record of the outcome reports (PL §3.19).
+         */
+        reads?: Address[];
+      } | undefined;
       /** What the clock holds when the executor starts. */
       now?: number;
       /**
@@ -2421,8 +2969,15 @@ export class Instance {
        * its identifier, its kind and its value: the documents of the
        * inputs that the argument links to. They are made outside any
        * transaction, so `transactions` is told of no change to them.
+       * `space` is the space of a document that is in another space than
+       * the instance.
        */
-      documents?: { id: string; kind: string; value: unknown }[];
+      documents?: {
+        id: string;
+        kind: string;
+        value: unknown;
+        space?: string;
+      }[];
     } = {},
   ) {
     this.store = options.parent?.store ??
@@ -2451,17 +3006,37 @@ export class Instance {
       this.store.onChange = (change) => this.#changed(change);
       const hooks = options.transactions;
       if (hooks !== undefined) {
-        this.store.onRead = (doc, path) => {
-          if (this.#tx !== undefined) hooks.read(doc, path);
+        this.store.onRead = (doc, path, by) => {
+          if (this.#tx !== undefined) hooks.read(doc, path, by);
+        };
+        hooks.watchLabels?.((changes, alone) =>
+          this.labelsChanged(changes, alone)
+        );
+        // A write of a body that leaves the value as it was is reported
+        // with the records of the write being made: what the body read
+        // decided that the value stays.
+        this.store.onUnchanged = (doc, path, schema) => {
+          if (this.#tx === undefined || this.#writing === undefined) return;
+          const writes = this.#writesOf(doc, path, undefined);
+          if (writes.length > 0) {
+            hooks.unchanged?.(
+              doc,
+              path,
+              this.store,
+              schema,
+              writes,
+              this.#inputsTable,
+            );
+          }
         };
       }
     }
-    // The documents that exist before the instance are the root's: an
-    // instance a body makes shares its store and makes none of them.
-    for (
-      const { id, kind, value } of options.parent ? [] : options.documents ?? []
-    ) {
+    // An instance that a function body makes is given the options of the
+    // instance that made it, and the documents exist already.
+    const given = this.root === this ? options.documents ?? [] : [];
+    for (const { id, kind, value, space } of given) {
       this.store.create(id, kind, value);
+      if (space !== undefined) this.store.spaces.set(id, space);
     }
     // The creation of an instance by something that is no handler is a
     // transaction that writes its two documents and evaluates nothing
@@ -2521,6 +3096,8 @@ export class Instance {
     };
     this.#tx = open;
     this.store.journal = open.journal;
+    this.root.#givenNow.clear();
+    this.root.#inputsTable = new InputsTable();
     this.options.transactions?.begin(cause);
     return open;
   }
@@ -2576,12 +3153,19 @@ export class Instance {
     this.#tx = undefined;
     this.store.journal = undefined;
     this.#transactions.push(open.record);
-    this.options.transactions?.end({
-      committed,
-      changes: committed ? open.journal : [],
-      store: this.store,
-      record: open.record,
-    });
+    // What the hooks report of labels while they end the transaction is
+    // what it stored, which the records it gave hold already.
+    this.root.#ending = true;
+    try {
+      this.options.transactions?.end({
+        committed,
+        changes: committed ? open.journal : [],
+        store: this.store,
+        record: open.record,
+      });
+    } finally {
+      this.root.#ending = false;
+    }
   }
 
   /**
@@ -3126,6 +3710,11 @@ export class Instance {
    * document until something writes it, and a read of it reads the
    * default. A first value that is not a constant is computed by the
    * cone `StateCell.first` names and written once, here.
+   *
+   * A cell whose schema declares a label is the exception to the first
+   * rule: a label is stored with a document, so the constant is written
+   * here under the schema, as the first value of the other kind is, and
+   * the store that keeps the documents stores what the schema declares.
    */
   stateCell(cell: number, host: Host): Ref {
     const record = this.plan.stateCells[cell];
@@ -3150,9 +3739,35 @@ export class Instance {
         // computed, and never a reference: a reference the value
         // function returns is stored as what it resolves to now, so a
         // write to the cell never lands in the input (ruling Z15).
+        const value = this.stored(reader.v(first(reader)));
+        const edge = record.first === undefined
+          ? undefined
+          : this.plan.cones[record.first.cone].writes?.[record.first.write];
+        const recorded = this.#recording({
+          instance: this,
+          host: reader,
+          records: [{
+            record: { stateFirst: cell },
+            template: edge?.template,
+            doc: id,
+            path: [],
+          }],
+        });
+        try {
+          this.store.write(
+            new Ref(id, [], declaresLabel(schema) ? schema : undefined),
+            value,
+          );
+        } finally {
+          recorded();
+        }
+      } else if (
+        typeof schema === "object" && schema.default !== undefined &&
+        declaresLabel(schema) && this.root.#tx !== undefined
+      ) {
         this.store.write(
-          new Ref(id, []),
-          this.stored(reader.v(first(reader))),
+          new Ref(id, [], schema),
+          structuredClone(schema.default),
         );
       }
     }
@@ -3267,20 +3882,49 @@ export class Instance {
                 again,
               );
             }
-            const instance = new Instance(artifact, argument, {
-              ...this.options,
-              parent: this,
-              id: made,
-            });
+            const recorded = this.#recording(
+              this.#coneWrites(
+                cone,
+                host,
+                argumentOf(made),
+                [],
+                (target) =>
+                  target.kind === "argument" && target.child === child,
+              ),
+            );
+            let instance: Instance;
+            try {
+              instance = new Instance(artifact, argument, {
+                ...this.options,
+                parent: this,
+                id: made,
+              });
+            } finally {
+              recorded();
+            }
             this.root.#instances.set(made, instance);
             this.#children.push(instance);
             held = { child, keys, instance };
             this.#asInstances.set(id, held);
           } else {
-            this.store.write(
-              new Ref(held.instance.argument, []),
-              argument,
+            const recorded = this.#recording(
+              this.#coneWrites(
+                cone,
+                host,
+                held.instance.argument,
+                [],
+                (target) =>
+                  target.kind === "argument" && target.child === child,
+              ),
             );
+            try {
+              this.store.write(
+                new Ref(held.instance.argument, []),
+                argument,
+              );
+            } finally {
+              recorded();
+            }
           }
           return new Ref(held.instance.id, []);
         },
@@ -3394,9 +4038,23 @@ export class Instance {
           }
           const state = new Ref(id, []);
           request = host.whole(request);
-          this.store.write(state.key("request"), this.stored(request));
+          const recorded = this.#recording(
+            this.#coneWrites(
+              cone,
+              host,
+              id,
+              ["request"],
+              (target) => target.kind === "request" &&
+                target.of?.operation === operation,
+            ),
+          );
+          try {
+            this.store.write(state.key("request"), this.stored(request));
+          } finally {
+            recorded();
+          }
           if (record.kind === "wish") {
-            this.#resolveWish(state, host.v(request));
+            this.#resolveWish(state, host.v(request), host, operation);
           } else if (!this.root.#operations.has(id)) {
             this.root.#operations.set(id, { instance: this, builtin });
           }
@@ -3411,10 +4069,16 @@ export class Instance {
    * clock is a document that the runtime writes: `#now` reads it once,
    * into the state document, where that holds no time yet, and `#now/N`
    * resolves to a reference to it. Any other target is what the table of
-   * the executor gives for the operands, stored in a document of its
-   * own, which the result is a reference to.
+   * the executor gives for the operands: an outcome whose links lead to
+   * documents the executor was given, or a value, stored in a document of
+   * its own, which the result is a reference to.
    */
-  #resolveWish(state: Ref, operands: unknown): void {
+  #resolveWish(
+    state: Ref,
+    operands: unknown,
+    host: Host,
+    operation: number,
+  ): void {
     const { store } = this;
     const query = isRecord(operands) ? operands.query : operands;
     if (typeof query === "string" && /^#now(\/|$)/.test(query)) {
@@ -3434,21 +4098,60 @@ export class Instance {
     const answer = this.root.options.wishes?.(
       isRecord(operands) ? operands : { query: operands },
     );
-    if (answer?.result === undefined) {
+    // The outcome is a write the plan has a record for: the operation, with
+    // the slots its operands reach and the positions its resolution read
+    // under the entry of `Plan.dynamicReads` that names it (PL §3.19, "The
+    // outcome of each `wish` has a label of its own").
+    const reads = (this.plan.dynamicReads ?? []).findIndex((held) => {
+      const why = (held as { why?: { kind?: string; operation?: number } }).why;
+      return why?.kind === "search" && why.operation === operation;
+    });
+    if (reads >= 0) host.dynamic.set(reads, [...answer?.reads ?? []]);
+    const { input } = this.plan.operations[operation];
+    const recorded = this.#recording({
+      instance: this,
+      host,
+      records: [{
+        record: { operation },
+        // What the record reports: the slots of the operands, and the
+        // reads of the resolution.
+        template: {
+          op: "derive",
+          by: { expression: true },
+          inputs: [
+            ...(input === undefined ? [] : [input]),
+            ...(reads < 0 ? [] : [{ op: "dynamic" as const, reads }]),
+          ],
+        },
+        doc: state.doc,
+        path: [...state.path, OUTCOME],
+      }],
+    });
+    try {
+      if (answer?.outcome !== undefined) {
+        for (const [name, member] of Object.entries(answer.outcome)) {
+          store.write(state.key(OUTCOME, name), this.stored(member));
+        }
+        return;
+      }
+      if (answer?.result === undefined) {
+        store.write(
+          state.key(OUTCOME, "error"),
+          this.stored(answer?.error ?? `no target for \`${query}\``),
+        );
+        return;
+      }
+      const target = identifierOf({ wish: this.id, target: `${query}` });
+      if (!store.docs.has(target)) {
+        store.create(target, "wish target", this.stored(answer.result));
+      }
       store.write(
-        state.key(OUTCOME, "error"),
-        this.stored(answer?.error ?? `no target for \`${query}\``),
+        state.key(OUTCOME, "result"),
+        this.stored(new Ref(target, [])),
       );
-      return;
+    } finally {
+      recorded();
     }
-    const target = identifierOf({ wish: this.id, target: `${query}` });
-    if (!store.docs.has(target)) {
-      store.create(target, "wish target", this.stored(answer.result));
-    }
-    store.write(
-      state.key(OUTCOME, "result"),
-      this.stored(new Ref(target, [])),
-    );
   }
 
   /**
@@ -3789,7 +4492,7 @@ export class Instance {
   /**
    * What `equals` compares of `value`: the text of the address it resolves
    * to, or `undefined` for a value with no place in the graph (provisional
-   * decision P32, `equalsKey`).
+   * decision P41, `equalsKey`).
    */
   equalsKey(value: unknown): string | undefined {
     if (value instanceof Handle && value.target instanceof StreamRef) {
@@ -4293,7 +4996,6 @@ export class Instance {
     }
     const sizes = forms.map(bytesOf);
     for (const size of sizes) sum += size;
-    this.store.spliceAt(this.id, path, start, removed.length, forms);
     const appended = start === unit.keys.length && removed.length === 0;
     spliceIn(unit.keys, start, removed.length, inserted);
     spliceIn(unit.values, start, removed.length, values);
@@ -4314,6 +5016,12 @@ export class Instance {
     } else {
       unit.positions = undefined;
     }
+    // The store reports the splice to the transaction hooks as it makes
+    // it, and the write records of the rows that entered take their
+    // element keys from the unit (`#keysAlong`): the unit holds the new
+    // keys first. A row whose key was formed from its value has another
+    // key after a change of that value, at the same position.
+    this.store.spliceAt(this.id, path, start, removed.length, forms);
     unit.sum += sum;
     this.#touched.add(unit);
     const rows = this.#touchedRows.get(unit) ?? new Set();
@@ -4552,6 +5260,51 @@ export class Instance {
   }
 
   /**
+   * Reports the record of the output at or above `at` of the result
+   * document as that of a write that left the value as it was
+   * (`TransactionHooks.unchanged`), its label alone to be formed again: an
+   * evaluation that gives the value the path holds read what its inputs
+   * hold now, which can be other positions than the ones the stored label
+   * was formed from. An output whose template reads nothing has one label
+   * whatever was read, and is not reported; nor is a record given earlier
+   * in the transaction.
+   */
+  #unchangedOutput(at: readonly string[]): void {
+    const { root } = this;
+    const hooks = root.options.transactions;
+    if (root.#tx === undefined || hooks?.unchanged === undefined) return;
+    let nearest: { output: number; path: readonly string[] } | undefined;
+    for (const entry of this.#recordedOutputs()) {
+      if (
+        entry.path.length <= at.length && matchesPath(entry.path, at) &&
+        (nearest === undefined || entry.path.length > nearest.path.length)
+      ) nearest = entry;
+    }
+    if (nearest === undefined) return;
+    const template = this.plan.outputs[nearest.output].template;
+    if (template === undefined) return;
+    const reached = reachedBy(template, this.plan.templates ?? []);
+    if (
+      reached.slots.size === 0 && reached.outputs.size === 0 &&
+      reached.folds.size === 0 && reached.dynamic.size === 0
+    ) return;
+    const path = at.slice(0, nearest.path.length);
+    const key = this.#recordKey(nearest.output, path);
+    if (root.#givenNow.has(key)) return;
+    root.#namedIndex.clear();
+    const write = this.#outputRecord(this.id, nearest.output, [...path]);
+    root.#noteRecord(key, this.id, write);
+    hooks.unchanged(
+      this.id,
+      path,
+      this.store,
+      undefined,
+      [{ ...write, relabel: true }],
+      root.#inputsTable,
+    );
+  }
+
+  /**
    * Stores a value at a place of the result document, and writes only
    * what differs from what the place holds: a member of a record and a
    * position of an array of the same length are compared by themselves.
@@ -4623,7 +5376,11 @@ export class Instance {
         }
       }
       const now = filled(form, held);
-      if (held === now || JSON.stringify(held) === JSON.stringify(now)) return;
+      if (held === now || JSON.stringify(held) === JSON.stringify(now)) {
+        // A reference that stays names the cell it named.
+        if (!isLink(now) && !isStream(now)) this.#unchangedOutput(at);
+        return;
+      }
       const [was, size] = [bytesOf(held), bytesOf(now)];
       store.put(doc, at, now);
       if (owner === undefined) {
@@ -4961,6 +5718,19 @@ export class Instance {
     };
     this.#memo.set(key, entry);
     this.#keep(key, cone, within, context);
+    // The bindings are kept for the write records of a store outside the
+    // executor (`TransactionHooks`), and for nothing else.
+    if (this.root.options.transactions !== undefined) {
+      if (cone !== undefined) this.#noteInputs(cone, context, host);
+      else if (key === "result") {
+        this.#inputs.set(RESULT_INPUTS, {
+          slots: host.bound,
+          selections: host.selections,
+          picks: host.picks,
+          dynamic: host.dynamic,
+        });
+      }
+    }
     this.#evaluated(slot, entry, host, changed);
     return entry;
   }
@@ -5119,7 +5889,24 @@ export class Instance {
    */
   #drop(collection: number, around: readonly string[], key: string): void {
     const id = this.#name("under", collection, around, key);
+    const table = this.#groups.get(this.#name("assembly", collection, around));
+    this.#indexReader(
+      `${this.#name("assembly", collection, around)}\n${key}`,
+      { collection, around, key },
+      undefined,
+    );
+    if (table?.byKey.has(key)) {
+      if (this.#leaveGroup(table, key)) {
+        this.#regroupEnclosing(collection, around);
+      }
+      this.counts.groupUpdates += 1;
+    }
     for (const entry of this.#underKey.get(id) ?? []) {
+      const kept = this.#kept.get(entry);
+      if (kept?.cone !== undefined) {
+        this.#inputs.delete(this.#coneInstance(kept.cone, kept.keys));
+      }
+      this.#groups.delete(entry);
       this.#memo.delete(entry);
       this.#kept.delete(entry);
       this.#tables.delete(entry);
@@ -6564,7 +7351,223 @@ export class Instance {
     const outcomes: Outcome[] = [];
     this.root.#drain(outcomes);
     this.root.settle();
+    this.root.#relabel();
     return outcomes;
+  }
+
+  /**
+   * On the root: the records of outputs given to the transaction hooks, by
+   * what the inputs of each read: for each document, the paths read, each
+   * with the keys of the records that read it (`#recordKey`). A path may
+   * hold `*` at the position of an element.
+   */
+  readonly #recordReaders = new Map<string, LabelReaders>();
+
+  /** On the root: the positions each record in `#recordReaders` is at. */
+  readonly #recordReads = new Map<string, Address[]>();
+
+  /**
+   * On the root: the records whose template folds over the elements of a
+   * collection of an instance, by the instance and the collection.
+   */
+  readonly #recordFolds = new Map<string, Set<string>>();
+
+  /**
+   * On the root: the records whose inputs read a label that changed while
+   * the values did not (`labelsChanged`), and whose labels were not formed
+   * again since.
+   */
+  readonly #relabels = new Set<string>();
+
+  /**
+   * On the root: the records given since the transaction in progress, or
+   * the last one, began. Their labels were formed from what that
+   * transaction stored.
+   */
+  readonly #givenNow = new Set<string>();
+
+  /** On the root: the transaction hooks are ending a transaction. */
+  #ending = false;
+
+  /** The key of the record of an output of this instance at a path. */
+  #recordKey(output: number, at: readonly string[]): string {
+    return JSON.stringify([this.id, output, at]);
+  }
+
+  /**
+   * On the root: keeps what the inputs of a record given for an output
+   * read, in place of what the record given for it before read, so that a
+   * change of a label finds the records that read it.
+   */
+  #noteRecord(key: string, instance: string, write: PlanWrite): void {
+    this.#givenNow.add(key);
+    this.#relabels.delete(key);
+    for (const { doc, path } of this.#recordReads.get(key) ?? []) {
+      let node = this.#recordReaders.get(doc);
+      for (const segment of path) node = node?.children.get(segment);
+      node?.readers.delete(key);
+    }
+    const positions: Address[] = [];
+    const seen = new Set<string>();
+    const read = (address: Address) => {
+      const id = JSON.stringify([address.doc, address.path]);
+      if (seen.has(id)) return;
+      seen.add(id);
+      positions.push(address);
+    };
+    for (const groups of this.#recordGroups.get(key) ?? []) {
+      groups.records.delete(key);
+    }
+    const reading = new Set<MemberGroups>();
+    this.#recordGroups.set(key, reading);
+    const table = this.#inputsTable;
+    const bindings = (slots: SlotBindings) => {
+      for (const at of Object.values(slots)) {
+        const binding = table.bindings[at];
+        if ("staged" in binding && typeof binding.staged === "object") {
+          read(binding.staged);
+        }
+        if (!("chain" in binding)) continue;
+        // A change of the label of a member no chain names changes the
+        // label of the record where it makes or empties a group, which the
+        // table of the container's groups finds.
+        for (const { container } of binding.members ?? []) {
+          for (
+            const groups of this.#memberGroupsAt.get(
+              memberGroupsPlace(container.doc, container.path),
+            ) ?? []
+          ) {
+            if (groups.observes !== binding.observes) continue;
+            groups.records.add(key);
+            reading.add(groups);
+          }
+        }
+        for (const address of binding.chain) read(address);
+        for (const chain of binding.below ?? []) {
+          for (const address of chain) read(address);
+        }
+      }
+    };
+    // Each entry of the table once, however many entries name it.
+    const visited = new Set<number>();
+    const visit = (index: number) => {
+      if (visited.has(index)) return;
+      visited.add(index);
+      const place = table.inputs[index];
+      bindings(place.slots);
+      for (const addresses of Object.values(place.dynamic ?? {})) {
+        for (const address of addresses) read(address);
+      }
+      for (const chosen of Object.values(place.picks ?? {})) {
+        if (chosen !== null) bindings(chosen.slots);
+      }
+      for (
+        const [collection, elements] of Object.entries(place.elements ?? {})
+      ) {
+        const folds = `${instance}\n${collection}`;
+        const held = this.#recordFolds.get(folds) ?? new Set();
+        held.add(key);
+        this.#recordFolds.set(folds, held);
+        if ("uniform" in elements) visit(elements.uniform);
+        else for (const group of elements.groups) visit(group.inputs);
+      }
+      for (const inputs of Object.values(place.outputs ?? {})) visit(inputs);
+    };
+    visit(write.inputs);
+    this.#recordReads.set(key, positions);
+    for (const { doc, path } of positions) {
+      const root: LabelReaders = this.#recordReaders.get(doc) ??
+        { readers: new Set(), children: new Map() };
+      this.#recordReaders.set(doc, root);
+      let node = root;
+      for (const segment of path) {
+        const child: LabelReaders = node.children.get(segment) ??
+          { readers: new Set(), children: new Map() };
+        node.children.set(segment, child);
+        node = child;
+      }
+      node.readers.add(key);
+    }
+  }
+
+  /**
+   * On the root: the keys of the records whose inputs read a position at,
+   * above or below a label entry of `changes`. A `*` in a path a record
+   * read stands for every element, and a `*` in a changed path for every
+   * position a record read there.
+   */
+  #recordsReading(changes: readonly LabelChange[]): Set<string> {
+    const found = new Set<string>();
+    const collect = (node: LabelReaders) => {
+      for (const reader of node.readers) found.add(reader);
+      for (const child of node.children.values()) collect(child);
+    };
+    const walk = (node: LabelReaders, rest: readonly string[]) => {
+      if (rest.length === 0) {
+        collect(node);
+        return;
+      }
+      for (const reader of node.readers) found.add(reader);
+      const [segment, ...more] = rest;
+      if (segment === "*") {
+        for (const child of node.children.values()) walk(child, more);
+        return;
+      }
+      for (const name of [segment, "*"]) {
+        const child = node.children.get(name);
+        if (child !== undefined) walk(child, more);
+      }
+    };
+    for (const { doc, paths } of changes) {
+      const root = this.#recordReaders.get(doc);
+      if (root === undefined) continue;
+      for (const path of paths) walk(root, path);
+    }
+    return found;
+  }
+
+  /**
+   * On the root: where a label changed alone, gives the transaction hooks
+   * the record of each output whose inputs read it, in a derivation
+   * transaction of its own, as that of a write that leaves the value as it
+   * is and forms the label alone again (`PlanWrite.relabel`): the label
+   * entries below the output's path stay, and no value code runs. The work
+   * is the number of records that read the changed label.
+   */
+  #relabel(): void {
+    const hooks = this.options.transactions;
+    if (this.#relabels.size === 0 || hooks?.unchanged === undefined) return;
+    const keys = [...this.#relabels];
+    this.#relabels.clear();
+    this.#within("derivation", () => {
+      this.#namedIndex.clear();
+      const byInstance = new Map<Instance, PlanWrite[]>();
+      for (const key of keys) {
+        const [id, output, at] = JSON.parse(key) as [string, number, string[]];
+        const instance = id === this.id ? this : this.#instances.get(id);
+        // An output whose path holds nothing now has no label to form.
+        if (
+          instance === undefined ||
+          this.store.peek(id, at) === undefined
+        ) continue;
+        const writes = byInstance.get(instance) ?? [];
+        writes.push({
+          ...instance.#outputRecord(id, output, at),
+          relabel: true,
+        });
+        byInstance.set(instance, writes);
+      }
+      for (const [instance, writes] of byInstance) {
+        hooks.unchanged?.(
+          instance.id,
+          [],
+          this.store,
+          undefined,
+          writes,
+          this.#inputsTable,
+        );
+      }
+    });
   }
 
   queue(stream: StreamRef, event: unknown): void {
@@ -6648,6 +7651,7 @@ export class Instance {
     const hooks = this.#tx === undefined
       ? this.options.transactions
       : undefined;
+    if (hooks !== undefined) this.#inputsTable = new InputsTable();
     hooks?.begin(cause);
     this.#outside = hooks !== undefined;
     let committed = false;
@@ -6783,22 +7787,2828 @@ export class Instance {
     return new StreamRef(-1, [key], this.#owner);
   }
 
-  /** Counts a write of the handler being run against its record. */
-  written(handle: Handle): void {
-    if (this.#handling === undefined) return;
-    const body = this.plan.bodies[this.#handling];
+  // ----- write records -----
+
+  /**
+   * Records what an evaluation bound a slot to: the positions that its
+   * read went through since `from`, and for an `identity` slot the
+   * reference the read gave. The slot of an element of the result of
+   * another per-element construct is bound to the upstream element.
+   */
+  bindSlot(host: Host, index: number, from: number, found: unknown): void {
+    if (this.root.options.transactions === undefined) return;
+    const slot = this.plan.slots[index];
+    if (slot.root.kind === "element") {
+      const collection = slot.root.collection ?? -1;
+      const element = host.context.get(collection);
+      const upstream = this.plan.collections[collection]?.source.collection;
+      if (
+        element !== undefined && upstream !== undefined &&
+        !(element.source instanceof Ref) && "entry" in element.source
+      ) {
+        host.bound.set(index, {
+          upstream: {
+            collection: upstream,
+            keys: [
+              ...this.#pairsIn(this.#outerOf(upstream), host.context),
+              [upstream, element.key],
+            ],
+          },
+        });
+        return;
+      }
+    }
+    const at: (Position | Ref)[] = host.reads.slice(from);
+    if (slot.observes === "identity" && found instanceof Ref) at.push(found);
+    // What a `reduce` computed is read from its memo entry, which reads no
+    // position: the slot is bound to every position the steps of the
+    // `reduce` read, in this transaction or an earlier one, and to those
+    // that the entries its steps used read, as the elements of the result
+    // of another per-element construct, which are at no stored position.
+    const operation = slot.root.kind === "operation"
+      ? slot.root.operation ?? -1
+      : -1;
+    if (
+      at.length === 0 && this.#reduces.has(operation) &&
+      host.accumulator?.operation !== operation
+    ) {
+      for (
+        const read of this.#readsBehind(this.reduced(operation)(host.context))
+      ) {
+        at.push(read);
+      }
+    }
+    const held = host.bound.get(index);
+    if (held !== undefined && "at" in held) {
+      for (const position of at) held.at.push(position);
+      return;
+    }
+    host.bound.set(index, { observes: slot.observes, at });
+  }
+
+  /**
+   * Runs `run` with no read reported, to the read through a handle in
+   * progress or to a store outside the executor: the comparison of two
+   * references resolves each to the position it names, which is no read
+   * of what the position holds.
+   */
+  unreported<T>(run: () => T): T {
+    const { store } = this;
+    const outer = store.reader;
+    store.reader = undefined;
+    try {
+      return this.#quietly(run);
+    } finally {
+      store.reader = outer;
+    }
+  }
+
+  /**
+   * The positions an entry read, and those the memo entries it used read,
+   * each entry once: every stored position its value was computed from.
+   */
+  #readsBehind(entry: Entry): Position[] {
+    const found: Position[] = [];
+    const seen = new Set<Entry>();
+    const visit = (each: Entry) => {
+      if (seen.has(each)) return;
+      seen.add(each);
+      for (const read of each.reads) found.push(read);
+      for (const { on } of each.dependencies) {
+        if (on === undefined) continue;
+        // The name of an element table stands for its assembly.
+        const used = this.#memo.get(
+          on.startsWith(TABLE_PREFIX) ? on.slice(TABLE_PREFIX.length) : on,
+        );
+        if (used !== undefined) visit(used);
+      }
+    };
+    visit(entry);
+    return found;
+  }
+
+  /**
+   * Runs a read through a handle, attributed to the body being run and
+   * the entry of its `Body.handles` that is the handle (`Store.reader`).
+   * What the read went through is kept, in the host of the body, under
+   * the entry of `Plan.dynamicReads` that names the handle.
+   */
+  readThrough<T>(handle: Handle, run: () => T): T {
+    const invoking = this.#invoking.at(-1);
+    const body = this.#handling ?? invoking?.body;
+    const host = this.#handling === undefined
+      ? invoking?.host
+      : this.#handlerHost;
+    const entry = body === undefined || handle.slot === undefined
+      ? -1
+      : (this.plan.bodies[body].handles ?? []).findIndex((held) =>
+        held.handle?.slot === handle.slot
+      );
+    if (body === undefined || entry < 0) return run();
+    const { store } = this;
+    const outer = store.reader;
+    const reader = { by: { body, handle: entry }, seen: [] };
+    store.reader = reader;
+    try {
+      return run();
+    } finally {
+      store.reader = outer;
+      // An enclosing read through a handle went through these too.
+      if (outer !== undefined) {
+        for (const position of reader.seen) outer.seen.push(position);
+      }
+      const read = (this.plan.dynamicReads ?? []).findIndex((held) => {
+        const why = (held as { why?: { kind?: string } & ReadThrough }).why;
+        return why?.kind === "handle" && why.body === body &&
+          why.handle === entry;
+      });
+      if (read >= 0 && host !== undefined) {
+        const seen = host.dynamic.get(read) ?? [];
+        for (const position of reader.seen) seen.push(position);
+        host.dynamic.set(read, seen);
+      }
+    }
+  }
+
+  /**
+   * Runs a sandboxed body of a cone, so that a write it makes through a
+   * handle is recorded under the body's write edge (`written`).
+   */
+  runBody<T>(body: number, host: Host, run: () => T): T {
+    this.#invoking.push({ body, host });
+    try {
+      return run();
+    } finally {
+      this.#invoking.pop();
+    }
+  }
+
+  /**
+   * On the root: the table the write records of the transaction in
+   * progress name their inputs in.
+   */
+  #inputsTable = new InputsTable();
+  /**
+   * On the root: the index in `#inputsTable` of the inputs of each cone instance
+   * of an output formed for the records being given, by the instance, the
+   * output and the element keys. It holds what was formed since the records
+   * of one change, or of one write that left a value as it was, began to be
+   * formed: nothing is evaluated or written in between, so the inputs of a
+   * cone instance are formed once for every record and every other set of
+   * inputs that names them.
+   */
+  readonly #namedIndex = new Map<string, number>();
+
+  /** The bodies of cones being run, innermost last, each with its host. */
+  readonly #invoking: { body: number; host: Host }[] = [];
+  /** The host of the handler being run, which bound its slots. */
+  #handlerHost: Host | undefined;
+  /** On the root: the records the writes being made belong to. */
+  #writing: Writing | undefined;
+  /** The bindings each cone instance last made, by its name. */
+  readonly #inputs = new Map<string, ConeInputs>();
+  /** The groups of the elements of each assembly a `fold` names. */
+  readonly #groups = new Map<string, Groups>();
+  /** The collections that a `fold` of some template names. */
+  #foldedCollections: Set<number> | undefined;
+  /** The cones of the element body of each collection. */
+  readonly #elementConesOf = new Map<number, number[]>();
+  /** The folded collections directly inside each collection. */
+  readonly #innerFoldsOf = new Map<number, number[]>();
+  /** The elements of a `fold` that read positions, by document and path. */
+  readonly #labelReaders = new Map<string, LabelReaders>();
+  /**
+   * The element each reader in `#labelReaders` stands for, by the name of
+   * its assembly and its key, with the positions its group read.
+   */
+  readonly #readerOf = new Map<
+    string,
+    {
+      collection: number;
+      around: readonly string[];
+      key: string;
+      positions: readonly Address[];
+    }
+  >();
+
+  /**
+   * The records of the write edges of a cone that `matches` selects, each
+   * with its target at `base` below the document given.
+   */
+  #coneWrites(
+    cone: number | undefined,
+    host: Host,
+    doc: string,
+    base: readonly string[],
+    matches: (
+      target: NonNullable<Plan["cones"][number]["writes"]>[number]["target"],
+    ) => boolean,
+  ): Writing | undefined {
+    if (cone === undefined) return undefined;
+    const records = (this.plan.cones[cone].writes ?? []).flatMap((
+      { target, template },
+      write,
+    ) =>
+      matches(target)
+        ? [{
+          record: { cone, write },
+          template,
+          doc,
+          path: [...base, ...target.path ?? []],
+        }]
+        : []
+    );
+    return records.length === 0 ? undefined : { instance: this, host, records };
+  }
+
+  /**
+   * On the root: makes the records of the writes being made those given,
+   * and returns what puts back the records there were before.
+   */
+  #recording(writing: Writing | undefined): () => void {
+    const { root } = this;
+    const before = root.#writing;
+    root.#writing = writing;
+    return () => {
+      root.#writing = before;
+    };
+  }
+
+  /** The element key of each of `collections` in a context, as pairs. */
+  #pairsIn(
+    collections: readonly number[],
+    context: Context,
+  ): [number, string][] {
+    return collections.map((collection) => [
+      collection,
+      context.get(collection)?.key ?? "?",
+    ]);
+  }
+
+  /** The name of a cone instance, by the cone and its element keys. */
+  #coneInstance(cone: number, keys: readonly string[]): string {
+    return `${cone}\n${textOf(keys)}`;
+  }
+
+  /** The keys of `pairs` for the collections a cone is within. */
+  #keysFor(cone: number, pairs: readonly [number, string][]): string[] {
+    const byCollection = new Map(pairs);
+    return this.collectionsOf(cone).map((collection) =>
+      byCollection.get(collection) ?? "?"
+    );
+  }
+
+  /** The collections that a `fold` node of the plan names. */
+  #folded(): Set<number> {
+    if (this.#foldedCollections !== undefined) return this.#foldedCollections;
+    const found = new Set<number>();
+    const walk = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        for (const member of value) walk(member);
+      } else if (typeof value === "object" && value !== null) {
+        const node = value as Record<string, unknown>;
+        if (node.op === "fold" && typeof node.collection === "number") {
+          found.add(node.collection);
+        }
+        for (const member of Object.values(node)) walk(member);
+      }
+    };
+    walk(this.plan);
+    this.#foldedCollections = found;
+    return found;
+  }
+
+  /** The cones whose innermost `element` step is a collection. */
+  #elementCones(collection: number): number[] {
+    let cones = this.#elementConesOf.get(collection);
+    if (cones === undefined) {
+      cones = this.plan.cones.flatMap((_, cone) =>
+        this.collectionsOf(cone).at(-1) === collection ? [cone] : []
+      );
+      this.#elementConesOf.set(collection, cones);
+    }
+    return cones;
+  }
+
+  /**
+   * Keeps what an evaluation of a cone instance bound its slots to, and
+   * for the cone of the element body of a collection that a `fold` names,
+   * updates the group of the element.
+   */
+  #noteInputs(cone: number, context: Context, host: Host): void {
+    const within = this.collectionsOf(cone);
+    const name = this.#coneInstance(cone, this.#keysIn(within, context));
+    const held: ConeInputs = this.#inputs.get(name) ?? {
+      slots: new Map(),
+      selections: new Map(),
+      picks: new Map(),
+      dynamic: new Map(),
+    };
+    for (const [at, read] of host.dynamic) held.dynamic.set(at, read);
+    for (const [slot, bound] of host.bound) held.slots.set(slot, bound);
+    for (const [at, branch] of host.selections) held.selections.set(at, branch);
+    for (const [at, key] of host.picks) held.picks.set(at, key);
+    delete held.id;
+    delete held.positions;
+    this.#inputs.set(name, held);
+    const collection = within.at(-1);
+    if (collection !== undefined && this.#folded().has(collection)) {
+      this.#regroup(collection, context);
+    }
+  }
+
+  /** The bindings a cone instance last made. */
+  /**
+   * What another cone instance bound a slot to, for the element keys
+   * given: a slot names a position whichever cone reads it, and a template
+   * that holds a copy of another cone's, as the output of a pattern
+   * compiled in that passes its interim output on does, reaches slots its
+   * own cone did not read.
+   */
+  #otherConeBound(
+    slot: number,
+    keys: readonly [number, string][],
+  ): Bound | undefined {
+    for (const [cone, record] of this.plan.cones.entries()) {
+      if (!(record as { slots?: number[] }).slots?.includes(slot)) continue;
+      const bound = this.#inputsOf(cone, this.#keysFor(cone, keys))?.slots
+        .get(slot);
+      if (bound !== undefined) return bound;
+    }
+    return undefined;
+  }
+
+  #inputsOf(cone: number, keys: readonly string[]): ConeInputs | undefined {
+    return this.#inputs.get(this.#coneInstance(cone, keys));
+  }
+
+  /**
+   * The identifier of what a cone instance's bindings consumed: the label
+   * identifier of each position each slot was bound to, and for the slot
+   * of an upstream element the identifier of that element's cone
+   * instances. Equal identifiers stand for equal inputs of a template.
+   */
+  #idOf(inputs: ConeInputs): string {
+    if (inputs.id !== undefined) return inputs.id;
+    const parts: string[] = [];
+    const positions: Address[] = [];
+    const slots = [...inputs.slots].sort(([a], [b]) => a - b);
+    for (const [slot, bound] of slots) {
+      if ("constant" in bound) {
+        parts.push(`${slot}:constant`);
+        continue;
+      }
+      if ("output" in bound) {
+        const { cone } = this.plan.outputs[bound.output];
+        const upstream = this.#inputsOf(cone, this.#keysFor(cone, []));
+        if (upstream !== undefined) {
+          for (const at of upstream.positions ?? []) positions.push(at);
+        }
+        parts.push(
+          `${slot}>${bound.output}<${
+            upstream === undefined ? "" : this.#idOf(upstream)
+          }>`,
+        );
+        continue;
+      }
+      if ("place" in bound) {
+        // The state of a handler's binding: no cone instance binds one.
+        parts.push(
+          `${slot}@${bound.place.slot}/${bound.place.rest.join("/")}`,
+        );
+        continue;
+      }
+      if ("upstream" in bound) {
+        const { collection, keys } = bound.upstream;
+        const ids = this.#elementCones(collection).map((cone) => {
+          const upstream = this.#inputsOf(cone, this.#keysFor(cone, keys));
+          if (upstream === undefined) return "";
+          const id = this.#idOf(upstream);
+          for (const at of upstream.positions ?? []) positions.push(at);
+          return id;
+        });
+        parts.push(`${slot}<${ids.join("|")}>`);
+        continue;
+      }
+      const addresses = this.#addressesOf(bound.at);
+      for (const at of addresses) positions.push(at);
+      const labels = addresses.map((address) =>
+        this.#labelKey(address, bound.observes) ??
+          JSON.stringify([address.doc, address.path])
+      );
+      parts.push(`${slot}:${bound.observes}:${[...new Set(labels)].join(",")}`);
+    }
+    for (
+      const [selector, branch] of [...inputs.selections].sort(([a], [b]) =>
+        a - b
+      )
+    ) {
+      parts.push(`s${selector}=${branch}`);
+    }
+    for (const [pick, key] of [...inputs.picks].sort(([a], [b]) => a - b)) {
+      parts.push(`p${pick}=${JSON.stringify(key)}`);
+    }
+    inputs.id = parts.join(";");
+    inputs.positions = positions;
+    return inputs.id;
+  }
+
+  /**
+   * Forgets the identifier of what a cone instance's bindings consumed, and
+   * of what the upstream elements its slots read consumed, so that the
+   * next `#idOf` asks for the labels again.
+   */
+  #forget(inputs: ConeInputs): void {
+    delete inputs.id;
+    delete inputs.positions;
+    for (const bound of inputs.slots.values()) {
+      if (!("upstream" in bound)) continue;
+      const { collection, keys } = bound.upstream;
+      for (const cone of this.#elementCones(collection)) {
+        const upstream = this.#inputsOf(cone, this.#keysFor(cone, keys));
+        if (upstream !== undefined) this.#forget(upstream);
+      }
+    }
+  }
+
+  /**
+   * On the root: the labels of documents changed (`watchLabels`). Updates
+   * the group of each element of a `fold`, in this instance and in every
+   * instance it made, that read a position at, above or below a label
+   * entry that changed. The work is the number of those elements and the
+   * length of the paths, and not the number of elements.
+   */
+  labelsChanged(changes: readonly LabelChange[], alone = false): void {
+    const regrouped = new Set<string>();
+    for (const instance of new Set([this, ...this.#instances.values()])) {
+      for (const key of instance.#regroupReaders(changes)) regrouped.add(key);
+    }
+    // The records whose bindings name a container with a group that the
+    // change made or emptied.
+    for (const key of this.#memberLabelsChanged(changes)) regrouped.add(key);
+    // Where the labels changed and no value did, nothing is evaluated
+    // again, and the label of an output that read a changed label, or that
+    // folds over a collection with an element that did, is formed again
+    // behind the batch in progress, or the next one (`#relabel`).
+    if (!alone) return;
+    for (const key of [...regrouped, ...this.#recordsReading(changes)]) {
+      // A record given in the transaction that stored the label holds it.
+      if (!(this.#ending && this.#givenNow.has(key))) this.#relabels.add(key);
+    }
+  }
+
+  /**
+   * Helper for `labelsChanged()`, for the folds of this instance. Returns
+   * the keys of the records whose template folds over a collection with an
+   * element it regrouped.
+   */
+  #regroupReaders(changes: readonly LabelChange[]): Set<string> {
+    const regrouped = new Set<string>();
+    const readers = new Set<string>();
+    const collect = (node: LabelReaders) => {
+      for (const reader of node.readers) readers.add(reader);
+      for (const child of node.children.values()) collect(child);
+    };
+    for (const { doc, paths } of changes) {
+      const root = this.#labelReaders.get(doc);
+      if (root === undefined) continue;
+      for (const path of paths) {
+        let node: LabelReaders | undefined = root;
+        for (const segment of path) {
+          for (const reader of node.readers) readers.add(reader);
+          if (segment === "*") break;
+          node = node.children.get(segment);
+          if (node === undefined) break;
+        }
+        if (node !== undefined) collect(node);
+      }
+    }
+    for (const reader of readers) {
+      const at = this.#readerOf.get(reader);
+      if (at === undefined) continue;
+      const keys = [...at.around, at.key];
+      for (const cone of this.#elementCones(at.collection)) {
+        const inputs = this.#inputsOf(cone, keys);
+        if (inputs !== undefined) this.#forget(inputs);
+      }
+      this.#regroupKey(at.collection, at.around, at.key);
+      // The records whose template folds over the collection hold its
+      // groups, which the change of the element's label changed.
+      for (
+        const key of this.root.#recordFolds.get(
+          `${this.id}\n${at.collection}`,
+        ) ?? []
+      ) regrouped.add(key);
+    }
+    return regrouped;
+  }
+
+  /**
+   * Keeps the positions the group of an element read in the index of
+   * label readers, in place of those it read before; none removes it.
+   */
+  #indexReader(
+    reader: string,
+    at: { collection: number; around: readonly string[]; key: string },
+    positions: readonly Address[] | undefined,
+  ): void {
+    const before = this.#readerOf.get(reader);
+    for (const { doc, path } of before?.positions ?? []) {
+      let node = this.#labelReaders.get(doc);
+      for (const segment of path) node = node?.children.get(segment);
+      node?.readers.delete(reader);
+    }
+    if (positions === undefined) {
+      this.#readerOf.delete(reader);
+      return;
+    }
+    this.#readerOf.set(reader, { ...at, positions });
+    for (const { doc, path } of positions) {
+      let node = this.#labelReaders.get(doc);
+      if (node === undefined) {
+        node = { readers: new Set(), children: new Map() };
+        this.#labelReaders.set(doc, node);
+      }
+      for (const segment of path) {
+        let child: LabelReaders | undefined = node.children.get(segment);
+        if (child === undefined) {
+          child = { readers: new Set(), children: new Map() };
+          node.children.set(segment, child);
+        }
+        node = child;
+      }
+      node.readers.add(reader);
+    }
+  }
+
+  /**
+   * Updates the group of the element of `collection` that a context
+   * binds, after its cone instance was evaluated: one update, whatever the
+   * number of elements.
+   */
+  #regroup(collection: number, context: Context): void {
+    const element = context.get(collection);
+    if (element === undefined) return;
+    const inPlace = element.source instanceof Ref &&
+      element.source.path.some(isKeySegment);
+    this.#regroupKey(
+      collection,
+      this.#keysIn(this.#outerOf(collection), context),
+      element.key,
+      inPlace,
+    );
+  }
+
+  /**
+   * Updates the group of the element of `collection` under `key`, in the
+   * assembly of the keys `around` it. The group is that of the
+   * identifiers of what the element's cone instances consumed and of the
+   * set of groups of each folded collection inside it, so two elements
+   * whose inner folds differ are in two groups. `inPlace` says whether
+   * the element is a plain value in place, where it is known. Where the
+   * set of groups changes, the element of the enclosing collection that
+   * holds this one is updated in turn. The work is the number of groups
+   * of the folded collections inside the element.
+   */
+  #regroupKey(
+    collection: number,
+    around: readonly string[],
+    key: string,
+    inPlace?: boolean,
+  ): void {
+    const name = this.#name("assembly", collection, around);
+    let table = this.#groups.get(name);
+    if (table === undefined) {
+      table = { byKey: new Map(), groups: new Map(), notInPlace: new Set() };
+      this.#groups.set(name, table);
+    }
+    const keys = [...around, key];
+    const positions: Address[] = [];
+    const own = this.#elementCones(collection).map((cone) => {
+      const inputs = this.#inputsOf(cone, keys);
+      if (inputs === undefined) return "";
+      const id = this.#idOf(inputs);
+      for (const at of inputs.positions ?? []) positions.push(at);
+      return id;
+    });
+    this.#indexReader(
+      `${name}\n${key}`,
+      { collection, around, key },
+      positions,
+    );
+    const inner = this.#innerFolds(collection).map((folded) => {
+      const ids = [
+        ...this.#groups.get(this.#name("assembly", folded, keys))?.groups
+          .keys() ?? [],
+      ].sort();
+      return `f${folded}<${ids.join("|")}>`;
+    });
+    const id = [...own, ...inner].join("|");
+    this.counts.groupUpdates += 1;
+    const was = table.byKey.get(key);
+    let changed = false;
+    if (was !== id) {
+      const notInPlace = table.notInPlace.has(key);
+      if (was !== undefined) changed = this.#leaveGroup(table, key);
+      if (notInPlace) table.notInPlace.add(key);
+      table.byKey.set(key, id);
+      let members = table.groups.get(id);
+      if (members === undefined) {
+        members = new Set();
+        table.groups.set(id, members);
+        changed = true;
+      }
+      members.add(key);
+    }
+    if (inPlace === true) table.notInPlace.delete(key);
+    else if (inPlace === false) table.notInPlace.add(key);
+    if (changed) this.#regroupEnclosing(collection, around);
+  }
+
+  /**
+   * Updates the group of the element of the collection enclosing
+   * `collection` that holds the assembly of the keys `around`, where that
+   * collection is folded and the element has a group already.
+   */
+  #regroupEnclosing(collection: number, around: readonly string[]): void {
+    const outer = this.#outerOf(collection).at(-1);
+    const key = around.at(-1);
+    if (outer === undefined || key === undefined) return;
+    if (!this.#folded().has(outer)) return;
+    const outerAround = around.slice(0, -1);
+    const table = this.#groups.get(
+      this.#name("assembly", outer, outerAround),
+    );
+    if (!table?.byKey.has(key)) return;
+    this.#regroupKey(outer, outerAround, key);
+  }
+
+  /**
+   * What the slot of an element is bound to where no evaluation bound it,
+   * for the element keys given: the position the element is at, for an
+   * element that is a reference or a plain value in place, and the
+   * upstream element, for an element of the result of another
+   * per-element construct. A kept output of each element of a `filter`
+   * reads its element in this way, in no cone of the element body.
+   */
+  #elementBound(
+    slot: number,
+    byCollection: ReadonlyMap<number, string>,
+  ): Bound | undefined {
+    const record = this.plan.slots[slot];
+    if (record.root.kind !== "element") return undefined;
+    const collection = record.root.collection ?? -1;
+    const key = byCollection.get(collection);
+    if (key === undefined) return undefined;
+    const outer = this.#outerOf(collection);
+    const pairs = outer.map((step): [number, string] => [
+      step,
+      byCollection.get(step) ?? "?",
+    ]);
+    const upstream = this.plan.collections[collection]?.source.collection;
+    if (upstream !== undefined) {
+      return {
+        upstream: {
+          collection: upstream,
+          keys: [
+            ...this.#outerOf(upstream).map((step): [number, string] => [
+              step,
+              byCollection.get(step) ?? "?",
+            ]),
+            [upstream, key],
+          ],
+        },
+      };
+    }
+    const element = this.#tables.get(
+      this.#name("assembly", collection, pairs.map(([, at]) => at)),
+    )?.byKey.get(key);
+    if (!(element?.source instanceof Ref)) return undefined;
+    const { source } = element;
+    return {
+      observes: record.observes,
+      at: [new Ref(source.doc, [...source.path, ...record.path])],
+    };
+  }
+
+  /**
+   * What a slot is bound to where no evaluation bound it and an evaluation
+   * bound another slot with the same root and path: the value code read the
+   * position once, in the other slot's class. The condition of a selector
+   * that is the left operand of `??` is such a `shape` slot, read only
+   * through the read of its value. The positions are those that read went
+   * through, and for an `identity` read the reference it gave, which is
+   * where the value whose shape the slot observes is.
+   */
+  #samePositionBound(
+    slot: number,
+    boundOf: (slot: number) => Bound | undefined,
+  ): Bound | undefined {
+    const record = this.plan.slots[slot];
+    for (const other of this.#slotsAtPosition(slot)) {
+      const bound = boundOf(other);
+      if (bound === undefined || !("at" in bound)) continue;
+      return this.#derivedBound(
+        bound,
+        `same ${slot}`,
+        () => ({ observes: record.observes, at: [...bound.at] }),
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * What a slot below the elements of a collection, whose path holds `*`,
+   * is bound to where no element was read for it, as where the collection
+   * is empty: the position the read would have read, `*` below the
+   * collection where a slot that reads the collection itself through to
+   * its stored array was bound. The runtime takes there the join of the
+   * element entries `*` covers, none for an empty collection, with the
+   * entries above it, so an absent element has the label of the nearest
+   * stored entry above it.
+   */
+  #elementsBound(
+    slot: number,
+    boundOf: (slot: number) => Bound | undefined,
+  ): Bound | undefined {
+    const record = this.plan.slots[slot];
+    const star = record.path.indexOf("*");
+    if (star < 0) return undefined;
+    const above = canonical([record.root, record.path.slice(0, star)]);
+    for (const [other, { root, path, observes }] of this.plan.slots.entries()) {
+      // An `identity` slot stops at the link to the collection's cell, and
+      // its last position is not the array's.
+      if (other === slot || observes === "identity") continue;
+      if (canonical([root, path]) !== above) continue;
+      const bound = boundOf(other);
+      if (bound === undefined || !("at" in bound)) continue;
+      const last = bound.at[bound.at.length - 1];
+      if (last === undefined || last instanceof Ref) continue;
+      return this.#derivedBound(bound, `elements ${slot}`, () => ({
+        observes: record.observes,
+        at: [
+          ...bound.at.slice(0, -1),
+          { doc: last.doc, path: [...last.path, ...record.path.slice(star)] },
+        ],
+      }));
+    }
+    return undefined;
+  }
+
+  /**
+   * What the source slot of a collection is bound to where no cone read it:
+   * the stored array the collection's assembly found, for the element keys
+   * of the collections around it. The template of the result of a `map`, an
+   * output with a `collection`, is that slot, which the assembly reads and
+   * no cone instance does.
+   */
+  #sourceBinding(
+    slot: number,
+    byCollection: ReadonlyMap<number, string>,
+    collections: Iterable<number> = this.plan.collections.keys(),
+  ): SlotBinding | undefined {
+    for (const collection of collections) {
+      if (this.plan.collections[collection].source.slot !== slot) continue;
+      const around = this.#outerOf(collection).map((step) =>
+        byCollection.get(step) ?? "?"
+      );
+      const chain = this.#arrayChain(
+        this.#name("assembly", collection, around),
+      );
+      if (chain.length > 0) {
+        return { chain, observes: this.plan.slots[slot].observes };
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * What a slot of the argument or of a state cell is bound to where no
+   * evaluation bound it, as the condition of `a?.b ?? c` that the value
+   * code reads only through the read of `b`: the position the slot names,
+   * through the links on the way to it. The runtime observes the label
+   * stored there at commit.
+   */
+  #positionBinding(
+    slot: number,
+    keys: readonly [number, string][],
+  ): SlotBinding | undefined {
+    const { root, path, observes } = this.plan.slots[slot];
+    let doc: string | undefined;
+    if (root.kind === "argument") doc = this.argument;
+    else if (root.kind === "state") {
+      const wanted = canonical(keys.map(([, key]) => key));
+      for (const [id, { cell, keys: held }] of this.#cells) {
+        if (cell === (root.cell ?? 0) && canonical(held) === wanted) doc = id;
+      }
+    }
+    if (doc === undefined) return undefined;
+    // Every class but `identity` resolves through a link at the last
+    // segment (PL §2.5).
+    const chain = this.#addressesOf(
+      [new Ref(doc, path)],
+      observes !== "identity",
+    );
+    return chain.length === 0 ? undefined : this.#chainsOf(chain, observes);
+  }
+
+  /**
+   * The binding of a slot to the positions its read went through, in
+   * order. A position that holds a link is one the read crossed, and a
+   * position that holds none is one it observed: the positions up to the
+   * first observed one are the slot's chain, and each further run of
+   * crossed links with the position it ends in is a chain below it, which
+   * a read of a value that holds links makes. An `identity` slot observes
+   * the reference at its last position and has one chain.
+   */
+  #chainsOf(
+    given: Address[],
+    observes: string,
+    /** Containers whose members the read is known to have covered. */
+    presumed: readonly MemberGroups[] = [],
+  ): SlotBinding {
+    return this.#chainsOver(
+      this.#coveredMembers(given, observes, presumed),
+      observes,
+    );
+  }
+
+  /**
+   * The binding of a slot of the class `observes` to what a read covered
+   * (`#chainsOf`). The members of each container the read covered are named
+   * by one member of each group of the container's table, and by no other.
+   */
+  #chainsOver(cover: Cover, observes: string): SlotBinding {
+    const addresses = cover.rest;
+    const reported = cover.covers.map(({ table, uncovered }) => {
+      const members = this.#memberOfEachGroup(table, uncovered);
+      return {
+        members,
+        stated: {
+          container: { doc: table.doc, path: [...table.path] },
+          count: table.members.size - uncovered.size,
+          groups: members.length,
+        },
+      };
+    });
+    const stated = reported.length === 0
+      ? {}
+      : { members: reported.map((each) => each.stated) };
+    if (observes === "identity") {
+      if (reported.length === 0) return { chain: addresses, observes };
+      const chain = [...addresses];
+      for (const { members } of reported) {
+        for (const { links, ends } of members) {
+          for (const address of links) chain.push(address);
+          for (const address of ends) chain.push(address);
+        }
+      }
+      // The position the read ended at stays the last of the chain.
+      const { last } = cover;
+      const end = chain[chain.length - 1];
+      if (
+        last !== undefined &&
+        (end.doc !== last.doc || canonical(end.path) !== canonical(last.path))
+      ) chain.push(last);
+      return { chain, observes, ...stated };
+    }
+    const chains: Address[][] = [];
+    let current: Address[] = [];
+    for (const address of addresses) {
+      current.push(address);
+      if (!isLink(this.store.peek(address.doc, address.path))) {
+        chains.push(current);
+        current = [];
+      }
+    }
+    // The positions end at a link where they are those of another slot's
+    // read that stopped there, as an `identity` slot's does. Every other
+    // class resolves through a link at the last segment (PL §2.5): the
+    // chain goes on to where the link leads.
+    const stopped = current.at(-1);
+    if (stopped !== undefined) {
+      const seen = new Set(
+        addresses.map(({ doc, path }) => JSON.stringify([doc, path])),
+      );
+      this.#quietly(() => {
+        const crossed: Position[] = [];
+        const located = this.store.locate(
+          new Ref(stopped.doc, stopped.path),
+          true,
+          crossed,
+        );
+        for (
+          const { doc, path } of [
+            ...crossed.filter(({ keyed }) => keyed === undefined),
+            located.ref,
+          ]
+        ) {
+          const id = JSON.stringify([doc, path]);
+          if (seen.has(id)) continue;
+          seen.add(id);
+          current.push({ doc, path: [...path] });
+        }
+      });
+      // Where the link leads to a position an earlier chain ends at, the
+      // links are crossed on the way to that position, and no chain ends
+      // at a link.
+      const [first] = chains;
+      const last = current[current.length - 1];
+      if (
+        first !== undefined &&
+        isLink(this.store.peek(last.doc, last.path))
+      ) {
+        chains[0] = [...current, ...first];
+      } else {
+        chains.push(current);
+      }
+    }
+    const [chain = [], ...rest] = chains;
+    for (const { members } of reported) {
+      for (const { links, ends } of members) {
+        ends.forEach((end, index) =>
+          rest.push(index === 0 ? [...links, end] : [end])
+        );
+      }
+    }
+    const below = this.#distinctByLabel(rest, observes);
+    return {
+      chain,
+      observes,
+      ...(below.length === 0 ? {} : { below }),
+      ...stated,
+    };
+  }
+
+  /** On the root: the table of each container and class of read, by name. */
+  readonly #memberGroups = new Map<string, MemberGroups>();
+  /** On the root: the tables of each container, by its position. */
+  readonly #memberGroupsAt = new Map<string, Set<MemberGroups>>();
+  /**
+   * On the root: the tables with a position in each document, that of the
+   * container or one a member's link leads to.
+   */
+  readonly #memberGroupsOf = new Map<string, Set<MemberGroups>>();
+  /** On the root: the tables each record of an output reads. */
+  readonly #recordGroups = new Map<string, Set<MemberGroups>>();
+
+  /**
+   * What a read of the class `observes` that went through `addresses`
+   * covered: the containers among them whose members it went through, each
+   * by its table, and the addresses that are no position of a covered
+   * member. A container is a stored array of references through most of
+   * whose members the read went, to the same positions of what each link
+   * leads to; a member the read did not go through every position of is
+   * not covered, and its positions stay among the rest. The members of
+   * each of `presumed`, tables of another class of read of the same
+   * positions, are covered without being looked for. No container is
+   * covered where the store names no label identifiers.
+   */
+  #coveredMembers(
+    given: Address[],
+    observes: string,
+    presumed: readonly MemberGroups[] = [],
+  ): Cover {
+    const last = given[given.length - 1];
+    const covered = new Set<string>();
+    const covers: Cover["covers"] = [];
+    const taken = new Set<string>();
+    let addresses = given;
+    for (const other of presumed) {
+      const { doc, path, fields } = other;
+      const table = this.root.#memberGroupsFor(doc, path, observes, fields);
+      if (table === undefined) {
+        // No table of this class of read places the members: the read
+        // went through the positions of each of them.
+        addresses = [
+          ...addresses,
+          ...[...other.members.values()].flatMap(({ links, ends }) => [
+            ...links,
+            ...ends,
+          ]),
+        ];
+        continue;
+      }
+      taken.add(memberGroupsPlace(doc, path));
+      for (const member of table.members.values()) {
+        for (const text of member.texts) covered.add(text);
+      }
+      covers.push({ table, uncovered: new Set() });
+    }
+    const none: Cover = { rest: addresses, covers: [], last };
+    if (this.root.options.transactions?.labelOf === undefined) return none;
+    if (covers.length === 0 && addresses.length < 3) return none;
+    const texts = addresses.map(({ doc, path }) => positionText(doc, path));
+    const read = new Set(texts);
+    addresses.forEach(({ doc, path }, at) => {
+      if (covered.has(texts[at]) || addresses.length < 3) return;
+      const held = this.store.peek(doc, path);
+      if (!Array.isArray(held) || held.length === 0 || !isLink(held[0])) {
+        return;
+      }
+      if (taken.has(memberGroupsPlace(doc, path))) return;
+      const fields = this.#fieldsRead(doc, path, addresses);
+      if (fields === undefined) return;
+      const table = this.root.#memberGroupsFor(doc, path, observes, fields);
+      if (table === undefined) return;
+      const uncovered = new Set<string>();
+      for (const [name, member] of table.members) {
+        if (!member.texts.every((text) => read.has(text))) uncovered.add(name);
+      }
+      // A read that went through few of the members covers none.
+      if (uncovered.size * 2 > table.members.size) return;
+      for (const [name, member] of table.members) {
+        if (uncovered.has(name)) continue;
+        for (const text of member.texts) covered.add(text);
+      }
+      covers.push({ table, uncovered });
+    });
+    if (covers.length === 0) return none;
+    return {
+      rest: addresses.filter((_, at) => !covered.has(texts[at])),
+      covers,
+      last,
+    };
+  }
+
+  /**
+   * The paths, below the position the link of the first member of the
+   * array at `path` of `doc` leads to, of the positions among `addresses`
+   * in that document: what a read that went through `addresses` reached of
+   * the member. Nothing where the link leads into `doc` itself, or the read
+   * reached no position of the member.
+   */
+  #fieldsRead(
+    doc: string,
+    path: readonly string[],
+    addresses: readonly Address[],
+  ): string[][] | undefined {
+    const { ref } = this.#quietly(() =>
+      this.store.locate(new Ref(doc, [...path, "0"]), true)
+    );
+    if (ref.doc === doc) return undefined;
+    const fields: string[][] = [];
+    const seen = new Set<string>();
+    for (const address of addresses) {
+      if (
+        address.doc !== ref.doc || address.path.length < ref.path.length ||
+        !ref.path.every((segment, index) => segment === address.path[index])
+      ) continue;
+      const field = address.path.slice(ref.path.length);
+      const text = canonical(field);
+      if (seen.has(text)) continue;
+      seen.add(text);
+      fields.push(field);
+    }
+    return fields.length === 0 ? undefined : fields;
+  }
+
+  /**
+   * On the root: the table of the groups of the members of the array at
+   * `path` of `doc`, for the reads of the class `observes` that reach the
+   * positions at `fields` of each member, brought up to date. Nothing where
+   * a member is no reference the table can place.
+   */
+  #memberGroupsFor(
+    doc: string,
+    path: readonly string[],
+    observes: string,
+    fields: readonly (readonly string[])[],
+  ): MemberGroups | undefined {
+    const place = memberGroupsPlace(doc, path);
+    const name = `${observes}\n${place}\n${canonical(fields)}`;
+    let table = this.#memberGroups.get(name);
+    if (table === undefined) {
+      table = {
+        doc,
+        path: [...path],
+        observes,
+        fields,
+        members: new Map(),
+        groups: new Map(),
+        unknown: new Set(),
+        dirty: new Set(),
+        stale: true,
+        declined: false,
+        membership: 0,
+        byDoc: new Map(),
+        records: new Set(),
+      };
+      this.#memberGroups.set(name, table);
+      const held = this.#memberGroupsAt.get(place) ?? new Set();
+      held.add(table);
+      this.#memberGroupsAt.set(place, held);
+      this.#indexGroups(table, doc);
+    }
+    return this.#refreshGroups(table) ? table : undefined;
+  }
+
+  /** On the root: keeps `table` as one with a position in `doc`. */
+  #indexGroups(table: MemberGroups, doc: string): void {
+    const held = this.#memberGroupsOf.get(doc) ?? new Set();
+    held.add(table);
+    this.#memberGroupsOf.set(doc, held);
+  }
+
+  /**
+   * On the root: brings a table up to date: places again the members
+   * whose positions or labels changed and those with no key, and forms the
+   * table again whole where the container changed otherwise than at a
+   * member. Returns whether the table covers the container. The work is
+   * the number of members placed.
+   */
+  #refreshGroups(table: MemberGroups): boolean {
+    // A table that covers nothing stays so until something changes.
+    if (table.declined && !table.stale && table.dirty.size === 0) return false;
+    const array = this.store.peek(table.doc, table.path);
+    if (!Array.isArray(array)) {
+      this.#clearGroups(table);
+      table.declined = true;
+      return false;
+    }
+    let whole = table.stale || table.declined;
+    if (!whole) {
+      for (const member of [...table.dirty, ...table.unknown]) {
+        if (!/^(0|[1-9][0-9]*)$/.test(member)) continue;
+        if (Number(member) >= array.length) {
+          if (table.members.has(member)) {
+            this.#leaveGroups(table, member);
+            table.membership += 1;
+          }
+        } else if (!this.#placeMember(table, member)) {
+          whole = true;
+          break;
+        }
+      }
+      table.dirty.clear();
+      if (table.members.size !== array.length) whole = true;
+    }
+    if (!whole) return true;
+    this.#clearGroups(table);
+    for (let index = 0; index < array.length; index++) {
+      if (!this.#placeMember(table, `${index}`)) {
+        this.#clearGroups(table);
+        table.declined = true;
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** On the root: empties a table, as one that is formed again whole. */
+  #clearGroups(table: MemberGroups): void {
+    table.members.clear();
+    table.groups.clear();
+    table.unknown.clear();
+    table.dirty.clear();
+    table.byDoc.clear();
+    table.stale = false;
+    table.declined = false;
+    table.membership += 1;
+  }
+
+  /** On the root: takes a member out of its group and out of the table. */
+  #leaveGroups(table: MemberGroups, member: string): void {
+    const held = table.members.get(member);
+    if (held === undefined) return;
+    table.members.delete(member);
+    table.unknown.delete(member);
+    if (held.key === undefined) return;
+    const group = table.groups.get(held.key);
+    group?.delete(member);
+    if (group?.size === 0) table.groups.delete(held.key);
+  }
+
+  /**
+   * On the root: finds the positions a read of a member goes through and
+   * the key of their labels, and puts the member in the group of that key.
+   * Returns whether the member is a reference the table can place: one
+   * that holds a link, whose positions at the table's fields hold none.
+   */
+  #placeMember(table: MemberGroups, member: string): boolean {
+    const { doc, path, observes } = table;
+    if (!isLink(this.store.peek(doc, [...path, member]))) return false;
+    const crossed: Position[] = [];
+    const { ref } = this.#quietly(() =>
+      this.store.locate(new Ref(doc, [...path, member]), true, crossed)
+    );
+    const links: Address[] = [];
+    for (const { doc: at, path: below, keyed } of crossed) {
+      if (keyed !== undefined) continue;
+      if (at === ref.doc && canonical(below) === canonical(ref.path)) continue;
+      links.push({ doc: at, path: [...below] });
+    }
+    const ends = table.fields.map((field) => ({
+      doc: ref.doc,
+      path: [...ref.path, ...field],
+    }));
+    if (
+      links.length === 0 ||
+      ends.some((end) => isLink(this.store.peek(end.doc, end.path)))
+    ) return false;
+    const keys = [...links, ...ends].map((address) =>
+      this.#labelKey(address, observes)
+    );
+    const key = keys.includes(undefined) ? undefined : JSON.stringify(keys);
+    const added = !table.members.has(member);
+    this.#leaveGroups(table, member);
+    table.members.set(member, {
+      links,
+      ends,
+      texts: [...links, ...ends].map(({ doc: at, path: below }) =>
+        positionText(at, below)
+      ),
+      key,
+    });
+    if (added) table.membership += 1;
+    if (key === undefined) table.unknown.add(member);
+    else {
+      const group = table.groups.get(key) ?? new Set();
+      group.add(member);
+      table.groups.set(key, group);
+    }
+    for (const { doc: at } of [...links, ...ends]) {
+      if (at === doc) continue;
+      const held = table.byDoc.get(at) ?? new Set();
+      held.add(member);
+      table.byDoc.set(at, held);
+      this.#indexGroups(table, at);
+    }
+    return true;
+  }
+
+  /**
+   * One member of each group of a table, and each member with no key, of
+   * the members that are not in `uncovered`: the members whose positions a
+   * binding names for the container. The work is the number of groups and
+   * of uncovered members.
+   */
+  #memberOfEachGroup(
+    table: MemberGroups,
+    uncovered: ReadonlySet<string>,
+  ): Member[] {
+    const found: Member[] = [];
+    for (const group of table.groups.values()) {
+      for (const member of group) {
+        if (uncovered.has(member)) continue;
+        found.push(table.members.get(member)!);
+        break;
+      }
+    }
+    for (const member of table.unknown) {
+      if (!uncovered.has(member)) found.push(table.members.get(member)!);
+    }
+    return found;
+  }
+
+  /**
+   * On the root: a document changed at `path`. A table with a position of
+   * a member in the document places that member again, a table whose
+   * container the change is below places the member it is at or below, one
+   * whose container gained members at its end places those, and one whose
+   * container changed otherwise is formed again whole. The work is the
+   * number of tables with a position in the document.
+   */
+  #memberDocumentChanged(
+    doc: string,
+    path: readonly string[],
+    splice: { start: number; removed: number; inserted: number } | undefined,
+  ): void {
+    for (const table of this.#memberGroupsOf.get(doc) ?? []) {
+      for (const member of table.byDoc.get(doc) ?? []) table.dirty.add(member);
+      if (doc !== table.doc) continue;
+      const shared = Math.min(path.length, table.path.length);
+      if (
+        !table.path.slice(0, shared).every((segment, at) =>
+          segment === path[at]
+        )
+      ) continue;
+      if (path.length > table.path.length) {
+        table.dirty.add(path[table.path.length]);
+      } else if (
+        path.length === table.path.length && splice !== undefined &&
+        splice.removed === 0 && splice.start === table.members.size &&
+        !table.stale
+      ) {
+        for (let added = 0; added < splice.inserted; added++) {
+          table.dirty.add(`${splice.start + added}`);
+        }
+      } else table.stale = true;
+    }
+  }
+
+  /**
+   * On the root: the labels of documents changed. Places again the members
+   * of each table that have a position at, above or below a changed label
+   * entry, and returns the records that read a table where that made or
+   * emptied a group: the label of a read that covers the container is the
+   * join over its groups, which a member that moves between two groups
+   * that both stay leaves as it was. The work is the number of members
+   * placed.
+   */
+  #memberLabelsChanged(changes: readonly LabelChange[]): Set<string> {
+    const found = new Set<string>();
+    const touched = new Set<MemberGroups>();
+    for (const { doc, paths } of changes) {
+      for (const table of this.#memberGroupsOf.get(doc) ?? []) {
+        touched.add(table);
+        for (const member of table.byDoc.get(doc) ?? []) {
+          table.dirty.add(member);
+        }
+        if (doc !== table.doc) continue;
+        for (const path of paths) {
+          const shared = Math.min(path.length, table.path.length);
+          if (
+            !table.path.slice(0, shared).every((segment, at) =>
+              segment === path[at]
+            )
+          ) continue;
+          const member = path[table.path.length];
+          // An entry at the container, above it, or at `*` below it is
+          // one every member's link position can take its label from.
+          if (member === undefined || member === "*") {
+            for (const each of table.members.keys()) table.dirty.add(each);
+          } else table.dirty.add(member);
+        }
+      }
+    }
+    for (const table of touched) {
+      if (table.records.size === 0) continue;
+      const before = canonical([...table.groups.keys()].sort());
+      const unknown = table.unknown.size;
+      const covers = this.#refreshGroups(table);
+      if (
+        !covers || table.unknown.size !== unknown ||
+        canonical([...table.groups.keys()].sort()) !== before
+      ) {
+        for (const key of table.records) found.add(key);
+      }
+    }
+    return found;
+  }
+
+  /**
+   * One chain of each set of chains whose positions hold equal labels, in
+   * order (provisional decision P31): the label of a slot is the join over
+   * its chains, to which chains of equal labels add nothing, so a read of an
+   * array of references whose labels are equal reports one chain, however
+   * many elements it has. A chain with a position whose label the store
+   * names no identifier for is kept. The labels compared are those of the
+   * observations the runtime makes of the positions of a chain
+   * (`#labelKey`), for a slot of the class `observes`.
+   */
+  #distinctByLabel(chains: Address[][], observes: string): Address[][] {
+    const hooks = this.root.options.transactions;
+    if (chains.length < 2 || hooks?.labelOf === undefined) return chains;
+    const seen = new Set<string>();
+    return chains.filter((chain) => {
+      const labels = chain.map((address) => this.#labelKey(address, observes));
+      if (labels.includes(undefined)) return true;
+      const key = JSON.stringify(labels);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  /**
+   * The identifiers of the labels the runtime observes at a position a
+   * slot of the class `observes` is bound to, as one text, or nothing where
+   * the store names no identifier. The runtime observes a link a read
+   * crossed as a reference, and the label of that observation is not part
+   * of the label of a read of the value there: two links written under
+   * different labels have one identifier for a read of their values. A
+   * position that holds a link is one a read crossed or one it ended at,
+   * so its text holds the identifier of both observations.
+   */
+  #labelKey({ doc, path }: Address, observes: string): string | undefined {
+    const hooks = this.root.options.transactions;
+    const own = hooks?.labelOf?.(doc, path, observes);
+    if (own === undefined) return undefined;
+    if (observes === "identity" || !isLink(this.store.peek(doc, path))) {
+      return own;
+    }
+    const crossed = hooks?.labelOf?.(doc, path, "identity");
+    return crossed === undefined ? undefined : `${own}|${crossed}`;
+  }
+
+  /** The other slots with the root and the path of `slot`, by its index. */
+  #slotsAtPosition(slot: number): number[] {
+    if (this.#atPosition === undefined) {
+      const byPosition = new Map<string, number[]>();
+      this.plan.slots.forEach(({ root, path }, index) => {
+        const key = canonical([root, path]);
+        byPosition.set(key, [...byPosition.get(key) ?? [], index]);
+      });
+      this.#atPosition = this.plan.slots.map(({ root, path }, index) =>
+        (byPosition.get(canonical([root, path])) ?? []).filter((other) =>
+          other !== index
+        )
+      );
+    }
+    return this.#atPosition[slot];
+  }
+
+  /** The result of `#slotsAtPosition()` for every slot, made once. */
+  #atPosition: number[][] | undefined;
+
+  /**
+   * The slots the membership of a collection reaches: those of its
+   * membership template, or, for a `filter`, whose membership template is
+   * the fold over its own elements, those of the membership of its source
+   * (`membership` of `runtime/runner/src/cfc/plan-labels.ts`). `source`
+   * names the collection a slot is the source of.
+   */
+  #membershipSlots(
+    collection: number,
+  ): { slot: number; source?: number }[] {
+    const templates = this.plan.templates ?? [];
+    const { membership, source } = this.plan.collections[collection];
+    const expanded = membership?.op === "shared"
+      ? templates[membership.template]
+      : membership;
+    if (expanded?.op === "fold" && expanded.collection === collection) {
+      if (source.collection !== undefined) {
+        return this.#membershipSlots(source.collection);
+      }
+      return source.slot === undefined
+        ? []
+        : [{ slot: source.slot, source: collection }];
+    }
+    return [...reachedBy(membership, templates).slots].map((slot) => ({
+      slot,
+      ...(source.slot === slot ? { source: collection } : {}),
+    }));
+  }
+
+  /**
+   * The output whose array a collection iterates, through the collections
+   * it is over whose membership is that of their source: a `filter`, whose
+   * membership template is the fold over its own elements.
+   */
+  #sourceOutput(collection: number): number | undefined {
+    const templates = this.plan.templates ?? [];
+    let at = collection;
+    for (let depth = 0; depth < 64; depth++) {
+      const { membership, source } = this.plan.collections[at];
+      const expanded = membership?.op === "shared"
+        ? templates[membership.template]
+        : membership;
+      if (expanded?.op !== "fold" || expanded.collection !== at) {
+        return undefined;
+      }
+      if (source.collection === undefined) return source.output;
+      at = source.collection;
+    }
+    return undefined;
+  }
+
+  /** The folded collections whose innermost enclosing one is `collection`. */
+  #innerFolds(collection: number): number[] {
+    let found = this.#innerFoldsOf.get(collection);
+    if (found === undefined) {
+      found = [...this.#folded()].filter((folded) =>
+        this.#outerOf(folded).at(-1) === collection
+      ).sort((a, b) => a - b);
+      this.#innerFoldsOf.set(collection, found);
+    }
+    return found;
+  }
+
+  /**
+   * Removes an element key from its group, and returns whether that
+   * emptied the group.
+   */
+  #leaveGroup(table: Groups, key: string): boolean {
+    const id = table.byKey.get(key);
+    if (id === undefined) return false;
+    table.byKey.delete(key);
+    table.notInPlace.delete(key);
+    const members = table.groups.get(id);
+    members?.delete(key);
+    if (members?.size !== 0) return false;
+    table.groups.delete(id);
+    return true;
+  }
+
+  /**
+   * Runs `run` with no read reported to a store outside the executor:
+   * what a write record resolves is no read of the transaction.
+   */
+  #quietly<T>(run: () => T): T {
+    const { store } = this;
+    const reported = store.onRead;
+    store.onRead = undefined;
+    try {
+      return run();
+    } finally {
+      store.onRead = reported;
+    }
+  }
+
+  /**
+   * The addresses of the positions a slot was bound to, each once, in
+   * order: a reference by key is resolved to the position that holds the
+   * key now, and a reference to the links it crosses and its position.
+   */
+  #addressesOf(
+    at: readonly (Position | Ref)[],
+    /** Whether a link at the last segment of a reference is followed. */
+    through = false,
+  ): Address[] {
+    const found: Address[] = [];
+    const seen = new Set<string>();
+    const add = (doc: string, path: readonly string[]) => {
+      const id = JSON.stringify([doc, path]);
+      if (seen.has(id)) return;
+      seen.add(id);
+      found.push({ doc, path: [...path] });
+    };
+    this.#quietly(() => {
+      for (const position of at) {
+        if (position instanceof Ref || position.keyed !== undefined) {
+          const ref = position instanceof Ref
+            ? position
+            : (position.keyed as { ref: Ref }).ref;
+          // The links crossed, and the position that holds the key now
+          // in the place of the read by key.
+          const crossed: Position[] = [];
+          const located = this.store.locate(
+            ref,
+            through && position instanceof Ref,
+            crossed,
+          );
+          for (const { doc, path, keyed } of crossed) {
+            if (keyed === undefined) add(doc, path);
+          }
+          add(located.ref.doc, located.ref.path);
+        } else {
+          add(position.doc, position.path);
+        }
+      }
+    });
+    return found;
+  }
+
+  /**
+   * The output that holds, for an element of the result of the
+   * per-element construct of `collection`, what is at `path` below the
+   * element: the output of the construct's element body at the longest
+   * path above it.
+   */
+  #upstreamOutput(collection: number, path: readonly string[]) {
+    const cone = this.code.values.find((value) =>
+      value.collection === collection
+    )?.cone;
+    const base = this.plan.outputs.find((output) =>
+      output.collection === collection
+    )?.path;
+    if (cone === undefined || base === undefined) return undefined;
+    let best: number | undefined;
+    this.plan.outputs.forEach((output, index) => {
+      if (output.cone !== cone || output.collection !== undefined) return;
+      const rest = output.path.slice(base.length + 1);
+      if (
+        output.path.length <= base.length ||
+        output.path[base.length] !== "*" ||
+        !base.every((segment, at) => output.path[at] === segment) ||
+        !rest.every((segment, at) => segment === path[at])
+      ) return;
+      if (
+        best === undefined ||
+        output.path.length > this.plan.outputs[best].path.length
+      ) best = index;
+    });
+    return best;
+  }
+
+  /**
+   * The binding a write record reports for a slot. The slot of an upstream
+   * element names the output that holds it, and `outputs` gets the inputs
+   * of that output.
+   */
+  #bindingOf(
+    slot: number,
+    bound: Bound,
+    outputs: Record<number, number>,
+    depth: number,
+    keys: [number, string][] = [],
+  ): SlotBinding {
+    if ("constant" in bound) return { constant: true };
+    if ("output" in bound) {
+      outputs[bound.output] ??= this.#namedInputs(
+        bound.output,
+        keys,
+        depth + 1,
+      );
+      return { output: bound.output };
+    }
+    if ("place" in bound) {
+      return this.#placeBinding(
+        bound.place.slot,
+        bound.place.rest,
+        this.plan.slots[slot].observes,
+        outputs,
+        depth,
+        keys,
+      ) ?? { chain: [], observes: this.plan.slots[slot].observes };
+    }
+    if ("upstream" in bound) {
+      const { collection, keys } = bound.upstream;
+      const output = this.#upstreamOutput(
+        collection,
+        this.plan.slots[slot].path,
+      );
+      if (output !== undefined) {
+        outputs[output] ??= this.#namedInputs(output, keys, depth + 1);
+        return { output };
+      }
+      return { chain: [], observes: this.plan.slots[slot].observes };
+    }
+    const { root } = this.plan.slots[slot];
+    const wish = root.kind === "operation" &&
+      this.plan.operations[root.operation ?? -1]?.kind === "wish";
+    // What the read covered is found once for the bound positions, while
+    // the documents of the positions outside the covered containers and
+    // the sets of members of those containers stay as they are.
+    const kept = wish ? undefined : this.root.#covers.get(bound);
+    if (
+      kept !== undefined && kept.positions === bound.at.length &&
+      kept.cover.covers.every(({ table }, at) =>
+        this.root.#refreshGroups(table) &&
+        table.membership === kept.memberships[at]
+      ) && !this.store.changedSince(kept.clock, kept.cover.rest)
+    ) {
+      return this.#chainsOver(kept.cover, bound.observes);
+    }
+    let chain = this.#addressesOf(bound.at);
+    if (chain.length === 0) {
+      const source = this.#sourceReadBinding(slot, keys) ??
+        this.#indexBinding(slot, keys);
+      if (source !== undefined) return source;
+    }
+    // Whether a `wish` failed is decided by its resolution, as its outcome
+    // is: a read of the mark of a failure in its state document, which
+    // holds nothing, is bound to the outcome, whose label is that of the
+    // resolution (PL §3.19).
+    if (wish) {
+      chain = chain.map(({ doc, path }) =>
+        path.length === 1 && path[0] === FAILED &&
+          this.store.peek(doc, path) === undefined
+          ? { doc, path: [OUTCOME] }
+          : { doc, path }
+      );
+      return this.#chainsOf(chain, bound.observes);
+    }
+    const cover = this.#coveredMembers(chain, bound.observes);
+    if (cover.covers.length > 0) {
+      this.root.#covers.set(bound, {
+        cover,
+        positions: bound.at.length,
+        clock: this.store.clock,
+        memberships: cover.covers.map(({ table }) => table.membership),
+      });
+    }
+    return this.#chainsOver(cover, bound.observes);
+  }
+
+  /**
+   * On the root: the cover found for what an evaluation bound a slot to,
+   * where the read covered a container, by the bound positions.
+   */
+  readonly #covers = new WeakMap<object, KeptCover>();
+
+  /**
+   * On the root: what `#elementsBound` and `#samePositionBound` made of
+   * what another slot was bound to, by that and by the slot, so that the
+   * cover of one bound is found once.
+   */
+  readonly #derived = new WeakMap<object, Map<string, Bound>>();
+
+  /**
+   * What `make` gives for `slot` from `source`, what another slot was
+   * bound to: made once while `source` holds the positions it held.
+   */
+  #derivedBound(
+    source: Extract<Bound, { at: unknown }>,
+    slot: string,
+    make: () => Bound,
+  ): Bound {
+    const held = this.root.#derived.get(source) ?? new Map<string, Bound>();
+    this.root.#derived.set(source, held);
+    const name = `${slot}\n${source.at.length}`;
+    let bound = held.get(name);
+    if (bound === undefined) {
+      bound = make();
+      held.set(name, bound);
+    }
+    return bound;
+  }
+
+  /**
+   * What a slot of root `index` is bound to: the index of an element is at
+   * no stored position and depends on the order of what the collection
+   * iterates, so the slot reads, in the class `enumeration`, the stored
+   * array the collection is over, through each `map` between them. A
+   * collection that a `filter` or a `flatMap` is on the way to has an index
+   * that depends on what that construct keeps: the slot stays unbound, and
+   * the preparation refuses the commit.
+   */
+  #indexBinding(
+    slot: number,
+    keys: readonly [number, string][],
+  ): SlotBinding | undefined {
+    const { root } = this.plan.slots[slot];
+    if (root.kind !== "index") return undefined;
+    let at = root.collection ?? -1;
+    // A chain of collections is as long as the plan is deep.
+    for (let depth = 0; depth < 64; depth++) {
+      const record = this.plan.collections[at];
+      if (record === undefined || record.construct !== "map") return undefined;
+      if (record.source.collection === undefined) break;
+      at = record.source.collection;
+    }
+    const source = this.plan.collections[at].source.slot;
+    if (source === undefined) return undefined;
+    const found = this.#sourceBinding(source, new Map(keys), [at]);
+    return found === undefined || !("chain" in found)
+      ? undefined
+      : { chain: found.chain, observes: "enumeration" };
+  }
+
+  /**
+   * What a slot of a binding's state is bound to where the handler's read
+   * of it went through no stored position (`Bound.place`): what the slot
+   * the member is taken from reads, at the path below it. An index is bound
+   * as `#indexBinding` binds it. An element is bound to the position it is
+   * at, for a reference or a plain value in place, and to the output of the
+   * upstream element that holds it, for an element of the result of another
+   * per-element construct.
+   */
+  #placeBinding(
+    place: number,
+    rest: readonly string[],
+    observes: string,
+    outputs: Record<number, number>,
+    depth: number,
+    keys: [number, string][],
+  ): SlotBinding | undefined {
+    const record = this.plan.slots[place];
+    if (record.root.kind === "index") return this.#indexBinding(place, keys);
+    if (record.root.kind !== "element") return undefined;
+    const bound = this.#elementBound(place, new Map(keys));
+    if (bound === undefined) return undefined;
+    if ("upstream" in bound) {
+      const output = this.#upstreamOutput(
+        bound.upstream.collection,
+        [...record.path, ...rest],
+      );
+      if (output === undefined) return undefined;
+      outputs[output] ??= this.#namedInputs(
+        output,
+        bound.upstream.keys,
+        depth + 1,
+      );
+      return { output };
+    }
+    if (!("at" in bound)) return undefined;
+    const [at] = bound.at;
+    if (!(at instanceof Ref)) return undefined;
+    const chain = this.#addressesOf(
+      [new Ref(at.doc, [...at.path, ...rest])],
+      observes !== "identity",
+    );
+    return chain.length === 0 ? undefined : this.#chainsOf(chain, observes);
+  }
+
+  /**
+   * What the slot of an element at no stored position is bound to, as an
+   * element of an array that a computation returned from what it read:
+   * where the computation the collection takes its elements from read one
+   * position, the value at that position, whose label covers every element
+   * of what it returned. A wider bound than the element's own position,
+   * which the computation does not report. Where it read several, the slot
+   * stays unbound and the preparation refuses the commit.
+   */
+  #sourceReadBinding(
+    slot: number,
+    keys: readonly [number, string][],
+  ): SlotBinding | undefined {
+    const { root } = this.plan.slots[slot];
+    if (root.kind !== "element") return undefined;
+    const output = this.plan.collections[root.collection ?? -1]?.source.output;
+    if (output === undefined) return undefined;
+    const { cone } = this.plan.outputs[output];
+    const inputs = this.#inputsOf(cone, this.#keysFor(cone, keys));
+    let found: Address[] | undefined;
+    for (const bound of inputs?.slots.values() ?? []) {
+      if (!("at" in bound)) return undefined;
+      const chain = this.#addressesOf(bound.at);
+      const last = chain.at(-1);
+      if (last === undefined) continue;
+      const known = found?.at(-1);
+      if (
+        known !== undefined &&
+        (known.doc !== last.doc ||
+          canonical(known.path) !== canonical(last.path))
+      ) return undefined;
+      found ??= chain;
+    }
+    return found === undefined ? undefined : this.#chainsOf(found, "value");
+  }
+
+  /**
+   * What a template is instantiated with, for the element keys given:
+   * the binding of each slot it reaches, the inputs of each output it
+   * names, and the elements of each `fold`.
+   */
+  #inputsFor(
+    template: Template | undefined,
+    keys: [number, string][],
+    sources: readonly (Inputs | undefined)[],
+    depth = 0,
+  ): NamedOutputInputs {
+    const first = <T>(of: (source: Inputs) => T | undefined): T | undefined => {
+      for (const source of sources) {
+        const found = source === undefined ? undefined : of(source);
+        if (found !== undefined) return found;
+      }
+      return undefined;
+    };
+    const templates = this.plan.templates ?? [];
+    const table = this.root.#inputsTable;
+    const reached = reachedBy(template, templates);
+    const slots: SlotBindings = {};
+    const outputs: Record<number, number> = {};
+    const elements: Record<number, FoldElements> = {};
+    const selections: Record<number, number> = {};
+    const picks: Record<number, { slots: SlotBindings } | null> = {};
+    const dynamic: Record<number, Address[]> = {};
+    // A chain of outputs is as long as the plan is deep; one that is
+    // longer than this is a cycle of the plan, and is not followed.
+    if (depth < 64) {
+      const byCollection = new Map(keys);
+      const bindingsOf = (reaching: Iterable<number>, into: SlotBindings) => {
+        for (const slot of [...reaching].sort((a, b) => a - b)) {
+          const bound = first((source) => source.slots.get(slot)) ??
+            this.#elementBound(slot, byCollection) ??
+            this.#samePositionBound(
+              slot,
+              (other) => first((source) => source.slots.get(other)),
+            ) ??
+            this.#elementsBound(
+              slot,
+              (other) => first((source) => source.slots.get(other)),
+            ) ??
+            this.#otherConeBound(slot, keys);
+          if (bound !== undefined) {
+            into[slot] = table.binding(
+              this.#bindingOf(slot, bound, outputs, depth, keys),
+            );
+            continue;
+          }
+          const source = this.#sourceBinding(slot, byCollection) ??
+            this.#positionBinding(slot, keys);
+          if (source !== undefined) into[slot] = table.binding(source);
+        }
+        return into;
+      };
+      bindingsOf(reached.slots, slots);
+      // The label of a fold takes the membership of its collection, whose
+      // template reaches slots of its own.
+      // A collection's source slot that no cone read is the stored array
+      // its assembly found.
+      for (const folded of reached.folds.keys()) {
+        for (const { slot, source } of this.#membershipSlots(folded)) {
+          if (slots[slot] !== undefined) continue;
+          const bound = first((inputs) => inputs.slots.get(slot));
+          if (bound !== undefined) {
+            slots[slot] = table.binding(
+              this.#bindingOf(slot, bound, outputs, depth, keys),
+            );
+          } else {
+            // A source whose assembly found no stored array, as that of a
+            // `flatMap` before its first element, is read at the position
+            // the slot names.
+            const found = (source === undefined
+              ? undefined
+              : this.#sourceBinding(slot, byCollection, [source])) ??
+              this.#positionBinding(
+                slot,
+                this.#outerOf(folded).map((step): [number, string] => [
+                  step,
+                  byCollection.get(step) ?? "?",
+                ]),
+              );
+            if (found !== undefined) {
+              slots[slot] = table.binding(found);
+            }
+          }
+        }
+      }
+      for (const selector of [...reached.selectors].sort((a, b) => a - b)) {
+        const branch = first((source) => source.selections.get(selector));
+        if (branch !== undefined) selections[selector] = branch;
+      }
+      // The slots of a pick's body are bound to the child the value code
+      // chose, which is the child it read.
+      for (
+        const [pick, body] of [...reached.picks].sort(([a], [b]) => a - b)
+      ) {
+        const key = first((source) =>
+          source.picks.has(pick) ? { key: source.picks.get(pick) } : undefined
+        );
+        if (key === undefined) continue;
+        picks[pick] = key.key === null || key.key === undefined
+          ? null
+          : { slots: bindingsOf(reachedBy(body, templates).slots, {}) };
+      }
+      for (const read of [...reached.dynamic].sort((a, b) => a - b)) {
+        const seen = first((source) => source.dynamic.get(read));
+        if (seen !== undefined) dynamic[read] = [...seen];
+      }
+      for (const output of reached.outputs) {
+        outputs[output] ??= this.#namedInputs(output, keys, depth + 1);
+      }
+      // A folded collection over the array an output computes iterates
+      // that output, whose inputs the membership is instantiated with.
+      for (const folded of reached.folds.keys()) {
+        const output = this.#sourceOutput(folded);
+        if (output !== undefined) {
+          outputs[output] ??= this.#namedInputs(output, keys, depth + 1);
+        }
+      }
+      for (const [collection, body] of reached.folds) {
+        elements[collection] = this.#foldElements(
+          collection,
+          body,
+          keys,
+          depth,
+        );
+      }
+    }
+    return {
+      instance: this.id,
+      keys,
+      inputs: table.place({
+        slots,
+        ...(Object.keys(selections).length === 0 ? {} : { selections }),
+        ...(Object.keys(picks).length === 0 ? {} : { picks }),
+        ...(Object.keys(dynamic).length === 0 ? {} : { dynamic }),
+        ...(Object.keys(outputs).length === 0 ? {} : { outputs }),
+        ...(Object.keys(elements).length === 0 ? {} : { elements }),
+      }),
+    };
+  }
+
+  /**
+   * The inputs of the cone instance of an output, for the keys given: their
+   * index in the table of inputs of the transaction, formed once for the
+   * records being given (`#namedIndex`).
+   */
+  #namedInputs(
+    index: number,
+    pairs: readonly [number, string][],
+    depth: number,
+  ): number {
+    const name = JSON.stringify([this.id, index, pairs]);
+    const known = this.root.#namedIndex.get(name);
+    if (known !== undefined) return known;
+    const formed = this.#formNamedInputs(index, pairs, depth);
+    this.root.#namedIndex.set(name, formed);
+    return formed;
+  }
+
+  /** Helper for `#namedInputs()`, which forms the inputs. */
+  #formNamedInputs(
+    index: number,
+    pairs: readonly [number, string][],
+    depth: number,
+  ): number {
+    const output = this.plan.outputs[index];
+    const own = this.#keysFor(output.cone, pairs);
+    const inputs = this.#inputsOf(output.cone, own);
+    const result = this.#inputs.get(RESULT_INPUTS);
+    const within = this.collectionsOf(output.cone);
+    // The keys of the collections the output is within, and the others
+    // given: the element an output of each element of a collection is of,
+    // where its cone is within none.
+    return this.#inputsFor(
+      output.template,
+      [
+        ...within.map((collection, at): [number, string] => [
+          collection,
+          own[at],
+        ]),
+        ...pairs.filter(([collection]) => !within.includes(collection)),
+      ],
+      [inputs, result],
+      depth,
+    ).inputs;
+  }
+
+  /**
+   * The elements of a `fold` over a collection, for the keys of the
+   * collections around it (provisional decision P31): one set of bindings
+   * at `*` where the collection is over a stored array whose elements are
+   * all plain values in place and the body allows it, and otherwise the
+   * groups the assembly keeps, each with the bindings of one of its
+   * elements and its count. The work is the number of groups.
+   */
+  #foldElements(
+    collection: number,
+    body: Template,
+    pairs: readonly [number, string][],
+    depth: number,
+  ): FoldElements {
+    const templates = this.plan.templates ?? [];
+    const inputsTable = this.root.#inputsTable;
+    const outer = this.#outerOf(collection);
+    const byCollection = new Map(pairs);
+    const around = outer.map((step) => byCollection.get(step) ?? "?");
+    const name = this.#name("assembly", collection, around);
+    const table = this.#groups.get(name);
+    const reached = reachedBy(body, templates);
+    const cones = this.#elementCones(collection);
+    const sourcesFor = (key: string) =>
+      cones.map((cone) => this.#inputsOf(cone, [...around, key]));
+    const keysOf = (key: string): [number, string][] => [
+      ...outer.map((step, at): [number, string] => [step, around[at]]),
+      [collection, key],
+    ];
+    if (
+      this.plan.collections[collection].source.slot !== undefined &&
+      isUniformBody(body, templates) && (table?.notInPlace.size ?? 0) === 0
+    ) {
+      const array = this.#arrayChain(name);
+      const [first] = table?.byKey.keys() ?? [];
+      const uniform: SlotBindings = {};
+      const outputs: Record<number, number> = {};
+      for (const slot of [...reached.slots].sort((a, b) => a - b)) {
+        const record = this.plan.slots[slot];
+        if (
+          record.root.kind === "element" &&
+          record.root.collection === collection
+        ) {
+          const last = array.at(-1);
+          uniform[slot] = inputsTable.binding({
+            chain: last === undefined ? [] : [
+              ...array.slice(0, -1),
+              { doc: last.doc, path: [...last.path, "*", ...record.path] },
+            ],
+            observes: record.observes,
+          });
+          continue;
+        }
+        const bound = first === undefined
+          ? undefined
+          : sourcesFor(first).map((source) => source?.slots.get(slot))
+            .find((found) => found !== undefined);
+        if (bound !== undefined) {
+          uniform[slot] = inputsTable.binding(
+            this.#bindingOf(slot, bound, outputs, depth),
+          );
+        }
+      }
+      return {
+        uniform: inputsTable.place({
+          slots: uniform,
+          ...(Object.keys(outputs).length === 0 ? {} : { outputs }),
+        }),
+      };
+    }
+    const groups = [...table?.groups.values() ?? []].map((members) => {
+      const [key] = members;
+      const { inputs } = this.#inputsFor(
+        body,
+        keysOf(key),
+        sourcesFor(key),
+        depth,
+      );
+      return { inputs, count: members.size };
+    });
+    return { groups };
+  }
+
+  /**
+   * The links an assembly crossed to its stored array, and the array's
+   * position last: from the reference it found the array through.
+   */
+  #arrayChain(assembly: string): Address[] {
+    const base = this.#memo.get(assembly)?.rows?.stored?.base;
+    if (base === undefined) return [];
+    const crossed: Position[] = [];
+    this.#quietly(() => this.store.locate(base, true, crossed));
+    return crossed.map(({ doc, path }) => ({ doc, path: [...path] }));
+  }
+
+  /**
+   * On the root: the records of the paths a change wrote. A change of the
+   * result document of an instance writes outputs; another change writes
+   * the records of the writes being made (`#writing`).
+   */
+  #writesOf(
+    doc: string,
+    path: readonly string[],
+    splice: { start: number; removed: number; inserted: number } | undefined,
+  ): PlanWrite[] {
+    this.#namedIndex.clear();
+    const owner = doc === this.id ? this : this.#instances.get(doc);
+    if (owner !== undefined && owner.id === doc) {
+      return owner.#outputWrites(doc, path, splice);
+    }
+    const writing = this.#writing;
+    if (writing === undefined) return [];
+    const keys = writing.instance.contextKeys(writing.host.context);
+    if (splice !== undefined && writing.members !== undefined) {
+      return this.#memberWrites(doc, path, splice, writing, keys);
+    }
+    return writing.records.flatMap(({ record, template, ...target }) => {
+      // A write edge the plan has no template for has no record either.
+      if (template === undefined) return [];
+      let at = path;
+      if (target.doc !== undefined) {
+        const to = target.path ?? [];
+        const above = to.length <= path.length &&
+          to.every((segment, index) => segment === path[index]);
+        const below = path.length <= to.length &&
+          path.every((segment, index) => segment === to[index]);
+        if (target.doc !== doc || (!above && !below)) return [];
+        if (below) at = to;
+      }
+      return [{
+        target: { doc, path: [...at] },
+        record,
+        ...writing.instance.#storedInPlace(
+          template,
+          writing.instance.#inputsFor(
+            template,
+            keys,
+            [{
+              slots: writing.host.bound,
+              selections: writing.host.selections,
+              picks: writing.host.picks,
+              dynamic: writing.host.dynamic,
+            }],
+          ),
+          { doc, path: [...at] },
+        ),
+      }];
+    });
+  }
+
+  /**
+   * On the root: the records of a splice that a write through a handle made
+   * of the stored list at `path` (provisional decision P39). Each member
+   * added is recorded at its own position. A member the splice moved has no
+   * record: the record of the membership names the runs of members that
+   * moved, and the stored labels move with them (ruling Z72). The number
+   * of members and the membership of the list are recorded with what the
+   * list stored of its membership. Every record holds what the method
+   * compared to find the members. A position before the splice is not
+   * recorded: the splice left it as it was. With no splice given, the
+   * method left every member as it was.
+   */
+  #memberWrites(
+    doc: string,
+    path: readonly string[],
+    given: { start: number; removed: number; inserted: number } | undefined,
+    writing: Writing,
+    keys: [number, string][],
+  ): PlanWrite[] {
+    const members = writing.members!;
+    const now = this.store.peek(doc, path);
+    if (!Array.isArray(now)) return [];
+    // With no splice, the members stay as they are: the number of members
+    // and the membership are recorded, and no position.
+    const kept = given === undefined;
+    const splice = given ?? { start: now.length, removed: 0, inserted: 0 };
+    const end = splice.start + splice.inserted;
+    const moves = splice.removed !== splice.inserted && end < now.length;
+    if (splice.removed > 0) members.removes = true;
+    if (!kept) {
+      members.start = Math.min(members.start ?? splice.start, splice.start);
+    }
+    if (members.origin === undefined && (moves || splice.removed > 0)) {
+      members.origin = Array.from(
+        { length: now.length - splice.inserted + splice.removed },
+        (_, index) => index,
+      );
+    }
+    if (members.origin !== undefined) {
+      spliceIn(
+        members.origin,
+        splice.start,
+        splice.removed,
+        Array.from({ length: splice.inserted }, () => undefined),
+      );
+    }
+    const { origin, decided } = members;
+    const held = decided.length === 0 ? {} : { decided };
+    // The members the writes kept at another position than the one they
+    // stood at before the first splice, as runs of positions.
+    const runs: { from: number; to: number; count: number }[] = [];
+    (origin ?? []).forEach((from, to) => {
+      if (from === undefined || from === to) return;
+      const last = runs.at(-1);
+      if (
+        last !== undefined && last.from + last.count === from &&
+        last.to + last.count === to
+      ) last.count += 1;
+      else runs.push({ from, to, count: 1 });
+    });
+    const inputsOf = (template: Template) =>
+      writing.instance.#inputsFor(
+        template,
+        keys,
+        [{
+          slots: writing.host.bound,
+          selections: writing.host.selections,
+          picks: writing.host.picks,
+          dynamic: writing.host.dynamic,
+        }],
+      );
+    // What the list stored of its membership: the label of its number of
+    // members, read at that position alone, and that of its enumeration.
+    const membership: Observed[] = [
+      {
+        address: { doc, path: [...path, "length"] },
+        observes: "value",
+        alone: true,
+      },
+      { address: { doc, path: [...path] }, observes: "enumeration" },
+    ];
+    return writing.records.flatMap(({ record, template }) => {
+      const writes: PlanWrite[] = [];
+      // A record the plan has no template for has no inputs, and is given
+      // as bound.
+      if (template === undefined) {
+        const bound = (target: Address) => ({
+          target,
+          record,
+          instance: writing.instance.id,
+          keys,
+          inputs: this.#inputsTable.place({ slots: {} }),
+          bound: true as const,
+          ...held,
+        });
+        for (let at = splice.start; at < end; at++) {
+          writes.push(bound({ doc, path: [...path, `${at}`] }));
+        }
+        if (kept || splice.removed !== splice.inserted) {
+          writes.push({
+            ...bound({ doc, path: [...path, "length"] }),
+            observed: membership,
+          });
+        }
+        writes.push({
+          ...bound({ doc, path: [...path] }),
+          observed: membership,
+          enumeration: true,
+          ...(members.removes ? { removes: true as const } : {}),
+          ...(runs.length === 0 ? {} : { moves: runs }),
+          ...(members.start === undefined || origin === undefined
+            ? {}
+            : { start: members.start }),
+        });
+        return writes;
+      }
+      // A member added is recorded at its own position with the label of
+      // the write and of what the method compared, and with nothing of
+      // what the list stored of its membership: an addition at the end
+      // reads no member (ruling Z74).
+      for (let at = splice.start; at < end; at++) {
+        const target = { doc, path: [...path, `${at}`] };
+        writes.push({
+          target,
+          record,
+          ...writing.instance.#storedInPlace(
+            template,
+            inputsOf(template),
+            target,
+          ),
+          ...held,
+        });
+      }
+      const inputs = inputsOf(template);
+      if (kept || splice.removed !== splice.inserted) {
+        writes.push({
+          target: { doc, path: [...path, "length"] },
+          record,
+          ...inputs,
+          ...held,
+          observed: membership,
+        });
+      }
+      writes.push({
+        target: { doc, path: [...path] },
+        record,
+        ...inputs,
+        ...held,
+        observed: membership,
+        enumeration: true,
+        ...(members.removes ? { removes: true as const } : {}),
+        ...(runs.length === 0 ? {} : { moves: runs }),
+        ...(members.start === undefined || origin === undefined
+          ? {}
+          : { start: members.start }),
+      });
+      return writes;
+    });
+  }
+
+  /**
+   * Reports the records of the membership of the stored list at `list` as
+   * those of a write that left it as it was (`TransactionHooks.unchanged`),
+   * for the writes being recorded through a handle.
+   */
+  membersKept(list: Address): void {
+    const { root } = this;
+    const hooks = root.options.transactions;
+    const writing = root.#writing;
+    if (
+      root.#tx === undefined || writing?.members === undefined ||
+      hooks?.unchanged === undefined
+    ) return;
+    root.#namedIndex.clear();
+    const writes = root.#memberWrites(
+      list.doc,
+      list.path,
+      undefined,
+      writing,
+      writing.instance.contextKeys(writing.host.context),
+    );
+    if (writes.length > 0) {
+      hooks.unchanged(
+        list.doc,
+        list.path,
+        this.store,
+        undefined,
+        writes,
+        root.#inputsTable,
+      );
+    }
+  }
+
+  /**
+   * The records of the outputs that a change of the result document at
+   * `path` wrote: the kept output nearest at or above the path, and each
+   * kept output below it, at each position the change wrote. A splice
+   * wrote the positions it inserted.
+   */
+  #outputWrites(
+    doc: string,
+    path: readonly string[],
+    splice: { start: number; removed: number; inserted: number } | undefined,
+  ): PlanWrite[] {
+    const outputs = this.#recordedOutputs();
+    const found: { output: number; at: string[] }[] = [];
+    let nearest: number | undefined;
+    outputs.forEach((output, index) => {
+      if (
+        output.path.length <= path.length &&
+        matchesPath(output.path, path) &&
+        (nearest === undefined ||
+          output.path.length > outputs[nearest].path.length)
+      ) nearest = index;
+    });
+    if (nearest !== undefined) {
+      found.push({ output: outputs[nearest].output, at: [...path] });
+    }
+    const held = this.store.peek(doc, path);
+    outputs.forEach((output) => {
+      const index = output.output;
+      if (
+        output.path.length <= path.length ||
+        !matchesPath(output.path.slice(0, path.length), path)
+      ) return;
+      const expand = (
+        at: string[],
+        rest: readonly string[],
+        value: unknown,
+        first: boolean,
+      ): void => {
+        if (rest.length === 0) {
+          if (value !== undefined) found.push({ output: index, at });
+          return;
+        }
+        const [segment, ...more] = rest;
+        if (segment !== "*") {
+          expand(
+            [...at, segment],
+            more,
+            typeof value === "object" && value !== null && !isLink(value)
+              ? (value as Record<string, unknown>)[segment]
+              : undefined,
+            false,
+          );
+          return;
+        }
+        if (!Array.isArray(value)) return;
+        const [start, end] = first && splice !== undefined
+          ? [splice.start, splice.start + splice.inserted]
+          : [0, value.length];
+        for (let position = start; position < end; position++) {
+          expand([...at, `${position}`], more, value[position], false);
+        }
+      };
+      expand([...path], output.path.slice(path.length), held, true);
+    });
+    // An output the plan has no template for has a record with no inputs:
+    // the runtime gives its path the label of a write it has no record of,
+    // where it would otherwise take the label of a kept output above it.
+    // A change of the array a kept output with a collection holds, other
+    // than an addition at its end, decides anew which member stands at
+    // each position.
+    const appends = splice !== undefined && Array.isArray(held) &&
+      splice.removed === 0 && splice.start + splice.inserted === held.length;
+    return found.map(({ output, at }) => {
+      const write = this.#outputRecord(doc, output, at);
+      this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
+      return !appends && this.plan.outputs[output].collection !== undefined &&
+          this.plan.outputs[output].kept && at.length === path.length &&
+          Array.isArray(held)
+        ? { ...write, membersChanged: true as const }
+        : write;
+    });
+  }
+
+  /**
+   * The outputs a change of the result document is recorded for, each with
+   * the path of the result document it is stored at: every kept output,
+   * and for a kept output that holds the result of a per-element construct
+   * of another output with no entry of its own for an element, each entry
+   * of that construct's elements, at its path below the kept output. The
+   * label of what an element holds is then that of the element's own
+   * entry, and not that of the collection's membership. A kept output
+   * that holds such a result as a branch of a `select` has no entry for
+   * an element: its records are `bound`, and the runtime gives their
+   * paths the label of a write it has no record of.
+   */
+  #recordedOutputs(): {
+    output: number;
+    path: readonly string[];
+    bound?: true;
+  }[] {
+    if (this.#recorded !== undefined) return this.#recorded;
+    const { outputs } = this.plan;
+    const templates = this.plan.templates ?? [];
+    const found: { output: number; path: readonly string[]; bound?: true }[] =
+      [];
+    const hasElementEntry = (path: readonly string[]) =>
+      outputs.some((output) =>
+        output.kept && output.path.length > path.length &&
+        output.path[path.length] === "*" &&
+        path.every((segment, index) => output.path[index] === segment)
+      );
+    // The output with a collection that a template gives the label of,
+    // and whether it does so through no `select`.
+    const collectionOf = (
+      template: Template | undefined,
+      direct: boolean,
+      depth: number,
+    ): { output: number; direct: boolean } | undefined => {
+      // A chain of outputs is as long as the plan is deep.
+      if (template === undefined || depth > 64) return undefined;
+      switch (template.op) {
+        case "shared":
+          return collectionOf(templates[template.template], direct, depth + 1);
+        case "output": {
+          const named = outputs[template.output];
+          return named?.collection !== undefined
+            ? { output: template.output, direct }
+            : collectionOf(named?.template, direct, depth + 1);
+        }
+        case "select":
+          for (const branch of template.branches) {
+            const through = collectionOf(branch, false, depth + 1);
+            if (through !== undefined) return through;
+          }
+          return undefined;
+        default:
+          return undefined;
+      }
+    };
+    const add = (output: number, path: readonly string[], depth: number) => {
+      const record = outputs[output];
+      const entry: (typeof found)[number] = { output, path };
+      found.push(entry);
+      if (record.collection !== undefined || depth > 64) return;
+      if (record.kept && hasElementEntry(record.path)) return;
+      const held = collectionOf(record.template, true, 0);
+      if (held === undefined) return;
+      if (!held.direct) {
+        entry.bound = true;
+        return;
+      }
+      const source = outputs[held.output];
+      outputs.forEach((element, index) => {
+        if (
+          index !== held.output && element.cone === source.cone &&
+          element.path.length > source.path.length &&
+          element.path[source.path.length] === "*" &&
+          source.path.every((segment, at) => element.path[at] === segment)
+        ) {
+          add(
+            index,
+            [...path, ...element.path.slice(source.path.length)],
+            depth + 1,
+          );
+        }
+      });
+    };
+    // An interim output is no path of the result document.
+    outputs.forEach((output, index) => {
+      if (output.kept) add(index, output.path, 0);
+    });
+    this.#recorded = found;
+    return found;
+  }
+
+  /** The result of `#recordedOutputs()`, made once. */
+  #recorded:
+    | { output: number; path: readonly string[]; bound?: true }[]
+    | undefined;
+
+  /** The record of the output `output` of this instance at the path `at`. */
+  #outputRecord(doc: string, output: number, at: string[]): PlanWrite {
+    const record = this.plan.outputs[output];
+    // The path the output is stored at, which for the entry of an element
+    // is below the kept output that holds the collection.
+    const stored =
+      this.#recordedOutputs().filter((entry) =>
+        entry.output === output && entry.path.length <= at.length &&
+        matchesPath(entry.path, at)
+      ).sort((a, b) => b.path.length - a.path.length)[0];
+    const stars = (stored?.path ?? record.path).flatMap((segment, index) =>
+      segment === "*" ? [index] : []
+    );
+    const pairs = this.#keysAlong(at, stars);
+    const ownKeys = this.#keysFor(record.cone, pairs);
+    const inputs = this.#inputsOf(record.cone, ownKeys);
+    const result = this.#inputs.get(RESULT_INPUTS);
+    const given = this.#storedInPlace(
+      record.template,
+      this.#inputsFor(
+        record.template,
+        this.collectionsOf(record.cone).map((collection, index) => [
+          collection,
+          ownKeys[index],
+        ]),
+        [inputs, result],
+      ),
+      { doc, path: at },
+    );
+    // The entry of an element held below a kept output, with a slot the
+    // executor has no position for, as that of an element of an array a
+    // computation returned: the record is given as bound, and the path
+    // takes the label of a write with no record, where the template could
+    // only be refused.
+    const templates = this.plan.templates ?? [];
+    const table = this.root.#inputsTable;
+    const own = table.inputs[given.inputs];
+    const lacks = (
+      template: Template | undefined,
+      place: PlanInputs | undefined,
+      depth: number,
+    ): boolean => {
+      // A chain of outputs is as long as the plan is deep.
+      if (template === undefined || depth > 64) return false;
+      switch (template.op) {
+        case "slot": {
+          const at = place?.slots[template.slot] ?? own.slots[template.slot];
+          const binding = at === undefined ? undefined : table.bindings[at];
+          return binding === undefined ||
+            ("chain" in binding && binding.chain.length === 0);
+        }
+        case "derive":
+          return template.inputs.some((input) =>
+            lacks(input, place, depth + 1)
+          );
+        case "select":
+          return lacks(template.condition, place, depth + 1) ||
+            template.branches.some((branch) => lacks(branch, place, depth + 1));
+        case "shared":
+          return lacks(templates[template.template], place, depth + 1);
+        case "output": {
+          const at = place?.outputs?.[template.output] ??
+            own.outputs?.[template.output];
+          return lacks(
+            this.plan.outputs[template.output]?.template,
+            at === undefined ? undefined : table.inputs[at],
+            depth + 1,
+          );
+        }
+        default:
+          return false;
+      }
+    };
+    const unbound = !record.kept && lacks(record.template, own, 0);
+    return {
+      target: { doc, path: at },
+      record: { output },
+      ...given,
+      ...(stored?.bound || unbound ? { bound: true as const } : {}),
+    };
+  }
+
+  /**
+   * The inputs of a write whose template gives the label of one slot of
+   * the class `identity`, directly, through the outputs it names or as a
+   * branch of a `select`, with that slot bound in the class `value` where
+   * the write stored a value at `target` and no reference: what a `reduce`
+   * computed, a copy of an array that a spread child holds, or the value
+   * of a cell that `a.get() ?? b` gives. The label of the stored value is
+   * then that of what the slot's positions hold, and not that of the
+   * reference alone.
+   */
+  #storedInPlace<T extends { inputs: number }>(
+    template: Template | undefined,
+    inputs: T,
+    target: Address,
+  ): T {
+    const held = this.store.peek(target.doc, target.path);
+    if (held === undefined || isLink(held) || isStream(held)) return inputs;
+    const templates = this.plan.templates ?? [];
+    const table = this.root.#inputsTable;
+    // The index of the inputs at `index` with the slot bound again, which
+    // is `index` where nothing is.
+    const rebound = (
+      at: Template | undefined,
+      index: number | undefined,
+      depth: number,
+    ): number | undefined => {
+      // A chain of outputs is as long as the plan is deep.
+      if (at === undefined || index === undefined || depth > 64) return index;
+      const place = table.inputs[index];
+      switch (at.op) {
+        case "shared":
+          return rebound(templates[at.template], index, depth + 1);
+        case "output": {
+          const named = place.outputs?.[at.output];
+          const again = rebound(
+            this.plan.outputs[at.output]?.template,
+            named,
+            depth + 1,
+          );
+          return again === undefined || again === named ? index : table.place({
+            ...place,
+            outputs: { ...place.outputs, [at.output]: again },
+          });
+        }
+        case "select": {
+          let now: number | undefined = index;
+          for (const branch of at.branches) {
+            now = rebound(branch, now, depth + 1);
+          }
+          return now;
+        }
+        case "slot": {
+          const bound = place.slots[at.slot];
+          const binding = bound === undefined
+            ? undefined
+            : table.bindings[bound];
+          if (
+            binding === undefined || !("chain" in binding) ||
+            binding.observes !== "identity" || binding.chain.length === 0
+          ) return index;
+          // A read of the value goes through each link the value holds.
+          const last = binding.chain[binding.chain.length - 1];
+          const reads: Position[] = [];
+          this.#quietly(() =>
+            this.store.read(new Ref(last.doc, last.path), reads)
+          );
+          const seen = new Set<string>();
+          const addresses = [
+            ...binding.chain,
+            ...this.#addressesOf(reads),
+          ].filter(({ doc, path }) => {
+            const id = JSON.stringify([doc, path]);
+            if (seen.has(id)) return false;
+            seen.add(id);
+            return true;
+          });
+          // The members of a container the reference's read covered are
+          // covered by the read of the value: the positions are the same,
+          // and their labels as values are grouped by a table of their own.
+          const presumed = (binding.members ?? []).flatMap(({ container }) =>
+            [
+              ...this.root.#memberGroupsAt.get(
+                memberGroupsPlace(container.doc, container.path),
+              ) ?? [],
+            ].filter((groups) => groups.observes === "identity")
+          );
+          return table.place({
+            ...place,
+            slots: {
+              ...place.slots,
+              [at.slot]: table.binding(
+                this.#chainsOf(addresses, "value", presumed),
+              ),
+            },
+          });
+        }
+        default:
+          return index;
+      }
+    };
+    const again = rebound(template, inputs.inputs, 0);
+    return again === undefined || again === inputs.inputs
+      ? inputs
+      : { ...inputs, inputs: again };
+  }
+
+  /**
+   * The element keys of the rows a path of the result document passes
+   * through, at the positions `stars` names: each from the unit that
+   * stores the rows of a collection there.
+   */
+  #keysAlong(
+    path: readonly string[],
+    stars: readonly number[],
+  ): [number, string][] {
+    const keys: [number, string][] = [];
+    let inside: Map<string, Unit> | undefined = this.#rootUnits;
+    let base = 0;
+    for (const star of stars) {
+      if (star >= path.length) break;
+      const unit: Unit | undefined = inside?.get(
+        JSON.stringify(path.slice(base, star)),
+      );
+      const key = unit?.keys[Number(path[star])];
+      if (unit === undefined || key === undefined) break;
+      // The body of a `flatMap` runs once for a source element, and each
+      // member of the segment it gave has that element's key in its own.
+      const { source } = recordOfKey(key);
+      keys.push([
+        unit.collection,
+        this.plan.collections[unit.collection].construct === "flatMap" &&
+          source !== undefined
+          ? textOf(source)
+          : key,
+      ]);
+      inside = unit.inside.get(key);
+      base = star + 1;
+    }
+    return keys;
+  }
+
+  /**
+   * Counts a write of the handler being run against its record, and
+   * makes the write edge that covers it, of the handler or of the body of
+   * a cone being run, the record of the writes until the returned
+   * function is called.
+   */
+  written(
+    handle: Handle,
+    decided?: Observed[],
+    /** Whether a write is made, which is counted. */
+    counted = true,
+  ): () => void {
+    const invoking = this.#invoking.at(-1);
+    const index = this.#handling ?? invoking?.body;
+    const host = this.#handling === undefined
+      ? invoking?.host
+      : this.#handlerHost;
+    if (index === undefined) return () => {};
+    const body = this.plan.bodies[index];
     const covers = (target: { slot?: number; path?: string[] }) =>
       target.slot === handle.slot &&
       (matchesPath(target.path ?? [], handle.below) ||
         matchesPath(handle.below, target.path ?? []));
-    const covered =
-      body.writes.some(({ target }) =>
-        target.kind === "handle" && covers(target)
-      ) || body.envelopes.some((envelope) =>
-        envelope.kind === "handle" && covers(envelope)
-      );
-    if (covered) this.counts.writesCovered += 1;
-    else this.counts.writesNotCovered += 1;
+    const write = body.writes.findIndex(({ target }) =>
+      target.kind === "handle" && covers(target)
+    );
+    if (this.#handling !== undefined && counted) {
+      const covered = write >= 0 ||
+        body.envelopes.some((envelope) =>
+          envelope.kind === "handle" && covers(envelope)
+        );
+      if (covered) this.counts.writesCovered += 1;
+      else this.counts.writesNotCovered += 1;
+    }
+    // A write that no write edge covers has the record of the envelope
+    // that covers it, which has no template: a change it makes of a list's
+    // members is recorded with no inputs, and the runtime gives each record
+    // the label of a write it has no record of.
+    const envelope = body.envelopes.findIndex((each) =>
+      each.kind === "handle" && covers(each)
+    );
+    return this.#recording(
+      host === undefined ? undefined : {
+        instance: this,
+        host,
+        records: write >= 0
+          ? [{
+            record: { body: index, write },
+            template: body.writes[write].template,
+          }]
+          : envelope >= 0
+          ? [{ record: { body: index, envelope }, template: undefined }]
+          : [],
+        members: { decided: decided ?? [] },
+      },
+    );
   }
 
   /**
@@ -6995,6 +10805,7 @@ export class Instance {
       if (entry?.place === undefined) continue;
       const rest = read.path.slice(entry.path.length);
       const { place } = entry;
+      const from = host.reads.length;
       let found: unknown;
       if (place.slot !== undefined) {
         const bound = this.plan.slots[place.slot];
@@ -7056,6 +10867,22 @@ export class Instance {
       const given = read.observes === "identity"
         ? this.handleOf(found, undefined, slot)
         : host.v(found);
+      this.bindSlot(host, slot, from, found);
+      // A literal the binding gives its state is a constant of the plan:
+      // the slot contributes no label, where it read nothing else. A value
+      // the pattern computes is an output, which read no stored position.
+      const held = host.bound.get(slot);
+      if (
+        held !== undefined && "at" in held && held.at.length === 0
+      ) {
+        if (place.constant !== undefined) {
+          host.bound.set(slot, { constant: true });
+        } else if (place.output !== undefined) {
+          host.bound.set(slot, { output: place.output });
+        } else if (place.slot !== undefined) {
+          host.bound.set(slot, { place: { slot: place.slot, rest } });
+        }
+      }
       if (this.gives(read.observes, state, read.path)) continue;
       // An entry that yields nothing places nothing: an entry below a
       // path that is absent does not make a container there (ES §2.4,
@@ -7063,7 +10890,33 @@ export class Instance {
       if (given === undefined) continue;
       state = this.placed(state, read.path, given);
     }
-    return this.#run(binding, body, run, event, state);
+    this.#bindEvent(host, body, stream);
+    return this.#run(binding, body, run, event, state, host);
+  }
+
+  /**
+   * Binds each slot of root `event` of a handler's body to the position
+   * of the event in its stream's document: the entry the watermark stands
+   * at, which is the event being handled. An event that no entry of the
+   * document holds binds nothing.
+   */
+  #bindEvent(host: Host, body: number, stream: StreamRef): void {
+    const id = this.root.#streamIdentifier(stream);
+    const held = this.store.docs.get(id)?.value as
+      | { entries?: unknown[]; eventWatermark?: number }
+      | undefined;
+    const at = held?.eventWatermark ?? 0;
+    if (!Array.isArray(held?.entries) || held.entries[at] === undefined) {
+      return;
+    }
+    for (const { slot } of this.plan.bodies[body].reads) {
+      const record = this.plan.slots[slot];
+      if (record.root.kind !== "event") continue;
+      host.bound.set(slot, {
+        observes: record.observes,
+        at: [{ doc: id, path: ["entries", `${at}`, "event", ...record.path] }],
+      });
+    }
   }
 
   /**
@@ -7076,10 +10929,13 @@ export class Instance {
     run: (...given: unknown[]) => unknown,
     event: unknown,
     state: unknown,
+    host?: Host,
   ): Outcome {
     const { root } = this;
     root.#events += 1;
     this.#handling = body;
+    const outer = this.#handlerHost;
+    this.#handlerHost = host;
     // What the body writes is the handler's own (SS §5.6).
     root.#evaluating.push({ instance: this, key: HANDLER });
     try {
@@ -7092,6 +10948,7 @@ export class Instance {
       return { binding, committed: false, error: messageOf(error) };
     } finally {
       this.#handling = undefined;
+      this.#handlerHost = outer;
       root.#evaluating.pop();
     }
     return { binding, committed: true };

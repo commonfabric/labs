@@ -1,4 +1,6 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
@@ -366,4 +368,26 @@ Deno.test("cfcResultFromRunscSidecar carries the readable part of a withheld lab
   );
   assertEquals(r.stdout.policy, "opaque");
   assertEquals(r.stdout.label, { integrity: [{ subject: "did:key:bob" }] });
+});
+
+describe("runsc-cfc-result", () => {
+  describe("cfcResultFromRunscSidecar()", () => {
+    it("denies a result whose container id is not a string, naming the actual id as empty", () => {
+      for (const containerId of [undefined, 42, ["c1"]]) {
+        const r = cfcResultFromRunscSidecar(
+          { version: 1, containerId, cfcTaint: {} },
+          "c1",
+          command,
+        );
+        expect(r.stdout.policy).toBe("denied");
+        expect(r.diagnostics?.[0]?.code).toBe(
+          "runsc_cfc_sidecar_container_mismatch",
+        );
+        expect(r.diagnostics?.[0]?.details).toEqual({
+          expectedContainerId: "c1",
+          actualContainerId: "",
+        });
+      }
+    });
+  });
 });

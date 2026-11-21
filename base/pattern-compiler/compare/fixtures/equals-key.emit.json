@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/equals-key.tsx",
-              "source": "const { \"Default\": Default, \"equalsKey\": equalsKey, \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst distinct = lift(\n  ({ items }) => {\n    const seen = new Set();\n    for (const item of Array.from(items)) seen.add(equalsKey(item) ?? item);\n    return seen.size;\n  },\n);\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/equals-key.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => (({ items }) => {\n    const seen = new Set();\n    for (const item of Array.from(items)) seen.add(equalsKey(item) ?? item);\n    return seen.size;\n  })($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ items: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ count: $h.output(0) })));\n});"
+              "source": "const { \"Default\": Default, \"equalsKey\": equalsKey, \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst distinct = lift(\n  ({ items }) => {\n    const seen = new Set();\n    for (const item of Array.from(items)) seen.add(equalsKey(item) ?? item);\n    return seen.size;\n  },\n);\nconst $default = (pattern(\"sha256:347afb053f4f9ed73b905ac23c54c2eba24935d7a3154125b6c3642472539025\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => (({ items }) => {\n    const seen = new Set();\n    for (const item of Array.from(items)) seen.add(equalsKey(item) ?? item);\n    return seen.size;\n  })($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ items: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ count: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -29,7 +29,7 @@
           ],
           "valuesWithoutOutput": []
         },
-        "line": 18,
+        "line": 24,
         "name": "default",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -78,7 +78,7 @@
             {
               "at": {
                 "file": "compare/fixtures/equals-key.tsx",
-                "start": 564
+                "start": 575
               },
               "bodies": [
                 0
@@ -141,7 +141,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/equals-key.tsx#default"
+            "sha256:347afb053f4f9ed73b905ac23c54c2eba24935d7a3154125b6c3642472539025"
           ],
           "picks": [],
           "selectors": [],

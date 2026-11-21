@@ -2,6 +2,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { defer } from "@commonfabric/async/defer";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
+import type { AssetRecord } from "../src/assets.ts";
 import type {
   BridgeCell,
   BridgeResource,
@@ -201,6 +202,7 @@ export function render(
   src: string,
   context = new ContextShim(),
   script = "",
+  assets: AssetRecord = {},
 ): Promise<CommonIframeSandboxElement> {
   return new Promise((resolve) => {
     const parent = document.createElement("div");
@@ -215,6 +217,7 @@ export function render(
     parent.appendChild(iframe);
     document.body.appendChild(parent);
     iframe.script = script;
+    iframe.assets = assets;
     // @ts-ignore This is a lit property.
     iframe.src = src;
   });

@@ -140,6 +140,13 @@ describe("loom-command-signature", () => {
         .toBe('plain|"a|b"|"two\\nlines"|""');
     });
 
+    it("returns the object or array type a schema implies by its `properties` or `items` without naming a `type`", () => {
+      expect(typeOfSchema({ properties: { a: { type: "string" } } }))
+        .toBe("{...}");
+      expect(typeOfSchema({ items: { type: "integer" } })).toBe("integer[]");
+      expect(typeOfSchema({ description: "anything" })).toBe("any");
+    });
+
     it("returns `never` for an empty `enum`, `anyOf`, or `oneOf`", () => {
       expect(typeOfSchema({ enum: [] })).toBe("never");
       expect(typeOfSchema({ anyOf: [] })).toBe("never");

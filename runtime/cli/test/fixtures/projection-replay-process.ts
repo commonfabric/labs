@@ -74,8 +74,10 @@ const itemSchema = {
 const schema = { type: "array", items: itemSchema } as const;
 
 /** Reads the structural frame log captured by this process. */
-async function readFrames(): Promise<Frame[]> {
-  return (await Deno.readTextFile(framesPath)).split("\n")
+function readFrames(): Frame[] {
+  // Frame appends run synchronously on this process's event loop. Keep the
+  // snapshot on that loop too, so an append cannot overlap the file read.
+  return Deno.readTextFileSync(framesPath).split("\n")
     .filter((line) => line.trim().length > 0)
     .map((line) => JSON.parse(line) as Frame);
 }
@@ -119,7 +121,7 @@ try {
   }
   const source = runtime.getCell(space, "survey", schema);
   await source.pull();
-  const setupFrames = await readFrames();
+  const setupFrames = readFrames();
   const before = setupFrames.length;
   const value = await deriveSelectedValue(runtime, space, source, {
     projection: parseSelectProjection(
@@ -128,7 +130,7 @@ try {
   });
   await runtime.idle();
   await storageManager.synced();
-  const frames = (await readFrames()).slice(before);
+  const frames = readFrames().slice(before);
   const requests = frames.filter((frame) =>
     frame.dir === "out" && frame.type === "transact"
   );

@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/element-handlers.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst choose = handler((_, { item, note, chosen }) => {\n  chosen.set(item.title + note);\n});\nconst mark = handler((_, { item, picked }) => {\n  picked.set(item.title + \"!\");\n});\nconst Row = pattern(\"unhashed:pattern/compare/fixtures/element-handlers.tsx#Row\");\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/element-handlers.tsx#default\"));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$h.slot(3)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { item, picked }) => {\n  picked.set(item.title + \"!\");\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst choose = handler((_, { item, note, chosen }) => {\n  chosen.set(item.title + note);\n});\nconst mark = handler((_, { item, picked }) => {\n  picked.set(item.title + \"!\");\n});\nconst Row = pattern(\"sha256:4ec62b710afaccb9b5e92d8b2f45959ef9d1125656a0d2644a1d1f24ceb0ccc4\");\nconst $default = (pattern(\"sha256:93affc5eb5a9180b1d086df11acc7f6f1fd2f126bc88daa7eb61501de422ba4c\"));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$h.slot(3)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { item, picked }) => {\n  picked.set(item.title + \"!\");\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -185,7 +185,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/element-handlers.tsx#Row"
+            "sha256:4ec62b710afaccb9b5e92d8b2f45959ef9d1125656a0d2644a1d1f24ceb0ccc4"
           ],
           "picks": [],
           "selectors": [],
@@ -352,7 +352,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/element-handlers.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst choose = handler((_, { item, note, chosen }) => {\n  chosen.set(item.title + note);\n});\nconst mark = handler((_, { item, picked }) => {\n  picked.set(item.title + \"!\");\n});\nconst Row = pattern(\"unhashed:pattern/compare/fixtures/element-handlers.tsx#Row\");\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/element-handlers.tsx#default\"));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(2, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(1) }, [$h.slot(10)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(2) })));\n});\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [\"x\"])));\n}\n{\nconst $s1 = $rt.setups[1]({  }, $h);\n$rt.element(1, ($h) => ($rt.force($s1, $h)));\n}\n$rt.value(5, ($h) => ($rt.h(\"div\", {  }, [$rt.h(\"h1\", {  }, [$h.slot(0)]), $rt.h(\"ul\", {  }, [$rt.h(\"li\", {  }, [\"first\"]), $h.output(0)]), $rt.h(\"ol\", {  }, [$h.output(4)])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(7), chosen: $h.slot(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { item, note, chosen }) => {\n  chosen.set(item.title + note);\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_, { item, picked }) => {\n  picked.set(item.title + \"!\");\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst choose = handler((_, { item, note, chosen }) => {\n  chosen.set(item.title + note);\n});\nconst mark = handler((_, { item, picked }) => {\n  picked.set(item.title + \"!\");\n});\nconst Row = pattern(\"sha256:4ec62b710afaccb9b5e92d8b2f45959ef9d1125656a0d2644a1d1f24ceb0ccc4\");\nconst $default = (pattern(\"sha256:93affc5eb5a9180b1d086df11acc7f6f1fd2f126bc88daa7eb61501de422ba4c\"));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(2, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(1) }, [$h.slot(10)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(2) })));\n});\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [\"x\"])));\n}\n{\nconst $s1 = $rt.setups[1]({  }, $h);\n$rt.element(1, ($h) => ($rt.force($s1, $h)));\n}\n$rt.value(5, ($h) => ($rt.h(\"div\", {  }, [$rt.h(\"h1\", {  }, [$h.slot(0)]), $rt.h(\"ul\", {  }, [$rt.h(\"li\", {  }, [\"first\"]), $h.output(0)]), $rt.h(\"ol\", {  }, [$h.output(4)])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(7), chosen: $h.slot(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { item, note, chosen }) => {\n  chosen.set(item.title + note);\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_, { item, picked }) => {\n  picked.set(item.title + \"!\");\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -928,8 +928,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/element-handlers.tsx#default",
-            "unhashed:pattern/compare/fixtures/element-handlers.tsx#Row"
+            "sha256:93affc5eb5a9180b1d086df11acc7f6f1fd2f126bc88daa7eb61501de422ba4c",
+            "sha256:4ec62b710afaccb9b5e92d8b2f45959ef9d1125656a0d2644a1d1f24ceb0ccc4"
           ],
           "picks": [],
           "selectors": [],

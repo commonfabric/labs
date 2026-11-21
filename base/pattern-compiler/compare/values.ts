@@ -27,6 +27,7 @@ import {
   type Scenario,
   type StreamRecord,
 } from "./harness.ts";
+import type { HomeStubs } from "./wish-home.ts";
 
 /** The values of an instance at one point of a run. */
 export type Snapshot = {
@@ -73,6 +74,11 @@ export type ValueComparison = {
   differences: Difference[];
   /** The documents the executor stored at the end, by kind. */
   documents?: Record<string, number>;
+  /**
+   * The identifier of each document the executor stored at the end, in
+   * the order of their text, without the constants held for a handle.
+   */
+  documentIds?: string[];
   /** The documents today's run stored at the end (`Values.documents`). */
   runtimeDocuments?: number;
   counts?: Instance["counts"];
@@ -387,6 +393,8 @@ export const categoryOf = (
 export type Stubs = {
   completion: (request: Outstanding) => Completion | undefined;
   now: number;
+  /** What the `wish` operations resolve in (`wish-home.ts`). */
+  home?: HomeStubs;
 };
 
 /** The outcome of an event of today's run, as a comparison reads it. */
@@ -468,6 +476,10 @@ export class ExecutorRun implements StreamRecord {
         secret: "the secret of the comparison",
         artifacts: this.#artifacts,
         ...(this.#stubs === undefined ? {} : { now: this.#stubs.now }),
+        ...(this.#stubs?.home === undefined ? {} : {
+          documents: this.#stubs.home.documents,
+          wishes: this.#stubs.home.wishes,
+        }),
         // For a run that is timed: the bytes of whole documents are
         // not counted, which is a pass over each document written.
         ...(Deno.env.get("PATTERN_COMPILER_MEASURE") === "patches"
@@ -480,6 +492,14 @@ export class ExecutorRun implements StreamRecord {
     } catch (error) {
       this.#notExecuted = categoryOf(error);
     }
+  }
+
+  /**
+   * The query of each `wish` the executor resolved so far that the home of
+   * the stubs does not simulate.
+   */
+  get unsimulated(): readonly string[] {
+    return this.#stubs?.home?.unsimulated ?? [];
   }
 
   /** @inheritDoc */
@@ -635,6 +655,9 @@ export class ExecutorRun implements StreamRecord {
     comparison.storedStreams = instance.streams().length;
     comparison.runtimeDocuments = runtime.documents?.end;
     comparison.documents = instance.documents();
+    comparison.documentIds = [...instance.store.docs].flatMap((
+      [id, { kind }],
+    ) => kind === "held constant" ? [] : [id]).sort();
     comparison.counts = instance.counts;
     return comparison;
   }

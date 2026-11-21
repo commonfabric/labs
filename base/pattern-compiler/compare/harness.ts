@@ -8,6 +8,8 @@
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
+import { deepLabelAlong, storedReader } from "./deep-label.ts";
+import type { CfcAddress } from "../../../runtime/runner/src/cfc/types.ts";
 import { atomPropagationClass } from "../../../runtime/runner/src/cfc/atom-classes.ts";
 import type { CfcLabelView } from "../../../runtime/runner/src/cfc/label-view-core.ts";
 import { cfcLabelViewFromMetadata } from "../../../runtime/runner/src/cfc/label-view-state.ts";
@@ -235,6 +237,16 @@ export type Row = {
   path: string[];
   runtime: Label;
   /**
+   * The runtime's label of everything the value at the path holds, with
+   * each link in it followed (`deepLabel`), for a row read in the class
+   * `value`, and of the container's own entries through the links at its
+   * position for a row read in the class `shape` (`runtimeDeepClass`), read
+   * once every event was handled: what the comparison of stored labels
+   * reads on both sides. `runtime` is read before the first event.
+   */
+  runtimeDeep?: Label;
+  runtimeDeepClass?: "value" | "shape";
+  /**
    * The template's label as §3.2 gives it, with the atom of the plan's
    * pattern that every kept output carries.
    */
@@ -283,6 +295,8 @@ export type WriteRow = {
   /** The path below the target's cell, with each `*` an index. */
   path: string[];
   runtime: Label;
+  /** As `Row.runtimeDeep`. */
+  runtimeDeep?: Label;
   /**
    * The edge's template beside the label the target's own type declares
    * for the written path, which is stored there on both sides (PL §3.1,
@@ -451,7 +465,7 @@ type AnyCell = Cell<unknown>;
  * entry is what crossing a link on the way consumed, which every read below
  * it retains; its integrity vouches for the reference and is left out.
  */
-const consumed = (
+export const consumed = (
   view: CfcLabelView | undefined,
   observes: "value" | "shape" | "followRef",
 ): Label => {
@@ -1034,6 +1048,25 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
 
       // The documents on the way from `cell` to the value it reads: the one
       // its path is in, and the one each link stored at the path leads to.
+      // The label of everything the value of `cell` holds, each link in it
+      // followed (`deepLabel`).
+      const deepLabelOf = (
+        cell: AnyCell,
+        observes: "value" | "shape" = "value",
+      ): Label => {
+        const link = cell.getAsNormalizedFullLink();
+        return deepLabelAlong(
+          storedReader(read, observes),
+          {
+            space: link.space,
+            id: link.id,
+            scope: link.scope ?? "space",
+            path: [...link.path],
+          } as CfcAddress,
+          undefined,
+          observes === "value",
+        );
+      };
       const hops = (cell: AnyCell): NormalizedFullLink[] => {
         const found: NormalizedFullLink[] = [];
         let link = cell.getAsNormalizedFullLink();
@@ -2045,6 +2078,8 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
                 output: number,
                 path,
                 runtime: runtimeLabel,
+                runtimeDeep: deepLabelOf(cell, observes),
+                runtimeDeepClass: observes,
                 stored,
                 reached,
                 comparison: compareLabels(reached.label, runtimeLabel),
@@ -2276,6 +2311,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           write: index,
           path,
           runtime: runtimeLabel,
+          runtimeDeep: deepLabelOf(cell),
           template,
           comparison,
           runtimeByOrigin: {
@@ -2296,6 +2332,8 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
 
       return {
         outputRows,
+        deepAt: (path: readonly string[], observes: "value" | "shape") =>
+          deepLabelOf(outputAt(path), observes),
         writeTargets,
         writeTemplates,
         writeRow,
@@ -2605,6 +2643,22 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
       unobserved: 0,
     };
     for (const by of how.values()) decided[by]++;
+    // The label of each output with every link below its path followed is
+    // read once every event was handled, when the comparison of stored
+    // labels reads the executor's side.
+    await reading((within) => {
+      for (const row of rows) {
+        if (row.runtimeDeep === undefined) continue;
+        try {
+          row.runtimeDeep = within.deepAt(
+            row.path,
+            row.runtimeDeepClass ?? "value",
+          );
+        } catch {
+          delete row.runtimeDeep;
+        }
+      }
+    });
     return { rows, writes, events, skipped, decided, missing };
   } finally {
     await runtime.dispose();

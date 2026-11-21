@@ -15,6 +15,15 @@
  * documents it holds in memory, and the storage holds the same documents
  * (`RuntimeTransactions.stored()`).
  *
+ * With the runtime's experimental option `compiledPatterns` on, the runtime
+ * serving (`servingPosture`) and the artifact given, the adapter registers the compiled pattern with the
+ * runtime (`CompiledPlanRegistry`) and records each write record the
+ * executor gives with a change as an authorized `plan-write` write-policy
+ * input, so that the paths the records cover store the labels their
+ * templates instantiate to. It answers the executor's `labelOf` with the
+ * identifier of the label a value read of the position consumes, interned
+ * in the runtime's label table.
+ *
  * A document of the executor is the entity `of:<identifier>` of the space,
  * and a link the executor stores is written as the runtime's link to that
  * entity (`createSigilLinkFromParsedLink()`). A path of a link that crosses
@@ -40,13 +49,53 @@ import {
   type MemorySpace,
   recordRelevantSchemaWritePolicyInput,
 } from "../../../runtime/runner/src/cell.ts";
+import type { CompiledPlan } from "../../../runtime/runner/src/cfc/compiled-plans.ts";
+import {
+  consumedEntriesForRead,
+  labelForConsumedEntries,
+} from "../../../runtime/runner/src/cfc/consumed-label.ts";
+import { readStoredCfcMetadata } from "../../../runtime/runner/src/cfc/metadata.ts";
+import {
+  type NestedPlanInputs,
+  type NestedPlanWrite,
+  nestedPlanWrite,
+  PlanInputsInterner,
+} from "../../../runtime/runner/src/cfc/plan-inputs.ts";
+import { mergedPlanWrites } from "../../../runtime/runner/src/cfc/plan-write-targets.ts";
+import { runtimeOwnedStoreOwnerKey } from "../../../runtime/runner/src/cfc/runtime-owned-stores.ts";
+import {
+  type CfcAddress,
+  type CfcMetadata,
+  type ObservedPosition as RuntimeObserved,
+  type PlanElements,
+  type PlanWrite as RuntimePlanWrite,
+  runtimeWritePolicyAuthorization,
+  type SlotBinding as RuntimeSlotBinding,
+  type SlotBindings as RuntimeSlotBindings,
+} from "../../../runtime/runner/src/cfc/types.ts";
+import { readMaybeLink } from "../../../runtime/runner/src/link-resolution.ts";
 import type { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import type { URI } from "../../../runtime/runner/src/sigil-types.ts";
 import type {
   IExtendedStorageTransaction,
+  IStorageNotification,
   TransactionCommitReceipt,
 } from "../../../runtime/runner/src/storage/interface.ts";
-import type { Transaction, TransactionHooks } from "../exec/executor.ts";
+import type {
+  Artifact,
+  LabelChange,
+  Transaction,
+  TransactionHooks,
+} from "../exec/executor.ts";
+import type {
+  Address,
+  FoldElements,
+  InputsTable,
+  Observed,
+  PlanWrite,
+  SlotBinding,
+  SlotBindings,
+} from "../exec/plan-write.ts";
 import { isLink, type Schema, type Store } from "../exec/store.ts";
 
 /** What the runtime's transactions were given, counted. */
@@ -61,6 +110,41 @@ export type RuntimeCounts = {
   reads: number;
   /** Writes staged, one for each change of the executor. */
   writes: number;
+  /**
+   * Write records recorded for a write that left the value at its target
+   * as it was.
+   */
+  unchangedRecords: number;
+  /** Write records the executor gave in transactions that committed. */
+  recordsGiven: number;
+  /**
+   * The `plan-write` inputs recorded for them: one for the records that
+   * differ only in a member of one container or in the document.
+   */
+  recordsRecorded: number;
+  /**
+   * The size, as JSON text, of the `plan-write` and `plan-inputs` inputs
+   * recorded, where the adapter was asked to count it.
+   */
+  recordBytes: number;
+  /**
+   * The paths whose label entries a commit changed in a document for which
+   * it recorded such a write record.
+   */
+  labelEntriesChanged: number;
+};
+
+/**
+ * A write record as the adapter recorded it with the runtime: the runtime's
+ * `plan-write` input without its kind, with the inputs it names in the
+ * transaction's table of inputs held by value.
+ */
+export type RecordedPlanWrite = NestedPlanWrite;
+
+/** The write records of one transaction, with the table they name. */
+type Recorded = {
+  writes: RuntimePlanWrite[];
+  interner: PlanInputsInterner;
 };
 
 /** Keeps the documents of one executor in one space of a runtime. */
@@ -71,28 +155,172 @@ export class RuntimeTransactions implements TransactionHooks {
   #cause = "";
   /** The positions the transaction in progress read, as text. */
   readonly #read = new Set<string>();
-  readonly #receipts: TransactionCommitReceipt[] = [];
+  /**
+   * The positions of `#read` that the transaction read before it wrote
+   * them, as text.
+   */
+  readonly #readBeforeWrite = new Set<string>();
+  /**
+   * The positions the transaction read after it wrote them, at their path
+   * or above, as text. A read is counted here even where `#read` already
+   * held its position from a read before the write.
+   */
+  readonly #readAfterWrite = new Set<string>();
+  readonly #receipts: {
+    receipt: TransactionCommitReceipt;
+    recorded: Recorded;
+    created: string[];
+  }[] = [];
+  /**
+   * The write records recorded in the transaction in progress, with the
+   * table of inputs they name.
+   */
+  #recorded: Recorded = { writes: [], interner: new PlanInputsInterner() };
+  /**
+   * The executor's table of inputs that the records of the transaction in
+   * progress name, and for each of its entries the index it was given in
+   * the runtime's table, with what that index was formed under: for a
+   * binding whether its position takes the label the transaction staged,
+   * and for a set of inputs the state of the transaction's reads and
+   * writes (`#stagedState`).
+   */
+  #converted: {
+    table: InputsTable;
+    bindings: Map<number, { staged: boolean; index: number }>;
+    inputs: Map<number, { state: number; index: number }>;
+  } | undefined;
+  /**
+   * The number of changes of what decides whether a binding takes a staged
+   * label, in the transaction in progress: its writes, and its reads of a
+   * position it wrote.
+   */
+  #stagedState = 0;
+  /**
+   * The label entries each document stored before the transaction in
+   * progress, for the documents it recorded a write for that left the
+   * value as it was.
+   */
+  readonly #unchanged = new Map<string, Map<string, string>>();
+  /** The documents the transaction in progress wrote first. */
+  #created: string[] = [];
+  /** What hears of the write records of each commit that settled. */
+  #onCommitted: ((writes: readonly RecordedPlanWrite[]) => void) | undefined;
   /** Removes this adapter from the readers of the storage manager. */
   readonly #stopReading: (() => void) | undefined;
+  /**
+   * The document whose instance owns the documents the executor makes: the
+   * result document of the instance the executor was started with.
+   */
+  readonly #owner: string | undefined;
   readonly #counts: RuntimeCounts = {
     committed: 0,
     byCause: {},
     aborted: 0,
     reads: 0,
     writes: 0,
+    unchangedRecords: 0,
+    recordsGiven: 0,
+    recordsRecorded: 0,
+    recordBytes: 0,
+    labelEntriesChanged: 0,
   };
+  /** Whether `RuntimeCounts.recordBytes` is counted. */
+  readonly #countRecordBytes: boolean;
   /** The identifier of each document the storage holds. */
   readonly #documents = new Set<string>();
   /** The document of the executor that each entity holds. */
   readonly #byEntity = new Map<string, string>();
+  /** The space of each document that is in another space than `#space`. */
+  readonly #spaces = new Map<string, MemorySpace>();
+  /**
+   * The identity the runtime registered the compiled pattern under, where
+   * the runtime's option `compiledPatterns` is on and the artifact was
+   * given; write records are recorded only then.
+   */
+  readonly #compiledPattern: string | undefined;
+  /** The paths the transaction in progress wrote, by document. */
+  readonly #written = new Map<string, (readonly string[])[]>();
+  /** The stored labels of each document `labelOf` read, per transaction. */
+  readonly #metadata = new Map<string, CfcMetadata | undefined>();
+  /**
+   * The label entries of each document `labelOf` read, each as text by the
+   * text of its path, which a change of the document is compared against.
+   */
+  readonly #entries = new Map<string, Map<string, string>>();
+  /** The documents of `#entries` that a commit changed since. */
+  readonly #touched = new Set<string>();
+  /** What the executor registered to hear of changed labels. */
+  #labelsChanged:
+    | ((changes: readonly LabelChange[], alone?: boolean) => void)
+    | undefined;
+  /** The subscription that hears of the commits of the space. */
+  readonly #subscription: IStorageNotification | undefined;
 
   /**
    * Constructs an instance which keeps the documents in `space` of
    * `runtime`.
    */
-  constructor(runtime: Runtime, space: MemorySpace) {
+  constructor(
+    runtime: Runtime,
+    space: MemorySpace,
+    options: {
+      /**
+       * The identifier of the result document of the instance the executor
+       * is started with. Each document the executor makes is then enrolled
+       * as a store the runtime owns, under that instance, as the runner
+       * enrolls the stores of a piece it sets up.
+       */
+      owner?: string;
+      /**
+       * The compiled pattern the executor runs. With the runtime's option
+       * `compiledPatterns` on, it is registered with the runtime and the
+       * executor's write records are recorded with each write.
+       */
+      artifact?: Artifact;
+      /**
+       * Whether to count the size of the write records recorded
+       * (`RuntimeCounts.recordBytes`), which costs a pass over each.
+       */
+      countRecordBytes?: boolean;
+    } = {},
+  ) {
     this.#runtime = runtime;
     this.#space = space;
+    this.#owner = options.owner;
+    this.#countRecordBytes = options.countRecordBytes === true;
+    this.#compiledPattern = options.artifact === undefined ||
+        !runtime.experimental.compiledPatterns || !runtime.servingPosture
+      ? undefined
+      : runtime.compiledPlans.register(
+        // The plan as the crate emits it carries every member the
+        // runtime reads.
+        options.artifact.plan as unknown as CompiledPlan,
+        JSON.stringify(options.artifact.code),
+        runtimeWritePolicyAuthorization,
+      );
+    if (this.#compiledPattern !== undefined) {
+      // A commit of the space, the executor's own or another's, can change
+      // the labels of a document whose positions the executor grouped
+      // elements by.
+      this.#subscription = {
+        next: (notification) => {
+          if (
+            notification.type === "reset" ||
+            notification.space !== this.#space
+          ) {
+            return undefined;
+          }
+          for (const { address } of notification.changes) {
+            const doc = this.#byEntity.get(address.id);
+            if (doc !== undefined && this.#entries.has(doc)) {
+              this.#touched.add(doc);
+            }
+          }
+          return undefined;
+        },
+      };
+      runtime.storageManager.subscribe(this.#subscription);
+    }
     // The replica drops a document that nothing holds or reads at its next
     // release pass (`releaseUnreadDocuments()`), and a read through a
     // transaction does not load it again: it reads the document as absent
@@ -101,7 +329,10 @@ export class RuntimeTransactions implements TransactionHooks {
     // it reads, as the replica counts it, every document it has named.
     this.#stopReading = runtime.storageManager.addDocumentReader?.((
       address,
-    ) => address.space === space && this.#byEntity.has(address.id));
+    ) => {
+      const doc = this.#byEntity.get(address.id);
+      return doc !== undefined && address.space === this.#spaceOf(doc);
+    });
   }
 
   /** What the transactions were given so far. */
@@ -109,9 +340,85 @@ export class RuntimeTransactions implements TransactionHooks {
     return { ...this.#counts, byCause: { ...this.#counts.byCause } };
   }
 
+  /**
+   * Takes a document as one that exists in storage and that the executor did
+   * not make, as an input it is handed: it is kept loaded, a change to it is
+   * written at its path, and it is not enrolled as a store the runtime owns.
+   * `space` is the space of a document that is in another space than the
+   * executor's.
+   */
+  external(doc: string, space?: MemorySpace): void {
+    this.entityOf(doc);
+    this.#documents.add(doc);
+    if (space !== undefined) this.#spaces.set(doc, space);
+  }
+
+  /** The space a document of the executor is in. */
+  #spaceOf(doc: string): MemorySpace {
+    return this.#spaces.get(doc) ?? this.#space;
+  }
+
   /** Stops keeping the documents of the executor loaded. */
   close(): void {
     this.#stopReading?.();
+    if (this.#subscription !== undefined) {
+      this.#runtime.storageManager.unsubscribe?.(this.#subscription);
+    }
+  }
+
+  /** @inheritDoc */
+  watchLabels(
+    changed: (changes: readonly LabelChange[], alone?: boolean) => void,
+  ): void {
+    this.#labelsChanged = changed;
+  }
+
+  /**
+   * Tells the executor of the label entries that changed in each document
+   * a commit touched since the last call: those added, removed or changed,
+   * by path. The work is the number of entries of the touched documents.
+   */
+  #reportLabels(): void {
+    if (this.#touched.size === 0) return;
+    const changes: LabelChange[] = [];
+    const tx = this.#runtime.edit();
+    try {
+      for (const doc of this.#touched) {
+        this.#metadata.delete(doc);
+        const before = this.#entries.get(doc) ?? new Map();
+        const after = entriesOf(this.#storedLabels(tx, doc));
+        this.#entries.set(doc, after);
+        const paths = new Set<string>();
+        for (const [path, label] of after) {
+          if (before.get(path) !== label) paths.add(path);
+        }
+        for (const path of before.keys()) {
+          if (!after.has(path)) paths.add(path);
+        }
+        if (paths.size > 0) {
+          changes.push({
+            doc,
+            paths: [...paths].map((path) => JSON.parse(path) as string[]),
+          });
+        }
+      }
+    } finally {
+      tx.abort();
+      this.#touched.clear();
+    }
+    if (changes.length > 0) this.#labelsChanged?.(changes);
+  }
+
+  /** The stored labels of a document of the executor, read through `tx`. */
+  #storedLabels(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+  ): CfcMetadata | undefined {
+    return readStoredCfcMetadata(tx, {
+      space: this.#spaceOf(doc),
+      id: this.entityOf(doc),
+      scope: "space",
+    });
   }
 
   /** @inheritDoc */
@@ -119,19 +426,90 @@ export class RuntimeTransactions implements TransactionHooks {
     if (this.#tx !== undefined) {
       throw new Error("A transaction began while another was open.");
     }
+    this.#reportLabels();
     this.#cause = cause;
     this.#tx = this.#runtime.edit();
     this.#read.clear();
+    this.#readBeforeWrite.clear();
+    this.#readAfterWrite.clear();
+    this.#written.clear();
+    this.#metadata.clear();
+    this.#recorded = { writes: [], interner: new PlanInputsInterner() };
+    this.#converted = undefined;
+    this.#stagedState = 0;
+    this.#created = [];
   }
 
   /** @inheritDoc */
   read(doc: string, path: readonly string[]): void {
     const tx = this.#open();
     const text = JSON.stringify([doc, path]);
+    const wrote = this.#wrote({ doc, path });
+    if (wrote && !this.#readAfterWrite.has(text)) {
+      this.#readAfterWrite.add(text);
+      this.#stagedState += 1;
+    }
     if (this.#read.has(text)) return;
     this.#read.add(text);
+    if (!wrote) this.#readBeforeWrite.add(text);
     this.#counts.reads += 1;
-    tx.readValueOrThrow(this.#address(doc, path));
+    const address = this.#address(doc, path);
+    const value = tx.readValueOrThrow(address);
+    // A slot's chain names each link position the read crossed, which the
+    // label of the slot takes as a reference-identity observation: the probe
+    // that link resolution journals.
+    if (this.#compiledPattern !== undefined && isPrimitiveCellLink(value)) {
+      readMaybeLink(tx, address);
+    }
+  }
+
+  /** @inheritDoc */
+  labelOf(
+    doc: string,
+    path: readonly string[],
+    observes = "value",
+  ): string | undefined {
+    if (this.#compiledPattern === undefined) return undefined;
+    // The label of a position the transaction wrote, at its path, above it
+    // or below it, is the staged one, which the storage does not hold.
+    if (
+      (this.#written.get(doc) ?? []).some((written) =>
+        written.every((segment, index) =>
+          index >= path.length || segment === path[index]
+        )
+      )
+    ) return undefined;
+    const table = this.#runtime.compiledPlans.labels;
+    if (!this.#metadata.has(doc)) {
+      const tx = this.#tx ?? this.#runtime.edit();
+      try {
+        const metadata = this.#storedLabels(tx, doc);
+        this.#metadata.set(doc, metadata);
+        if (!this.#entries.has(doc)) {
+          this.#entries.set(doc, entriesOf(metadata));
+        }
+      } finally {
+        if (tx !== this.#tx) tx.abort();
+      }
+    }
+    const metadata = this.#metadata.get(doc);
+    if (metadata === undefined) return table.empty.id;
+    // The class the runtime observes the position in (`observesOf`), read
+    // as its observation of a label alone is: below the position too for a
+    // read of the value, and at the position for the other classes.
+    const consumes = observesOf(observes);
+    const label = labelForConsumedEntries(
+      consumedEntriesForRead(metadata, path, {
+        nonRecursive: consumes !== "value",
+        consumes,
+      }),
+      path,
+      consumes !== "value",
+    );
+    return table.intern({
+      confidentiality: [...label?.confidentiality ?? []],
+      integrity: [...label?.integrity ?? []],
+    }).id;
   }
 
   /** @inheritDoc */
@@ -140,10 +518,20 @@ export class RuntimeTransactions implements TransactionHooks {
     path: readonly string[],
     store: Store,
     schema?: Schema,
+    writes?: readonly PlanWrite[],
+    splice?: { start: number; removed: number; inserted: number },
+    inputs?: InputsTable,
   ): void {
     const tx = this.#open();
     this.#counts.writes += 1;
+    this.#stagedState += 1;
+    const written = this.#written.get(doc) ?? [];
+    this.#written.set(doc, written);
     const document = store.docs.get(doc);
+    const attempts = tx.getWriteAttemptLog?.().length;
+    // Whether the change was written as the positions of a splice, which
+    // are then the paths written, and the path of the change is not.
+    let spliced = false;
     if (document === undefined) {
       if (!this.#documents.delete(doc)) return;
       tx.writeValueOrThrow(this.#address(doc, []), undefined, {
@@ -155,17 +543,42 @@ export class RuntimeTransactions implements TransactionHooks {
       // from the place's default, and the change names only the path
       // written.
       this.#documents.add(doc);
+      this.#created.push(doc);
       tx.writeValueOrThrow(
         this.#address(doc, []),
         this.#encode(document.value),
       );
+      this.#enroll(tx, doc);
     } else {
       const parent = path.length === 0
         ? undefined
         : store.peek(doc, path.slice(0, -1));
       const absent = path.length > 0 && isWalkableObjectNotArray(parent) &&
         !Object.hasOwn(parent, path[path.length - 1]);
-      if (absent) {
+      const held = splice === undefined ? undefined : store.peek(doc, path);
+      if (splice !== undefined && Array.isArray(held)) {
+        // A splice of a stored array writes the number of members and the
+        // positions it changed, and no position before it: the labels
+        // stored for those stay with them. The number is written first, so
+        // that it is a write of its own where the array grows.
+        const moved = splice.removed !== splice.inserted;
+        const end = moved ? held.length : splice.start + splice.inserted;
+        spliced = true;
+        if (moved) {
+          written.push([...path, "length"]);
+          tx.writeValueOrThrow(
+            this.#address(doc, [...path, "length"]),
+            held.length,
+          );
+        }
+        for (let at = splice.start; at < end; at++) {
+          written.push([...path, `${at}`]);
+          tx.writeValueOrThrow(
+            this.#address(doc, [...path, `${at}`]),
+            this.#encode(held[at]),
+          );
+        }
+      } else if (absent) {
         tx.writeValueOrThrow(this.#address(doc, path), undefined, {
           delete: true,
         });
@@ -176,16 +589,426 @@ export class RuntimeTransactions implements TransactionHooks {
         );
       }
     }
+    if (!spliced) written.push([...path]);
+    // A write can change the label of a value a reader's own value does
+    // not change with, so the label entries the document stores before
+    // the transaction are kept as for a write that changes no value.
+    if (this.#compiledPattern !== undefined) this.#noteUnchanged(doc);
     // The write policy of the write, as a cell's write records it
     // (`Cell.set`): the schema the write was made under where it declares
     // labels, and otherwise the schema the document's stored labels name.
     // A schema of a plan is a JSON schema with the members the executor
     // reads typed (`Schema` of `exec/store.ts`).
+    this.#recordSchema(tx, doc, path, schema, store);
+    if (this.#compiledPattern === undefined) return;
+    // A write of the value the storage holds is no write of the
+    // transaction: its records are given as those of a write that left the
+    // value as it was, so the path stores the label of the write for the
+    // value it holds. A transaction that keeps no log of its writes gives
+    // every record as that of a write.
+    if (writes === undefined || writes.length === 0) return;
+    if (inputs === undefined) {
+      throw new Error(
+        "Write records were given without their table of inputs.",
+      );
+    }
+    this.#record(
+      writes,
+      attempts !== undefined && tx.getWriteAttemptLog?.().length === attempts,
+      inputs,
+    );
+  }
+
+  /**
+   * Records the schema write-policy input of a write at `path` of `doc`
+   * under `schema`, the schema of the reference the write was made through.
+   * A write at or below a member of an array is recorded at the outermost
+   * array on the way: a schema input is spelled from its path with each
+   * segment as a named property, and the envelope the document stores
+   * spells an array as an array, so an input at a path through an index
+   * does not merge with it. The schema of the write is then spelled from
+   * that array, an index as its `items`; a write under a schema that
+   * declares no label answers to the schema the document stores there.
+   */
+  #recordSchema(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+    path: readonly string[],
+    schema: Schema | undefined,
+    store: Store,
+  ): void {
+    const isIndex = (at: number) =>
+      /^(0|[1-9][0-9]*)$/.test(path[at]) &&
+      Array.isArray(store.peek(doc, path.slice(0, at)));
+    const first = path.findIndex((_, at) => isIndex(at));
+    if (first < 0) {
+      recordRelevantSchemaWritePolicyInput(
+        tx,
+        this.#address(doc, path),
+        schema as JSONSchema | undefined,
+      );
+      return;
+    }
+    let spelled = schema as JSONSchema | undefined;
+    for (let at = path.length - 1; at >= first; at--) {
+      if (typeof spelled !== "object") break;
+      spelled = isIndex(at)
+        ? { type: "array", items: spelled }
+        : { type: "object", properties: { [path[at]]: spelled } };
+    }
     recordRelevantSchemaWritePolicyInput(
       tx,
-      this.#address(doc, path),
-      schema as JSONSchema | undefined,
+      this.#address(doc, path.slice(0, first)),
+      typeof spelled === "object" ? spelled : undefined,
     );
+  }
+
+  /**
+   * Keeps the label entries a document stores before the transaction in
+   * progress stores, for a write that left a value of the document as it
+   * was, the label of that write.
+   */
+  #noteUnchanged(doc: string): void {
+    if (this.#unchanged.has(doc)) return;
+    // The entries kept of a document no commit changed since are the ones
+    // it stores.
+    const kept = this.#touched.has(doc) ? undefined : this.#entries.get(doc);
+    if (kept !== undefined) {
+      this.#unchanged.set(doc, kept);
+      return;
+    }
+    const tx = this.#runtime.edit();
+    try {
+      this.#unchanged.set(doc, entriesOf(this.#storedLabels(tx, doc)));
+    } finally {
+      tx.abort();
+    }
+  }
+
+  /**
+   * Tells the executor of the label entries that the transaction that just
+   * committed changed in the documents of `#unchanged`, where it changed
+   * a label and no value, and counts them.
+   */
+  #reportUnchanged(): void {
+    if (this.#unchanged.size === 0) return;
+    const changes: LabelChange[] = [];
+    const tx = this.#runtime.edit();
+    try {
+      for (const [doc, before] of this.#unchanged) {
+        const after = entriesOf(this.#storedLabels(tx, doc));
+        const paths = [...new Set([...before.keys(), ...after.keys()])]
+          .filter((path) => before.get(path) !== after.get(path));
+        if (paths.length === 0) continue;
+        this.#counts.labelEntriesChanged += paths.length;
+        changes.push({
+          doc,
+          paths: paths.map((path) => JSON.parse(path) as string[]),
+        });
+      }
+    } finally {
+      tx.abort();
+      this.#unchanged.clear();
+    }
+    if (changes.length > 0) this.#labelsChanged?.(changes, true);
+  }
+
+  /** @inheritDoc */
+  unchanged(
+    doc: string,
+    path: readonly string[],
+    store: Store,
+    schema: Schema | undefined,
+    writes: readonly PlanWrite[],
+    inputs: InputsTable,
+  ): void {
+    if (this.#compiledPattern === undefined) return;
+    const tx = this.#open();
+    // The write policy of each path a record names, as `change` records it
+    // for a write: the label is stored under the policy a write of the
+    // path is held to.
+    for (const target of new Set(writes.map((write) => write.target))) {
+      this.#recordSchema(
+        tx,
+        target.doc,
+        target.path,
+        target.doc === doc &&
+          JSON.stringify(target.path) === JSON.stringify(path)
+          ? schema
+          : undefined,
+        store,
+      );
+    }
+    this.#record(writes, true, inputs);
+  }
+
+  /**
+   * Keeps each write record as the runtime reads it, for the end of the
+   * transaction (`#recordWrites`): `unchanged` for a write that left the
+   * value at its target as it was. The inputs a record names in `table`,
+   * the executor's table of inputs, become entries of the runtime's, each
+   * distinct one once for the transaction.
+   */
+  #record(
+    writes: readonly PlanWrite[],
+    unchanged: boolean,
+    table: InputsTable,
+  ): void {
+    if (this.#compiledPattern === undefined) return;
+    // The records of one change of the members of a list hold one array of
+    // what the change compared, which is given to the runtime as one
+    // object.
+    const observed = (positions: readonly Observed[]) =>
+      positions.map(({ address, observes, alone }) => ({
+        address: this.#cfcAddress(address),
+        observes: observesOf(observes),
+        ...(alone ? { alone: true as const } : {}),
+      }));
+    const decidedOf = new Map<readonly Observed[], RuntimeObserved[]>();
+    const recorded: RuntimePlanWrite[] = [];
+    for (const write of writes) {
+      let decided = write.decided === undefined
+        ? undefined
+        : decidedOf.get(write.decided);
+      if (write.decided !== undefined && decided === undefined) {
+        decided = observed(write.decided);
+        decidedOf.set(write.decided, decided);
+      }
+      recorded.push({
+        inputs: this.#inputs(table, write.inputs),
+        target: this.#cfcAddress(write.target),
+        compiledPattern: this.#compiledPattern,
+        record: write.record,
+        instance: write.instance,
+        keys: write.keys,
+        ...(unchanged ? { unchanged: true as const } : {}),
+        ...(decided === undefined ? {} : { decided }),
+        ...(write.observed === undefined
+          ? {}
+          : { observed: observed(write.observed) }),
+        ...(write.enumeration ? { enumeration: true as const } : {}),
+        ...(write.removes ? { removes: true as const } : {}),
+        ...(write.moves === undefined ? {} : { moves: write.moves }),
+        ...(write.start === undefined ? {} : { start: write.start }),
+        ...(write.relabel ? { relabel: true as const } : {}),
+        ...(write.bound ? { bound: true as const } : {}),
+        ...(write.membersChanged ? { membersChanged: true as const } : {}),
+      });
+      if (unchanged) {
+        this.#counts.unchangedRecords += 1;
+        this.#noteUnchanged(write.target.doc);
+      }
+    }
+    // The records are recorded with the runtime when the transaction ends
+    // (`#recordWrites`), those that differ in their target alone as one.
+    for (const write of recorded) this.#recorded.writes.push(write);
+  }
+
+  /**
+   * Records the write records of the transaction in progress with the
+   * runtime, as authorized `plan-write` inputs behind the `plan-inputs`
+   * input that holds the table they name: one record for those that name
+   * one record of the plan and one entry of the table and differ only in
+   * a member of one container or in the document (`mergedPlanWrites`).
+   */
+  #recordWrites(tx: IExtendedStorageTransaction): void {
+    if (this.#compiledPattern === undefined) return;
+    const { writes, interner } = this.#recorded;
+    if (writes.length === 0) return;
+    // The runtime's mark: this adapter stands in for the runner, which
+    // records what its own code computed.
+    const record = (
+      input: Parameters<
+        IExtendedStorageTransaction["recordCfcWritePolicyInput"]
+      >[0],
+    ) => {
+      if (this.#countRecordBytes) {
+        this.#counts.recordBytes += JSON.stringify(input).length;
+      }
+      tx.recordCfcWritePolicyInput(input, runtimeWritePolicyAuthorization);
+    };
+    const part = interner.take();
+    if (part !== undefined) {
+      record({
+        kind: "plan-inputs",
+        compiledPattern: this.#compiledPattern,
+        ...part,
+      });
+    }
+    const merged = mergedPlanWrites(writes);
+    this.#counts.recordsGiven += writes.length;
+    this.#counts.recordsRecorded += merged.length;
+    for (const write of merged) record({ kind: "plan-write", ...write });
+  }
+
+  /**
+   * The index, in the runtime's table of inputs of the transaction in
+   * progress, of the entry `index` of the executor's table `table`, as the
+   * runtime reads it. An entry is given an index again where what decides
+   * whether one of its bindings takes a staged label changed since
+   * (`#stagedState`), and the same index where it reads as it did.
+   */
+  #inputs(table: InputsTable, index: number): number {
+    if (this.#converted?.table !== table) {
+      this.#converted = { table, bindings: new Map(), inputs: new Map() };
+    }
+    const known = this.#converted.inputs.get(index);
+    if (known?.state === this.#stagedState) return known.index;
+    const { interner } = this.#recorded;
+    const place = table.inputs[index];
+    const entries = <T, U>(
+      record: Record<number, T> | undefined,
+      as: (value: T) => U,
+    ): Record<number, U> | undefined =>
+      record === undefined ? undefined : Object.fromEntries(
+        Object.entries(record).map(([at, value]) => [at, as(value)]),
+      );
+    const elements = (given: FoldElements): PlanElements =>
+      "uniform" in given ? { uniform: this.#inputs(table, given.uniform) } : {
+        groups: given.groups.map(({ inputs, count }) => ({
+          inputs: this.#inputs(table, inputs),
+          count,
+        })),
+      };
+    const formed = interner.inputs({
+      slots: this.#slots(table, place.slots),
+      ...(place.selections === undefined
+        ? {}
+        : { selections: place.selections }),
+      ...(place.picks === undefined ? {} : {
+        picks: entries(
+          place.picks,
+          (chosen) =>
+            chosen === null
+              ? null
+              : { slots: this.#slots(table, chosen.slots) },
+        ),
+      }),
+      ...(place.elements === undefined
+        ? {}
+        : { elements: entries(place.elements, elements) }),
+      ...(place.dynamic === undefined ? {} : {
+        dynamic: entries(
+          place.dynamic,
+          (addresses) => addresses.map((address) => this.#cfcAddress(address)),
+        ),
+      }),
+      ...(place.outputs === undefined ? {} : {
+        outputs: entries(
+          place.outputs,
+          (inputs) => this.#inputs(table, inputs),
+        ),
+      }),
+    });
+    this.#converted.inputs.set(index, {
+      state: this.#stagedState,
+      index: formed,
+    });
+    return formed;
+  }
+
+  /**
+   * The bindings of slots that name theirs in `table`, as the runtime reads
+   * them: each the index of the binding in the runtime's table. A plan's
+   * class `identity` is the runtime's `followRef`. A slot whose position the
+   * transaction in progress wrote takes the label staged there.
+   */
+  #slots(table: InputsTable, slots: SlotBindings): RuntimeSlotBindings {
+    const converted = this.#converted!.bindings;
+    return Object.fromEntries(
+      Object.entries(slots).map(([slot, at]) => {
+        const binding = table.bindings[at];
+        const staged = this.#takesStaged(binding);
+        const known = converted.get(at);
+        if (known?.staged === staged) return [slot, known.index];
+        const index = this.#recorded.interner.binding(
+          this.#binding(binding, staged),
+        );
+        converted.set(at, { staged, index });
+        return [slot, index];
+      }),
+    );
+  }
+
+  /**
+   * Whether the position a binding's chain ends at takes, for the slot,
+   * the label the transaction in progress staged there. A position the
+   * transaction read before it wrote it, and only then, holds for the slot
+   * what the read found: its stored label, and not the label the write
+   * stages, which a write edge that reads its own target would make depend
+   * on itself. A position it read after the write holds what the write
+   * made, whose label is the staged one; the binding names no read, so a
+   * position read both before and after the write takes the staged label,
+   * and a slot whose label then depends on itself is refused as a cycle.
+   */
+  #takesStaged(binding: SlotBinding): boolean {
+    if (!("chain" in binding)) return false;
+    const last = binding.chain.at(-1);
+    if (last === undefined || !this.#wrote(last)) return false;
+    const position = JSON.stringify([last.doc, last.path]);
+    return this.#readAfterWrite.has(position) ||
+      !this.#readBeforeWrite.has(position);
+  }
+
+  /**
+   * Helper for `#slots()`, for one binding, with whether its position
+   * takes the staged label (`#takesStaged`).
+   */
+  #binding(binding: SlotBinding, staged: boolean): RuntimeSlotBinding {
+    if ("output" in binding) return { output: binding.output };
+    if ("constant" in binding) return { constant: true };
+    if ("staged" in binding) {
+      return { staged: this.#cfcAddress(binding.staged) };
+    }
+    // A staged position that the read crossed links to, or that holds
+    // links the read followed, keeps those positions: the binding names
+    // them all, marked as read after the write.
+    if (staged && binding.chain.length === 1 && binding.below === undefined) {
+      return { staged: this.#cfcAddress(binding.chain[0]) };
+    }
+    // A position the transaction did not read, such as the one an element
+    // of a fold's group read in an earlier transaction, is the runtime's to
+    // observe: it observes the label stored there in the committing
+    // transaction and reads no value (ruling (c)).
+    const observes = observesOf(binding.observes);
+    return {
+      chain: binding.chain.map((address) => this.#cfcAddress(address)),
+      observes,
+      ...(binding.below === undefined ? {} : {
+        below: binding.below.map((chain) =>
+          chain.map((address) => this.#cfcAddress(address))
+        ),
+      }),
+      ...(binding.members === undefined ? {} : {
+        members: binding.members.map(({ container, count, groups }) => ({
+          container: this.#cfcAddress(container),
+          count,
+          groups,
+        })),
+      }),
+      ...(staged ? { staged: true as const } : {}),
+    };
+  }
+
+  /**
+   * Whether the transaction in progress wrote `address`, at its path or
+   * above it.
+   */
+  #wrote({ doc, path }: Address): boolean {
+    return (this.#written.get(doc) ?? []).some((written) =>
+      written.length <= path.length &&
+      written.every((segment, index) => segment === path[index])
+    );
+  }
+
+  /** The runtime's address of a position of a document of the executor. */
+  #cfcAddress({ doc, path }: Address): CfcAddress {
+    return {
+      space: this.#spaceOf(doc),
+      id: this.entityOf(doc),
+      scope: "space",
+      path: [...path],
+    };
   }
 
   /** @inheritDoc */
@@ -194,10 +1017,35 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#tx = undefined;
     if (!committed) {
       tx.abort();
+      this.#unchanged.clear();
       this.#counts.aborted += 1;
+      for (const doc of this.#created) this.#documents.delete(doc);
       return;
     }
-    this.#receipts.push(tx.commit());
+    // The preparation runs here, before the commit, so that a refusal is
+    // known before the executor begins its next transaction, which can
+    // depend on what this one wrote. The storage holds nothing this
+    // transaction wrote then, so the next change of each document it wrote
+    // writes the document whole. The commit finds the transaction prepared.
+    this.#recordWrites(tx);
+    this.#runtime.prepareTxForCommit(tx);
+    const refused = tx.getCfcState().prepare.status === "invalidated";
+    if (refused) {
+      for (const doc of this.#written.keys()) this.#documents.delete(doc);
+    }
+    this.#receipts.push({
+      receipt: tx.commit(),
+      recorded: this.#recorded,
+      // A document forgotten here may be written again by a later
+      // transaction before this one settles.
+      created: refused ? [] : this.#created,
+    });
+    this.#recorded = { writes: [], interner: new PlanInputsInterner() };
+    this.#converted = undefined;
+    this.#created = [];
+    this.#reportLabels();
+    if (refused) this.#unchanged.clear();
+    else this.#reportUnchanged();
     this.#counts.committed += 1;
     this.#counts.byCause[this.#cause] = (this.#counts.byCause[this.#cause] ??
       0) + 1;
@@ -209,11 +1057,35 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   async settled(): Promise<string[]> {
     const refused: string[] = [];
-    for (const receipt of this.#receipts.splice(0)) {
+    for (const { receipt, recorded, created } of this.#receipts.splice(0)) {
       const { error } = await receipt.settled;
-      if (error !== undefined) refused.push(`${error.name}: ${error.message}`);
+      if (error === undefined) {
+        if (this.#onCommitted !== undefined) {
+          const expanded = new Map<number, NestedPlanInputs>();
+          const { table } = recorded.interner;
+          this.#onCommitted(
+            recorded.writes.map((write) =>
+              nestedPlanWrite(write, table, expanded)
+            ),
+          );
+        }
+        continue;
+      }
+      refused.push(`${error.name}: ${error.message}`);
+      // The storage does not hold a document whose first write was refused:
+      // the next change of it writes it whole again.
+      for (const doc of created) this.#documents.delete(doc);
     }
     return refused;
+  }
+
+  /**
+   * Has `listener` hear, as `settled()` finds each commit settled without
+   * a refusal, the write records the commit recorded, in the order they
+   * were recorded.
+   */
+  onCommitted(listener: (writes: readonly RecordedPlanWrite[]) => void): void {
+    this.#onCommitted = listener;
   }
 
   /**
@@ -251,6 +1123,31 @@ export class RuntimeTransactions implements TransactionHooks {
     return this.#byEntity.get(entity) ?? entity;
   }
 
+  /**
+   * Enrolls a document the executor made as a store the runtime owns, as
+   * `enrollPieceOwnedStores` in `runtime/runner/src/runner.ts` enrolls the
+   * result, the argument and the internal documents of a piece: a clause
+   * that does not fit the store is then declared onto it rather than refused
+   * (CFC spec §8.12.5). The enrollment outlives the transaction.
+   */
+  #enroll(tx: IExtendedStorageTransaction, doc: string): void {
+    if (this.#owner === undefined) return;
+    const store = this.#address(doc, []);
+    const owner = runtimeOwnedStoreOwnerKey(
+      store,
+      this.#address(this.#owner, []),
+      this.#runtime.scopeKeyIdentity,
+    );
+    if (owner === undefined) return;
+    // The runtime's mark: this adapter stands in for the runner, which
+    // enrolls a piece's stores with it.
+    tx.enrollRuntimeOwnedStore(
+      { ...store, path: [] },
+      owner,
+      runtimeWritePolicyAuthorization,
+    );
+  }
+
   /** Helper for the hooks, which gives the transaction in progress. */
   #open(): IExtendedStorageTransaction {
     if (this.#tx === undefined) {
@@ -262,7 +1159,7 @@ export class RuntimeTransactions implements TransactionHooks {
   /** The address of a path of a document of the executor. */
   #address(doc: string, path: readonly string[]): NormalizedFullLink {
     return {
-      space: this.#space,
+      space: this.#spaceOf(doc),
       id: this.entityOf(doc),
       path: [...path],
       scope: "space",
@@ -280,7 +1177,7 @@ export class RuntimeTransactions implements TransactionHooks {
       return createSigilLinkFromParsedLink(
         {
           id: this.entityOf(doc),
-          space: this.#space,
+          space: this.#spaceOf(doc),
           path,
           // A schema of a plan is a JSON schema with the members the
           // executor reads typed (`Schema` of `exec/store.ts`).
@@ -337,3 +1234,37 @@ export class RuntimeTransactions implements TransactionHooks {
     return value;
   }
 }
+
+/**
+ * The runtime's read shape of a plan's observation class (PL §2.2). A read
+ * of `identity` is the runtime's `followRef`. An `enumeration` slot
+ * observes which children its container has and resolves as a `shape`
+ * read at the container's path, which consumes the `shape` and `enumerate`
+ * entries there and no entry below it. The executor reads the array it
+ * enumerates as a value, a wider read than the slot's, so the journal
+ * holds no read in the slot's class and the runtime observes the label
+ * stored at the path at commit.
+ */
+const observesOf = (observes: string): "value" | "shape" | "followRef" =>
+  observes === "identity"
+    ? "followRef"
+    : observes === "shape" || observes === "enumeration"
+    ? "shape"
+    : "value";
+
+/**
+ * The label entries of stored labels, each as text by the text of its path;
+ * entries at one path are one, their texts in order.
+ */
+const entriesOf = (metadata: CfcMetadata | undefined): Map<string, string> => {
+  const byPath = new Map<string, string[]>();
+  for (const entry of metadata?.labelMap.entries ?? []) {
+    const path = JSON.stringify(entry.path);
+    const texts = byPath.get(path) ?? [];
+    texts.push(JSON.stringify(entry));
+    byPath.set(path, texts);
+  }
+  return new Map(
+    [...byPath].map(([path, texts]) => [path, texts.sort().join("\n")]),
+  );
+};

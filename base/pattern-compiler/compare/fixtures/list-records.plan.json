@@ -696,7 +696,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/list-records.tsx#default"
+            "sha256:6e66d3c4cf1efe6a73924fd8fb87fd523e85e1f8ff5214d6f73b8c2f1121d384"
           ],
           "picks": [],
           "selectors": [],

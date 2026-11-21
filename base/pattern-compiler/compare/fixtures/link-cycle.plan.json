@@ -267,7 +267,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/link-cycle.tsx#default"
+            "sha256:758da61d6380e341ca4db04a88640a8f592baf2fa197ba6c249ab86b22ff047c"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

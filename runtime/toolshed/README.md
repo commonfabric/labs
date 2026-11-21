@@ -282,29 +282,62 @@ signature, or any code.
 The reusable client is `SpaceInviteClient` from
 `@commonfabric/runner/space-invites`. The same export provides
 `createInviteCredentials`, `inviteCodeVerifier`, `buildInviteLink`, and
-`parseInviteLink`. A join link is `/join?host&space&invite#code`, with an
-optional `inviter` DID key in the query; the parser refuses any other query key.
-`inviter` is a display hint that anyone holding the link can change; it is
-checked only syntactically and is not part of the code verifier. A recipient
-cannot read the space ACL before redeeming, and afterwards an ACL check can show
-at most that the DID is an owner, not that it issued the link. Like the space
-DID, it travels in the query, so it reaches the shell host's access logs.
-`issue` accepts a prepared request containing `inviteId`, `codeVerifier`,
-`access`, `ttlSeconds`, and optional `maxUses`, `suggestedProfile`, `spaceName`
-and `issuerName`. Retain the credentials before calling it so an uncertain
-response can be retried with the same ID. The convenience `create` accepts the
-same access/lifetime/limit/suggestion/name options and optional paired
-`inviteId` and `code`, and returns flat active metadata plus `code`. If the
-create request fails, `SpaceInviteCreateError` retains its credentials and
-original options in the frozen `retry` getter. Retry with
-`client.create(error.retry)` on the same client. The getter contains the bearer
-code: keep it private, and use it only to recover or retry this invitation.
-Ordinary error inspection and JSON serialization omit these credentials. The
-error preserves a structured refusal code; uncertain transport or response
-parsing failures use `create-outcome-unknown`. Validation failures before
-sending remain `SpaceInviteError` refusals. `redeem` and `preview` accept only
-`inviteId` and `code`, and `preview` always sends the signed HTTP request;
+`parseInviteLink`, and `INVITE_LINK_SCHEME`. A join link is
+`/join?host&space&invite#code`, with an optional `inviter` DID key in the query;
+the parser refuses any other query key, and any fragment but the code.
+`parseInviteLink` accepts the same invitation in three more forms and returns
+the same result for each: `/open?…#code=…` on any HTTPS origin, or loopback HTTP
+as for `/join`, which a person reaches by asking to open the invitation in
+Weaver; `fbrc://join?…#code=…`, on the custom scheme every Weaver answers, where
+`join` is the URL's host and its path is empty; and that scheme form without a
+fragment, with the code passed separately as `parseInviteLink(url, { code })`,
+which is how Android delivers it (the code arrives as the intent's `S.code`
+extra). The result's `host` is always the service named in the query, never the
+link's own origin. Other paths, a `/join` or `/open` URL whose query names none
+of `host`, `space`, and `invite`, and any scheme action but `join` return
+`undefined`: `fbrc://setup?n=<nonce>`, the reply a Weaver receives while making
+itself the browser's default for the scheme; a space link, `fbrc://space?…`
+(below); and any action added later, so a newer link reaches an older reader as
+one it does not know rather than a malformed one. A malformed `join` URL
+(`fbrc://JOIN?…`, `fbrc://join/?…`) or a scheme URL naming no action
+(`fbrc:join?…`) throws `invalid-link`. `inviter` is a display hint that anyone
+holding the link can change; it is checked only syntactically and is not part of
+the code verifier. A recipient cannot read the space ACL before redeeming, and
+afterwards an ACL check can show at most that the DID is an owner, not that it
+issued the link. Like the space DID, it travels in the query, so it reaches the
+shell host's access logs. `issue` accepts a prepared request containing
+`inviteId`, `codeVerifier`, `access`, `ttlSeconds`, and optional `maxUses`,
+`suggestedProfile`, `spaceName` and `issuerName`. Retain the credentials before
+calling it so an uncertain response can be retried with the same ID. The
+convenience `create` accepts the same access/lifetime/limit/suggestion/name
+options and optional paired `inviteId` and `code`, and returns flat active
+metadata plus `code`. If the create request fails, `SpaceInviteCreateError`
+retains its credentials and original options in the frozen `retry` getter. Retry
+with `client.create(error.retry)` on the same client. The getter contains the
+bearer code: keep it private, and use it only to recover or retry this
+invitation. Ordinary error inspection and JSON serialization omit these
+credentials. The error preserves a structured refusal code; uncertain transport
+or response parsing failures use `create-outcome-unknown`. Validation failures
+before sending remain `SpaceInviteError` refusals. `redeem` and `preview` accept
+only `inviteId` and `code`, and `preview` always sends the signed HTTP request;
 `list` and `receipts` return arrays; `revoke` returns `{ "revoked": true }`.
+
+A space link names a space and grants nothing, so a member can say which space
+they mean without handing out access: it opens the space for someone who already
+has access, and anyone else is told they don't.
+`@commonfabric/memory/space-links` defines it, and
+`@commonfabric/runner/space-invites` re-exports it.
+`buildSpaceLink(shell, link)` makes `/space?host&space` on the shell origin, and
+`parseSpaceLink` reads that and the scheme form `fbrc://space?host&space`. The
+service and the space follow the invitation's rules: an HTTPS (or loopback)
+origin, and a `did:key`. Each link names exactly one `host` and one `space`;
+unlike an invitation's, whose fields its code binds, other query fields and any
+fragment are ignored. The format has no version number: a new field may only add
+what a reader can safely ignore, and anything that would change what an existing
+link means takes a new path or scheme action. `parseSpaceLink` returns
+`undefined` for anything that is not a space link, including other scheme
+actions, and throws a `SpaceLinkError`: `invalid-link` for a malformed space
+link, and `invalid-host` for a link or service that is not a secure origin.
 
 Given a `session`, a function that sends an operation on the space's memory
 session as `IStorageManager.administerInvites()` does, `SpaceInviteClient` sends

@@ -201,8 +201,10 @@ const TIMER_DELAY_MAX_MS = 2_147_483_647;
  * (`SERVER_EXECUTION_STORE_READ_THROUGH`) and the overlapped wave commit
  * (`SERVER_EXECUTION_OVERLAP_COMMIT`) are each on for the literal `true`
  * alone, where a toolshed keeps the read-through on unless the variable is
- * `false`. The flush deadline and the cap it grows to come from
- * `SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
+ * `false`. The currency index (`SERVER_EXECUTION_CURRENCY_INDEX`) is kept
+ * for the literal `record` or `skip`, under the epoch
+ * `SERVER_EXECUTION_CURRENCY_EPOCH` names. The flush deadline and the cap it
+ * grows to come from `SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
  * `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`, positive decimal integers of
  * milliseconds. A lane sets the first two to run every test that leaves them
  * unset under the posture; a benchmark sets the others to measure a cadence.
@@ -223,6 +225,21 @@ export const policyFromEnvironment = (
     env("SERVER_EXECUTION_OVERLAP_COMMIT") === "true"
   ) {
     resolved = { ...resolved, overlapWaveCommit: true };
+  }
+  if (resolved?.currencyIndex === undefined) {
+    const mode = env("SERVER_EXECUTION_CURRENCY_INDEX");
+    if (mode === "record" || mode === "skip") {
+      resolved = { ...resolved, currencyIndex: mode };
+    }
+  }
+  if (
+    resolved?.currencyIndex !== undefined &&
+    resolved.currencyEpoch === undefined
+  ) {
+    const epoch = env("SERVER_EXECUTION_CURRENCY_EPOCH");
+    if (epoch !== undefined && epoch !== "") {
+      resolved = { ...resolved, currencyEpoch: epoch };
+    }
   }
   // A positive decimal integer, as the toolshed bootstrap reads it; a
   // fraction, an exponent or a prefix would select a cadence the toolshed

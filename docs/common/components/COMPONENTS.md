@@ -38,17 +38,23 @@ nothing live to hand over for it.
 **Native HTML inputs are one-way only.** Always use the Common Fabric form
 components for inputs.
 
-Use camelCase for component properties — kebab-case JSX attributes don't map
-correctly:
+A JSX prop sets the element's JavaScript property, so write the property's
+name: `allowCustom`, `defaultSize`, `className`, `htmlFor`. Three kinds of name
+are not properties and keep their hyphens: `data-*` and `aria-*`, which are set
+as attributes, and an event prop, which starts with `on` and is spelled with the
+event's own name (`onClick`, `oncf-change`). Any other hyphenated prop sets
+nothing, since no property has that name, and the compiler refuses it, naming
+the property to write. Because the property name is the only spelling, TypeScript checks every
+prop against the component's declared props.
 
 ```tsx
 // Shown for illustration only.
-// ❌ Kebab-case won't work
-<cf-autocomplete allow-custom={true} />  // Sets element["allow-custom"], not allowCustom
-
-// ✅ CamelCase works
-<cf-autocomplete allowCustom={true} />  // Sets element.allowCustom correctly
+<cf-autocomplete allow-custom={true} />  // error: write `allowCustom`
+<cf-autocomplete allowCustom={true} />
 ```
+
+A component's HTML attribute names, such as `allow-custom` in a component's own
+documentation, are for markup written as HTML, not for pattern JSX.
 
 When a control is already bound to a cell via `$value`, treat that binding as
 the primary value path. Avoid `oncf-change` handlers that simply write the same
@@ -129,7 +135,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-checkbox` | Binary selection input with indeterminate support | `$checked` |
 | `cf-chevron-button` | Minimal chevron button rotating between up/down | |
 | `cf-chip` | Compact pill/label for status, tags, and filters | |
-| `cf-code-editor` | Code/prose editor with syntax highlighting and `[[`-mention completion. With `mode="prose"`, its `math` attribute draws `$…$` and `$$…$$` TeX in Markdown with KaTeX, showing a formula's TeX where the cursor or a selection touches it. Its `highlights` attribute marks ranges of a collaborative field's text, each from one of the field's anchors to another (see [`anchorsOf`](../concepts/types-and-schemas/writable.md#anchoring-text-anchorsof)); `cf-highlight-click` names the highlight a click lands on, and `cf-selection-change` reports the selection with the editor's whole text, which a handler compares with the field before anchoring the selection | `$value`, `$mentionable`, `$mentioned` |
+| `cf-code-editor` | Code/prose editor with syntax highlighting and `[[`-mention completion. With `mode="prose"`, its `math` attribute draws `$…$` and `$$…$$` TeX in Markdown with KaTeX, showing a formula's TeX where the cursor or a selection touches it. Its `highlights` attribute marks ranges of a collaborative field's text, each from one of the field's anchors to another (see [`anchorsOf`](../concepts/types-and-schemas/writable.md#anchoring-text-anchorsof)); `cf-highlight-click` names the highlight a click lands on, and `cf-selection-change` reports the selection with the editor's whole text, which a handler compares with the field before anchoring the selection. `cf-edit` tells an edit the viewer made, where `cf-change` also tells what another collaborator or the bound cell changed. Its element children are shown in a margin beside the text, each child whose `data-anchor` names one of the field's anchors beside the text at that anchor | `$value`, `$mentionable`, `$mentioned` |
 | `cf-collapsible` | Single collapsible section with trigger and content | |
 | `cf-copy-button` | Copy-to-clipboard button with visual feedback | |
 | `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, seats, policy and sources beside what the terms say (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources`, `$box` |
@@ -153,7 +159,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-hover-reveal` | Content whose `actions` slot appears on hover or focus (see [cf-hover-reveal](#cf-hover-reveal)) | |
 | `cf-hscroll` | Horizontal scroll container | |
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
-| `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities, bound as one record of cells (see [iframe-first patterns](../ai/iframe-pattern-guide.md)) | `$context` |
+| `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities, bound as one record of cells, and static `assets` (see [iframe-first patterns](../ai/iframe-pattern-guide.md)) | `$context` |
 | `cf-image` | Image from raw `bytes` and a `media-type`, or from a blob reference `{ space, id }` (see [files](../capabilities/files.md)) | |
 | `cf-image-input` | Image capture/upload with compression and camera support | |
 | `cf-input` | Text input with validation and reactive binding | `$value` |
@@ -174,6 +180,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-modal` | Accessible modal dialog with bottom-sheet presentation mode | `$open` |
 | `cf-oauth` | Generic OAuth authentication | `$auth` |
 | `cf-owner-view` | Sets a per-user presentation predicate from the runtime's acting principal and a stored creator attestation (see [owner view](#cf-owner-view)) | `$originator`, `$result` |
+| `cf-pattern-install` | Button that installs one pattern onto one loom and says so in its own words ("Install “title” onto loom"); its real (trusted) click carries the surface's UI integrity, and it takes no text for its button (see [cf-pattern-install](#cf-pattern-install)) | |
 | `cf-picker` | Carousel selection over cells with `[UI]` | `$items`, `$selectedIndex` |
 | `cf-piece` | Provides piece context to child components | |
 | `cf-plaid-link` | Plaid banking integration | `$auth` |
@@ -248,6 +255,28 @@ when its text is identical to the submitted text. The bound field uses
 
 The draft binding supplies its own initial text and controls clearing; a bound
 field does not use `initialValue` or clear itself after dispatch.
+
+## cf-pattern-install
+
+A trusted surface places it where a tap must authorize installing a pattern.
+Its words are its own: from `patternTitle` (or `patternId` when there is no
+title), an optional `author`, and `destinationName` (left out when absent), it
+shows "Install “title” by author onto loom". It takes no button text, so a
+caller chooses which pattern and which loom it names but cannot make it say
+anything else. The element does not know what its host's `onClick` does, so
+the surface placing it passes the title of the pattern a tap installs, taken
+from the same source as the action. Each name is flattened to one line, with its quotation
+marks turned into apostrophes, cut short when long, and drawn in a chip of its
+own, so it cannot pass for the words around it.
+
+Wire `onClick` on the element together with `data-ui-action`, inside an
+ancestor carrying `data-ui-pattern` and `data-ui-event-integrity`, as with
+`cf-submit-input`. The button is a native `<button>`, so Enter and Space on it
+are trusted clicks as a pointer tap is. Only a trusted click on the enabled
+button reaches the host's `onClick`: a scripted click, a click on the host's
+box around the button, and a second click before the first has been handled
+are stopped by a capture listener on the host. The pattern
+catalog's `GetItButton` (`patterns/system/pattern-catalog/`) is the caller.
 
 ## cf-form
 
@@ -1197,7 +1226,9 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   bound property $profile is not reactive"*, blanking the whole pattern. Resolve
   `wish({query:"#profile"})` once and place the badge in the static JSX; gate only
   its *siblings* reactively, or use `ifElse(cond, staticA, staticB)` as a child of a
-  static wrapper. Repro: `patterns/dev/scope-bug-computed-vnode-blank/`.
+  static wrapper. Repro:
+  `patterns/dev/scope-bug-computed-vnode-blank/`; the refusal is tested in
+  `runtime/runner/test/h-binding-validation.test.ts`.
 
 ---
 

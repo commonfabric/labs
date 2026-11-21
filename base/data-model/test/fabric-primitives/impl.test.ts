@@ -44,10 +44,8 @@ describe("fabric-primitives/impl", () => {
     });
 
     it("lists classes whose JSON codecs' type tags are exactly `FABRIC_PRIMITIVE_CODEC_TYPE_TAGS`", () => {
-      // TODO(danfuzz): Once `FabricRegExp` is deleted, map every listed
-      // class's `[JSON_CODEC]` without the filter.
-      const tags = codecClasses().flatMap((cls) =>
-        (JSON_CODEC in cls) ? [cls[JSON_CODEC].recognizedTypeTag] : []
+      const tags = codecClasses().map((cls) =>
+        cls[JSON_CODEC].recognizedTypeTag
       );
       expect(new Set(tags).size).toBe(tags.length);
       expect(new Set(tags)).toEqual(

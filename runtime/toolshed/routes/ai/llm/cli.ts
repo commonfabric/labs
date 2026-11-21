@@ -15,5 +15,3 @@ export const colors = {
 // Helper for timestamps
 export const timestamp = () =>
   colors.dim + new Date().toLocaleTimeString() + colors.reset;
-export const timeTrack = (start: number) =>
-  colors.gray + `${(Date.now() - start).toFixed(0)}ms` + colors.reset;

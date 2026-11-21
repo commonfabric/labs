@@ -181,7 +181,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/array-by-key.tsx#RepoRow"
+            "sha256:f9af9c980a98d6cd12b30e503fc07b9f83f37625594271c1c2df1c9961ce6873"
           ],
           "picks": [],
           "selectors": [],
@@ -717,7 +717,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key.tsx#RepoRow"
+                "compiled": "sha256:f9af9c980a98d6cd12b30e503fc07b9f83f37625594271c1c2df1c9961ce6873"
               },
               "name": "map",
               "within": [
@@ -1575,7 +1575,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/array-by-key.tsx#default"
+            "sha256:6ee9e4454f04881ce35bfd0da9d5a620d0dd07f550e518d52c77487c03a05b29"
           ],
           "picks": [],
           "selectors": [],

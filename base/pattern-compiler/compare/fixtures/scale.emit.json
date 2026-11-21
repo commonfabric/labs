@@ -18,7 +18,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/scale.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/scale.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n{\n$rt.element(1, ($h) => (($h.v($h.slot(2)) + (\"!\"))));\n}\n$rt.element(0, ($h) => (({ name: $h.slot(3), titles: $h.output(0) })));\n}\n{\n$rt.element(2, ($h) => ((!$h.v($h.slot(5)))));\n}\n{\n$rt.element(3, ($h) => (($h.v($h.slot(7)).toUpperCase())));\n}\n{\n$rt.element(4, ($h) => ((`${$h.v($h.slot(8))}:${$h.v($h.slot(9))}`)));\n}\nreturn $rt.thunk(($h) => (({ nested: $h.output(2), labels: $h.output(8), marks: $h.output(10) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\n  \"sha256:4ea19078d8d22758a5727411d4be4d204db004b2e4b2509a336695abb54b17eb\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n{\n$rt.element(1, ($h) => (($h.v($h.slot(2)) + (\"!\"))));\n}\n$rt.element(0, ($h) => (({ name: $h.slot(3), titles: $h.output(0) })));\n}\n{\n$rt.element(2, ($h) => ((!$h.v($h.slot(5)))));\n}\n{\n$rt.element(3, ($h) => (($h.v($h.slot(7)).toUpperCase())));\n}\n{\n$rt.element(4, ($h) => ((`${$h.v($h.slot(8))}:${$h.v($h.slot(9))}`)));\n}\nreturn $rt.thunk(($h) => (({ nested: $h.output(2), labels: $h.output(8), marks: $h.output(10) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -446,7 +446,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/scale.tsx#default"
+            "sha256:4ea19078d8d22758a5727411d4be4d204db004b2e4b2509a336695abb54b17eb"
           ],
           "picks": [],
           "selectors": [],

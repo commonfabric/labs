@@ -119,7 +119,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/callee-default.tsx#Price"
+            "sha256:0773fff1efe4c73e384c6f901b2112a9bc99f42910f4a9135919f0f82cf4eed3"
           ],
           "picks": [],
           "selectors": [],
@@ -310,7 +310,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/callee-default.tsx#Marked"
+            "sha256:95de7011ce6e53b01a2c4d05588d3a4561bbe5bc42152caff39418de5f51ffc2"
           ],
           "picks": [],
           "selectors": [],
@@ -1603,9 +1603,9 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/callee-default.tsx#default",
-            "unhashed:pattern/compare/fixtures/callee-default.tsx#Price",
-            "unhashed:pattern/compare/fixtures/callee-default.tsx#Marked"
+            "sha256:4652d4f198822f262ac205b245dc93694a1a849a83792170f10780a1bdc48e44",
+            "sha256:0773fff1efe4c73e384c6f901b2112a9bc99f42910f4a9135919f0f82cf4eed3",
+            "sha256:95de7011ce6e53b01a2c4d05588d3a4561bbe5bc42152caff39418de5f51ffc2"
           ],
           "picks": [],
           "selectors": [],

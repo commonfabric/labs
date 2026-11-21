@@ -63,7 +63,13 @@ export interface PullSchedulingState {
     DirtyPullRunnableStateWithDebounce;
   readonly isLiveAction: (action: Action) => boolean;
   readonly hasActiveDebounceTimer: (action: Action) => boolean;
-  readonly getNextEligibleRunTime: (action: Action) => number | undefined;
+
+  /** Returns future eligibility as of the caller's clock sample. */
+  readonly getNextEligibleRunTime: (
+    action: Action,
+    now: number,
+  ) => number | undefined;
+
   // Per-action escape valve for convergence-backoff-deferred work. Keeping the
   // episode count on the gated node prevents one non-settling subgraph from
   // releasing idle() for an unrelated future convergence wave.
@@ -81,12 +87,109 @@ export function isInvalidOrNeverRan(record: SchedulerNode): boolean {
   return record.status === "invalid" || record.status === "never-ran";
 }
 
+/**
+ * Whether no pull seed scan can do anything with the invalid node `action`
+ * until something about it changes. A scan runs a node only when it is live
+ * or pending (`isRunnableSchedulingSeed`), and waits on one only when it is
+ * an effect, a materializer or a demanded computation, all of which are
+ * live. The three are read here as well so that the answer does not depend
+ * on that implication.
+ */
+function isDormantSeedCandidate(
+  state: PullSchedulingState,
+  action: Action,
+): boolean {
+  return !state.isLiveAction(action) &&
+    !state.pending.has(action) &&
+    !state.effects.has(action) &&
+    !state.materializerIndex.isMaterializer(action) &&
+    !state.dirtyPullRunnableStateWithDebounce.isDemandedPullComputation(action);
+}
+
+/**
+ * With `SCHEDULER_SEED_SCAN_EQUIVALENCE=1`, every seed scan also walks all
+ * the invalid nodes and throws unless it finds the same nodes in the same
+ * order as the walk over the seed candidates did. It is the check on the
+ * contract `NodeRegistry.noteMayBeLive()` states: run it across the runner
+ * suite after a change to liveness maintenance or to what a scan reads. Off
+ * by default, since it costs the walk the candidates exist to avoid.
+ */
+const SEED_SCAN_EQUIVALENCE_CHECK: boolean = (() => {
+  try {
+    return typeof Deno !== "undefined" &&
+      Deno.env.get("SCHEDULER_SEED_SCAN_EQUIVALENCE") === "1";
+  } catch {
+    return false; // no env permission: stay disabled
+  }
+})();
+
+/**
+ * The invalid nodes a pull seed scan has to examine, in the order
+ * `NodeRegistry.getInvalidNodes()` holds them: every invalid node that is
+ * not dormant (`isDormantSeedCandidate`). The scans below iterate this where
+ * they would iterate every invalid node, and reach the same result, because
+ * a dormant node passes none of their tests.
+ *
+ * Under lazy materialization most invalid nodes of a large graph are
+ * computations nothing demands, which stay `never-ran` and dormant for as
+ * long as that holds. So a dormant node is parked in the registry when a
+ * scan first meets it, and later scans cost the nodes that are live, pending
+ * or newly changed, not every node that has yet to run.
+ */
+export function seedScanNodes(
+  state: PullSchedulingState,
+  verify: boolean = SEED_SCAN_EQUIVALENCE_CHECK,
+): SchedulerNode[] {
+  const candidates = state.nodes.getSeedCandidates();
+  const found: SchedulerNode[] = [];
+  for (const action of candidates) {
+    if (isDormantSeedCandidate(state, action)) {
+      state.nodes.parkSeedCandidate(action);
+      continue;
+    }
+    found.push(state.nodes.get(action)!);
+  }
+  // A node is parked without regard to later run requests, so a parked node
+  // that has since become pending is picked up from the pending set.
+  for (const action of state.pending) {
+    if (state.nodes.isInvalid(action) && !candidates.has(action)) {
+      found.push(state.nodes.get(action)!);
+    }
+  }
+  found.sort((a, b) => a.invalidOrdinal - b.invalidOrdinal);
+
+  if (verify) {
+    const expected: SchedulerNode[] = [];
+    for (const action of state.nodes.getInvalidNodes()) {
+      if (!isDormantSeedCandidate(state, action)) {
+        expected.push(state.nodes.get(action)!);
+      }
+    }
+    const same = expected.length === found.length &&
+      expected.every((record, i) => record === found[i]);
+    if (!same) {
+      const name = (record: SchedulerNode) =>
+        record.action.name || "<anonymous>";
+      const foundSet = new Set(found);
+      const expectedSet = new Set(expected);
+      const missed = expected.filter((record) => !foundSet.has(record));
+      const extra = found.filter((record) => !expectedSet.has(record));
+      throw new Error(
+        `seed scan drift: missed [${missed.map(name).join(", ")}], ` +
+          `extra [${extra.map(name).join(", ")}], ` +
+          `${missed.length === 0 && extra.length === 0 ? "order differs" : ""}`,
+      );
+    }
+  }
+  return found;
+}
+
 export function isTimeGated(
   state: PullSchedulingState,
   action: Action,
   now: number,
 ): boolean {
-  const nextEligibleAt = state.getNextEligibleRunTime(action);
+  const nextEligibleAt = state.getNextEligibleRunTime(action, now);
   return nextEligibleAt !== undefined && nextEligibleAt > now;
 }
 
@@ -144,6 +247,8 @@ export interface PullWorkAssessment {
 export function assessPullWork(
   state: PullSchedulingState,
 ): PullWorkAssessment {
+  // Eligibility and its wake share a clock sample, so a deadline that expires
+  // during the scan still leaves a wake scheduled for the deferred work.
   const now = performance.now();
   let nextWakeAt: number | undefined;
   let deferredIdleBlocking = false;
@@ -179,7 +284,7 @@ export function assessPullWork(
   // queries are pure), and eligibleAt = max(debounce, throttle, backoff), so
   // one gate read covers every deferral mechanism.
   const noteFutureEligibility = (action: Action): void => {
-    const nextEligibleAt = state.getNextEligibleRunTime(action);
+    const nextEligibleAt = state.getNextEligibleRunTime(action, now);
     if (nextEligibleAt !== undefined && nextEligibleAt > now) {
       nextWakeAt = nextWakeAt === undefined
         ? nextEligibleAt
@@ -211,9 +316,10 @@ export function assessPullWork(
     noteFutureEligibility(action);
   }
 
-  // Dirty sources: the invalid-node index is exactly the candidate set.
-  for (const action of state.nodes.getInvalidNodes()) {
-    const record = state.nodes.get(action)!;
+  // Dirty sources: the invalid nodes that are not dormant are exactly the
+  // candidate set (`seedScanNodes`).
+  for (const record of seedScanNodes(state)) {
+    const action = record.action;
     const idleRelevant = state.effects.has(action) ||
       state.dirtyPullRunnableStateWithDebounce
         .isDemandedPullComputation(action) ||

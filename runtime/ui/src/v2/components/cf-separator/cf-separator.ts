@@ -82,7 +82,7 @@ export class CFSeparator extends BaseElement {
   `;
 
   static override properties = {
-    orientation: { type: String },
+    orientation: { type: String, reflect: true },
     decorative: { type: Boolean },
   };
 

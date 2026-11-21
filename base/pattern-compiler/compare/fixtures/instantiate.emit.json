@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/instantiate.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\n\nconst Row = pattern(\n  \"unhashed:pattern/compare/fixtures/instantiate.tsx#Row\",\n);\nconst add = handler((event, { rows, total }) => {\n  rows.push(Row({ title: event.title, total }));\n});\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/instantiate.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ title: $h.slot(5), count: $h.slot(3), bump: $h.stream(0), tally: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\n\nconst Row = pattern(\n  \"sha256:eaf5ca5c5dcc8ddc36f33c54814854882cf5865b052662d0a70b22a126090deb\",\n);\nconst add = handler((event, { rows, total }) => {\n  rows.push(Row({ title: event.title, total }));\n});\nconst $default = (pattern(\"sha256:c44706f52161e106f826a0e815671e65f4fd0cc6a50f33234e18ede60fc53800\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ title: $h.slot(5), count: $h.slot(3), bump: $h.stream(0), tally: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -219,7 +219,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/instantiate.tsx#Row"
+            "sha256:eaf5ca5c5dcc8ddc36f33c54814854882cf5865b052662d0a70b22a126090deb"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",
@@ -425,7 +425,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/instantiate.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\n\nconst Row = pattern(\n  \"unhashed:pattern/compare/fixtures/instantiate.tsx#Row\",\n);\nconst add = handler((event, { rows, total }) => {\n  rows.push(Row({ title: event.title, total }));\n});\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/instantiate.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { pressed } = $a; return (() =>\n    [1, 2].map((by) => ({ by, press: bump({ count: pressed }) })))(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ note: $h.slot(9), rows: $h.slot(7), total: $h.slot(8), pressed: $h.slot(0), buttons: $h.output(0), add: $h.stream(1) })));\n});\n$rt.body(1, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));\n$rt.body(2, ($e, $s) => ((event, { rows, total }) => {\n  rows.push(Row({ title: event.title, total }));\n})($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\n\nconst Row = pattern(\n  \"sha256:eaf5ca5c5dcc8ddc36f33c54814854882cf5865b052662d0a70b22a126090deb\",\n);\nconst add = handler((event, { rows, total }) => {\n  rows.push(Row({ title: event.title, total }));\n});\nconst $default = (pattern(\"sha256:c44706f52161e106f826a0e815671e65f4fd0cc6a50f33234e18ede60fc53800\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { pressed } = $a; return (() =>\n    [1, 2].map((by) => ({ by, press: bump({ count: pressed }) })))(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ note: $h.slot(9), rows: $h.slot(7), total: $h.slot(8), pressed: $h.slot(0), buttons: $h.output(0), add: $h.stream(1) })));\n});\n$rt.body(1, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));\n$rt.body(2, ($e, $s) => ((event, { rows, total }) => {\n  rows.push(Row({ title: event.title, total }));\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -843,7 +843,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/instantiate.tsx#default"
+            "sha256:c44706f52161e106f826a0e815671e65f4fd0cc6a50f33234e18ede60fc53800"
           ],
           "picks": [],
           "selectors": [],

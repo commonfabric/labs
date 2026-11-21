@@ -600,6 +600,30 @@ loop's duty).
   and a fresh attempt may land the write that sealing an error would
   end. An explicit handler abort is a handler-error consequence, not an
   infrastructure retry.
+- **Outcome withheld under a foreign join.** The entry's `consequenced`
+  mark is the event's processed claim (CFC §6.2.2), which takes nothing
+  of what the handler read: the CFC gate neither stamps nor measures it
+  (`runtime/runner/src/executor/processed-claim.ts`;
+  [specs#94](https://github.com/commonfabric/specs/pull/94)). Where the
+  handler's flow join carries a clause the stream's space doesn't admit,
+  the entry also says the same thing however the handling ended: a
+  commit, a throw, a CFC verdict, an explicit abort and an ACL-document
+  refusal each leave `consequenced` and `withheld: true`, and none of
+  `error`, `status` or `reason`. A drain-delivered run writes `withheld`
+  in its own transaction, the wave writes it beside a same-wave copy's
+  mark, and the consequence notice writes it for a failure. The sender's
+  durable-ack coupling reports every such outcome as `done`, on a view
+  `isWithheldDelivery()` names, never as a failure, since the handling
+  may have committed; the overlay signals `withheld`. Neither the sender
+  nor a reader of the stream's space learns whether the handling
+  committed. What the handling wrote stays
+  readable under its own labels. A dispatch whose handler did not run is
+  withdrawn rather than marked, and under such a join its deferral, and the
+  drop notice its deferrals can harden into, carry fixed text in place of the
+  runner's reason, which can name a document the run reached. A delivery failure that ends in
+  `needs-attention` made no claim: the event was not handled and stays
+  retryable, and its record holds fixed text and the failure's class,
+  `unknown` for a commit preparation, and nothing of what the run read.
 - **Handler body DID NOT RUN — not a consequence (RULED 2026-08-27;
   mark/effects atomicity, the a04 write-side member).** A served
   dispatch whose handler body never executed — the runner's
@@ -661,7 +685,33 @@ loop's duty).
   armed, counted `handlerNotRunDeferrals`, serving-loop.md §7), so a
   PERMANENTLY unresolvable argument hardens through the bounded
   deferral budget into the visible T3 drop notice instead of wedging
-  the stream. The withdrawal carries §2's per-space arrival-order
+  the stream. A withdrawal whose run read a scoped instance the serving
+  loop has not produced, in the stream's own space, while a writer that
+  owes it will still run, is settlement instead (counted
+  `handlerNotRunWaits` as well). "Owes" is link resolution's
+  `unproducedScopedInstance` (serving-loop.md §3d), and "will run" is
+  the scheduler's own test for queueing the writer: invalid or never
+  run, and live, a materializer, or pending; on a fanned-out writer, the
+  instance must also be one its current demanders produce and not
+  current, since the run supply runs no other. Such a deferral spends no
+  deferral budget and arms no backstop: the entry waits on that
+  instance and is not dispatched again until a commit writes it (a write
+  to another instance of the document does not wake it) or a writer of
+  the document finishes a run that was not withdrawn, or stops writing
+  it. The second wake is what reaches a writer whose run leaves the
+  instance absent, which commits no write to it. Once dispatched again,
+  the entry is judged afresh; and
+  the drain stops its pass at the waiting entry, so later arrivals in
+  the space wait behind it. Time and unrelated commits decide nothing
+  about it. A tenure that parks forgets the wait, and the next one
+  dispatches the entry afresh. A withdrawal with nothing
+  owed, or owed only by a writer that is dormant or clean, spends the
+  budget as above, so an argument that nothing will change still ends
+  in the drop notice, and an instance in another space, whose commits
+  this loop does not see, takes the budget too. A writer that stays
+  queued without ever producing holds the entry, and §2's arrival-order
+  barrier holds the space's later arrivals behind it, as a load in
+  flight holds a client dispatch (RULED 2026-11-17, owner). The withdrawal carries §2's per-space arrival-order
   BARRIER with it, exactly as the load-park failure arm does — both
   halves: every later-arrived durable served entry already QUEUED
   behind the withdrawn dispatch in the same space defers too

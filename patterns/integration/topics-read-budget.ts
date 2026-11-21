@@ -41,6 +41,8 @@ export const TOPICS_READ_BUDGET_GROUPS = {
   "high-degree": [
     "pivot/high-degree/mentions-4/topics-32/topic-open",
     "pivot/high-degree/mentions-4/topics-32/all-backlinks",
+    "pivot/high-degree/mentions-4/topics-32/unbound/topic-open",
+    "pivot/high-degree/mentions-4/topics-32/unbound/all-backlinks",
   ],
   "mentions-16": [
     "pivot/low-degree/mentions-16/topics-32/topic-open",

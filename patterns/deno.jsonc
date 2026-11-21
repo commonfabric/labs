@@ -39,10 +39,11 @@
   // `integration:reload`.
   //
   // Every workspace member must define a `test` task. The root runner
-  // (tasks/test.ts) calls `deno task test` in each member, and a member with no
-  // such task would fall through to the root task and recurse over the whole
-  // workspace; the runner refuses to start rather than let that happen, and
-  // names the member. So this lane stays a real task, never an empty stub.
+  // (tasks/workspace-tests.ts) calls `deno task test` in each member, and a
+  // member with no such task would fall through to the root task and recurse
+  // over the whole workspace; the runner refuses to start rather than let that
+  // happen, and names the member. So this lane stays a real task, never an
+  // empty stub.
   //
   // For how to write each kind of test and how CI measures them, see
   // docs/development/TESTING.md (the testing hub),

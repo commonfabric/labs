@@ -252,6 +252,22 @@ describe("evidence", () => {
         ]);
       });
     });
+
+    it("returns the runs beside a `runs` directory that holds no run", async () => {
+      // A `runs` holding nothing that is a run is not the artifact root's
+      // runs, so the directory itself is read as a directory of runs.
+
+      await withTree({
+        "mixed/runs/notes/.keep": "",
+        "mixed/beside/run-state.json": runState("beside"),
+      }, async (root) => {
+        const families = await discoverRunFamilies(join(root, "mixed"));
+
+        expect(families.map((family) => family.root.runId)).toEqual([
+          "beside",
+        ]);
+      });
+    });
   });
 
   describe("auditing what the loader returns", () => {

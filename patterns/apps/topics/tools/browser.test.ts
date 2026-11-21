@@ -173,8 +173,8 @@ describe("browser", () => {
     };
   }
 
-  /** A browser over the test board, opening `open`. */
-  function make(open?: Opening): Browser {
+  /** A browser over `topics`, the test board unless given, opening `open`. */
+  function make(open?: Opening, topics = board()): Browser {
     const made = new Browser({
       board: { space: "space", topicLinks: LINKS, viewer: ME },
       host,
@@ -183,7 +183,7 @@ describe("browser", () => {
       now: () => NOW,
       open,
     });
-    made.update(board(), NOW, true, 42);
+    made.update(topics, NOW, true, 42);
     return made;
   }
 
@@ -216,6 +216,53 @@ describe("browser", () => {
   /** Waits for the browser to draw again of its own accord, as a write that lands makes it. */
   async function settle(): Promise<void> {
     await redrawn.promise;
+  }
+
+  /** Presses the button down at the zero-based cell `x`, `y`. */
+  function press({ x, y }: { x: number; y: number }): void {
+    type(`\x1b[<0;${x + 1};${y + 1}M`);
+  }
+
+  /** Moves the pointer, the button held, to the zero-based cell `x`, `y`. */
+  function dragTo({ x, y }: { x: number; y: number }): void {
+    type(`\x1b[<32;${x + 1};${y + 1}M`);
+  }
+
+  /** Lets the button up at the zero-based cell `x`, `y`. */
+  function release({ x, y }: { x: number; y: number }): void {
+    type(`\x1b[<0;${x + 1};${y + 1}m`);
+  }
+
+  /** The background a selected row of the list is drawn on, while it has the keys. */
+  const SELECTED = `48;2;${mix(C.editorBg, C.blue, 0.35).join(";")}`;
+
+  /** The text of the row of the list drawn selected. */
+  function selectedRow(): string {
+    return stripAnsi(
+      browser.frame(columnsWide, rowsTall, NOW).find((row) =>
+        row.includes(SELECTED)
+      ) ?? "",
+    );
+  }
+
+  /** Forty Topics, `Many 10` most recently active down to `Many 49`. */
+  function many(): Topic[] {
+    return Array.from(
+      { length: 40 },
+      (_, index) =>
+        topic({
+          number: String(index + 10),
+          title: `Many ${index + 10}`,
+          lastActivityAt: NOW - index * HOUR,
+        }),
+    );
+  }
+
+  /** The board with the body of top/1 long enough to scroll. */
+  function long(): Topic[] {
+    const topics = board();
+    topics[0] = { ...topics[0], body: Array(60).fill("line").join("\n\n") };
+    return topics;
   }
 
   describe("the list", () => {
@@ -266,16 +313,7 @@ describe("browser", () => {
 
     it("scrolls under the wheel without snapping back to the selection, and follows the selection when it moves", () => {
       rowsTall = 16;
-      const many = Array.from(
-        { length: 40 },
-        (_, index) =>
-          topic({
-            number: String(index + 10),
-            title: `Many ${index + 10}`,
-            lastActivityAt: NOW - index * HOUR,
-          }),
-      );
-      browser.update(many, NOW, true, 42);
+      browser.update(many(), NOW, true, 42);
       const { x, y } = find("Many 10");
       type(`\x1b[<65;${x + 1};${y + 1}M`);
       type(`\x1b[<65;${x + 1};${y + 1}M`);
@@ -297,6 +335,88 @@ describe("browser", () => {
 
       expect(row()).not.toContain("●");
       expect(saved.seen["1"]).toBe(NOW - 2 * HOUR);
+    });
+
+    it("orders the list by number, then by comments, then by activity again, with Control-O", () => {
+      const said = (count: number) =>
+        Array.from(
+          { length: count },
+          (_, index) => comment("Ada (person)", `Said ${index}.`, NOW - HOUR),
+        );
+      browser.update(
+        [
+          topic({ number: "5", lastActivityAt: NOW - HOUR, comments: said(1) }),
+          topic({
+            number: "6",
+            lastActivityAt: NOW - 2 * HOUR,
+            comments: said(2),
+          }),
+          topic({ number: "7", lastActivityAt: NOW - 3 * HOUR }),
+        ],
+        NOW,
+        true,
+        42,
+      );
+      const order = () =>
+        screen().flatMap((row) => row.match(/Topic (\d)/)?.[1] ?? []);
+      expect(order()).toEqual(["5", "6", "7"]);
+
+      type("\x0f"); // Control-O
+      expect(order()).toEqual(["7", "6", "5"]);
+      expect(screen().join("\n")).toContain("↕ number");
+
+      type("\x0f");
+      expect(order()).toEqual(["6", "5", "7"]);
+      expect(screen().join("\n")).toContain("↕ comments");
+
+      type("\x0f");
+      expect(order()).toEqual(["5", "6", "7"]);
+      expect(screen().join("\n")).toContain("↕ activity");
+    });
+
+    it("pages the selection through the list, which follows it down and back up", () => {
+      rowsTall = 16; // nine rows of the list, a page of eight
+      browser = make(undefined, many());
+      screen();
+
+      type("\x1b[6~\x1b[6~"); // PageDown twice
+      expect(selectedRow()).toContain("Many 26");
+      expect(screen().join("\n")).not.toContain("Many 17");
+
+      type("\x1b[5~"); // PageUp
+      expect(selectedRow()).toContain("Many 18");
+      type("\x1b[5~");
+      expect(selectedRow()).toContain("Many 10");
+    });
+
+    it("moves to a search's end with End, and opens nothing with Enter while nothing is listed", () => {
+      type("fryer\x1b[H\x1b[F"); // to the search's start, then its end
+      type("X");
+      expect(screen().join("\n")).toContain("Find fryerX");
+
+      type("\r");
+      const shown = screen().join("\n");
+      expect(shown).toContain("No Topic matches.");
+      expect(shown).toContain("Pick a Topic from the list to read it here.");
+    });
+
+    it("marks a match lying inside another match once", () => {
+      type("fryer fry");
+
+      expect(screen().join("\n")).toContain("1 Flaky fryer test");
+    });
+
+    it("drags the list's scroll bar's thumb", () => {
+      rowsTall = 16;
+      browser.update(many(), NOW, true, 42);
+      const thumb = find("█");
+      press(thumb);
+      dragTo({ x: thumb.x, y: rowsTall - 3 });
+      release({ x: thumb.x, y: rowsTall - 3 });
+
+      const shown = screen().join("\n");
+      expect(shown).not.toContain("Many 10");
+      expect(shown).toContain("Many 49");
     });
   });
 
@@ -431,15 +551,14 @@ describe("browser", () => {
     });
 
     it("moves the list's selection with the button held on its rows, and opens the row it is released on", () => {
-      const selected = `48;2;${mix(C.editorBg, C.blue, 0.35).join(";")}`;
       const flaky = find("Flaky fryer test");
       const donut = find("Donut glaze cracks");
       type(`\x1b[<0;${flaky.x + 1};${flaky.y + 1}M`);
       type(`\x1b[<32;${donut.x + 1};${donut.y + 1}M`);
       const held = browser.frame(columnsWide, rowsTall, NOW);
 
-      expect(held[donut.y]).toContain(selected);
-      expect(held[flaky.y]).not.toContain(selected);
+      expect(held[donut.y]).toContain(SELECTED);
+      expect(held[flaky.y]).not.toContain(SELECTED);
       expect(screen().join("\n")).not.toContain("top/2 Donut glaze cracks");
 
       type(`\x1b[<0;${donut.x + 1};${donut.y + 1}m`);
@@ -448,27 +567,24 @@ describe("browser", () => {
       // The keys stay with the list, from the row it opened.
       type("\x1b[A");
       expect(browser.frame(columnsWide, rowsTall, NOW)[flaky.y]).toContain(
-        selected,
+        SELECTED,
       );
     });
 
     it("goes to the top and bottom of the list, the reader, and a dialog with Home and End", () => {
-      const selected = `48;2;${mix(C.editorBg, C.blue, 0.35).join(";")}`;
       const flaky = find("Flaky fryer test");
       const donut = find("Donut glaze cracks");
       type("\x1b[F"); // End
       expect(browser.frame(columnsWide, rowsTall, NOW)[donut.y]).toContain(
-        selected,
+        SELECTED,
       );
       type("\x1b[H"); // Home
       expect(browser.frame(columnsWide, rowsTall, NOW)[flaky.y]).toContain(
-        selected,
+        SELECTED,
       );
 
       rowsTall = 16;
-      const long = board();
-      long[0] = { ...long[0], body: Array(60).fill("line").join("\n\n") };
-      browser.update(long, NOW, true, 42);
+      browser.update(long(), NOW, true, 42);
       type("\r\x1b[F");
       expect(screen().join("\n")).not.toContain("top/1 Flaky");
       type("\x1b[H");
@@ -514,9 +630,7 @@ describe("browser", () => {
 
     it("scrolls up from the bottom after End, in one read", () => {
       rowsTall = 16;
-      const long = board();
-      long[0] = { ...long[0], body: Array(60).fill("line").join("\n\n") };
-      browser.update(long, NOW, true, 42);
+      browser.update(long(), NOW, true, 42);
       type("\r");
       screen();
       type("\x1b[F");
@@ -655,6 +769,281 @@ describe("browser", () => {
       expect(screen().join("\n")).toContain("Fixed upstream.");
       expect(browser.nextFrame(NOW)).toBe(33);
       expect(browser.nextFrame(NOW + 60_000)).toBeUndefined();
+    });
+
+    it("scrolls with the arrows, J and K, the page keys, and Space", () => {
+      rowsTall = 16;
+      browser.update(long(), NOW, true, 42);
+      type("\r");
+      const title = () => screen().join("\n").includes("top/1 Flaky");
+      expect(title()).toBe(true);
+
+      for (const [down, up] of [["\x1b[B", "\x1b[A"], ["j", "k"]]) {
+        type(down);
+        expect(title()).toBe(false);
+        type(up);
+        expect(title()).toBe(true);
+      }
+      type("\x1b[6~"); // PageDown
+      expect(screen().join("\n")).not.toContain("line\n");
+      expect(title()).toBe(false);
+      type("\x1b[5~"); // PageUp
+      expect(title()).toBe(true);
+      type(" ");
+      expect(title()).toBe(false);
+    });
+
+    it("scrolls a row at a time with its scroll bar's arrows", () => {
+      rowsTall = 16;
+      browser.update(long(), NOW, true, 42);
+      type("\r");
+      click("▼");
+      expect(screen().join("\n")).not.toContain("top/1 Flaky");
+
+      click("▲");
+      expect(screen().join("\n")).toContain("top/1 Flaky");
+    });
+
+    it("wraps its buttons onto more rows where they do not fit on one", () => {
+      columnsWide = 60;
+      type("\r");
+
+      expect(find("Labels").y).toBeGreaterThan(find("Comment").y);
+    });
+
+    it("goes back with Backspace, and nowhere with no Topic read before", () => {
+      type("\r");
+      type("\x1b[1;3D"); // Alt-Left, with nothing to go back to
+      expect(screen().join("\n")).toContain("top/1 Flaky fryer test");
+
+      click("→ top/2");
+      type("\x7f"); // Backspace
+      expect(screen().join("\n")).toContain("top/1 Flaky fryer test");
+    });
+
+    it("steps back through the reader's links with Shift-Tab, scrolling each into view", () => {
+      rowsTall = 16;
+      browser.update(long(), NOW, true, 42);
+      type("\r");
+      screen();
+      type("\x1b[Z"); // Shift-Tab, to the last link, the thread's author
+      expect(screen().join("\n")).toContain("1. Ada (person)");
+      expect(screen().join("\n")).not.toContain("top/1 Flaky");
+
+      type("\t"); // around to the first, the Topic's own number
+      expect(screen().join("\n")).toContain("top/1 Flaky");
+      type("\t\t\x1b[Z\r"); // on to the Comment button, back to who filed it
+      expect(screen().join("\n")).toContain('Find by:"Sol (agent)"');
+    });
+
+    it("lets go of the reader's focus with Esc, and then of the keys", () => {
+      screen();
+      type("\r");
+      type("\r"); // with no link focused, nothing
+      expect(screen().join("\n")).not.toMatch(/Find by:|Comment on/);
+
+      type("\t\t"); // to who filed it
+      type("\x1b");
+      type("\t\t\r"); // from no link, on to who filed it again
+      expect(screen().join("\n")).toContain('Find by:"Sol (agent)"');
+
+      type("\t"); // back to the reader, its link still focused
+      type("\x1b");
+      type("\x1b");
+      type("x"); // the list has the keys, and its search goes on
+      expect(screen().join("\n")).toContain('Find by:"Sol (agent)"x');
+    });
+
+    it("steps through no links, and opens no editor, where no Topic is open", () => {
+      type("\t\t"); // to the reader, then through what it shows
+      expect(screen().join("\n")).toContain(
+        "Pick a Topic from the list to read it here.",
+      );
+
+      type("c");
+      expect(screen().join("\n")).not.toContain("Comment on");
+      expect(screen().at(-1)).toContain("Open a Topic first.");
+    });
+
+    it("gives a window the keys with Alt and its number", () => {
+      type("\r\x1b1g"); // Alt-1, then a search
+      expect(screen().join("\n")).toContain("Find g");
+
+      type("\x1b2c"); // Alt-2, then a comment
+      expect(screen().join("\n")).toContain("Comment on top/1");
+    });
+
+    it("zooms the other window with F6 while one is zoomed, and the list with a search", () => {
+      type("\r\x1b[15~"); // Enter, then F5 zooms the reader
+      expect(screen().join("\n")).not.toContain("Find");
+
+      type("\x1b[17~"); // F6
+      expect(screen().join("\n")).toContain("Find");
+      expect(screen().join("\n")).not.toContain("filed by");
+
+      type("\x1b[17~/"); // back to the reader, then / searches
+      expect(screen().join("\n")).toContain("Find");
+      expect(screen().join("\n")).not.toContain("filed by");
+    });
+
+    it("opens the Topic being read in a web browser with O", () => {
+      type("\ro");
+
+      expect(host.opened).toEqual([`${LINKS}1`]);
+    });
+
+    it("says why a web browser could not be opened", async () => {
+      host.open = () => Promise.reject(new Error("No web browser."));
+      type("\ro");
+      await settle();
+
+      expect(screen().at(-1)).toContain("No web browser.");
+    });
+
+    it("says what each of the Topic menu's items needs when no Topic is open, doing nothing", () => {
+      type("\x1btl"); // Topic ▸ Add link
+      expect(screen().at(-1)).toContain("Open a Topic to link from.");
+      type("\x1btm"); // Topic ▸ Mention a topic
+      expect(screen().at(-1)).toContain("Open a Topic to mention from.");
+      type("\x1bvc"); // View ▸ CFC labels
+      expect(screen().at(-1)).toContain("Open a Topic to see its labels.");
+      type("\x1bty"); // Topic ▸ Copy reference
+      type("\x1bto"); // Topic ▸ Open in web browser
+
+      expect(screen().join("\n")).not.toMatch(
+        /Add a link|mentions…|CFC labels of/,
+      );
+      expect(host.copied).toEqual([]);
+      expect(host.opened).toEqual([]);
+    });
+
+    it("opens here a Topic its body cites", () => {
+      type("\r");
+      click("top/2"); // in the body's text
+
+      expect(screen().join("\n")).toContain("top/2 Donut glaze cracks");
+      expect(host.opened).toEqual([]);
+    });
+
+    it("opens the next unread Topic with N, listed or not, until nothing is unread", () => {
+      type("\r");
+      screen();
+      type("n");
+      expect(screen().join("\n")).toContain("top/2 Donut glaze cracks");
+
+      type("n"); // the settled one, which the list hides
+      expect(screen().join("\n")).toContain("top/3 [RESOLVED] Old oven");
+
+      type("n");
+      expect(screen().at(-1)).toContain("Nothing is unread.");
+      expect(screen().join("\n")).toContain("top/3 [RESOLVED] Old oven");
+    });
+
+    it("says so when stepping past either end of the list", () => {
+      type("\r]]");
+      expect(screen().at(-1)).toContain("This is the last Topic listed.");
+      expect(screen().join("\n")).toContain("top/2 Donut glaze cracks");
+
+      type("[[");
+      expect(screen().at(-1)).toContain("This is the first Topic listed.");
+      expect(screen().join("\n")).toContain("top/1 Flaky fryer test");
+    });
+
+    it("dates a comment, saying when it was edited, and says so of a time it does not know", () => {
+      const dated = board();
+      dated[0] = {
+        ...dated[0],
+        comments: [{
+          ...comment("Ada (person)", "Undated.", 0),
+          editedAt: NOW - 30 * 60_000,
+        }],
+      };
+      dated[1] = { ...dated[1], updatedAt: 0, lastActivityAt: 0 };
+      browser.update(dated, NOW, true, 42);
+      type("#1\r");
+      expect(screen().join("\n")).toContain(
+        "1. Ada (person) ◇ · - · edited 30m ago",
+      );
+
+      type("\x1b[17~\x15#2\r"); // the list, a search for top/2, and Enter
+      expect(screen().join("\n")).toContain("· active never");
+    });
+
+    it("shows a web link by its address when it has no label", () => {
+      const linked = board();
+      linked[0] = {
+        ...linked[0],
+        links: [{ ...linked[0].links[0], kind: "web", label: "" }],
+      };
+      browser.update(linked, NOW, true, 42);
+      type("\r");
+
+      expect(screen().join("\n")).toContain("↗ https://example.com/pull/1");
+    });
+
+    it("gives the keys to the reader when its text is clicked", () => {
+      type("\r\x1b[17~"); // F6, back to the list
+      click("Reproduced with cold oil.");
+      type("c");
+
+      expect(screen().join("\n")).toContain("Comment on top/1");
+    });
+
+    it("keeps where it may go forward when the Topic being read is opened again", () => {
+      type("\r");
+      click("→ top/2");
+      type("\x1b[1;3D"); // Alt-Left, back to top/1
+      type("\x1b[17~\r"); // F6, then Enter on top/1 in the list
+      type("\x1b[1;3C"); // Alt-Right
+
+      expect(screen().join("\n")).toContain("top/2 Donut glaze cracks");
+    });
+
+    it("opens nothing for a click on a reference to a Topic the board has since taken away", () => {
+      type("\r");
+      const cited = find("→ top/2");
+      browser.update(board().slice(0, 1), NOW, true, 42);
+      press(cited);
+      release(cited);
+
+      expect(screen().join("\n")).toContain("top/1 Flaky fryer test");
+    });
+
+    it("asks nothing for a click taking back a link or a mention of a Topic the board has since taken away", () => {
+      type("\r");
+      const link = find("✕");
+      const mention = find("cracks  ✕");
+      browser.update(board().slice(1), NOW, true, 42);
+      for (const at of [link, { x: mention.x + 8, y: mention.y }]) {
+        press(at);
+        release(at);
+      }
+
+      expect(screen().join("\n")).not.toContain("Are you sure?");
+    });
+
+    it("goes back to no Topic the board has since taken away", () => {
+      type("\r");
+      click("→ top/2");
+      browser.update(board().slice(1), NOW, true, 42);
+      type("\x1b[1;3D"); // Alt-Left
+
+      expect(screen().join("\n")).toContain("top/2 Donut glaze cracks");
+    });
+
+    it("lets go of a scroll bar's thumb whose window is no longer drawn", () => {
+      rowsTall = 16;
+      browser.update(long(), NOW, true, 42);
+      type("\r");
+      const thumb = find("█");
+      press(thumb);
+      type("\x1b[17~\x1b[15~"); // F6, then F5 zooms the list over the reader
+      screen();
+      dragTo({ x: thumb.x, y: rowsTall - 3 });
+      release({ x: thumb.x, y: rowsTall - 3 });
+      type("\x1b[15~");
+
+      expect(screen().join("\n")).toContain("top/1 Flaky");
     });
   });
 
@@ -1111,6 +1500,176 @@ describe("browser", () => {
       );
       expect(screen().join("\n")).not.toContain("An unfinished write");
     });
+
+    it("signs its writes with the name it is given", async () => {
+      browser = new Browser({
+        board: { space: "space", topicLinks: LINKS, viewer: ME },
+        host,
+        saved,
+        redraw,
+        now: () => NOW,
+        agentName: "Given (agent)",
+      });
+      browser.update(board(), NOW, true, 42);
+      expect(saved.agentName).toBe("Given (agent)");
+      expect(screen().at(-1)).toContain("writing as Given (agent)");
+
+      type("\rm2\r");
+      await settle();
+
+      expect(host.writes.map((w) => w.agentName)).toEqual(["Given (agent)"]);
+    });
+
+    it("files a new Topic only once it has a title and a body, typed where a field is clicked", async () => {
+      type("\x0e"); // Control-N
+      type("Cold oil");
+      type("\x1bi"); // Alt-I files it
+      expect(screen().at(-1)).toContain("A topic needs a title and a body.");
+      expect(host.writes).toEqual([]);
+
+      const label = find("Body (Markdown)");
+      press({ x: label.x, y: label.y + 1 });
+      release({ x: label.x, y: label.y + 1 });
+      type("Fry hot.\rThen rest.");
+      expect(saved.drafts["new"]?.fields).toEqual([
+        "Cold oil",
+        "Fry hot.\nThen rest.",
+      ]);
+
+      type("\x1bi");
+      await settle();
+
+      expect(host.writes.map((w) => w.request)).toEqual([
+        { verb: "new", title: "Cold oil", body: "Fry hot.\nThen rest." },
+      ]);
+      expect(screen().join("\n")).not.toContain("File a new topic");
+      expect(saved.drafts).toEqual({});
+    });
+
+    it("throws a draft away once that is confirmed, from the button Shift-Tab reaches", () => {
+      type("\x0e");
+      type("Half an idea");
+      type("\x1b[Z\r"); // Shift-Tab, around to Discard, then Enter
+      expect(screen().join("\n")).toContain("Throw this draft away?");
+      expect(saved.drafts["new"]?.fields).toEqual(["Half an idea", ""]);
+
+      type("t");
+
+      expect(screen().join("\n")).not.toContain("File a new topic");
+      expect(saved.drafts).toEqual({});
+      expect(saved.dropped["new"]).toBeDefined();
+    });
+
+    it("forgets a draft taken back to what the editor began with when it closes", () => {
+      type("\rc");
+      type("x\x7f"); // a letter, then Backspace
+      type("\x1b");
+
+      expect(saved.drafts).toEqual({});
+      expect(screen().at(-1)).not.toContain("Your draft is kept");
+    });
+
+    it("says what each form lacks, writing nothing", () => {
+      type("\rc\x13"); // Control-S, with nothing written
+      expect(screen().at(-1)).toContain("There is nothing to save.");
+      type("\x1b");
+
+      type("l\r\r"); // a link with no address
+      expect(screen().at(-1)).toContain("A link needs an address.");
+      type("\x1b");
+
+      type("m99\r"); // a mention of no Topic on the board
+      expect(screen().at(-1)).toContain(
+        "Name a Topic on the board by its number.",
+      );
+      type("\x1b");
+
+      delete saved.agentName;
+      type("m2\r\r"); // a signature of no name
+      expect(screen().at(-1)).toContain("Writes are signed with a name.");
+
+      expect(host.writes).toEqual([]);
+    });
+
+    it("moves a form's focus to its next field or button from the status line", () => {
+      type("\x07"); // Control-G
+      const next = screen().at(-1)!.indexOf("Tab Next");
+      press({ x: next, y: rowsTall - 1 });
+      release({ x: next, y: rowsTall - 1 });
+      type("g"); // with a button focused, its letter presses it
+
+      expect(screen().at(-1)).toContain("The board has no such Topic.");
+    });
+
+    it("says when no write is unfinished", () => {
+      type("\x1bfu"); // File ▸ Unfinished writes
+
+      expect(screen().at(-1)).toContain("No write is unfinished.");
+      expect(screen().join("\n")).not.toContain("An unfinished write");
+    });
+
+    it("takes back no link the board took back while it asked", () => {
+      type("\r");
+      click("✕");
+      const unlinked = board();
+      unlinked[0] = { ...unlinked[0], links: [] };
+      browser.update(unlinked, NOW, true, 42);
+      type("t");
+
+      expect(screen().at(-1)).toContain(
+        "That link can no longer be taken back from here.",
+      );
+      expect(host.writes).toEqual([]);
+    });
+
+    describe("a mention", () => {
+      beforeEach(() => {
+        browser.update(
+          [
+            topic({ number: "1", mentions: ["of:fid1:entry-2"] }),
+            topic({ number: "2" }),
+          ],
+          NOW,
+          true,
+          42,
+        );
+        type("\r");
+        click("✕");
+      });
+
+      it("is taken back once that is confirmed", async () => {
+        type("r");
+        await settle();
+
+        expect(host.writes.map((w) => w.request)).toEqual([
+          { verb: "unmention", topic: "1", other: "2" },
+        ]);
+      });
+
+      it("is not taken back from a Topic the board took away while it asked", () => {
+        browser.update([topic({ number: "2" })], NOW, true, 42);
+        type("r");
+
+        expect(screen().at(-1)).toContain("top/1 is no longer on the board.");
+        expect(host.writes).toEqual([]);
+      });
+    });
+
+    it("saves nothing of, and shows nothing of, a body the board took away while it was edited", () => {
+      type("\re More.");
+      browser.update(board().slice(1), NOW, true, 42);
+      expect(screen().join("\n")).toContain(
+        "⚠ top/1 is no longer on the board.",
+      );
+
+      type("\x1bt"); // Alt-T, Theirs
+      expect(screen().join("\n")).not.toContain("What top/1 holds now");
+      type("\x13"); // Control-S
+
+      expect(screen().join("\n")).not.toContain("Are you sure?");
+      expect(screen().at(-1)).toContain("top/1 is no longer on the board.");
+      expect(host.writes).toEqual([]);
+    });
   });
 
   describe("authors", () => {
@@ -1135,6 +1694,61 @@ describe("browser", () => {
       click("Ada (person)");
 
       expect(screen().join("\n")).toContain('by:"Ada (person)"');
+    });
+
+    it("moves its selection with the arrows, the page keys, Home, and End, keeping it in view, and lists what the one chosen wrote", () => {
+      rowsTall = 16;
+      browser.update(
+        Array.from({ length: 20 }, (_, index) =>
+          topic({
+            number: String(index + 10),
+            createdBy: `Writer ${index + 10} (agent)`,
+            createdAt: NOW - index * HOUR,
+            lastActivityAt: NOW - index * HOUR,
+          })),
+        NOW,
+        true,
+        42,
+      );
+      /** The author the dialog shows selected. */
+      const picked = () =>
+        browser.frame(columnsWide, rowsTall, NOW).join("").match(
+          new RegExp(`48;2;${C.button.join(";")}[^m]*m(Writer \\d+)`),
+        )?.[1];
+      type("\x1bva"); // View ▸ Authors
+      expect(picked()).toBe("Writer 10");
+
+      type("\x1b[B");
+      expect(picked()).toBe("Writer 11");
+      type("\x1b[A");
+      expect(picked()).toBe("Writer 10");
+
+      type("\x1b[F"); // End
+      expect(picked()).toBe("Writer 29");
+      expect(screen().join("\n")).not.toContain("Writer 10");
+      type("\x1b[H"); // Home
+      expect(picked()).toBe("Writer 10");
+
+      type("\x1b[6~"); // PageDown
+      expect(screen().join("\n")).not.toContain("Writer 10");
+      type("\x1b[5~"); // PageUp
+      expect(picked()).toBe("Writer 10");
+
+      type("x"); // which presses nothing
+      expect(screen().join("\n")).toContain("Filed  Comments");
+
+      type("\x1b[B\r");
+      expect(screen().join("\n")).not.toContain("Filed  Comments");
+      expect(screen().join("\n")).toContain('Find by:"Writer 11 (agent)"');
+    });
+
+    it("closes from the status line", () => {
+      type("\x1bva");
+      const close = screen().at(-1)!.indexOf("C Close");
+      press({ x: close, y: rowsTall - 1 });
+      release({ x: close, y: rowsTall - 1 });
+
+      expect(screen().join("\n")).not.toContain("Filed  Comments");
     });
   });
 
@@ -1222,6 +1836,13 @@ describe("browser", () => {
       expect(shown.match(/Withheld: its labels do not admit it/g)?.length)
         .toBe(1);
       expect(shown).toContain("⚠ Withheld: its labels cannot be read.");
+
+      type("i");
+      const dialog = screen().join("\n");
+      expect(dialog).toContain("• Withheld: its labels cannot be read.");
+      expect(dialog).toContain(
+        "• Withheld: its labels do not admit it to this display.",
+      );
     });
 
     it("finds nothing of a withheld Topic by its words, its author, or a reference to it", () => {
@@ -1288,6 +1909,86 @@ describe("browser", () => {
       click("Help");
       click("Keys and search…");
       expect(screen().join("\n")).toContain("Finding Topics");
+    });
+
+    it("moves through a menu's items with Up and Down, past its separators, and between menus with Left and Right", () => {
+      /** Whether the item whose label goes on with `rest` is highlighted. */
+      const highlighted = (rest: string) =>
+        new RegExp(`48;2;${C.button.join(";")}[^m]*m${rest}`).test(
+          browser.frame(columnsWide, rowsTall, NOW).join(""),
+        );
+      type("\x1b[21~\x1b[D"); // F10, then Left, around to Help
+      expect(screen().join("\n")).toContain("Keys and search…");
+      type("\x1b[C"); // Right, around to File
+      expect(highlighted("ew topic")).toBe(true);
+
+      type("\x1b[B\x1b[B"); // Down twice
+      expect(highlighted("nfinished writes")).toBe(true);
+      type("\x1b[A"); // Up
+      expect(highlighted("o to topic")).toBe(true);
+      expect(highlighted("nfinished writes")).toBe(false);
+
+      // Down twice more passes the separator, to Exit.
+      type("\x1b[B\x1b[B");
+      expect(type("\r")).toBe(true);
+    });
+
+    it("closes a menu when its title is clicked again, or something outside it is pressed", () => {
+      click("File");
+      expect(screen().join("\n")).toContain("New topic…");
+      click("File");
+      expect(screen().join("\n")).not.toContain("New topic…");
+
+      type("\r\x1b[21~"); // Enter, then F10
+      expect(screen().join("\n")).toContain("New topic…");
+      press(find("Reproduced with cold oil."));
+      expect(screen().join("\n")).not.toContain("New topic…");
+    });
+
+    it("scrolls a dialog of text with the arrows, the page keys, Space, the wheel, and its thumb, and does nothing for other keys", () => {
+      type("\x1bOP"); // F1
+      const top = () => screen().join("\n").includes("Finding Topics");
+      expect(top()).toBe(true);
+
+      for (const [down, up] of [["\x1b[B", "\x1b[A"], ["\x1b[6~", "\x1b[5~"]]) {
+        type(down);
+        expect(top()).toBe(false);
+        type(up);
+        expect(top()).toBe(true);
+      }
+      type(" ");
+      expect(top()).toBe(false);
+      type("\x1b[H");
+
+      const help = find("Finding Topics");
+      type(`\x1b[<65;${help.x + 1};${help.y + 1}M`); // the wheel, down
+      expect(top()).toBe(false);
+      type("\x1b[H");
+
+      const thumb = find("█");
+      press(thumb);
+      dragTo({ x: thumb.x, y: rowsTall - 4 });
+      release({ x: thumb.x, y: rowsTall - 4 });
+      expect(top()).toBe(false);
+
+      type("x");
+      expect(screen().join("\n")).toContain("═ Keys and search ═");
+    });
+
+    it("takes no press outside a dialog but on the status line", () => {
+      type("\x1bOP"); // F1
+      click("File");
+
+      expect(screen().join("\n")).not.toContain("New topic…");
+      expect(screen().join("\n")).toContain("═ Keys and search ═");
+    });
+
+    it("says so, asking nothing, when there is nothing to mark read", () => {
+      saved.since = NOW;
+      type("\x1bvm"); // View ▸ Mark all read
+
+      expect(screen().at(-1)).toContain("Nothing is unread.");
+      expect(screen().join("\n")).not.toContain("Are you sure?");
     });
 
     it("pushes a button down while it is held, and presses it only when released over it", () => {
@@ -1971,9 +2672,7 @@ describe("browser", () => {
 
     it("scrolls the window under the wheel, and drags a scroll bar's thumb", () => {
       rowsTall = 16;
-      const long = board();
-      long[0] = { ...long[0], body: Array(60).fill("line").join("\n\n") };
-      browser.update(long, NOW, true, 42);
+      browser.update(long(), NOW, true, 42);
       type("\r");
       const top = screen().join("\n");
       const { x, y } = find("top/1 Flaky");

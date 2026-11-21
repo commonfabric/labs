@@ -366,7 +366,11 @@ export const run: Exec = async (command, args, options = {}) => {
   );
 };
 
-const spawn: Spawn = (command, args, options = {}) =>
+/**
+ * Starts a command and leaves it running, with its standard output piped
+ * to the caller, its standard input closed, and its standard error dropped.
+ */
+export const spawn: Spawn = (command, args, options = {}) =>
   new Deno.Command(command, {
     ...commandOptions(args, options),
     stdin: "null",

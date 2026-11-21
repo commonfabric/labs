@@ -205,7 +205,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+            "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
           ],
           "picks": [],
           "selectors": [],
@@ -420,7 +420,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 1
+                  }
                 },
                 {
                   "element": 0
@@ -450,7 +453,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 2
+                  }
                 },
                 {
                   "element": 1
@@ -480,7 +486,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 3
+                  }
                 },
                 {
                   "element": 3
@@ -510,7 +519,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 4
+                  }
                 },
                 {
                   "element": 4
@@ -611,7 +623,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+                "compiled": "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
               },
               "name": {
                 "name": "Rows",
@@ -622,7 +634,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+                "compiled": "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
               },
               "name": {
                 "name": "Rows",
@@ -633,7 +645,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+                "compiled": "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
               },
               "name": {
                 "name": "Rows",
@@ -644,7 +656,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+                "compiled": "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
               },
               "name": {
                 "name": "Rows",
@@ -664,16 +676,16 @@
                 "op": "slot",
                 "slot": 3
               },
-              "name": {
-                "name": "map",
-                "ordinal": 1
-              },
+              "name": "map",
               "source": {
                 "slot": 3
               },
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 1
+                  }
                 }
               ]
             },
@@ -686,16 +698,16 @@
                 "op": "output",
                 "output": 0
               },
-              "name": {
-                "name": "map",
-                "ordinal": 2
-              },
+              "name": "map",
               "source": {
                 "output": 0
               },
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 2
+                  }
                 }
               ]
             },
@@ -723,17 +735,17 @@
                 "op": "output",
                 "output": 11
               },
-              "name": {
-                "name": "map",
-                "ordinal": 3
-              },
+              "name": "map",
               "source": {
                 "collection": 2,
                 "via": "map"
               },
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 3
+                  }
                 }
               ]
             },
@@ -743,16 +755,16 @@
                 "op": "slot",
                 "slot": 17
               },
-              "name": {
-                "name": "map",
-                "ordinal": 4
-              },
+              "name": "map",
               "source": {
                 "slot": 17
               },
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 4
+                  }
                 }
               ]
             },
@@ -829,7 +841,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 1
+                  }
                 },
                 {
                   "element": 0
@@ -853,7 +868,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 2
+                  }
                 },
                 {
                   "element": 1
@@ -897,7 +915,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 3
+                  }
                 },
                 {
                   "element": 3
@@ -921,7 +942,10 @@
               ],
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 4
+                  }
                 },
                 {
                   "element": 4
@@ -1626,8 +1650,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#default",
-            "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+            "sha256:4a7bf2345e27eff8a9281dae4e4f81f25bc5a1c567e90835c84f0cf07a27083d",
+            "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
           ],
           "picks": [],
           "selectors": [],
@@ -1935,7 +1959,10 @@
               "scope": "space",
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 1
+                  }
                 },
                 {
                   "element": 0
@@ -1948,7 +1975,10 @@
               "scope": "space",
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 2
+                  }
                 },
                 {
                   "element": 1
@@ -1961,7 +1991,10 @@
               "scope": "space",
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 3
+                  }
                 },
                 {
                   "element": 3
@@ -1974,7 +2007,10 @@
               "scope": "space",
               "within": [
                 {
-                  "site": "Rows"
+                  "site": {
+                    "name": "Rows",
+                    "ordinal": 4
+                  }
                 },
                 {
                   "element": 4

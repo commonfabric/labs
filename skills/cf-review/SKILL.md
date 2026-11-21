@@ -68,9 +68,12 @@ Two failure modes recur when moving fast without the whole picture:
 
 ## Step 1 — Establish scope, then pick your depth
 
-Auto-detect the target: no argument → the local branch vs `main`
-(`BASE=$(git merge-base HEAD origin/main)`, then read `git diff "$BASE"` and
-`git log "$BASE"..HEAD` for intent); a number → that PR (`gh pr view <N>`,
+Auto-detect the target: no argument → the local branch vs `main`. Take `main`
+from `upstream` when the checkout has `refs/remotes/upstream/main`, and from
+`origin` otherwise: in a fork `origin/main` is the fork's stale default branch,
+and diffing against it pulls in every unrelated upstream change. Then
+`BASE=$(git merge-base HEAD <that ref>)`, and read `git diff "$BASE"` and
+`git log "$BASE"..HEAD` for intent. A number → that PR (`gh pr view <N>`,
 `gh pr diff <N>`). Say in a couple of lines what the change does and why, and
 whether its scope is coherent or has leaked. Unclear motivation is a **question
 for the author**, not a defect.
@@ -147,7 +150,7 @@ author's classification: host arrangement, conforming implementation, or
 semantic gap. A semantic gap with no linked specs pull request, a kernel
 function given an input the pseudocode lacks, or a rule stated with MUST force
 in a labs document is Blocking. Count the `SPEC-PENDING` markers the diff adds:
-each names a specs pull request, the tree holds at most forty, and marked code
+each names a specs pull request, the tree holds at most eighty, and marked code
 runs at the strict default only when it is fail-closed. Reviewing a specs ruling
 pull request instead, check that its body says whether the entry was already
 answered at specs `main`, states the runtime's conformance under the current and

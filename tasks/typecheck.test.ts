@@ -378,6 +378,26 @@ describe("typecheck", () => {
       }
     });
 
+    it("throws what Deno says where it cannot load the workspace the graph is read in", async () => {
+      // Deno refuses a workspace one of whose members has no manifest, so
+      // the module graph cannot be read, and the reach says why rather than
+      // returning an empty one.
+
+      const root = await tree({
+        "deno.jsonc": JSON.stringify({ workspace: ["./runtime/bare"] }),
+        "runtime/bare/mod.ts": "export const bare = 1;\n",
+      });
+      try {
+        const reach = await changeReach(root, () => ["runtime/bare/mod.ts"]);
+        expect(reach(new Set())).toEqual(new Map());
+        expect(() => reach(new Set(["runtime/bare/mod.ts"]))).toThrow(
+          /^deno info could not read the checked modules' imports:\n.*Could not find config file for workspace member/s,
+        );
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
     it("returns everything for a change to the lock file, and not for a change to another file", async () => {
       const root = await tree({ "runtime/a/a.test.ts": "" });
       try {

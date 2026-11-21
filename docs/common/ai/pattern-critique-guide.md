@@ -81,7 +81,7 @@ has been explicitly verified as problematic.
 | `$checked={item}` | `$checked={item.done}` |
 | wrong event name | Use `oncf-send`, `oncf-input`, or `oncf-change` |
 | cell-bound control (for example `$value={status}`) with `oncf-change` writing `status.set(...)` | Let the binding own the control value; use the handler only for dependent state or side effects |
-| any `$`-binding (`$value`/`$checked`/`$profile`/…) inside a `computed(() => …)` subtree → throws *"Bidirectionally bound property … is not reactive"* and **blanks the whole render** | Hoist the `$`-binding to a **static** `[UI]` position; switch views with `ifElse(cond, staticA, staticB)` as a child of a static wrapper, or lift behind a `pattern<{…}>` sub-pattern. Repro: `patterns/dev/scope-bug-computed-vnode-blank/` |
+| any `$`-binding (`$value`/`$checked`/`$profile`/…) inside a `computed(() => …)` subtree → throws *"Bidirectionally bound property … is not reactive"* and **blanks the whole render** | Hoist the `$`-binding to a **static** `[UI]` position; switch views with `ifElse(cond, staticA, staticB)` as a child of a static wrapper, or lift behind a `pattern<{…}>` sub-pattern. Repro: `patterns/dev/scope-bug-computed-vnode-blank/`; the refusal is tested in `runtime/runner/test/h-binding-validation.test.ts` |
 
 ### 6. Custom Component Props and Styling Affordances
 
@@ -91,7 +91,7 @@ than guessing at unsupported internals.
 
 | Violation | Fix |
 |-----------|-----|
-| kebab-case props on `cf-*` | Use camelCase, for example `allowCustom` |
+| a hyphenated prop on an element (`cf-*` or native, not a pattern component) other than `data-*`, `aria-*` or an `on…` event (the compiler refuses it) | Write the property's camel-case name, for example `allowCustom` |
 | styling through guessed shadow-internal selectors | Prefer documented custom properties, parts, or theme hooks |
 | arbitrary one-off visual overrides where theme/custom properties would work | Prefer public styling affordances with fallbacks |
 

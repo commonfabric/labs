@@ -19,7 +19,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/element-resolved.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"spaceOf\": spaceOf, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst locate = handler((_, { item, where }) => {\n  where.set(spaceOf(item) ?? \"\");\n});\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/element-resolved.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [\"x\"])));\n}\n$rt.value(2, ($h) => ($rt.h(\"ul\", {  }, [$h.output(0)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(2), where: $h.slot(4) })));\n});\n$rt.body(0, ($e, $s) => ((_, { item, where }) => {\n  where.set(spaceOf(item) ?? \"\");\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"spaceOf\": spaceOf, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst locate = handler((_, { item, where }) => {\n  where.set(spaceOf(item) ?? \"\");\n});\nconst $default = (pattern(\"sha256:b2cd0c288eefce9be01c3730d9e1ec54a47b8bf9e36fdbe8bea3f405b0c33b14\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [\"x\"])));\n}\n$rt.value(2, ($h) => ($rt.h(\"ul\", {  }, [$h.output(0)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(2), where: $h.slot(4) })));\n});\n$rt.body(0, ($e, $s) => ((_, { item, where }) => {\n  where.set(spaceOf(item) ?? \"\");\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -287,7 +287,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/element-resolved.tsx#default"
+            "sha256:b2cd0c288eefce9be01c3730d9e1ec54a47b8bf9e36fdbe8bea3f405b0c33b14"
           ],
           "picks": [],
           "selectors": [],

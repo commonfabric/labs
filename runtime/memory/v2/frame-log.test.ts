@@ -524,6 +524,16 @@ describe("frame log edges", () => {
     );
   });
 
+  it("returns `undefined` for a variable name the environment cannot hold", () => {
+    // `Deno.env.get()` throws for such a name, as it does where the process
+    // may not read the environment.
+
+    for (const name of ["", "CF=MEMORY", "CF\0MEMORY"]) {
+      expect(() => Deno.env.get(name)).toThrow(TypeError);
+      expect(readEnvironmentVariable(name)).toBeUndefined();
+    }
+  });
+
   it("appends lines to a file", async () => {
     const path = await Deno.makeTempFile({ suffix: ".jsonl" });
     try {

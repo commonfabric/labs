@@ -60,6 +60,48 @@ describe("runtime-processor", () => {
 
     afterEach(() => post.restore());
 
+    describe("with `branches`", () => {
+      const branches = { [federatedSpace]: "fork" };
+      const refusal = "declares `experimental.serverExecution` false";
+
+      it("rejects when `experimental` is absent", async () => {
+        await expect(initialize(() => Promise.resolve(true), { branches }))
+          .rejects.toThrow(refusal);
+      });
+
+      it("rejects when `experimental.serverExecution` is `true`", async () => {
+        await expect(
+          initialize(() => Promise.resolve(true), {
+            branches,
+            experimental: { serverExecution: true },
+          }),
+        ).rejects.toThrow(refusal);
+      });
+
+      it("returns a processor when `experimental.serverExecution` is `false`", async () => {
+        const processor = await initialize(() => Promise.resolve(true), {
+          branches,
+          experimental: { serverExecution: false },
+        });
+        try {
+          expect(await processor.accessForTestingOnly.health).toBe(true);
+        } finally {
+          await processor.dispose();
+        }
+      });
+
+      it("returns a processor for an empty map with `experimental` absent", async () => {
+        const processor = await initialize(() => Promise.resolve(true), {
+          branches: {},
+        });
+        try {
+          expect(await processor.accessForTestingOnly.health).toBe(true);
+        } finally {
+          await processor.dispose();
+        }
+      });
+    });
+
     it("returns the processor before the health check settles", async () => {
       const check = Promise.withResolvers<boolean>();
       let asked = 0;

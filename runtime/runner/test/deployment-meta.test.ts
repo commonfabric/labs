@@ -1434,6 +1434,7 @@ describe("deployment-meta", () => {
         "pieceCreatorRecord",
         "sharedMemoryConnection",
         "instanceNames",
+        "compiledPatterns",
       ]);
       for (const flag of SHELL_DEPLOYMENT_FLAGS) {
         expect(SHELL_FLAG_SOURCES[flag]).toBe("deployment");

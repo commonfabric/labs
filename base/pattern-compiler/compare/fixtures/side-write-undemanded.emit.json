@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/side-write-undemanded.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/side-write-undemanded.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { note, unseen } = $a; return (() => {\n    unseen.set(note);\n  })(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ note: $h.slot(2) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\"sha256:e9196ea806cf2f8591de765838b34694262f1c9cda0830f0f30a8c46218a209d\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { note, unseen } = $a; return (() => {\n    unseen.set(note);\n  })(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ note: $h.slot(2) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -147,7 +147,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/side-write-undemanded.tsx#default"
+            "sha256:e9196ea806cf2f8591de765838b34694262f1c9cda0830f0f30a8c46218a209d"
           ],
           "picks": [],
           "selectors": [],

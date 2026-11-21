@@ -26,7 +26,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/state-below.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst retitle = handler(\n  (event, { draft }) => {\n    draft.key(\"text\").set(event.text);\n  },\n);\nconst add = handler(\n  (event, { marks }) => {\n    marks.push(event.tag);\n  },\n);\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/state-below.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ title: $h.slot(4), memo: $h.slot(3), retitle: $h.stream(0) })));\n}\n{\n$rt.element(1, ($h) => (({ word: $h.slot(7), memo: $h.slot(6), retitle: $h.stream(1) })));\n}\n{\n$rt.element(2, ($h) => (($h.v($h.slot(8)) !== (\"skip\"))));\n}\n{\n$rt.element(3, ($h) => (({ word: $h.slot(11), memo: $h.slot(10), retitle: $h.stream(2) })));\n}\nreturn $rt.thunk(($h) => (({ draft: $h.slot(12), marks: $h.slot(15), rows: $h.output(0), labels: $h.output(4), kept: $h.output(10), retitle: $h.stream(3), add: $h.stream(4) })));\n});\n$rt.body(0, ($e, $s) => ((event, { draft }) => {\n    draft.key(\"text\").set(event.text);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((event, { marks }) => {\n    marks.push(event.tag);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst retitle = handler(\n  (event, { draft }) => {\n    draft.key(\"text\").set(event.text);\n  },\n);\nconst add = handler(\n  (event, { marks }) => {\n    marks.push(event.tag);\n  },\n);\nconst $default = (pattern(\n  \"sha256:4d88a442f8d13e4ef8bd7fde269e184cccc795942c625f1f61165a50c711865f\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ title: $h.slot(4), memo: $h.slot(3), retitle: $h.stream(0) })));\n}\n{\n$rt.element(1, ($h) => (({ word: $h.slot(7), memo: $h.slot(6), retitle: $h.stream(1) })));\n}\n{\n$rt.element(2, ($h) => (($h.v($h.slot(8)) !== (\"skip\"))));\n}\n{\n$rt.element(3, ($h) => (({ word: $h.slot(11), memo: $h.slot(10), retitle: $h.stream(2) })));\n}\nreturn $rt.thunk(($h) => (({ draft: $h.slot(12), marks: $h.slot(15), rows: $h.output(0), labels: $h.output(4), kept: $h.output(10), retitle: $h.stream(3), add: $h.stream(4) })));\n});\n$rt.body(0, ($e, $s) => ((event, { draft }) => {\n    draft.key(\"text\").set(event.text);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((event, { marks }) => {\n    marks.push(event.tag);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -697,7 +697,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/state-below.tsx#default"
+            "sha256:4d88a442f8d13e4ef8bd7fde269e184cccc795942c625f1f61165a50c711865f"
           ],
           "picks": [],
           "selectors": [],
