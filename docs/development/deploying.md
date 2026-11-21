@@ -320,8 +320,12 @@ Dispatch it on `main` with the full infra commit:
 gh workflow run estuary-replica-service.yml --ref main -f infra_sha=<infra SHA>
 ```
 
-The job declares the `estuary` environment, so it waits for the same approval
-as a production deployment and uses the same bastion credentials. Before it
+The job asks for no approval yet. It declares the `toolshed` environment,
+which holds the bastion credentials and has no reviewers, as the Rapids
+release does. While the service is being brought up nothing depends on it, and
+an install only applies what infra's `main` already selects. Once the service
+is in use, the job should declare `estuary` instead, which holds the same
+credentials behind the reviewers a production deployment needs. Before it
 connects, it checks the SHA's form and asks GitHub whether the commit is on
 infra's `main`. It checks out and runs nothing on the runner. On the bastion,
 `/opt/cf/deploy-replica-service.sh` checks the commit against infra's `main`

@@ -3,8 +3,15 @@
 # The service's build is selected in the infra repository
 # (ansible/vars/replica-service-release.yml there). Installing it used to take
 # one person at their own machine, with a hardware key. The bastion can run
-# the same play with nobody present, and this workflow is what asks it to,
-# behind the approval a production deployment needs.
+# the same play with nobody present, and this workflow is what asks it to.
+#
+# It asks for no approval yet. While the service is being brought up, nothing
+# depends on it and an install only ever applies what infra's main already
+# selects, so Wilk chose (2026-11-21) not to make each one wait for a reviewer.
+# The job therefore declares the `toolshed` environment, which holds the
+# bastion credentials and has no reviewers, as the Rapids release does. Once
+# the service is in use, declare `estuary` instead: it holds the same
+# credentials behind the reviewers a production deployment needs.
 #
 # It runs no code from any repository on the runner. It establishes that the
 # named commit is on infra's main, then hands that commit to the bastion's
@@ -37,7 +44,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    environment: estuary
+    environment: toolshed
     permissions:
       contents: read
     env:

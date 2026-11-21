@@ -416,7 +416,7 @@ describe("rapids-workflows", () => {
     expect(deploy.with.capture_stdout).toBe(true);
   });
 
-  it("installs Estuary's replica service only from an infra commit on main, behind production approval", async () => {
+  it("installs Estuary's replica service only from an infra commit on main", async () => {
     const replica = await workflow("estuary-replica-service.yml");
     expect(replica.name).toBe("Deploy Estuary replica service");
     expect(Object.keys(replica.on)).toEqual(["workflow_dispatch"]);
@@ -440,7 +440,13 @@ describe("rapids-workflows", () => {
     expect(Object.keys(replica.jobs)).toEqual(["deploy"]);
     const job = replica.jobs.deploy;
     expect(job.if).toBe("github.ref == 'refs/heads/main'");
-    expect(job.environment).toBe("estuary");
+    // No approval while the service is being brought up: `toolshed` holds the
+    // bastion credentials without reviewers, as it does for the Rapids
+    // release. When the service is in use this becomes `estuary`, which holds
+    // them behind a production deployment's reviewers.
+    expect(job.environment).toBe("toolshed");
+    expect((await workflow("rapids-release.yml")).jobs.deploy.environment)
+      .toBe("toolshed");
     expect(job.permissions).toEqual({ contents: "read" });
     expect(job.env).toEqual({ INFRA_SHA: "${{ inputs.infra_sha }}" });
 
