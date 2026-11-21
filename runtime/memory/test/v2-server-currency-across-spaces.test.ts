@@ -7,6 +7,7 @@ import {
 } from "../v2/currency-index.ts";
 import { aclDocId } from "../acl.ts";
 import { resolveScopeKey } from "../v2.ts";
+import { connect, loopback } from "../v2/client.ts";
 import { applyCommit } from "../v2/engine.ts";
 import { getCurrencyDelivery, Server } from "../v2/server.ts";
 
@@ -375,6 +376,79 @@ describe("v2-server-currency-across-spaces", () => {
 
           expect(await markAt(aliceUser)).toBe(2);
           expect(await registrations()).toBe(0);
+        });
+
+        it("stores the slice marked `2`, and drops its registration, once the actor's grant has been withdrawn", async () => {
+          await grant("READ");
+          const read = await writeOwn("user");
+          await store(readingOwn(aliceUser, read));
+          await grant();
+
+          await store(readingOwn(aliceUser, read));
+
+          expect(await markAt(aliceUser)).toBe(2);
+          expect(await registrations()).toBe(0);
+        });
+
+        it("marks the slice `2` at the judgment that follows a change to that space's access list which withdrew the actor's grant", async () => {
+          // The slice is demanded by no session here, so the judgment that
+          // pulls is made of a piece whose `space` slice read that space
+          // too.
+
+          await grant("READ");
+          const read = await writeOwn("user");
+          const shared = await write(SOURCE, "of:far");
+          await store({
+            ...readingOwn(aliceUser, read),
+            slices: [
+              {
+                key: "space",
+                vouched: true,
+                reads: [{
+                  space: SOURCE,
+                  id: "of:far",
+                  scopeKey: "space",
+                  derived: false,
+                  seq: shared,
+                }],
+                vouches: [],
+              },
+              readingOwn(aliceUser, read).slices[1],
+            ],
+          });
+          await servable();
+          expect(await markAt(aliceUser)).toBe(0);
+          expect(server.currencyReadersArmedOn(SOURCE)).toEqual([SPACE]);
+
+          // A client's commit is what a change to an access list is.
+          const client = await connect({ transport: loopback(server) });
+          const owner = await client.mount(SOURCE, {}, (
+            _space,
+            _session,
+            context,
+          ) => ({
+            invocation: {
+              aud: context.audience,
+              challenge: context.challenge.value,
+            },
+            authorization: {},
+          }));
+          await owner.transact({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: aclDocId(SOURCE),
+              value: { value: { "did:key:owner": "OWNER" } },
+            }],
+          });
+          await client.close();
+          await server.idle();
+          expect(server.currencyReadersArmedOn(SOURCE)).toEqual([]);
+          await servable();
+
+          expect(await markAt(aliceUser)).toBe(2);
+          expect(await registrations()).toBe(1);
         });
 
         it("stores the slice marked `2`, and registers nothing, where that space has no access list", async () => {

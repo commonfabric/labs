@@ -60,14 +60,16 @@ export type PieceCurrencySlice = {
    * Why the slice cannot be vouched for, empty when it can: every live
    * computation that ran at its key is clean, and everything they read has
    * no writer the slice cannot answer for, and is in the piece's space or is
-   * a shared instance of another space that the snapshot names the seq of.
+   * one instance of a document of another space, the shared one, a user's
+   * or a session's, that the snapshot names the seq of.
    */
   unvouched: PieceUnvouchedReason[];
 
   /**
    * The time, in milliseconds since the epoch, from which the slice is no
-   * longer current whatever the store holds: the next tick of a clock one
-   * of its live computations read. Absent for a slice that read none.
+   * longer current whatever the store holds: the tick after the one a
+   * clock's document held when one of its live computations read it.
+   * Absent for a slice that read none.
    */
   expiresAt?: number;
 

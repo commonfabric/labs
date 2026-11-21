@@ -1222,7 +1222,11 @@ executing:
   the record is stored, where one memory server holds both stores. A
   user's or a session's own instance is registered at its own key, and
   only where the actor the key names holds READ on that space (protocol.md
-  §2); one that is not registered leaves its slice marked. That index
+  §2); one that is not registered leaves its slice marked. The grant is
+  looked up at each record and at each pull, an instance whose actor holds
+  none any longer is forgotten, which marks `2` each slice that read it,
+  and a change to a space's access list disarms every space armed with
+  it. That index
   keeps, for each registered instance, the spaces that read it and what it
   last told them, the instance's head and whether a piece there computes
   it and does not answer for it at present, and the reading index keeps

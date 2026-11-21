@@ -172,11 +172,13 @@ import {
   type CurrencyRefusal,
   type CurrencyStored,
   dropUnreadCurrencyImports,
+  forgetCurrencyImports,
   forgetCurrencySource,
   judgeCurrencyRoots,
   pullCurrencyExports,
   registerCurrencyReads,
   selectCurrencyExport,
+  selectCurrencyImports,
   selectCurrencyNextExpiry,
   selectCurrencyPiece,
   selectCurrencyReadersMoved,
@@ -184,6 +186,7 @@ import {
   selectCurrencySources,
   selectCurrencyWriters,
   storeCurrencyRecords,
+  unregisterCurrencyReads,
 } from "./currency-index.ts";
 import { sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import * as Engine from "./engine.ts";
@@ -5337,6 +5340,9 @@ export class Server {
     }
     this.#revokeDeauthorizedSessions(engine, space, writerSessionId);
     this.#noticeAdmissions(engine, space);
+    // A space that rests on `space` may hold an instance of an actor the
+    // list no longer grants, so each pulls again before it rests on.
+    this.#disarmCurrencyReaders(space);
   }
 
   /**
@@ -12776,6 +12782,63 @@ export class Server {
   }
 
   /**
+   * Returns a check of whether the space `source` may tell another space of
+   * an instance of its store: a shared one always, and a user's or a
+   * session's own only while the actor its key names holds READ on
+   * `source` (protocol.md §2). A read that names no one instance is told of
+   * nothing. Each actor is looked up once.
+   */
+  #currencyGrantCheck(
+    sourceEngine: Engine.Engine,
+    source: string,
+  ): (instance: CurrencyInstance) => boolean {
+    const granted = new Map<string, boolean>();
+    return ({ scopeKey }) => {
+      if (scopeKey === "space") return true;
+      const actor = identityOfScopeKey(scopeKey)?.principal;
+      if (actor === undefined) return false;
+      let verdict = granted.get(actor);
+      if (verdict === undefined) {
+        verdict = this.#foreignGrantOn(sourceEngine, source, actor, "READ")
+          .granted;
+        granted.set(actor, verdict);
+      }
+      return verdict;
+    };
+  }
+
+  /**
+   * Forgets what `space`'s index holds of each instance of `source` it may
+   * not be told of any longer, because the actor the instance is the own
+   * of holds no READ on `source` now, and drops `space`'s registration of
+   * it there. Each slice that read one is marked `2`.
+   *
+   * @returns Whether a slice was marked.
+   */
+  #forgetUngrantedCurrencyReads(
+    engine: Engine.Engine,
+    space: string,
+    source: string,
+    sourceEngine: Engine.Engine,
+  ): boolean {
+    const mayBeTold = this.#currencyGrantCheck(sourceEngine, source);
+    const refused = selectCurrencyImports(engine, { space, source }).filter((
+      instance,
+    ) => !mayBeTold(instance));
+    if (refused.length === 0) return false;
+    unregisterCurrencyReads(sourceEngine, {
+      space: source,
+      reader: space,
+      reads: refused,
+    });
+    return forgetCurrencyImports(engine, {
+      space,
+      source,
+      instances: refused,
+    }).length > 0;
+  }
+
+  /**
    * Hands `space`'s serving loop `marked`, the slices its own request
    * marked, with the slices an advance made on another request marked since
    * the loop last asked.
@@ -13100,6 +13163,14 @@ export class Server {
       this.#refreshCarriedDemand(source);
       return forgetCurrencySource(engine, { space, source }).length > 0;
     }
+    // A grant withdrawn since `space` registered an actor's own instance
+    // ends what it may be told of it.
+    const ungranted = this.#forgetUngrantedCurrencyReads(
+      engine,
+      space,
+      source,
+      sourceEngine,
+    );
     const pulled = pullCurrencyExports(sourceEngine, {
       space: source,
       reader: space,
@@ -13124,12 +13195,13 @@ export class Server {
     });
     // The pull's advance may have moved a row another reader registered.
     this.#tellCurrencyReaders(source, sourceEngine);
-    return applyCurrencyImports(engine, {
+    const applied = applyCurrencyImports(engine, {
       space,
       source,
       entries: pulled.entries,
       position: pulled.position,
     }).length > 0;
+    return applied || ungranted;
   }
 
   /**
@@ -13168,20 +13240,11 @@ export class Server {
       // An instance that is a user's or a session's own is read under that
       // actor's READ grant on the source (protocol.md §2), and what the
       // source reports of it is told under the same grant. One whose actor
-      // holds none is not registered, which leaves its slice marked too.
-      const granted = new Map<string, boolean>();
-      const admitted = [...instances.values()].filter(({ scopeKey }) => {
-        if (scopeKey === "space") return true;
-        const actor = identityOfScopeKey(scopeKey)?.principal;
-        if (actor === undefined) return false;
-        let verdict = granted.get(actor);
-        if (verdict === undefined) {
-          verdict = this.#foreignGrantOn(sourceEngine, source, actor, "READ")
-            .granted;
-          granted.set(actor, verdict);
-        }
-        return verdict;
-      });
+      // holds none is not registered, and what an earlier record registered
+      // of it is forgotten, which leaves its slice marked too.
+      this.#forgetUngrantedCurrencyReads(engine, space, source, sourceEngine);
+      const mayBeTold = this.#currencyGrantCheck(sourceEngine, source);
+      const admitted = [...instances.values()].filter(mayBeTold);
       const registered = registerCurrencyReads(sourceEngine, {
         space: source,
         reader: space,

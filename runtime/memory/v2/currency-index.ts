@@ -1989,6 +1989,91 @@ export const forgetCurrencySource = (
 };
 
 /**
+ * The instances of the space `source` that `space`'s index holds as told of
+ * by it: the ones a slice here read and registered there.
+ */
+export const selectCurrencyImports = (
+  engine: Engine,
+  options: { space: string; source: string },
+): CurrencyInstance[] => {
+  const context = contextFor(engine, options.space);
+  return (context.statements.selectImportsOfSource.all({
+    branch: context.branch,
+    source: options.source,
+  }) as Array<{ id: string; scope_key: string }>).map((
+    { id, scope_key },
+  ) => ({ id, scopeKey: scope_key }));
+};
+
+/**
+ * Forgets what `space`'s index holds of `instances` of the space `source`,
+ * which it may not be told of any longer, and marks `2` each slice that
+ * read one. A record stored afterward finds nothing reported of them.
+ *
+ * @returns The pieces with a slice this marked.
+ */
+export const forgetCurrencyImports = (
+  engine: Engine,
+  options: {
+    space: string;
+    source: string;
+    instances: readonly CurrencyInstance[];
+  },
+): string[] => {
+  const context = changingContextFor(engine, options.space);
+  const { branch, statements } = context;
+  const { source } = options;
+  const marked = new Map<string, SliceRef>();
+  engine.database.transaction(() => {
+    for (const { id, scopeKey } of options.instances) {
+      const readers = statements.selectReadersOfImport.all({
+        branch,
+        source,
+        id,
+        scope_key: scopeKey,
+      }) as SliceRef[];
+      for (const { slice, piece } of readers) {
+        const ref = { piece, slice };
+        const mark = markOf(context, ref);
+        if (mark === undefined || mark === 2) continue;
+        setMark(context, ref, 2);
+        marked.set(refKey(ref), ref);
+      }
+      statements.deleteImport.run({ branch, source, id, scope_key: scopeKey });
+    }
+    markDownstream(context, [...marked.values()], new Map());
+    refreshTouched(context);
+  }).immediate();
+  return [...new Set([...marked.values()].map((ref) => ref.piece))];
+};
+
+/**
+ * Drops the registrations the space `reader` holds of `reads`, instances of
+ * `space`'s store, so that `space` tells it nothing more of them.
+ */
+export const unregisterCurrencyReads = (
+  engine: Engine,
+  options: {
+    space: string;
+    reader: string;
+    reads: readonly CurrencyInstance[];
+  },
+): void => {
+  const context = contextFor(engine, options.space);
+  const { branch, statements } = context;
+  engine.database.transaction(() => {
+    for (const { id, scopeKey } of options.reads) {
+      statements.deleteReader.run({
+        branch,
+        reader: options.reader,
+        id,
+        scope_key: scopeKey,
+      });
+    }
+  }).immediate();
+};
+
+/**
  * The earliest time, in milliseconds since the epoch, at which a slice of
  * `space` expires, or `undefined` where none does. The marks are brought up
  * to date at or after that time to mark it, which a space that reads this

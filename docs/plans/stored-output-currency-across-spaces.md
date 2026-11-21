@@ -160,9 +160,12 @@ one is, at that instance's key, where the actor the key names holds READ
 on the source: the grant the read itself was admitted under
 (`protocol.md` §2). Where the actor holds none, the instance is not
 registered and its slice is stored marked `2`. The grant is checked each
-time a record is stored. A grant withdrawn afterward does not reach a
-slice that already rests, as it does not reach an instance a serving
-replica already holds (`verification-coverage.md` OW35 (a)).
+time a record is stored and each time the reading space pulls. An instance
+whose actor holds none any longer is forgotten: the reading space's
+registration of it is dropped, and each slice that read it is marked `2`.
+A change to the source's access list disarms every space armed with it, so
+each pulls again before it rests on, and a grant that was withdrawn ends
+the rest of the slices that depended on it.
 
 Two reads are left out, and a slice with either is not vouched for: one
 that names no one instance of a document, and one whose seq the serving
@@ -816,7 +819,10 @@ change to a shared input of the other space, which reaches both viewers:
 23. A slice that read its actor's own instance in another space, a user's
     or a session's, is stored clean where the actor holds READ there and
     marked `2` where the actor holds none, and nothing is registered for
-    the second (`v2-server-currency-across-spaces.test.ts`). Under `skip`
+    the second. A grant withdrawn afterward marks the slice `2` and drops
+    its registration, at the next record and at the judgment that follows
+    the change to the access list
+    (`v2-server-currency-across-spaces.test.ts`). Under `skip`
     the piece of test 22 is left unstarted, and carries nothing, while
     each viewer's instance is unchanged, and is started when an input of
     the other space's piece changes, which brings each viewer the new
