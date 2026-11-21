@@ -433,7 +433,12 @@ that derives it and no pattern pointer of its own. A demand that names one as
 a root, as a session's watch of it or a row carried from another space (§3b)
 does, is a demand for a value of that piece: its structure load follows the
 back-link and starts the piece, as a load of an argument does, and the demand's
-pair counts among the piece's demanders. A `computed:` document a session was
+pair counts among the piece's demanders. Where the root is an instance
+narrower than the space, the back-link is read from the instance as a pair
+that demands it: the serving identity's own instance is not the one
+demanded, and the space may hold none. An instance that does not exist yet
+has no back-link to read, so a demand carried from another space brings the
+piece with it (§3b). A `computed:` document a session was
 only sent, because a document it names links to it, is no root. A session
 watching a piece is sent every document the piece derives, and the piece
 starts from the root that reached them. A `computed:` root that holds no

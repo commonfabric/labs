@@ -24,6 +24,9 @@ const setupSigner = await Identity.fromPassphrase(
 const aliceSigner = await Identity.fromPassphrase(
   "space-server computed root alice",
 );
+const bobSigner = await Identity.fromPassphrase(
+  "space-server computed root bob",
+);
 
 /** A piece with one output, `total`, derived from its input. */
 const PROGRAM: RuntimeProgram = {
@@ -35,6 +38,21 @@ const PROGRAM: RuntimeProgram = {
       "export default pattern<{ n: number }, { total: number }>(",
       "  ({ n }) => ({ total: computed(() => n + 1) }),",
       ");",
+    ].join("\n"),
+  }],
+};
+
+/** A piece with one output, `mine`, derived once for each viewer. */
+const PER_USER_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern, PerUser } from 'commonfabric';",
+      "export default pattern<{ n: number }, { mine: string }>(({ n }) => {",
+      "  const mine = computed((): PerUser<string> => 'mine:' + String(n));",
+      "  return { mine };",
+      "});",
     ].join("\n"),
   }],
 };
@@ -110,16 +128,30 @@ describe("SpaceServer", () => {
       runtime.runner.isRunning(runtime.getCellFromLink(root))
     );
 
+  /** Has the client that `openRuntime()` returned last leave. */
+  const closeLastRuntime = async () => {
+    const { runtime, manager } = opened.pop()!;
+    await runtime.dispose();
+    await manager.close();
+  };
+
   /**
-   * Stands the piece up as a client that then leaves, with a document that
-   * links to its `total`, parks the space, and then changes the piece's
-   * input to 41 with no client, so that the `total` the store holds is out
-   * of date and nothing runs the piece. Returns the piece's root and the
-   * address of the `computed:` document that holds `total`.
+   * Stands a piece of `program` up as a client that then leaves, with a
+   * document that links to its output `output`, parks the space, and then
+   * changes the piece's input to 41 with no client, so that the output the
+   * store holds is out of date and nothing runs the piece. With `viewer`,
+   * that viewer watches the piece's result before the space is parked, so
+   * that the store holds their own instance of the output. Returns the
+   * piece's root and the address of the `computed:` document that holds
+   * the output, as the viewer reads it where there is one.
    */
-  const standUpParkAndChange = async () => {
+  const standUpParkAndChange = async (
+    program: RuntimeProgram,
+    output: string,
+    viewer?: Identity,
+  ) => {
     const setup = openRuntime(setupSigner);
-    const compiled = await setup.patternManager.compilePattern(PROGRAM, {
+    const compiled = await setup.patternManager.compilePattern(program, {
       space,
     });
     const argument = setup.getCell<{ n: number }>(
@@ -127,7 +159,7 @@ describe("SpaceServer", () => {
       "computed root argument",
       compiled.argumentSchema,
     );
-    const result = setup.getCell<{ total: number }>(
+    const result = setup.getCell<Record<string, unknown>>(
       space,
       "computed root result",
       compiled.resultSchema,
@@ -141,28 +173,44 @@ describe("SpaceServer", () => {
     result.sink(() => {});
     await waitForCellValue(
       setup,
-      result.key("total"),
-      (total: number | undefined) => total === 2,
-      { stuckLabel: "the piece to derive its first total" },
+      result.key(output),
+      (value: unknown) => value !== undefined,
+      { stuckLabel: "the piece to derive its first output" },
     );
     await host!.whenQuiescent();
-    const total = result.key("total").resolveAsCell()
-      .getAsNormalizedFullLink();
-    expect(total.id.startsWith("computed:")).toBe(true);
-    const pointer = setup.getCellFromLink<{ to: number }>({
+    const pointer = setup.getCellFromLink<Record<string, unknown>>({
       space,
       id: POINTER_ID as never,
       path: [],
     });
     await pointer.sync();
     const link = setup.edit();
-    pointer.withTx(link).set({ to: result.withTx(link).key("total") });
+    pointer.withTx(link).set({ to: result.withTx(link).key(output) });
     expect((await link.commit().settled).error).toBeUndefined();
     const root = result.getAsNormalizedFullLink();
     const input = argument.getAsNormalizedFullLink().id;
-    const { runtime, manager } = opened.pop()!;
-    await runtime.dispose();
-    await manager.close();
+    let derived = result.key(output).resolveAsCell().getAsNormalizedFullLink();
+    await closeLastRuntime();
+    if (viewer !== undefined) {
+      const viewing = openRuntime(viewer);
+      const viewed = viewing.getCell<Record<string, unknown>>(
+        space,
+        "computed root result",
+        compiled.resultSchema,
+      );
+      await viewed.sync();
+      viewed.sink(() => {});
+      await waitForCellValue(
+        viewing,
+        viewed.key(output),
+        (value: unknown) => value !== undefined,
+        { stuckLabel: "the piece to derive the viewer's own output" },
+      );
+      await host!.whenQuiescent();
+      derived = viewed.key(output).resolveAsCell().getAsNormalizedFullLink();
+      await closeLastRuntime();
+    }
+    expect(derived.id.startsWith("computed:")).toBe(true);
     await host!.whenQuiescent();
     await clock.tick(DETACHED_SESSION_MS);
     await host!.whenQuiescent();
@@ -173,7 +221,7 @@ describe("SpaceServer", () => {
       n: 41,
     });
     await server.idle();
-    return { root, total };
+    return { root, derived };
   };
 
   /** The demand rows of the space's sessions for the document `id`. */
@@ -183,15 +231,15 @@ describe("SpaceServer", () => {
       .filter((row) => row.id === id);
 
   describe("instance members", () => {
-    describe("a `computed:` document of a piece nothing runs", () => {
+    describe("a demanded `computed:` document", () => {
       it("starts the piece for a viewer who names the document and watches nothing else of the piece", async () => {
-        const { root, total } = await standUpParkAndChange();
+        const { root, derived } = await standUpParkAndChange(PROGRAM, "total");
         expect(serves(root)).toBe(false);
 
         const alice = openRuntime(aliceSigner);
         const cell = alice.getCellFromLink<number>({
           space,
-          id: total.id,
+          id: derived.id,
           path: [],
         });
         await cell.sync();
@@ -206,11 +254,86 @@ describe("SpaceServer", () => {
         expect(serves(root)).toBe(true);
       });
 
+      it("starts the piece for a viewer who names their own instance of the document and watches nothing else of the piece", async () => {
+        // The serving identity holds no instance of an output derived once
+        // for each viewer, and the space holds none either, so the piece is
+        // found through the instance of the viewer who demands it.
+
+        const { root, derived } = await standUpParkAndChange(
+          PER_USER_PROGRAM,
+          "mine",
+          aliceSigner,
+        );
+        expect(derived.scope).toBe("user");
+        expect(serves(root)).toBe(false);
+
+        const alice = openRuntime(aliceSigner);
+        const cell = alice.getCellFromLink<string>({
+          space,
+          id: derived.id,
+          scope: "user",
+          path: [],
+        });
+        await cell.sync();
+        cell.sink(() => {});
+
+        await waitForCellValue(
+          alice,
+          cell,
+          (value: string | undefined) => value === "mine:41",
+          { stuckLabel: "alice to read her output derived from the new input" },
+        );
+        expect(serves(root)).toBe(true);
+      });
+
+      it("derives the instance of a viewer who names it while the piece runs for another viewer", async () => {
+        const { root, derived } = await standUpParkAndChange(
+          PER_USER_PROGRAM,
+          "mine",
+          aliceSigner,
+        );
+        const bob = openRuntime(bobSigner);
+        const watched = bob.getCellFromLink<{ mine: string }>({
+          space,
+          id: root.id,
+          path: [],
+        }).asSchema({
+          type: "object",
+          properties: { mine: { type: "string" } },
+        });
+        await watched.sync();
+        watched.sink(() => {});
+        await waitForCellValue(
+          bob,
+          watched.key("mine"),
+          (value: string | undefined) => value === "mine:41",
+          { stuckLabel: "bob to read his output derived from the new input" },
+        );
+        expect(serves(root)).toBe(true);
+
+        const alice = openRuntime(aliceSigner);
+        const cell = alice.getCellFromLink<string>({
+          space,
+          id: derived.id,
+          scope: "user",
+          path: [],
+        });
+        await cell.sync();
+        cell.sink(() => {});
+
+        await waitForCellValue(
+          alice,
+          cell,
+          (value: string | undefined) => value === "mine:41",
+          { stuckLabel: "alice to read her output derived from the new input" },
+        );
+      });
+
       it("starts nothing for a viewer who was sent the document and names another", async () => {
         // The viewer names a document that links to the piece's output, so
         // the output is sent along with it and no watch names it.
 
-        const { root, total } = await standUpParkAndChange();
+        const { root, derived } = await standUpParkAndChange(PROGRAM, "total");
 
         const alice = openRuntime(aliceSigner);
         const pointer = alice.getCellFromLink<{ to: number }>({
@@ -224,10 +347,11 @@ describe("SpaceServer", () => {
         await pointer.sync();
         await host!.whenQuiescent();
 
-        expect(rowsFor(total.id).map(({ root, piece }) => ({ root, piece })))
-          .toEqual([{ root: false, piece: true }]);
+        expect(
+          rowsFor(derived.id).map(({ root, piece }) => ({ root, piece })),
+        ).toEqual([{ root: false, piece: true }]);
         expect(serves(root)).toBe(false);
-        expect((await server.readDocument(space, total.id))?.value).toBe(2);
+        expect((await server.readDocument(space, derived.id))?.value).toBe(2);
       });
     });
   });

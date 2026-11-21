@@ -223,6 +223,7 @@ import { ensureSpaceRootPattern } from "../ensure-space-root.ts";
 import { sourceDocKey } from "../compilation-cache/cell-cache.ts";
 import { asPatternIdentityRef } from "../meta-seam.ts";
 import { entityKindOfIdString } from "../entity-kind.ts";
+import { getMetaLink } from "../link-utils.ts";
 import {
   stampWaveRunContext,
   WaveAccumulator,
@@ -6365,9 +6366,14 @@ export class SpaceServer implements TransactionSealDestination {
             ]);
             this.#rearmSeqsUnderRetry.delete(key);
             this.#rearmSeqsAwaitingFollow.delete(key);
+            // A `computed:` root narrower than the space is loaded from
+            // the document its demander's instance links back to.
+            const loadRoot =
+              await this.#ownerOfComputedInstance(runtime, key, root) ?? root;
+            if (!this.#active || this.#runtime !== runtime) return;
             const attempt = await this.#attemptStructureLoad(
               runtime,
-              root,
+              loadRoot,
               onOwningRoot,
               onSourceRoot,
             );
@@ -6383,7 +6389,7 @@ export class SpaceServer implements TransactionSealDestination {
               // where it can answer, and to the chain where it cannot.
               const confirmed = (await this.#confirmNoPatternMeta(
                 runtime,
-                root,
+                loadRoot,
                 attempt,
                 onOwningRoot,
                 onSourceRoot,
@@ -6680,6 +6686,51 @@ export class SpaceServer implements TransactionSealDestination {
     d.demandPasses += 1;
     d.demandPassMs += performance.now() - passStart;
     timing.time(passStart, "executor", "wave", "demand-pass");
+  }
+
+  /**
+   * The document that the `computed:` root `root`, demanded under `key` at
+   * an instance narrower than the space, links back to: the next document
+   * on the way to the piece that derives it. A structure load reads a root
+   * under the serving identity, whose own instance of such a document is
+   * not the one demanded, and the space may hold no instance of it at all.
+   * So the instance is read as a pair that demands it, which resolves to
+   * the demanded one. `undefined` for any other root, for a key no pair
+   * demands, and for an instance that is absent, cannot be read, or links
+   * back to a document of another space.
+   */
+  async #ownerOfComputedInstance(
+    runtime: Runtime,
+    key: string,
+    root: { id: string; scope?: string },
+  ): Promise<{ id: string; scope?: string } | undefined> {
+    const scope = (root.scope ?? "space") as CellScope;
+    if (scope === "space" || !isComputedId(root.id)) return undefined;
+    const demander = this.#demandersByKey.get(key)?.values().next().value;
+    if (demander === undefined) return undefined;
+    const tx = runtime.readTx();
+    tx.tx.scopeKeyIdentity = demander;
+    try {
+      const instance = runtime.getCellFromLink(
+        {
+          space: this.#options.space,
+          id: root.id as URI,
+          scope,
+          path: [],
+        },
+        undefined,
+        tx,
+      );
+      await instance.sync();
+      const owner = getMetaLink(instance, "result");
+      if (owner === undefined || owner.space !== this.#options.space) {
+        return undefined;
+      }
+      return { id: owner.id, scope: owner.scope };
+    } catch {
+      // The structure load of the root itself reports what cannot be read.
+      return undefined;
+    }
   }
 
   /**
