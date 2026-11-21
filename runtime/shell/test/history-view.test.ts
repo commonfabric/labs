@@ -1170,9 +1170,15 @@ describe("XHistoryView", () => {
      */
     const queuedTurns = () => Promise.resolve();
 
-    /** Mounts a view that lists `pages` in turn, lists it, and connects it. */
-    async function following(pages: Page[]): Promise<Mounted> {
-      const mounted = mount(() => Promise.resolve(pages.shift()!));
+    /**
+     * Mounts a view that lists `pages` in turn, or what `list` returns where
+     * it is given, lists it, and connects it.
+     */
+    async function following(
+      pages: Page[],
+      list: () => Promise<Page> = () => Promise.resolve(pages.shift()!),
+    ): Promise<Mounted> {
+      const mounted = mount(list);
       await mounted.update(
         ["rt", "space"],
         (markup) => markup.includes("data-seq"),
@@ -1405,20 +1411,34 @@ describe("XHistoryView", () => {
         expect(markup()).toContain("Show older steps");
       });
 
-      it("lists no step for a refresh that returns none", async () => {
-        const { follows, markup, until } = await following([
-          { steps: [step(5)], next: 5 },
-          { steps: [] },
-        ]);
+      it("leaves the listed steps, and the way to older steps, for a refresh that returns none", async () => {
+        // The refresh is followed by another, for a seq reported while it
+        // was made, so the third listing is asked for once the empty one has
+        // ended.
+
+        const empty = Promise.withResolvers<Page>();
+        const third = Promise.withResolvers<void>();
+        const answers: Promise<Page>[] = [
+          Promise.resolve({ steps: [step(5)], next: 5 }),
+          empty.promise,
+        ];
+        const { follows, listings, markup } = await following([], () => {
+          const answer = answers.shift();
+          if (answer === undefined) {
+            third.resolve();
+            return new Promise<Page>(() => {});
+          }
+          return answer;
+        });
+        follows[0].onAdvance(7);
+        follows[0].onAdvance(8);
+        expect(listings).toHaveLength(2);
+
+        empty.resolve({ steps: [] });
+        await third.promise;
+
+        expect(markup()).toContain('data-seq="5"');
         expect(markup()).toContain("Show older steps");
-
-        await until(
-          () => follows[0].onAdvance(7),
-          (rendered) => !rendered.includes("data-seq"),
-        );
-
-        // The way to older steps is set just after the steps are.
-        expect(markup()).not.toContain("Show older steps");
       });
     });
   });

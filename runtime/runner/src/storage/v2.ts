@@ -5396,7 +5396,11 @@ class Provider
       // reports to the same ones.
       onServerSeq: (serverSeq) => {
         for (const observer of [...this.#serverSeqObservers]) {
-          observer(serverSeq);
+          try {
+            observer(serverSeq);
+          } catch (cause) {
+            console.error("server-seq subscriber threw:", cause);
+          }
         }
       },
       // A released root is not read again on a replacement replica.
@@ -6703,6 +6707,9 @@ export class SpaceReplica
   #cancelTermination: Cancel | undefined;
   #onServerSeq?: (serverSeq: number) => void;
   #cancelServerSeq: Cancel | undefined;
+
+  /** The newest seq this replica has reported to `#onServerSeq`. */
+  #reportedServerSeq = 0;
   #onSessionReplaced?: () => void;
   #onSessionError?: (error: Error) => void;
 
@@ -13822,6 +13829,17 @@ export class SpaceReplica
     return false;
   }
 
+  /**
+   * Helper for `#memoizedSessionHandle()`, which reports `serverSeq` to
+   * `#onServerSeq` when it is newer than the one reported last.
+   */
+  #reportServerSeq(serverSeq: number): void {
+    if (this.#onServerSeq === undefined) return;
+    if (!(serverSeq > this.#reportedServerSeq)) return;
+    this.#reportedServerSeq = serverSeq;
+    this.#onServerSeq(serverSeq);
+  }
+
   #memoizedSessionHandle(): Promise<{
     client: SessionConnection;
     session: MemoryV2Client.SpaceSession;
@@ -13856,10 +13874,14 @@ export class SpaceReplica
           this.#onAccessChange?.(undefined);
           this.#onSessionAnswered?.();
           this.#cancelServerSeq?.();
-          const onServerSeq = this.#onServerSeq;
-          this.#cancelServerSeq = onServerSeq === undefined
+          this.#cancelServerSeq = this.#onServerSeq === undefined
             ? undefined
-            : resolved.session.subscribeServerSeq(onServerSeq);
+            : resolved.session.subscribeServerSeq((serverSeq) =>
+              this.#reportServerSeq(serverSeq)
+            );
+          // A session opened anew starts at the seq its open answered, which
+          // it reports to no observer, so the replica reports it here.
+          this.#reportServerSeq(resolved.session.serverSeq);
           this.#cancelTermination?.();
           this.#cancelTermination = resolved.session.subscribeTermination(
             (error) => {

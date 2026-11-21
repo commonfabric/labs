@@ -4498,8 +4498,10 @@ export class SpaceSession {
    * Observes the newest seq of the space this session has learned of
    * (`serverSeq`) moving forward, whether by an answer to a request of its
    * own or by an update the server pushes. The seq is that of the space's
-   * own history, so it moves only for commits this session hears of: its
-   * own, and those to documents it watches.
+   * own history. It moves for commits this session hears of, its own and
+   * those to documents it watches, and for an answer that names the space's
+   * head, as listing its history or its branches does, which can name a
+   * commit this session is not sent, such as one of another branch.
    */
   subscribeServerSeq(observer: (serverSeq: number) => void): () => void {
     this.#serverSeqObservers.add(observer);

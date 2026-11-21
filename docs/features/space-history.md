@@ -200,8 +200,11 @@ the principal that made it, and marks a step that is not settled as in
 progress. The list is read when the panel opens, after returning from a fork
 and after a pattern version is restored, and again each time the space moves
 on past its newest step while no fork is open. The older steps already listed
-stay listed beneath the new ones, and the pattern changes are placed from the
-piece sources the panel last read rather than read again.
+stay listed beneath the new ones where the newest stretch reaches back to
+them; where the space moved on by more than a stretch, the new stretch
+replaces the list, and "Show older steps" lists the steps between. The
+space's pieces are listed again, and the pattern changes are placed from the
+piece sources the panel last read, reading only those of pieces listed since.
 
 The panel learns that the space moved on from the newest `seq` of it that the
 runtime has heard of, which a space's memory session keeps

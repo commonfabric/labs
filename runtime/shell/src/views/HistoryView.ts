@@ -304,6 +304,8 @@ export class XHistoryView extends BaseView {
       if (before !== undefined) {
         this._steps = withOlderSteps(this._steps, page.steps);
         this._next = page.next;
+      } else if (refresh === true && page.steps.length === 0) {
+        // A refresh that finds no step leaves the steps listed as they are.
       } else if (refresh === true) {
         // The older steps listed stay only where the new page reaches back
         // to them: the space can have moved on by more than a page, and

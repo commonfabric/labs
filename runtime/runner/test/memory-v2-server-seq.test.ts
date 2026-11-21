@@ -2,10 +2,16 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { EntityDocument } from "@commonfabric/memory/v2";
-import { StorageManager } from "../src/storage/cache.deno.ts";
+import { stub } from "@std/testing/mock";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "../src/storage/cache.deno.ts";
 import type { IStorageProvider } from "../src/storage/interface.ts";
 
 type TestProvider = IStorageProvider & {
+  sync(uri: string): Promise<unknown>;
   send(
     batch: { uri: string; value: EntityDocument | undefined }[],
   ): Promise<{ ok?: Record<PropertyKey, never>; error?: unknown }>;
@@ -102,6 +108,51 @@ describe("memory-v2 server seq", () => {
       await write(2);
 
       expect(seen).toEqual(before);
+    });
+
+    it("reports to the other observers when one throws, and logs the throw", async () => {
+      const failure = new Error("observer failure");
+      using reported = stub(console, "error");
+      provider.subscribeServerSeq!(() => {
+        throw failure;
+      });
+      const seen: number[] = [];
+      provider.subscribeServerSeq!((seq) => seen.push(seq));
+
+      await write(1);
+
+      expect(seen.at(-1)).toBe(await newestSeq());
+      expect(reported.calls.map((call) => call.args)).toContainEqual([
+        "server-seq subscriber threw:",
+        failure,
+      ]);
+    });
+
+    it("reports the seq a session opened on a space with history starts at", async () => {
+      const server = newLoopbackServer();
+      const writer = EmulatedStorageManager.connectTo(server, { as: signer });
+      const reader = EmulatedStorageManager.connectTo(server, { as: signer });
+      try {
+        const written = writer.open(space) as TestProvider;
+        expect(
+          await written.send([{
+            uri: `of:memory-v2-server-seq-${crypto.randomUUID()}`,
+            value: { value: 1 },
+          }]),
+        ).toEqual({ ok: {} });
+        const newest = (await written.listHistory!())[0].seq;
+
+        const opened = reader.open(space) as TestProvider;
+        const seen: number[] = [];
+        opened.subscribeServerSeq!((seq) => seen.push(seq));
+        await opened.sync(`of:memory-v2-server-seq-${crypto.randomUUID()}`);
+
+        expect(seen[0]).toBe(newest);
+      } finally {
+        await reader.close();
+        await writer.close();
+        await server.close();
+      }
     });
   });
 });

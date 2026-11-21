@@ -500,6 +500,17 @@ export interface SlugReferenceRefusal {
 }
 
 /**
+ * Returns what tells one piece apart from another in a space: its scope, an
+ * omitted one being the space's, and its id without the `of:` scheme, which
+ * a listed piece's id carries and a routed one's does not.
+ */
+function pieceKey(
+  { id, scope }: { id: string; scope?: CellScope },
+): string {
+  return `${scope ?? "space"}\n${id.replace(/^of:/, "")}`;
+}
+
+/**
  * RuntimeInternals bundles all resources bound to an identity/host pair:
  * ONE runtime serving all of that identity's spaces over one worker.
  * There is no bound/current space — a space is just part of an address,
@@ -513,14 +524,10 @@ export class RuntimeInternals extends EventTarget {
   #historyWatchers = new Map<DID, number>();
 
   /**
-   * The piece sources the latest `spaceHistory()` of each space read, and
-   * the pieces it was asked to read beside the listed ones, for a listing
-   * that reuses them.
+   * The piece sources the latest `spaceHistory()` of each space read, by
+   * the piece they are of (`pieceKey()`), for a listing that reuses them.
    */
-  #historySources = new Map<
-    DID,
-    { named: string; sources: PieceSourceOfScope[] }
-  >();
+  #historySources = new Map<DID, Map<string, PieceSourceOfScope>>();
 
   #disposed = false;
   #favorites: FavoritesManager;
@@ -941,10 +948,12 @@ export class RuntimeInternals extends EventTarget {
    * changes of pattern code the space's pieces recorded during it, as a
    * piece's own source history lists them: the pieces the space lists, and
    * those `pieces` names beside them, which is how a piece the space does
-   * not list has its changes shown. With `options.reuseSources`, the sources
-   * the previous listing of the space read for the same `pieces` are used
-   * again instead of being read, which suits a listing made because the
-   * space moved on rather than because a piece's source may have changed.
+   * not list has its changes shown. With `options.reuseSources`, a piece
+   * whose source the previous listing of the space read has that source used
+   * again instead of read, which suits a listing made because the space
+   * moved on rather than because a piece's source may have changed. The
+   * pieces are listed again either way, so a piece added since has its
+   * source read, and one removed since is left out.
    */
   async spaceHistory(
     space: DID,
@@ -953,16 +962,16 @@ export class RuntimeInternals extends EventTarget {
     options: { reuseSources?: boolean } = {},
   ): Promise<{ steps: SpaceHistoryStep[]; next?: number }> {
     this.#check();
-    const named = JSON.stringify(
-      pieces.map(({ id, scope }) => [id, scope ?? "space"]),
-    );
-    const held = this.#historySources.get(space);
-    const reading = options.reuseSources === true && held?.named === named
-      ? Promise.resolve(held.sources)
-      : this.#pieceSources(space, pieces).then((sources) => {
-        this.#historySources.set(space, { named, sources });
-        return sources;
-      });
+    const reading = this.#pieceSources(
+      space,
+      pieces,
+      options.reuseSources === true
+        ? this.#historySources.get(space)
+        : undefined,
+    ).then((read) => {
+      this.#historySources.set(space, read);
+      return [...read.values()];
+    });
     const [page, sources] = await Promise.all([
       this.#client.spaceHistory({
         space,
@@ -1034,7 +1043,8 @@ export class RuntimeInternals extends EventTarget {
   async #pieceSources(
     space: DID,
     named: readonly { id: string; scope?: CellScope }[],
-  ): Promise<PieceSourceOfScope[]> {
+    held?: ReadonlyMap<string, PieceSourceOfScope>,
+  ): Promise<Map<string, PieceSourceOfScope>> {
     let pieces: { id: string; scope?: CellScope }[] = [];
     try {
       // A piece registered a moment ago is on the list once the space's
@@ -1061,30 +1071,30 @@ export class RuntimeInternals extends EventTarget {
         error,
       ]);
     }
-    // A listed piece is named by its full URI and a routed one without the
-    // scheme, so the two are compared without it, and an omitted scope is
-    // the space's.
-    const key = ({ id, scope }: { id: string; scope?: CellScope }) =>
-      `${scope ?? "space"}\n${id.replace(/^of:/, "")}`;
-    const listed = new Set(pieces.map(key));
+    const listed = new Set(pieces.map(pieceKey));
     for (const piece of named) {
-      if (listed.has(key(piece))) continue;
-      listed.add(key(piece));
+      if (listed.has(pieceKey(piece))) continue;
+      listed.add(pieceKey(piece));
       pieces.push(piece);
     }
     const sources = await Promise.allSettled(
-      pieces.map(({ id, scope }) =>
-        this.#client.getPieceSource(id, space, scope)
-      ),
+      pieces.map(({ id, scope }) => {
+        const kept = held?.get(pieceKey({ id, scope }));
+        return kept !== undefined
+          ? Promise.resolve(kept.source)
+          : this.#client.getPieceSource(id, space, scope);
+      }),
     );
-    return sources.flatMap((outcome, index) => {
-      if (outcome.status !== "fulfilled") return [];
+    const read = new Map<string, PieceSourceOfScope>();
+    sources.forEach((outcome, index) => {
+      if (outcome.status !== "fulfilled") return;
       const { scope } = pieces[index];
-      return [{
+      read.set(pieceKey(pieces[index]), {
         source: outcome.value,
         ...(scope !== undefined ? { scope } : {}),
-      }];
+      });
     });
+    return read;
   }
 
   /**
