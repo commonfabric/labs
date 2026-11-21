@@ -3723,9 +3723,15 @@ export class SpaceSession {
     return this.#sessionId;
   }
 
-  /** The branch this session is of (`MountOptions.branch`): the default
-   *  branch when its open named none. */
-  get branch(): BranchName {
+  /**
+   * The branch this session's opens name (`MountOptions.branch`): the default
+   * branch when they name none. It is the branch the session is of, except
+   * where an open asked the server to fork it (`MountOptions.forkBranch`) for
+   * a principal that may not write to the space: the server then opens the
+   * session on the default branch (04-protocol.md section 4.1.2), and
+   * `session.open` does not say so.
+   */
+  get requestedBranch(): BranchName {
     return this.#branch ?? DEFAULT_BRANCH;
   }
 

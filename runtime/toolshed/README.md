@@ -263,8 +263,8 @@ writes it advertises `spaceInvitesRevision` in its handshake
 ([protocol](../../docs/specs/memory-v2/04-protocol.md#411-websocket)), so a
 client reads the flag on the connection its session is on, from the process that
 tells that session of the move (`ISpaceReplica.invitesRevisionWatchable()`,
-which also requires the default branch). A server without the flag writes no
-such document.
+which also requires a session that asked for the default branch). A server
+without the flag writes no such document.
 
 Over HTTP, every invitation operation is a signed JSON POST under
 `/api/spaces/:space/invites/`: `create`, `redeem`, `preview`, `list`, `revoke`,

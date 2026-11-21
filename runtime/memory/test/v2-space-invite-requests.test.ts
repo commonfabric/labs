@@ -415,6 +415,43 @@ describe("space.invite", () => {
       expect(Array.isArray(listed) && listed.length).toBe(2);
     });
 
+    it("moves for a reader's session the server opened on the default branch, which still names the fork it asked for", async () => {
+      // A reader that asks to fork a branch gets a session of the default
+      // branch, and `session.open` does not say so: the session reads the
+      // document as it moves, while `requestedBranch` names the fork. A
+      // replica's `invitesRevisionWatchable()` reads `requestedBranch`, so it
+      // answers `false` for such a session, and its caller reads the ledger
+      // itself rather than miss a move.
+
+      const server = serverWith({ inviteHost: INVITE_HOST });
+      const reader = (await Identity.generate()).did();
+      const { space, session } = await ownedSpace(server, {
+        [reader]: "READ",
+      });
+      const revisionOn = async (on: SpaceSession) =>
+        (await on.queryGraph({
+          roots: [{
+            id: SPACE_INVITES_REVISION_DOC_ID,
+            selector: { path: [], schema: false },
+          }],
+        })).entities[0]?.document;
+      await session.administerInvites(creation(space).invite);
+      const client = await connect({ transport: loopback(server) });
+      clients.push(client);
+      const readerSession = await client.mount(
+        space,
+        { branch: "reader-fork", forkBranch: true },
+        authAs(reader),
+      );
+
+      await session.administerInvites(creation(space).invite);
+
+      expect(await revisionOn(readerSession)).toEqual({
+        value: { revision: 2 },
+      });
+      expect(readerSession.requestedBranch).toBe("reader-fork");
+    });
+
     it("reaches an owner watching it when another owner makes an invitation and when a member already holding the access redeems one", async () => {
       // The two changes a daemon holding the space hears of no other way:
       // neither is its own, and the redemption leaves the access list as it

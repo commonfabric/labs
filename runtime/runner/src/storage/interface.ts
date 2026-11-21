@@ -3989,7 +3989,9 @@ export interface ISpaceReplica extends ISpace {
    * every change to the ledger: the session is on the space's default branch,
    * where the invitation service moves it, and its server advertises
    * `spaceInvitesRevision`, as the session's latest handshake said. A session
-   * on another branch sees the document as it stood at the fork. A session
+   * on another branch sees the document as it stood at the fork, and one that
+   * asked to fork a branch is taken to be of it, even where the server opened
+   * it on the default branch, since `session.open` does not say. A session
    * replaced on reconnect (`IStorageManager.subscribeSpaceSessionReplaced()`)
    * is on a server that may answer otherwise, so a reader whose watch rests on
    * the answer asks again then.
