@@ -398,9 +398,12 @@ edges, and along the edges no index can vouch for.
 
 **Who may be carried.** A pair is admitted into the source only where its
 actor holds READ there, by the check a named scoped read passes
-(`protocol.md` §2, the grant-scoped read). A row whose actor does not is
-dropped and counted, and the reading run reads what the source's loop last
-derived, as before the rule.
+(`protocol.md` §2, the grant-scoped read). Where the actor does not, a row
+for the actor's own instance is dropped and counted, as the read of it is
+refused. A row for a shared instance still stands, with no pair: a serving
+loop reads a shared instance of another space whoever it runs for
+(`protocol.md` §2b), so the source loads the piece that computes it and
+runs nothing for the actor, as it does for an anonymous session.
 
 **How long it stands.** The reading loop sends its whole set for a source
 whenever the set changes, and the set is replaced. It changes when a piece

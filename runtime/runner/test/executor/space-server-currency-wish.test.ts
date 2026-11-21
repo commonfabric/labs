@@ -518,8 +518,8 @@ describe("SpaceServer", () => {
 
       /**
        * Gives alice's home space an access list that names her its owner,
-       * as a home space has: a demand is carried into a space only for an
-       * actor who may read it.
+       * as a home space has: a demand is carried into a space with its
+       * actor's pair only for an actor who may read it.
        */
       const ownHome = async () => {
         await server.writeDocument(home, aclDocId(home), {
@@ -539,16 +539,17 @@ describe("SpaceServer", () => {
         expect(carriedIntoHome()).toEqual([]);
       });
 
-      it("counts the rows as refused where the home space has no access list that grants the viewer", async () => {
+      it("offers what the wish read in a home space with no access list, which refuses none of it", async () => {
+        // A shared instance is read whoever the run is for, so its demand
+        // is taken without the viewer's grant.
+
         await seedHome();
         host = newHost("record");
         await watch(wishProgram("{ query: '#favorites' }"));
-        await awaitEach(
-          cycles,
-          () => host!.stats().currency.carriedRefused > 0,
-        );
+        await awaitEach(cycles, () => host!.stats().currency.carried > 0);
+        await host.whenQuiescent();
 
-        expect(carriedIntoHome()).toEqual([]);
+        expect(host.stats().currency.carriedRefused).toBe(0);
       });
 
       it("counts nothing as carried once the loop has parked", async () => {

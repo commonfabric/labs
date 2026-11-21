@@ -464,19 +464,33 @@ describe("v2-server-carried-demand", () => {
         ).toEqual({ refused: 1 });
       });
 
-      it("refuses a row whose actor does not hold READ on the space, and admits the rows of one who does", async () => {
-        const alice = await session(ALICE, "alice-one");
+      it("adds a row with no pair for a shared instance whose actor does not hold READ on the space", async () => {
         const bob = await session(BOB, "bob-one");
 
         expect(
           await server.setCarriedDemand(SOURCE, READER, [
             shared("of:far", bob),
-            shared("of:far", alice),
+          ]),
+        ).toEqual({ refused: 0 });
+
+        expect(demand()).toEqual([{
+          id: "of:far",
+          scope: "space",
+          scopeKey: "space",
+          root: true,
+          origin: bob,
+        }]);
+      });
+
+      it("refuses a row for the own instance of an actor who does not hold READ on the space", async () => {
+        const bob = await session(BOB, "bob-one");
+
+        expect(
+          await server.setCarriedDemand(SOURCE, READER, [
+            own("of:prefs", BOB, bob),
           ]),
         ).toEqual({ refused: 1 });
-        expect(demand().map(({ identity }) => identity?.principal)).toEqual([
-          ALICE,
-        ]);
+        expect(demand()).toEqual([]);
       });
 
       it("refuses a row for an instance of another actor than the origin session's", async () => {

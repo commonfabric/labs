@@ -11,7 +11,7 @@
  *   new session, and watches every piece;
  * - **change**: one viewer renames their favorite while every viewer
  *   watches, timed until that viewer reads the new name from every piece;
- * - **away** (`skip` only): a viewer who is not watching renames theirs.
+ * - **away**: a viewer who is not watching renames theirs.
  *
  * Each phase prints its wall time, how many pieces a serving runtime runs,
  * what the serving loop counted, and what passed between the spaces'

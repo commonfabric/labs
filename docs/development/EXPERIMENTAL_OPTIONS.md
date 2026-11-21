@@ -2502,12 +2502,15 @@ the per-epic implementation notes).
   started pieces' runs read, for the actors those runs were made for, where
   that space's index does not prove the instance current: `currency.carried`
   counts the rows offered now, and `currency.carriedRefused` the rows a
-  space refused, as it does where the actor may not read it.
+  space refused, as it does an actor's own instance where the actor may not
+  read the space.
   `skip` acts on the judgment: a root
   whose piece vouches for every demanded instance of it, in slices that are
   clean, is neither loaded nor started, until an input marks a slice a
-  demanded instance is resolved under or a session's demand reaches an
-  instance the piece does not vouch for
+  demanded instance is resolved under, the record of such a slice expires
+  because it read the interval clock of a wish, which the loop sets a timer
+  for (`currency.expiryWakes`), or a session's demand reaches an instance
+  the piece does not vouch for
   ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §1).
   [The plan](../plans/stored-output-currency.md) carries the design, its
   limits and the stages after this one.

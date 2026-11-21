@@ -30,10 +30,25 @@
  * none of them runs at admission.
  */
 
-import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { fabricAwareEqual } from "@commonfabric/data-model";
 import { DEFAULT_BRANCH, type ScopeKey, scopeOfScopeKey } from "../v2.ts";
 import { ANY_INSTANCE, sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import { type Engine, read, serverSeq } from "./engine.ts";
+
+/**
+ * Whether two documents read from the store hold the same value. A stored
+ * value can hold a link, a byte sequence or another special object, which
+ * keeps its state out of its properties, so the comparison is the one that
+ * decides those by content. Two documents it cannot decide are not the
+ * same: a pair of maps or of sets, which it does not hash yet.
+ */
+const sameDocument = (a: unknown, b: unknown): boolean => {
+  try {
+    return fabricAwareEqual(a, b);
+  } catch {
+    return false;
+  }
+};
 
 /** What the id of a document some computation derives begins with. */
 const COMPUTED_ID_PREFIX = "computed:";
@@ -1213,7 +1228,7 @@ export const storeCurrencyRecords = (
     // no sign that the stored value was stale.
     return vouches.some(({ id, seq }) =>
       headOf(id, ref.slice) > seq &&
-      !deepEqual(
+      !sameDocument(
         read(engine, { id, scopeKey: ref.slice as ScopeKey, seq }),
         read(engine, { id, scopeKey: ref.slice as ScopeKey }),
       )

@@ -13415,14 +13415,17 @@ export class Server {
    * Replaces the demand the reading space `reader` carries into `space`
    * with `rows` (serving-loop.md §3b): each instance a run of `reader` read
    * here under the actor of a client session, which then demands it here
-   * as if it watched it. A row is refused where its origin is not a live
-   * client session on this server, which a serving session of
-   * `excludePrincipal` (`isServingSessionOf()`) is not; where that session
-   * is anonymous, and so names no actor to carry; where its instance
-   * is narrower than the space and not its actor's own; where its actor
-   * does not hold READ on `space`, as a named scoped read is refused
-   * (protocol.md §2); and where this server cannot ask `space`'s store. A
-   * row stands until `reader` replaces it or its origin session ends.
+   * as if it watched it. A row for the actor's own instance is admitted
+   * only where the actor holds READ on `space`, as a named scoped read is
+   * (protocol.md §2). A row for a shared instance is admitted without that,
+   * and then stands with no pair, as an anonymous session's does: the
+   * piece that computes it is loaded, and nothing is run for the actor. A
+   * row is refused where its origin is not a live client session on this
+   * server, which a serving session of `excludePrincipal`
+   * (`isServingSessionOf()`) is not; where that session is anonymous, and
+   * so names no actor to carry; where its instance is another actor's; and
+   * where this server cannot ask `space`'s store. A row stands until
+   * `reader` replaces it or its origin session ends.
    *
    * @returns How many of `rows` were refused.
    */
@@ -13458,6 +13461,8 @@ export class Server {
       let admitted = engine !== undefined && origin !== undefined &&
         !isServingSessionOf(origin, options.excludePrincipal) &&
         principal !== undefined && actor === principal;
+      // Whether the actor holds READ here, and so is carried as a pair.
+      let reads = false;
       if (admitted) {
         let verdict = granted.get(principal!);
         if (verdict === undefined) {
@@ -13465,7 +13470,12 @@ export class Server {
             .granted;
           granted.set(principal!, verdict);
         }
-        admitted = verdict;
+        reads = verdict;
+        // A serving loop reads a shared instance of another space whoever
+        // it runs for (protocol.md §2b), so the demand for one stands
+        // without the actor. The actor's own instance is read under the
+        // actor's grant alone, and so is demanded under it.
+        admitted = verdict || row.scopeKey === "space";
       }
       if (!admitted) {
         refused += 1;
@@ -13474,14 +13484,20 @@ export class Server {
       const sessionId = carriedSessionId(reader, row.origin);
       let session = next.get(sessionId);
       if (session === undefined) {
-        session = { origin: { ...row.origin }, principal, rows: new Map() };
+        session = {
+          origin: { ...row.origin },
+          principal: reads ? principal : undefined,
+          rows: new Map(),
+        };
         next.set(sessionId, session);
       }
       session.rows.set(toDirtyKey(row.id, row.scopeKey), {
         id: row.id,
         scope: row.scope,
         scopeKey: row.scopeKey,
-        identity: { principal: principal!, sessionId: row.origin.sessionId },
+        ...(reads && {
+          identity: { principal: principal!, sessionId: row.origin.sessionId },
+        }),
         root: true,
         origin: session.origin,
       });

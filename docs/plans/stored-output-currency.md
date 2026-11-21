@@ -366,7 +366,8 @@ wrong.
 
 1. **The index.** `runtime/memory/v2/currency-index.ts` and its tables
    (`currency_slice`, `currency_read`, `currency_write`, `currency_vouch`,
-   `currency_under`, `currency_cursor`): store a batch of records, advance
+   `currency_under`, `currency_cursor`, and `currency_expiry` for the time a
+   slice that read a clock expires at): store a batch of records, advance
    the cursor, judge roots against demand rows. The tables join the SQL
    guard's core names and the engine's table list.
 2. **Recording, and judging without acting.** The scheduler reports the

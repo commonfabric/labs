@@ -21,6 +21,7 @@ import {
   selectCurrencySources,
   storeCurrencyRecords,
 } from "../v2/currency-index.ts";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
 import { resolveScopeKey } from "../v2.ts";
 
@@ -1208,6 +1209,40 @@ describe("currency-index", () => {
 
         expect(stored.falseClean).toEqual([]);
         expect(markOf("of:piece")).toBe(0);
+      });
+
+      it("names a piece that wrote an instance it vouched for again with a different byte sequence in it", () => {
+        // A byte sequence keeps its state out of its properties, so a
+        // comparison of properties alone would take the two for the same.
+
+        /** Commits a write of `bytes` to `computed:out`. */
+        const writeBytes = (bytes: number[]): number => {
+          localSeq += 1;
+          return applyCommit(engine, {
+            sessionId: ALICE.sessionId,
+            principal: ALICE.principal,
+            space: SPACE,
+            commit: {
+              localSeq,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: "computed:out",
+                value: {
+                  value: { bytes: new FabricBytes(new Uint8Array(bytes)) },
+                },
+              }],
+            },
+          }).seq;
+        };
+        write("of:a");
+        const asOf = writeBytes([1, 2, 3]);
+        store(asOf, [vouching()]);
+        const own = writeBytes([1, 2, 4]);
+
+        const stored = store(asOf, [vouching()], [own]);
+
+        expect(stored.falseClean).toEqual(["of:piece"]);
       });
 
       it("names each piece of a wave stored in separate batches", () => {

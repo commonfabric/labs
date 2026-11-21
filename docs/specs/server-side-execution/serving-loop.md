@@ -1259,19 +1259,24 @@ executing:
   session's slice. It finds the reads in the records it takes, so a loop
   that keeps no index carries nothing. The set is replaced when it changes
   and withdrawn at a park. The memory server admits a row only for a live
-  client session on it, whose actor holds READ on the space carried into
-  by the check a named scoped read passes (protocol.md §2), and holds what
-  it admitted as offered. An offered row stands as demand unless that
-  space's index proves the instance current: the instance is shared, the
+  client session on it that names an actor. Where that actor holds READ on
+  the space carried into, by the check a named scoped read passes
+  (protocol.md §2), the row is the actor's pair's. Where the actor does
+  not, a row for the actor's own instance is refused, and one for a shared
+  instance, which a serving loop reads whoever it runs for (protocol.md
+  §2b), stands with no pair, as an anonymous session's row does. The
+  server holds what it admitted as offered. An offered row stands as
+  demand unless that space's index proves the instance current: the
+  instance is shared, the
   reading space is armed with the space for no limited time, and the
   index holds the instance as one no piece there is behind on. Which rows
   stand is worked out again whenever that index or the arming changes. A
   reading space that offers rows pulls from the space when it is not armed
   with it, and again when the space tells it of a change, so it is armed
   whenever a row could be proven. A row that stands is a row of the
-  space's demand set, a root with the
-  origin session's pair, held under an id of its own among the space's
-  sessions, so the space's loop loads and judges it as it does a client's:
+  space's demand set, a root with the origin session's pair where it has
+  one, held under an id of its own among the space's sessions, so the
+  space's loop loads and judges it as it does a client's:
   the host activates a parked space that receives one and does not park it
   idle while one stands. It is not a connected session for an intent that
   needs a channel to its actor (builtins.md §4). A pair that reached a
