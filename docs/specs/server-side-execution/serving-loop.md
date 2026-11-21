@@ -1764,10 +1764,10 @@ non-re-derivable writes; a rebase that conflicts semantically DROPS
 the contribution whole — there is no event to requeue, and the loop
 re-derives its bookkeeping next wave (a raced watermark advance is
 re-advanced; watermark forgery is an accepted authored intrusion —
-protocol.md §1's threat model). A bookkeeping write conflicts on the
-same terms a derivation's does: when its document moved past the wave's
-basis, or past the view its own seal stood on through a commit this
-tenure did not make. The second is the arrival seed's case: it can find a
+protocol.md §1's threat model). Bookkeeping writes conflict when their
+document moves past the wave's basis. A scoped-default seed also conflicts
+with another tenure's or a client's write that its replica had yet to see
+at seal. It can find a
 viewer's instance absent because the replica has not taken the viewer's
 first write, and seal its create of the instance into a wave opened after
 that write was admitted, where the write sits at or below the basis. The

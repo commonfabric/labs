@@ -117,8 +117,8 @@ const logger = getLogger("wave-accumulator", {
  *   when Phase 4 lands the client-effect channel, protocol.md §5 —
  *   declare this kind; stage G's outbox-ROW retirement is an unstamped
  *   engine-table delete on plane (c), never a commit). A bookkeeping write
- *   is raced by a commit past the wave's basis, and by one its own seal's
- *   view had not taken that this tenure did not make (`conflictsFor`).
+ *   conflicts with commits past the wave's basis. A scoped-default seed also
+ *   checks for writes its replica had yet to see at seal (`conflictsFor`).
  *   Conflict class: non-re-derivable, so a raced bookkeeping PATCH rebases
  *   when it commutes with the concurrent commit (the loop's steady-state
  *   watermark advance is a key-path patch); a write that cannot rebase
@@ -466,6 +466,13 @@ const waveSettlements = new WeakMap<
   IExtendedStorageTransaction,
   Promise<WaveSettlement>
 >();
+
+const scopedDefaultSeeds = new WeakSet<IStorageTransaction>();
+
+/** Marks a seed whose writes depend on what its replica saw in the viewer's instance. */
+export function markScopedDefaultSeed(tx: IExtendedStorageTransaction): void {
+  scopedDefaultSeeds.add(tx.tx);
+}
 
 const requiresWaveAcceptance = new WeakSet<IStorageTransaction>();
 
@@ -944,8 +951,8 @@ interface WaveContribution {
   /** Per home doc-instance key: the seq the replica's CONFIRMED view
    * stood at for that instance when this run sealed — the view its
    * writes rest on, which the wave's own basis can be ahead of
-   * (#viewSeqsAtSeal). */
-  viewSeqs: ReadonlyMap<string, number>;
+   * (#viewSeqsAtSeal). Derivations and scoped-default seeds need this view. */
+  viewSeqs: ReadonlyMap<string, number> | undefined;
 }
 
 interface SealedSpaceContribution {
@@ -1816,7 +1823,9 @@ export class WaveAccumulator
         outboundAppends: [...pendingAppends],
         spaceAccessChanges: servedAclChanges,
         discoveredScope: assembly.discoveredScope,
-        viewSeqs: this.#viewSeqsAtSeal(assembly.spaces, context),
+        viewSeqs: context.kind === "derivation" || scopedDefaultSeeds.has(tx.tx)
+          ? this.#viewSeqsAtSeal(assembly.spaces, context)
+          : undefined,
         ...(waveClaimIsWithheld(tx) ? { claimWithheld: true as const } : {}),
       };
       this.#contributions.push(contribution);
@@ -2490,8 +2499,8 @@ export class WaveAccumulator
     }
 
     /** Whether `key` conflicts FOR this contribution: the doc moved past
-     * the wave's basis, or — for a pure derivation or the loop's own
-     * bookkeeping — past the view its own seal stood on, with an INTRUSION
+     * the wave's basis, or — for a pure derivation or a scoped-default
+     * seed — past the view its own seal stood on, with an INTRUSION
      * accounting for the difference.
      *
      * The basis and that view differ because the basis is the serverSeq
@@ -2518,14 +2527,14 @@ export class WaveAccumulator
      * path. One that did not read the doc runs again only if the commits
      * it lost to left every doc with no value (SupersededOutput).
      *
-     * A bookkeeping write reads the same lagging view and takes the same
-     * check. The scoped-default seed is the case: it probes a viewer's
+     * A scoped-default seed also reads the lagging view. It probes a viewer's
      * instance, finds it absent because the replica has not taken the
      * viewer's first write, and creates it. Without the check that create
      * lands over the write. A bookkeeping write is not re-derivable, so a
      * conflict here goes to the rebase below, and one that cannot rebase,
      * such as that whole-document create, is dropped and reported to its
-     * writer as a withdrawal it can retry.
+     * writer as a withdrawal it can retry. Other bookkeeping, including
+     * piece starts and compile-cache writes, checks the wave's basis.
      *
      * An event-handler consequence takes no view check here: its reads are
      * held to the store ahead of this loop, and one with a stale read is
@@ -2538,7 +2547,7 @@ export class WaveAccumulator
       doc: { id: string; scope?: CellScope; scopeKey: string },
     ): Promise<boolean> => {
       if (conflicted.has(key)) return true;
-      if (contribution.context.kind === "event-handler") return false;
+      if (contribution.viewSeqs === undefined) return false;
       const held = contribution.viewSeqs.get(key) ?? 0;
       if ((heads.get(key) ?? 0) <= held) return false;
       return await sink.intrusionSince?.(
@@ -2732,15 +2741,11 @@ export class WaveAccumulator
             // event to requeue and DROPS whole instead — what lands it
             // again depends on which bookkeeping write it was (WaveRunKind
             // doc).
-            // A bookkeeping write rests on its own view, which can lag the
-            // basis (`conflictsFor`), so what it races is every commit
-            // since the older of the two.
-            const since = contribution.context.kind === "bookkeeping"
-              ? Math.min(
-                this.#basisSeq,
-                contribution.viewSeqs.get(key) ?? this.#basisSeq,
-              )
-              : this.#basisSeq;
+            // A seed can race a write its replica missed before the wave opened.
+            const since = Math.min(
+              this.#basisSeq,
+              contribution.viewSeqs?.get(key) ?? this.#basisSeq,
+            );
             const concurrent = await sink.concurrentWritePaths(
               this.#space,
               doc,

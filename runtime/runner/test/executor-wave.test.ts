@@ -77,6 +77,7 @@ import type {
 } from "../src/storage/interface.ts";
 import {
   isAclDocumentWriteRefusal,
+  markScopedDefaultSeed,
   stageSpaceAccessChanges,
   stampWaveRunContext,
   WaveAccumulator,
@@ -1349,7 +1350,7 @@ describe("stage D seal-into-wave", () => {
     });
   });
 
-  it("drops a bookkeeping write over an intrusion the sealing replica had not taken, though the wave's basis covers it — a seed never lands over the write it raced", async () => {
+  it("drops a scoped-default seed when the viewer wrote the instance before the wave opened and the seed had yet to see the write", async () => {
     // The loop's own writes read the same lagging view. A seed that found a
     // viewer's instance absent, sealing into a wave opened after the
     // viewer's first write was admitted, would otherwise create the
@@ -1384,6 +1385,7 @@ describe("stage D seal-into-wave", () => {
 
     const tx = runtime.edit();
     stampWaveRunContext(tx, { actionId: "seed-w", kind: "bookkeeping" });
+    markScopedDefaultSeed(tx);
     expect(w.withTx(tx).get()).toBeUndefined();
     w.withTx(tx).set({ value: 1 });
     expect((await tx.commit().settled).error).toBeUndefined();
