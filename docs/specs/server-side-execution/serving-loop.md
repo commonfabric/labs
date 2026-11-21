@@ -343,8 +343,10 @@ events (the carries-events arm's sibling), and the target's tenure
 takes the staged instances as identity-less WARM DEMAND — the
 anonymous-session shape, a demand key with no demanding pair, unioned
 into the demand pass for that tenure — so the staged piece
-structure-loads and derives. This is the one deliberate extension of
-the demand union beyond client sessions: the issuer is the
+structure-loads and derives. This is one of two deliberate extensions of
+the demand union beyond a space's own client sessions (the other is the
+demand another space's loop carries for a client session of its own,
+§3b): the issuer is the
 provisioning run that KNOWS it staged setup needing derivation — a
 scoped signal, never a blanket write-trigger — so T11.Q7 stays as
 designed (the admission hook alone still notifies without activating;
@@ -1207,16 +1209,28 @@ executing:
   holds, which are those of the viewers demanding the piece then, and
   replaces them; a slice it does not name keeps its rows and its mark. A
   slice is stored marked when a live computation that ran at its key is not
-  clean, or read a document in another space at an instance narrower than
-  the space or at a seq its replica cannot name, or one a clock writes (the
-  interval cell of a `#now/N` wish), which no commit marks when its interval
-  passes, or one whose writer names no piece and is not live, not clean, or
-  runs once for each viewer. A read of another space's shared instance is
-  registered with that space's index when the record is stored, where one
-  memory server holds both stores: that index keeps the spaces that read
-  each of its instances and what it last told them, the instance's head and
-  whether a piece there computes it and does not answer for it at present,
-  and the reading index keeps what it was last told. A slice is stored
+  clean, or read a document in another space at no one instance or at a
+  seq its replica cannot name, or one whose writer names
+  no piece and is not live, not clean, or runs once for each viewer. A
+  slice that read a document a clock writes (the interval cell of a `#now/N`
+  wish) is current until the tick after the one that document holds, which
+  no commit reports while no runtime holds the clock: its record names that
+  time, each call that brings the marks up to date marks `2` a slice whose
+  time has come, at a seq above the store's head, and a loop that left a
+  root unstarted asks for a judgment at the earliest such time. A read of
+  an instance of another space is registered with that space's index when
+  the record is stored, where one memory server holds both stores. A
+  user's or a session's own instance is registered at its own key, and
+  only where the actor the key names holds READ on that space (protocol.md
+  §2); one that is not registered leaves its slice marked. The grant is
+  looked up at each record and at each pull, an instance whose actor holds
+  none any longer is forgotten, which marks `2` each slice that read it,
+  and a change to a space's access list disarms every space armed with
+  it. That index
+  keeps, for each registered instance, the spaces that read it and what it
+  last told them, the instance's head and whether a piece there computes
+  it and does not answer for it at present, and the reading index keeps
+  what it was last told. A slice is stored
   marked `2` where its read is behind that head or the space cannot be
   asked, and `1` where the instance is stale there. A judgment that may rest
   on such a slice first pulls, from each space the slices its demand rows
@@ -1229,7 +1243,12 @@ executing:
   told passes the word to each space armed with it, pulling nothing, and
   its loop judges again each root it left unstarted. Which spaces are armed
   is held in the memory server's memory, so after a restart every space
-  pulls before it rests on another. A trigger carries the number of the
+  pulls before it rests on another. An arming lasts only until the earliest
+  time a slice of the space pulled from expires at, or that space's own
+  arming with a space it reads runs out: a judgment after that time pulls
+  again, the time a judgment returns for its loop to judge again at is that
+  one for its own space, and a record that makes the time earlier tells each
+  space armed for longer. A trigger carries the number of the
   change it leads back to, one with no trigger behind it, and how many
   triggers lead from that change. The same change reaching a space through
   more triggers than before has come round a circle of spaces, and at
@@ -1237,7 +1256,43 @@ executing:
   read it is marked `2` and its piece starts. A hold ends by itself, the
   first after a second and each further one after twice as long as the
   last, up to five minutes, and at once when a change the space has not
-  been sent reaches it. A
+  been sent reaches it. A read of an instance of another space by a run
+  under an actor is that actor's demand in that space (RULED 2026-11-21,
+  verification-coverage.md OW35 (b)). The loop sends the memory server,
+  for each space its started pieces' runs read, the instances read, each
+  with the client session of a pair the run was made for: every pair
+  demanding in the loop's space for a run in the `space` slice, a user's
+  pairs for one in that user's slice, and the one pair for one in a
+  session's slice. It finds the reads in the records it takes, so a loop
+  that keeps no index carries nothing. The set is replaced when it changes
+  and withdrawn at a park. The memory server admits a row only for a live
+  client session on it that names an actor. Where that actor holds READ on
+  the space carried into, by the check a named scoped read passes
+  (protocol.md §2), the row is the actor's pair's. Where the actor does
+  not, a row for the actor's own instance is refused, and one for a shared
+  instance, which a serving loop reads whoever it runs for (protocol.md
+  §2b), stands with no pair, as an anonymous session's row does. The
+  server holds what it admitted as offered. An offered row stands as
+  demand unless that space's index proves the instance current: the
+  reading space registered the instance, shared or an actor's own, and is
+  armed with the space for no limited time, and the
+  index holds the instance as one no piece there is behind on. Which rows
+  stand is worked out again whenever that index or the arming changes. A
+  reading space that offers rows pulls from the space when it is not armed
+  with it, and again when the space tells it of a change, so it is armed
+  whenever a row could be proven. With a row for an actor's own instance
+  stands a row for each piece the index records as writing that document,
+  for the same pair, since such an instance may not exist yet and a loop
+  finds the piece behind a document from what the document holds. A row
+  that stands is a row of the
+  space's demand set, a root with the origin session's pair where it has
+  one, held under an id of its own among the space's sessions, so the
+  space's loop loads and judges it as it does a client's:
+  the host activates a parked space that receives one and does not park it
+  idle while one stands. It is not a connected session for an intent that
+  needs a channel to its actor (builtins.md §4). A pair that reached a
+  space carried is carried on with the origin it came with, and the memory
+  server drops every row of an origin session when that session ends. A
   slice that read what a live, clean writer
   that names no piece wrote, such as a wish's shared hashtag resolver, takes
   over that writer's reads as its own. Every slice of a record is stored marked when the piece's root is
@@ -1272,8 +1327,8 @@ executing:
   writer runs clean again. Nothing is recorded while an effect is outstanding,
   because a start is what re-fires an effect whose result never landed (§6
   step 3). The tables are `currency_slice`, `currency_under`,
-  `currency_read`, `currency_write`, `currency_vouch` and
-  `currency_cursor`, and for reads across spaces `currency_slice_source`,
+  `currency_read`, `currency_write`, `currency_vouch`, `currency_expiry`
+  and `currency_cursor`, and for reads across spaces `currency_slice_source`,
   `currency_import` and `currency_source` on the reading side and
   `currency_reader` and `currency_export` on the side read;
   `runtime/memory/v2/currency-index.ts` is their only writer and reader,
@@ -2560,7 +2615,8 @@ demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
 structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, currency:
 {recordsStored, unvouched, judged, servable, refused, servedFromStore,
-rearmed, falseClean}, settle:
+rearmed, indexWakes, expiryWakes, falseClean, carried, carriedRefused},
+settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
@@ -2748,8 +2804,13 @@ ones it could not, by the first reason found;
 time a root is first left; `rearmed` the roots so left that were then
 loaded, because an input marked the piece or a session's demand reached an
 instance it does not vouch for; `falseClean` the pieces the index held
-clean that wrote an instance they vouched for again with no input of
-theirs changed, each one a judgment that would have served a stale value.
+clean that wrote an instance they vouched for again, to a value other than
+the one it held, with no input of theirs changed, each one a judgment that
+would have served a stale value; `indexWakes` and `expiryWakes` the times
+the loop was woken to judge a root it had left unloaded, because the index
+changed from outside the loop or a slice's record expired; `carried` the
+rows of demand the loops offer to carry into other spaces now, and
+`carriedRefused` the rows a space they were sent to refused (§3b).
 `ownedDefaultSeeds` the (piece root, demanding pair) seedings the passes
 completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
 scope narrower than its result (scoped-cell-instances.md, "A pattern-owned

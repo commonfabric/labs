@@ -1,8 +1,10 @@
 import {
   type CellScope,
+  identityOfScopeKey,
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
+  scopeOfScopeKey,
 } from "@commonfabric/memory/v2";
 import { type ArmedTurn, armTurn } from "@commonfabric/async/turn";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
@@ -148,6 +150,7 @@ import { SpeculationLineage } from "./lineage.ts";
 import { SchedulerMaterializers } from "./materializers.ts";
 import { NodeRegistry, type SchedulerNode } from "./node-record.ts";
 import {
+  type ClockDocument,
   clockDocumentKey,
   type PieceCurrencySnapshot,
   snapshotPieceCurrency,
@@ -488,8 +491,11 @@ export class Scheduler {
   });
   #writeIndex!: SchedulerWriteIndex;
 
-  /** The documents a clock writes, as `noteClockDocument()` was told of them. */
-  readonly #clockDocuments = new Set<string>();
+  /**
+   * The documents a clock writes, as `noteClockDocument()` was told of
+   * them.
+   */
+  readonly #clockDocuments = new Map<string, ClockDocument>();
 
   readonly #materializers = new SchedulerMaterializers(
     this.#nodes.effects,
@@ -1685,12 +1691,18 @@ export class Scheduler {
   }
 
   /**
-   * Records that a clock writes the document at `address`: something other
-   * than a commit decides when its value is out of date, so the currency
-   * index vouches for no slice that read it.
+   * Records that a clock writes the document at `address` on each whole
+   * multiple of `intervalMs` since the epoch, and that `read` returns the
+   * tick the document holds: something other than a commit decides when its
+   * value is out of date, so the currency index holds a slice that read it
+   * current only until the tick after that one.
    */
-  noteClockDocument(address: Pick<IMemorySpaceAddress, "space" | "id">): void {
-    this.#clockDocuments.add(clockDocumentKey(address));
+  noteClockDocument(
+    address: Pick<IMemorySpaceAddress, "space" | "id">,
+    intervalMs: number,
+    read: () => number | undefined,
+  ): void {
+    this.#clockDocuments.set(clockDocumentKey(address), { intervalMs, read });
   }
 
   /**
@@ -1709,9 +1721,20 @@ export class Scheduler {
         dependencies: this.#dependencies,
         writeIndex: this.#writeIndex,
         clockDocuments: this.#clockDocuments,
-        sourceSeqOf: ({ space: source, id }) =>
-          this.runtime.storageManager.open(source).replica
-            .speculationRetirementView?.(id, "space").confirmedSeq,
+        sourceSeqOf: ({ space: source, id, scopeKey }) => {
+          // The replica files a user's or a session's instance under the
+          // identity its key names.
+          const identity = scopeKey === "space"
+            ? undefined
+            : identityOfScopeKey(scopeKey);
+          if (scopeKey !== "space" && identity === undefined) return undefined;
+          return this.runtime.storageManager.open(source).replica
+            .confirmedDocumentSeq(
+              id,
+              scopeOfScopeKey(scopeKey) as CellScope,
+              identity,
+            );
+        },
       },
       space,
       pieceRootId,

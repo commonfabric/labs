@@ -403,6 +403,13 @@ export class ServingPortBridge {
         }),
     );
     endpoint.onRequest(
+      "server.setCarriedDemand",
+      ({ space, reader, rows, excludePrincipal }) =>
+        server.setCarriedDemand(space, reader, rows, {
+          ...(excludePrincipal !== undefined && { excludePrincipal }),
+        }),
+    );
+    endpoint.onRequest(
       "server.foreignWriteAuthorityFor",
       ({ space, principal }) =>
         server.foreignWriteAuthorityFor(space, principal),

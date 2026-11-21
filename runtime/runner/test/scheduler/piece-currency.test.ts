@@ -62,10 +62,11 @@ describe("piece-currency", () => {
    * identity and holding the reads given for it, of which those in `clean`
    * are current. With none, the computation has no fan-out state, and
    * `reads` is what its one run read. `clocks` are the documents of the
-   * space that a clock writes, and `sourceSeqs` the seq the replica holds
-   * each document of another space at, by id. Each of `unattributed` is a computation that
-   * names no piece, clean and live unless it says otherwise, with the
-   * document it writes and what it read.
+   * space that a clock writes, each with the interval of the clock and the
+   * tick the document holds, and `sourceSeqs` the seq the replica holds
+   * each document of another space at, by id. Each of `unattributed` is a
+   * computation that names no piece, clean and live unless it says
+   * otherwise, with the document it writes and what it read.
    */
   const snapshotOf = (options: {
     declared?: CellScope;
@@ -75,7 +76,7 @@ describe("piece-currency", () => {
     clean?: ScopeKey[];
     status?: NodeStatus;
     reads?: Read[];
-    clocks?: Array<Read["id"]>;
+    clocks?: Record<string, { intervalMs: number; tick?: number }>;
     sourceSeqs?: Record<string, number>;
     unattributed?: Array<
       { writes: Read["id"]; reads: Read[]; status?: NodeStatus; live?: boolean }
@@ -150,10 +151,13 @@ describe("piece-currency", () => {
         writersByEntity,
         getSchedulingWrites: (of) => of === action ? surface : [],
       },
-      clockDocuments: new Set(
-        (options.clocks ?? []).map((id) =>
-          clockDocumentKey({ space: SPACE, id })
-        ),
+      clockDocuments: new Map(
+        Object.entries(options.clocks ?? {}).map((
+          [id, { intervalMs, tick }],
+        ) => [
+          clockDocumentKey({ space: SPACE, id: id as Read["id"] }),
+          { intervalMs, read: () => tick },
+        ]),
       ),
       sourceSeqOf: ({ id }) => options.sourceSeqs?.[id],
     };
@@ -318,18 +322,82 @@ describe("piece-currency", () => {
         ).toEqual([]);
       });
 
-      it("reports a read of a document a clock writes as a reason its slice alone is not vouched for", () => {
+      it("names the seq of a read of the run's own user's instance in another space that the replica holds, and gives it as no reason", () => {
+        const far = "did:key:z6Mk-another-space" as MemorySpace;
+        const taken = snapshotOf({
+          instances: [{
+            key: user,
+            reads: [{ space: far, id: "of:prefs", scope: "user" }],
+          }],
+          sourceSeqs: { "of:prefs": 9 },
+        });
+
+        expect(sliceOf(taken, user)?.reads).toEqual([{
+          space: far,
+          id: "of:prefs",
+          scopeKey: user,
+          derived: false,
+          seq: 9,
+        }]);
+        expect(sliceOf(taken, user)?.unvouched).toEqual([]);
+      });
+
+      it("names the seq of a read of the run's own session's instance in another space that the replica holds, and gives it as no reason", () => {
+        const far = "did:key:z6Mk-another-space" as MemorySpace;
+        const taken = snapshotOf({
+          instances: [{
+            key: session,
+            reads: [{ space: far, id: "of:draft", scope: "session" }],
+          }],
+          sourceSeqs: { "of:draft": 4 },
+        });
+
+        expect(sliceOf(taken, session)?.reads).toEqual([{
+          space: far,
+          id: "of:draft",
+          scopeKey: session,
+          derived: false,
+          seq: 4,
+        }]);
+        expect(sliceOf(taken, session)?.unvouched).toEqual([]);
+      });
+
+      it("gives a slice that read a document a clock writes the tick after the one the document holds as the time it expires at, and leaves it vouched for", () => {
         const taken = snapshotOf({
           instances: [
             { key: user, reads: [{ id: "of:tick" }, { id: "of:shared" }] },
             { key: bobUser, identity: BOB, reads: [{ id: "of:shared" }] },
           ],
-          clocks: ["of:tick"],
+          clocks: { "of:tick": { intervalMs: 60_000, tick: 60_000 } },
         });
 
-        expect(sliceOf(taken, user)?.unvouched).toEqual(["clock-read"]);
-        expect(sliceOf(taken, bobUser)?.unvouched).toEqual([]);
+        expect(sliceOf(taken, user)?.expiresAt).toBe(120_000);
+        expect(sliceOf(taken, user)?.unvouched).toEqual([]);
+        expect(sliceOf(taken, bobUser)?.expiresAt).toBeUndefined();
         expect(taken.unvouched).toEqual([]);
+      });
+
+      it("gives a slice that read two clocks the earlier of the times their ticks are out of date at", () => {
+        const taken = snapshotOf({
+          instances: [
+            { key: user, reads: [{ id: "of:minute" }, { id: "of:hour" }] },
+          ],
+          clocks: {
+            "of:minute": { intervalMs: 60_000, tick: 3_480_000 },
+            "of:hour": { intervalMs: 3_600_000, tick: 0 },
+          },
+        });
+
+        expect(sliceOf(taken, user)?.expiresAt).toBe(3_540_000);
+      });
+
+      it("gives a slice that read a clock's document which holds no tick a time that has passed", () => {
+        const taken = snapshotOf({
+          instances: [{ key: user, reads: [{ id: "of:tick" }] }],
+          clocks: { "of:tick": { intervalMs: 60_000 } },
+        });
+
+        expect(sliceOf(taken, user)?.expiresAt).toBe(0);
       });
 
       it("takes over what a clean writer that names no piece read, and reports the document it wrote as an input", () => {
@@ -409,7 +477,7 @@ describe("piece-currency", () => {
               writersByEntity: new Map(),
               getSchedulingWrites: () => [],
             },
-            clockDocuments: new Set(),
+            clockDocuments: new Map(),
             sourceSeqOf: () => undefined,
           },
           SPACE,

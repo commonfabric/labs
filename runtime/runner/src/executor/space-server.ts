@@ -65,6 +65,11 @@ import {
 } from "@commonfabric/memory/v2/genesis-root";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
+import {
+  CarriedDemand,
+  type CarriedPair,
+  carriedRowsOf,
+} from "./carried-demand.ts";
 
 import type { HostMemoryServer } from "./host-memory-server.ts";
 import type { RoutedPlane, RouteOptions } from "./routed-plane.ts";
@@ -1285,12 +1290,32 @@ export class SpaceServer implements TransactionSealDestination {
    * the index (`SpaceServerPolicy.currencyIndex`). */
   #currency: StoreCurrency | undefined;
 
+  /**
+   * What this loop carries into the spaces its runs read (serving-loop.md
+   * §3b), made when a run first reads one.
+   */
+  #carriedDemand: CarriedDemand | undefined;
+
+  /**
+   * The pairs that demand in this space, each with the session it is
+   * carried for, as the last demand pass that changed a row left them.
+   */
+  #carriedDemandPairs: CarriedPair[] | undefined;
+
   /** Wake latch: a stored currency record left a piece owed another
    * snapshot, which the next cycle's settle takes, or the currency index
    * changed from outside this loop while a root was left unloaded, which the
    * next cycle's demand pass judges again. Consumed by the next
    * `#waitForInput()`. */
   #pendingCurrencyWake = false;
+
+  /**
+   * The timer that wakes the loop at the time a slice's record expires,
+   * where a root is left unloaded, and the time it is set for. Both are
+   * `undefined` while none is set.
+   */
+  #currencyExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+  #currencyExpiryAt: number | undefined;
 
   /** Level-converted demand wake (stage B): a session's watch set
    * changed (or a session opened); consumed by the next #waitForInput. */
@@ -2566,6 +2591,31 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /**
+   * Helper for `#loadDemandedStructure()`, which sets the timer that wakes
+   * the loop when the record of a slice expires, for as long as a root is
+   * left unloaded (serving-loop.md §3b). A slice that read a clock goes
+   * stale at the clock's next tick with no commit to report it, so the
+   * loop asks for a judgment then. The judgment that follows sets the timer
+   * again, for the next such time.
+   */
+  #armCurrencyExpiry(): void {
+    const at = this.#currency?.nextExpiry;
+    if (at === this.#currencyExpiryAt) return;
+    clearTimeout(this.#currencyExpiryTimer);
+    this.#currencyExpiryAt = at;
+    this.#currencyExpiryTimer = at === undefined
+      ? undefined
+      : setTimeout(() => {
+        this.#currencyExpiryTimer = undefined;
+        this.#currencyExpiryAt = undefined;
+        if (this.#currency?.noteIndexChanged() !== true) return;
+        this.#options.stats.currency.expiryWakes += 1;
+        this.#pendingCurrencyWake = true;
+        this.#feedArrived?.resolve();
+      }, Math.max(0, at - Date.now()));
+  }
+
+  /**
    * Queue a lifecycle verb for the next wave cycle. Resolves with the
    * verb's receipt once the wave that carried its writes has committed
    * and its `confirm` step has passed; rejects with the verb's own
@@ -2887,6 +2937,7 @@ export class SpaceServer implements TransactionSealDestination {
     const runtime = this.#runtime;
     if (!this.#active || runtime === undefined) return;
     await this.#currency?.stored;
+    await this.#carriedDemand?.settled;
     await this.#outbox?.settle();
     await runtime.settled();
     await this.#options.server.idle();
@@ -6171,6 +6222,12 @@ export class SpaceServer implements TransactionSealDestination {
     }
     this.#demandFullReconcile = false;
     stats.demand.demandKeysReconciled += changed.size;
+    // A pair that arrived or left changes whom a read in another space is
+    // carried for.
+    if (changed.size > 0) {
+      this.#carriedDemandPairs = undefined;
+      this.#syncCarriedDemand();
+    }
     // The roots whose structure load is owed, with the address each one's
     // load reads: every root on its first demand, and every root still
     // pending from an earlier attempt.
@@ -6210,6 +6267,7 @@ export class SpaceServer implements TransactionSealDestination {
           this.#rearmSeqsAwaitingFollow.delete(key);
         }
       }
+      this.#armCurrencyExpiry();
     }
     // ONE changed-doc collection for the whole pass, opened BEFORE the pull
     // below rather than per root inside it. The pull is what registers each
@@ -7264,11 +7322,67 @@ export class SpaceServer implements TransactionSealDestination {
     // below them, and forgets the own ones it covers. A cycle that no input
     // woke, as a viewer's arrival does, settles at the input head of the
     // cycle before it, which may sit below such a commit.
-    return currency.snapshot(
+    const snapshot = currency.snapshot(
       runtime,
       Math.max(asOf, this.#watermark),
       this.#ownDerivedSeqs,
     );
+    // Taking the snapshot is what finds a run's reads in another space,
+    // and what finds them gone, whether or not it leaves a record to store.
+    if (
+      currency.takeForeignReadsChanged() ||
+      this.#carriedDemand?.retryOwed === true
+    ) this.#syncCarriedDemand();
+    return snapshot;
+  }
+
+  /**
+   * Sends each space a run here read the demand that read carries
+   * (serving-loop.md §3b), where it changed: the instance read, for each
+   * pair demanding in this space that the run was made for
+   * (`carriedRowsOf()`).
+   */
+  #syncCarriedDemand(): void {
+    const reads = this.#currency?.foreignReads;
+    if (reads === undefined) return;
+    if (reads.size === 0 && this.#carriedDemand?.carries !== true) return;
+    this.#carriedDemand ??= new CarriedDemand({
+      space: this.#options.space,
+      server: this.#options.server,
+      serviceIdentity: this.#options.serviceIdentity,
+      stats: this.#options.stats,
+    });
+    this.#carriedDemand.send(
+      carriedRowsOf(
+        [...reads.values()].flat(),
+        reads.size === 0 ? [] : this.#demandingPairs(),
+      ),
+    );
+  }
+
+  /**
+   * Helper for `#syncCarriedDemand()`, which returns the pairs demanding
+   * in this space with the session each is carried for: the pair's own
+   * session here, or the origin of a pair another space carried here.
+   */
+  #demandingPairs(): CarriedPair[] {
+    if (this.#carriedDemandPairs !== undefined) return this.#carriedDemandPairs;
+    const pairs = new Map<string, CarriedPair>();
+    for (const key of this.#demandMirror.keys()) {
+      for (const row of this.#demandMirror.rowsFor(key)?.values() ?? []) {
+        const { principal, sessionId } = row.identity ?? {};
+        if (principal === undefined || sessionId === undefined) continue;
+        const identity = { principal, sessionId } as ScopeKeyIdentity;
+        const pairKey = demanderPairKey(identity);
+        if (pairs.has(pairKey)) continue;
+        pairs.set(pairKey, {
+          ...identity,
+          origin: row.origin ?? { space: this.#options.space, sessionId },
+        });
+      }
+    }
+    this.#carriedDemandPairs = [...pairs.values()];
+    return this.#carriedDemandPairs;
   }
 
   /**
@@ -9014,6 +9128,9 @@ export class SpaceServer implements TransactionSealDestination {
     this.#enclosingRootsByOwningRoot.clear();
     this.#demandRootAddresses.clear();
     this.#rootsAwaitingFirstLoad.clear();
+    // No run of this tenure reads another space any longer.
+    this.#carriedDemand?.withdraw();
+    this.#carriedDemandPairs = undefined;
     // The registry is empty, so the next tenure's first pass reconciles
     // every key it reads.
     this.#demandMirror.clear();
@@ -9041,6 +9158,9 @@ export class SpaceServer implements TransactionSealDestination {
     this.#pendingStructureRetryWake = false;
     this.#currency = undefined;
     this.#pendingCurrencyWake = false;
+    clearTimeout(this.#currencyExpiryTimer);
+    this.#currencyExpiryTimer = undefined;
+    this.#currencyExpiryAt = undefined;
     // Phase 5: foreign engine resolutions die with the tenure, since the
     // memory server may close their engines once it has ended.
     this.#foreignEngines.clear();
@@ -9057,6 +9177,7 @@ export class SpaceServer implements TransactionSealDestination {
     const wave = this.#currentWave;
     this.#currentWave = undefined;
     await this.#sealChain;
+    await this.#carriedDemand?.settled;
     wave?.abandon(`parked: ${reason}`);
     // Nothing sealed into this tenure's waves commits now: a barrier
     // waiting on one has nothing left to wait for.

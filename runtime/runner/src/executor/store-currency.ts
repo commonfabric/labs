@@ -10,6 +10,7 @@ import type {
   CurrencyMarked,
   CurrencyRecord,
 } from "@commonfabric/memory/v2/currency-index";
+import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace, URI } from "../storage/interface.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";
@@ -36,6 +37,20 @@ export type CurrencySnapshot = {
   records: CurrencyRecord[];
 };
 
+/**
+ * An instance in another space that a run of a piece read, with the slice
+ * the run belongs to, which says whose run it was.
+ */
+export type ForeignRead = {
+  /** The key of the slice the run that read belongs to. */
+  slice: string;
+
+  /** The space the instance is in. */
+  space: string;
+  id: string;
+  scopeKey: string;
+};
+
 /** A demand key to re-arm, with a seq at or below the input that marked it. */
 export type CurrencyRearm = { key: string; seq: number };
 
@@ -60,6 +75,15 @@ export class StoreCurrency {
   readonly #owed = new Set<string>();
 
   /**
+   * What the runs of each piece read in another space, as the piece's
+   * latest snapshot found it. A piece with no such read has no entry.
+   */
+  readonly #foreignReads = new Map<string, ForeignRead[]>();
+
+  /** Whether `#foreignReads` changed since `takeForeignReadsChanged()`. */
+  #foreignReadsChanged = false;
+
+  /**
    * The owed pieces a record of which was stored behind a commit its settle
    * had not covered, each with that settle's `asOf`. A snapshot taken at
    * that seq or below would be stored behind the same commit, so such a
@@ -82,6 +106,12 @@ export class StoreCurrency {
 
   /** How many judgments the memory server has not returned yet. */
   #judging = 0;
+
+  /**
+   * The earliest time a slice of the space expires at, as the last judgment
+   * the memory server made found it.
+   */
+  #nextExpiry: number | undefined;
 
   /** The store head the marks were last brought up to from here. */
   #advancedThrough = 0;
@@ -147,6 +177,35 @@ export class StoreCurrency {
   }
 
   /**
+   * The time, in milliseconds since the epoch, at which a root left
+   * unloaded is owed a fresh judgment because a slice's record expires
+   * then, or `undefined` where no root is left unloaded or no slice expires.
+   * No commit marks such a slice, so the loop has to ask at that time.
+   */
+  get nextExpiry(): number | undefined {
+    return this.#served.size > 0 ? this.#nextExpiry : undefined;
+  }
+
+  /**
+   * What the runs of the pieces this loop holds read in another space, by
+   * piece. A read of every instance of a document names no instance to
+   * demand, and is left out.
+   */
+  get foreignReads(): ReadonlyMap<string, readonly ForeignRead[]> {
+    return this.#foreignReads;
+  }
+
+  /**
+   * Whether a snapshot found a piece's reads in another space changed, or
+   * gone, since this was last called.
+   */
+  takeForeignReadsChanged(): boolean {
+    const changed = this.#foreignReadsChanged;
+    this.#foreignReadsChanged = false;
+    return changed;
+  }
+
+  /**
    * Snapshots each piece of `runtime` a computation of which changed since
    * the last snapshot, and each piece a snapshot is owed. The caller has
    * established that the scheduler is idle and that no effect is
@@ -174,9 +233,25 @@ export class StoreCurrency {
     for (const piece of pieces) {
       this.#owed.delete(piece);
       this.#behindAt.delete(piece);
+      // A piece that is gone, or reads no other space any longer, has none.
+      if (this.#foreignReads.delete(piece)) this.#foreignReadsChanged = true;
       if (!isDocumentId(piece)) continue;
       const taken = runtime.scheduler.pieceCurrencySnapshot(this.#space, piece);
       if (taken === undefined) continue;
+      const foreign = taken.slices.flatMap((slice) =>
+        slice.reads.filter((read) =>
+          read.space !== this.#space && read.scopeKey !== ANY_INSTANCE
+        ).map((read) => ({
+          slice: slice.key,
+          space: read.space,
+          id: read.id,
+          scopeKey: read.scopeKey,
+        }))
+      );
+      if (foreign.length > 0) {
+        this.#foreignReads.set(piece, foreign);
+        this.#foreignReadsChanged = true;
+      }
       const facts = runtime.runner.pieceCurrencyFacts(
         runtime.getCellFromLink({
           space: this.#space,
@@ -212,6 +287,7 @@ export class StoreCurrency {
           vouched: slice.unvouched.length === 0,
           reads: slice.reads,
           vouches: slice.vouches,
+          ...(slice.expiresAt !== undefined && { expiresAt: slice.expiresAt }),
         })),
       });
     }
@@ -259,8 +335,9 @@ export class StoreCurrency {
         if (stored.falseClean.length > 0) {
           logger.warn("currency-false-clean", () => [
             `space ${this.#space}: ${stored.falseClean.length} piece(s) the ` +
-            "currency index held clean wrote a vouched output again with " +
-            "no input changed: " + stored.falseClean.join(", "),
+            "currency index held clean wrote a different value to a " +
+            "vouched output with no input changed: " +
+            stored.falseClean.join(", "),
           ]);
         }
         let owed = false;
@@ -370,6 +447,7 @@ export class StoreCurrency {
     ).finally(() => {
       this.#judging -= 1;
     });
+    this.#nextExpiry = judged.nextExpiry;
     for (const [reason, count] of Object.entries(judged.refused)) {
       const counts = this.#stats.currency.refused;
       counts[reason] = (counts[reason] ?? 0) + count;

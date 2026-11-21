@@ -38,6 +38,7 @@ Deno.test("memory v2 engine drops a currency index laid out one row per piece", 
     ).all() as Array<{ name: string }>).map((row) => row.name);
     assertEquals(tables, [
       "currency_cursor",
+      "currency_expiry",
       "currency_export",
       "currency_import",
       "currency_read",
@@ -86,6 +87,7 @@ Deno.test("memory v2 engine bootstraps the revision schema", async () => {
         "branch",
         "commit",
         "currency_cursor",
+        "currency_expiry",
         "currency_export",
         "currency_import",
         "currency_read",

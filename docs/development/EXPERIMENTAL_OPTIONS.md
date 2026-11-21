@@ -2493,16 +2493,25 @@ the per-epic implementation notes).
   records, judges each eligible cold root, and loads every root regardless:
   `currency.servable` counts the roots the store could have served, and
   `currency.falseClean` counts the pieces that were held clean and then
-  wrote a vouched output again with no input changed, each one a judgment
-  that would have served a stale value. A root may rest on a slice that
+  wrote a vouched output again, to a value other than the one it held, with
+  no input changed, each one a judgment that would have served a stale
+  value. A root may rest on a slice that
   read another space the same memory server holds: that space is asked
   what changed before the judgment, and tells the reading space of its next
   change, which has a loop that left such a root unstarted judge it again.
+  A loop that keeps the index also carries demand into the spaces its
+  started pieces' runs read, for the actors those runs were made for, where
+  that space's index does not prove the instance current: `currency.carried`
+  counts the rows offered now, and `currency.carriedRefused` the rows a
+  space refused, as it does an actor's own instance where the actor may not
+  read the space.
   `skip` acts on the judgment: a root
   whose piece vouches for every demanded instance of it, in slices that are
   clean, is neither loaded nor started, until an input marks a slice a
-  demanded instance is resolved under or a session's demand reaches an
-  instance the piece does not vouch for
+  demanded instance is resolved under, the record of such a slice expires
+  because it read the interval clock of a wish, which the loop sets a timer
+  for (`currency.expiryWakes`), or a session's demand reaches an instance
+  the piece does not vouch for
   ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §1).
   [The plan](../plans/stored-output-currency.md) carries the design, its
   limits and the stages after this one.

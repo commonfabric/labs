@@ -53,9 +53,9 @@ belongs to the slice at that viewer's key (`user:<principal>` or
 reads and its clean bit apart (`FanOutNodeState`), so a slice is that state
 written down.
 
-The index holds identifiers and sequence numbers only, overwritten in place,
-and the slice leads every key, so reading one viewer's slices reads no other
-viewer's rows:
+The index holds identifiers and sequence numbers, and for a slice that read
+a clock the time it expires at, overwritten in place. The slice leads every
+key, so reading one viewer's slices reads no other viewer's rows:
 
 - **The slice**: a mark, and the epoch of the build that recorded it. Every
   recorded piece has a `space` slice.
@@ -116,15 +116,21 @@ of its runs at the snapshot:
 
 - a live computation is not clean, which covers one a throttle, a debounce
   or a convergence backoff is holding;
-- one read a document in another space at an instance narrower than the
-  space, at a seq its replica cannot name, or in a space whose store
-  another memory server holds;
+- one read a document in another space at no one instance, at a seq its
+  replica cannot name, at a user's or a session's own instance whose actor
+  holds no READ grant on that space, or in a space whose store another
+  memory server holds;
 - one read a document whose writer in this runtime names no piece and
   cannot be answered for. A writer that is live, clean and runs once is
-  answered for by the slice, which takes over what it read;
-- one read a document a clock writes, which is the interval cell of a wish
-  for `#now/N`: no commit marks the slice when the interval passes while no
-  runtime holds the clock.
+  answered for by the slice, which takes over what it read.
+
+A slice that read a document a clock writes, which is the interval cell of
+a wish for `#now/N`, is vouched for until the tick after the one that
+document holds. No commit marks it when the interval passes while no
+runtime holds the clock, so its record names that time, and the index marks
+the slice once it has come
+([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
+"The interval clock").
 
 Any other read in another space is registered with that space's index when
 the record is stored
@@ -141,9 +147,10 @@ origin.
 ### How a slice becomes marked
 
 A mark is `0` clean, `1` one of its inputs is stale, or `2` one of its own
-rows is behind or the slice was not vouched for. An input is stale while a
-slice that decides it is marked, and in the two cases without a marked
-producer that "How a mark is cleared" lists.
+rows is behind, the slice was not vouched for, or the time its record
+expires at has come. An input is stale while a slice that decides it is
+marked, and in the two cases without a marked producer that "How a mark is
+cleared" lists.
 
 When a record is stored, each read row and each vouch row takes its
 instance's head sequence number if every revision of that instance above
@@ -183,6 +190,11 @@ it: a `space` slice reaches every reader, a user's slice that user's and
 their sessions', and a session's slice that session's. The walk goes on from
 each slice it marks and stops wherever it reaches one that is already
 marked.
+
+Advancing the cursor also marks `2` each slice whose record expires at a
+time that has come, and what is downstream of it as above. No revision
+made such a slice stale, so it is reported at a sequence number above the
+store's head.
 
 Nothing runs at admission. The serving loop advances the cursor once per
 cycle that drained input and before each judgment below, so a quiet space
@@ -279,10 +291,13 @@ reaches clean ones.
 `SERVER_EXECUTION_CURRENCY_INDEX=record` records and judges and still starts
 everything. Each root the judgment would have served from the store is
 counted (`currency.servable`), and when a piece the index held clean writes
-an instance it vouched for again with no input of it changed, the judgment
-was wrong: the count of those is `currency.falseClean`, logged with the
-piece. Whether a piece had been clean is kept with its record, so a mark that
-lands before the next record is stored does not hide it. `skip` acts on the
+an instance it vouched for again, to a value other than the one it held,
+with no input of it changed, the judgment was wrong: the count of those is
+`currency.falseClean`, logged with the piece. A start derives every output
+of a piece afresh, those of a current slice among them, so an instance
+written again as it stood is not counted. Whether a piece had been clean is
+kept with its record, so a mark that lands before the next record is stored
+does not hide it. `skip` acts on the
 judgment, and only under an epoch: a record is trusted across builds only by
 the epoch it names, so a serving loop asked to skip with no epoch named runs
 as `record` and logs a warning. A toolshed's epoch is
@@ -343,9 +358,8 @@ wrong.
   15 µs each on the memory server's thread.
 - **A piece whose output depends on something that is not a read** is held
   clean while what it would compute moves. The interval clock of a wish is
-  the one such input the index knows, and a slice that read it is never
-  vouched for, so its piece always starts. The same plan gives that slice
-  an expiry.
+  the one such input the index knows, and a slice that read it expires at
+  the tick after the one it read.
 - **A crash loses what the last cycles would have recorded.** The affected
   pieces are marked by their own later commits and start again.
 
@@ -353,7 +367,8 @@ wrong.
 
 1. **The index.** `runtime/memory/v2/currency-index.ts` and its tables
    (`currency_slice`, `currency_read`, `currency_write`, `currency_vouch`,
-   `currency_under`, `currency_cursor`): store a batch of records, advance
+   `currency_under`, `currency_cursor`, and `currency_expiry` for the time a
+   slice that read a clock expires at): store a batch of records, advance
    the cursor, judge roots against demand rows. The tables join the SQL
    guard's core names and the engine's table list.
 2. **Recording, and judging without acting.** The scheduler reports the
@@ -471,8 +486,9 @@ of which exist:
 25. A piece whose first record was taken below a client's write of an
     instance it vouches for is stored clean once a record covers that
     write.
-26. A slice that read the interval clock of a wish is stored marked, and
-    under `skip` its piece is started by a demand made after the interval
+26. A slice that read the interval clock of a wish is stored with the time
+    of the tick after the one the clock's cell holds. Under `skip` its
+    piece is left unstarted within the interval and started once it has
     passed, for a session that runs nothing itself
     (`space-server-currency-wish.test.ts`).
 

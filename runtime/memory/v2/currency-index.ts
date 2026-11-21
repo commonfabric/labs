@@ -30,9 +30,25 @@
  * none of them runs at admission.
  */
 
-import { DEFAULT_BRANCH, scopeOfScopeKey } from "../v2.ts";
+import { fabricAwareEqual } from "@commonfabric/data-model";
+import { DEFAULT_BRANCH, type ScopeKey, scopeOfScopeKey } from "../v2.ts";
 import { ANY_INSTANCE, sliceChain, SPACE_SLICE } from "./currency-keys.ts";
-import { type Engine, serverSeq } from "./engine.ts";
+import { type Engine, read, serverSeq } from "./engine.ts";
+
+/**
+ * Whether two documents read from the store hold the same value. A stored
+ * value can hold a link, a byte sequence or another special object, which
+ * keeps its state out of its properties, so the comparison is the one that
+ * decides those by content. Two documents it cannot decide are not the
+ * same: a pair of maps or of sets, which it does not hash yet.
+ */
+const sameDocument = (a: unknown, b: unknown): boolean => {
+  try {
+    return fabricAwareEqual(a, b);
+  } catch {
+    return false;
+  }
+};
 
 /** What the id of a document some computation derives begins with. */
 const COMPUTED_ID_PREFIX = "computed:";
@@ -115,6 +131,13 @@ export type CurrencySliceRecord = {
    * computation of the piece wrote.
    */
   vouches: readonly string[];
+
+  /**
+   * The time, in milliseconds since the epoch, from which the slice is no
+   * longer current whatever its rows say: the next tick of a clock one of
+   * its runs read. Absent for a slice only a commit can make stale.
+   */
+  expiresAt?: number;
 };
 
 /** What a serving loop recorded about one piece at a quiescent point. */
@@ -201,8 +224,9 @@ export type CurrencyStored = {
 
   /**
    * The pieces with a slice that had been clean since its last record, then
-   * wrote an instance it vouched for again with no input of its having
-   * changed: what it held was not what it computes.
+   * wrote an instance it vouched for again, to a value other than the one
+   * it held, with no input of its having changed: what it held was not what
+   * it computes.
    */
   falseClean: string[];
 
@@ -532,6 +556,22 @@ DO UPDATE SET head = excluded.head, stale = excluded.stale,
   selectHighestPosition: engine.prepare(`
 SELECT MAX(position) AS position FROM currency_export WHERE branch = :branch
 `),
+  deleteExpiry: engine.prepare(`
+DELETE FROM currency_expiry
+WHERE branch = :branch AND slice = :slice AND piece = :piece
+`),
+  insertExpiry: engine.prepare(`
+INSERT INTO currency_expiry (branch, slice, piece, expires_at)
+VALUES (:branch, :slice, :piece, :expires_at)
+`),
+  selectExpired: engine.prepare(`
+SELECT slice, piece FROM currency_expiry
+WHERE branch = :branch AND expires_at <= :now
+`),
+  selectNextExpiry: engine.prepare(`
+SELECT MIN(expires_at) AS expires_at FROM currency_expiry
+WHERE branch = :branch
+`),
   selectAnyExport: engine.prepare(`
 SELECT 1 AS found FROM currency_export WHERE branch = :branch LIMIT 1
 `),
@@ -564,6 +604,9 @@ type Context = {
   branch: string;
   space: string;
   statements: Statements;
+
+  /** The time the call was made at, in milliseconds since the epoch. */
+  now: number;
 
   /**
    * What a change to the index touched, where the store tells other spaces
@@ -849,8 +892,11 @@ const clearDownstream = (
 };
 
 /**
- * Brings the marks up to the store's head and moves the cursor there. Runs
- * inside the caller's transaction.
+ * Brings the marks up to the store's head and to the time of the call, and
+ * moves the cursor to the head. A slice past the time its record expires at
+ * is marked `2` with what is downstream of it, and reported at a seq above
+ * the head: no input the store holds made it stale. Runs inside the
+ * caller's transaction.
  */
 const advance = (context: Context): CurrencyMarked[] => {
   const { branch, space, statements } = context;
@@ -860,24 +906,35 @@ const advance = (context: Context): CurrencyMarked[] => {
       ?.seq;
   const slices =
     (statements.countSlices.get({ branch }) as { count: number }).count;
+  const seqs = new Map<string, { ref: SliceRef; seq: number }>();
+  const becameMarked: SliceRef[] = [];
+  if (slices > 0) {
+    const expired = statements.selectExpired.all({
+      branch,
+      now: context.now,
+    }) as SliceRef[];
+    for (const { slice, piece } of expired) {
+      const ref = { piece, slice };
+      statements.deleteExpiry.run({ branch, slice, piece });
+      const mark = markOf(context, ref);
+      if (mark === undefined || mark === 2) continue;
+      setMark(context, ref, 2);
+      seqs.set(refKey(ref), { ref, seq: head + 1 });
+      if (mark === 0) becameMarked.push(ref);
+    }
+  }
   // With nothing recorded and no instance another space reads, nothing
   // depends on what the store holds above the cursor, so the cursor moves
   // without reading a revision.
-  if (
-    cursor === undefined || (slices === 0 && context.touched === undefined)
-  ) {
-    if (cursor !== head) statements.upsertCursor.run({ branch, seq: head });
-    return [];
-  }
-  if (cursor >= head) return [];
-  const seqs = new Map<string, { ref: SliceRef; seq: number }>();
-  const becameMarked: SliceRef[] = [];
-  const changes = statements.selectChangedSince.all({
-    branch,
-    seq: cursor,
-  }) as Array<
-    { id: string; scope_key: string; lowest: number; highest: number }
-  >;
+  const changes = cursor === undefined || cursor >= head ||
+      (slices === 0 && context.touched === undefined)
+    ? []
+    : statements.selectChangedSince.all({
+      branch,
+      seq: cursor,
+    }) as Array<
+      { id: string; scope_key: string; lowest: number; highest: number }
+    >;
   for (const { id, scope_key, lowest, highest } of changes) {
     context.touched?.ids.add(id);
     const behind = [
@@ -915,7 +972,7 @@ const advance = (context: Context): CurrencyMarked[] => {
     }
   }
   markDownstream(context, becameMarked, seqs);
-  statements.upsertCursor.run({ branch, seq: head });
+  if (cursor !== head) statements.upsertCursor.run({ branch, seq: head });
   const under = new Map<string, string[]>();
   return [...seqs.values()].map(({ ref, seq }) => {
     let roots = under.get(ref.piece);
@@ -933,6 +990,7 @@ const contextFor = (engine: Engine, space: string): Context => ({
   branch: DEFAULT_BRANCH,
   space,
   statements: statementsFor(engine),
+  now: Date.now(),
 });
 
 /**
@@ -987,6 +1045,10 @@ export const advanceCurrencyCursor = (
  * slice stays marked until it does. A vouch row a record no longer names is
  * released and kept, so that is still known when the piece vouches for the
  * instance again.
+ *
+ * A slice whose record names a time it expires at is stored with that time,
+ * and marked `2` by the first call that brings the marks up to date at or
+ * after it. One whose time has passed already is stored marked `2`.
  *
  * A read row for an instance of another space takes the seq its record
  * names. The slice is marked `2` where that seq is below the head the
@@ -1107,8 +1169,8 @@ export const storeCurrencyRecords = (
 
   /**
    * Whether `ref`, clean since its last record, wrote an instance it
-   * vouched for again with nothing it read having changed. Read before its
-   * rows are replaced.
+   * vouched for again, to a value other than the one it held, with nothing
+   * it read having changed. Read before its rows are replaced.
    */
   const wroteAgainUnprompted = (ref: SliceRef): boolean => {
     const vouches = (statements.selectVouches.all({
@@ -1161,7 +1223,16 @@ export const storeCurrencyRecords = (
         if (headOf(row.entity, row.entity_scope_key) > row.seq) return false;
       }
     }
-    return vouches.some(({ id, seq }) => headOf(id, ref.slice) > seq);
+    // A start derives every output of a piece afresh, those of a slice that
+    // was current among them, so an instance written again as it stood is
+    // no sign that the stored value was stale.
+    return vouches.some(({ id, seq }) =>
+      headOf(id, ref.slice) > seq &&
+      !sameDocument(
+        read(engine, { id, scopeKey: ref.slice as ScopeKey, seq }),
+        read(engine, { id, scopeKey: ref.slice as ScopeKey }),
+      )
+    );
   };
 
   engine.database.transaction(() => {
@@ -1343,11 +1414,26 @@ export const storeCurrencyRecords = (
         }
         const vouched = record.vouched && slice.vouched && !foreign;
         if (vouched && unseen && !overwritten) behind.add(piece);
+        // A record that reaches the store at or after the time it expires
+        // at was current for no time at all.
+        const expired = slice.expiresAt !== undefined &&
+          slice.expiresAt <= context.now;
+        const clean = vouched && !unseen && !overwritten && !behindSource &&
+          !expired;
+        statements.deleteExpiry.run({ branch, slice: slice.key, piece });
+        if (clean && slice.expiresAt !== undefined) {
+          statements.insertExpiry.run({
+            branch,
+            slice: slice.key,
+            piece,
+            expires_at: slice.expiresAt,
+          });
+        }
         statements.upsertSlice.run({
           branch,
           slice: slice.key,
           piece,
-          mark: vouched && !unseen && !overwritten && !behindSource ? 0 : 2,
+          mark: clean ? 0 : 2,
           epoch: batch.epoch,
         });
         refs.push(ref);
@@ -1749,6 +1835,43 @@ export const applyCurrencyImports = (
 };
 
 /**
+ * The pieces of `space` whose records say they write the document `id`, at
+ * any instance of it.
+ */
+export const selectCurrencyWriters = (
+  engine: Engine,
+  options: { space: string; id: string },
+): string[] => {
+  const context = contextFor(engine, options.space);
+  return (context.statements.selectWriters.all({
+    branch: context.branch,
+    id: options.id,
+  }) as Array<{ piece: string }>).map(({ piece }) => piece);
+};
+
+/**
+ * What `space`'s index last worked out of the instance `(id, scopeKey)` for
+ * the spaces that read it, or `undefined` where no space registered it: its
+ * head, and whether a piece here computes it and does not answer for it at
+ * present. It is as of the index's last change, so a commit since may have
+ * moved the instance.
+ */
+export const selectCurrencyExport = (
+  engine: Engine,
+  options: { space: string } & CurrencyInstance,
+): { head: number; stale: boolean } | undefined => {
+  const context = contextFor(engine, options.space);
+  const row = context.statements.selectExport.get({
+    branch: context.branch,
+    id: options.id,
+    scope_key: options.scopeKey,
+  }) as { head: number; stale: number } | undefined;
+  return row === undefined
+    ? undefined
+    : { head: row.head, stale: row.stale !== 0 };
+};
+
+/**
  * The position of the space `source` that `space`'s index last pulled
  * through, `0` where it has pulled nothing.
  */
@@ -1863,6 +1986,107 @@ export const forgetCurrencySource = (
     refreshTouched(context);
   }).immediate();
   return [...new Set([...marked.values()].map((ref) => ref.piece))];
+};
+
+/**
+ * The instances of the space `source` that `space`'s index holds as told of
+ * by it: the ones a slice here read and registered there.
+ */
+export const selectCurrencyImports = (
+  engine: Engine,
+  options: { space: string; source: string },
+): CurrencyInstance[] => {
+  const context = contextFor(engine, options.space);
+  return (context.statements.selectImportsOfSource.all({
+    branch: context.branch,
+    source: options.source,
+  }) as Array<{ id: string; scope_key: string }>).map((
+    { id, scope_key },
+  ) => ({ id, scopeKey: scope_key }));
+};
+
+/**
+ * Forgets what `space`'s index holds of `instances` of the space `source`,
+ * which it may not be told of any longer, and marks `2` each slice that
+ * read one. A record stored afterward finds nothing reported of them.
+ *
+ * @returns The pieces with a slice this marked.
+ */
+export const forgetCurrencyImports = (
+  engine: Engine,
+  options: {
+    space: string;
+    source: string;
+    instances: readonly CurrencyInstance[];
+  },
+): string[] => {
+  const context = changingContextFor(engine, options.space);
+  const { branch, statements } = context;
+  const { source } = options;
+  const marked = new Map<string, SliceRef>();
+  engine.database.transaction(() => {
+    for (const { id, scopeKey } of options.instances) {
+      const readers = statements.selectReadersOfImport.all({
+        branch,
+        source,
+        id,
+        scope_key: scopeKey,
+      }) as SliceRef[];
+      for (const { slice, piece } of readers) {
+        const ref = { piece, slice };
+        const mark = markOf(context, ref);
+        if (mark === undefined || mark === 2) continue;
+        setMark(context, ref, 2);
+        marked.set(refKey(ref), ref);
+      }
+      statements.deleteImport.run({ branch, source, id, scope_key: scopeKey });
+    }
+    markDownstream(context, [...marked.values()], new Map());
+    refreshTouched(context);
+  }).immediate();
+  return [...new Set([...marked.values()].map((ref) => ref.piece))];
+};
+
+/**
+ * Drops the registrations the space `reader` holds of `reads`, instances of
+ * `space`'s store, so that `space` tells it nothing more of them.
+ */
+export const unregisterCurrencyReads = (
+  engine: Engine,
+  options: {
+    space: string;
+    reader: string;
+    reads: readonly CurrencyInstance[];
+  },
+): void => {
+  const context = contextFor(engine, options.space);
+  const { branch, statements } = context;
+  engine.database.transaction(() => {
+    for (const { id, scopeKey } of options.reads) {
+      statements.deleteReader.run({
+        branch,
+        reader: options.reader,
+        id,
+        scope_key: scopeKey,
+      });
+    }
+  }).immediate();
+};
+
+/**
+ * The earliest time, in milliseconds since the epoch, at which a slice of
+ * `space` expires, or `undefined` where none does. The marks are brought up
+ * to date at or after that time to mark it, which a space that reads this
+ * one does by pulling from it.
+ */
+export const selectCurrencyNextExpiry = (
+  engine: Engine,
+  options: { space: string },
+): number | undefined => {
+  const context = contextFor(engine, options.space);
+  return (context.statements.selectNextExpiry.get({
+    branch: context.branch,
+  }) as { expires_at: number | null } | undefined)?.expires_at ?? undefined;
 };
 
 /** Why a root is not one the store can serve. */
