@@ -234,6 +234,21 @@ describe("call-kind", () => {
       ).toBeUndefined();
     });
 
+    it("returns `undefined` for a call of a union of `Function` and a function type", () => {
+      // The checker gives such a callee one call signature, combined from the
+      // union's members, and that signature has no declaration.
+
+      const { sourceFile, checker } = createProgram(`
+        interface Function {}
+        declare const callee: Function | (() => number);
+
+        const value = callee();
+      `);
+
+      expect(detectCallKind(findCallInitializer(sourceFile, "value"), checker))
+        .toBeUndefined();
+    });
+
     it("returns `undefined` for an authored `*WithPattern` call on an untyped receiver", () => {
       // The method resolves to no symbol on `any`, but the node is authored
       // (parser-ranged), so the synthetic-spelling fallback must not claim it:

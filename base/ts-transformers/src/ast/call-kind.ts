@@ -1581,11 +1581,9 @@ function resolveExpressionKind(
   const type = checker.getTypeAtLocation(target);
   const signatures = checker.getSignaturesOfType(type, ts.SignatureKind.Call);
   for (const signature of signatures) {
-    const kind = resolveSymbolKind(
-      getSignatureSymbol(signature),
-      checker,
-      seen,
-    );
+    const signatureSymbol = getSignatureSymbol(signature);
+    if (!signatureSymbol) continue;
+    const kind = resolveSymbolKind(signatureSymbol, checker, seen);
     if (kind) {
       cache.set(expression, kind);
       return kind;
@@ -1896,8 +1894,10 @@ function resolveBuilderExpressionKind(
     const type = checker.getTypeAtLocation(target);
     const signatures = checker.getSignaturesOfType(type, ts.SignatureKind.Call);
     for (const signature of signatures) {
+      const signatureSymbol = getSignatureSymbol(signature);
+      if (!signatureSymbol) continue;
       const kind = resolveBuilderSymbolKind(
-        getSignatureSymbol(signature),
+        signatureSymbol,
         checker,
         seen,
         options,
@@ -2374,12 +2374,12 @@ function hasIdentifierName(
 }
 
 /**
- * The symbol of the declaration a call signature came from. Every call
- * signature a type reports carries the declaration it was read from, and the
- * binder gives every signature declaration a symbol; `symbol` is internal to
- * TypeScript's `Node`.
+ * The symbol of the declaration a call signature came from, or `undefined`
+ * for a signature with no declaration: the checker combines one from the
+ * members of a union such as `Function | (() => number)`. `symbol` is internal
+ * to TypeScript's `Node`.
  */
-function getSignatureSymbol(signature: ts.Signature): ts.Symbol {
+function getSignatureSymbol(signature: ts.Signature): ts.Symbol | undefined {
   // deno-lint-ignore no-explicit-any
-  return (signature.declaration as any).symbol;
+  return (signature.declaration as any)?.symbol;
 }

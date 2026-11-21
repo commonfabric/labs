@@ -608,7 +608,13 @@ Detection occurs in `applyShrinkAndWrap` and `validateShrinkCoverage` (both in
 into them), including the `defaults_only` branch of
 `applyCapabilitySummaryToArgument`. After shrinking completes,
 `validateShrinkCoverage` compares requested top-level path heads against what
-was materialized in the shrunk result.
+was materialized in the shrunk result. On an array, a path whose head the
+array itself has is checked against the array, and every other path against
+its element. A path whose head is no index reaches the element unchanged, so
+an element that leads back to the array, as in `type R = R[]` or
+`type A = A[][]`, is not descended into where it is the array or was already
+handed the same paths on the way down; those paths are checked against the
+array (`test/type-shrinking.test.ts`).
 
 Path extraction (`extractAccessPath` in capability-analysis.ts) sees through the
 non-semantic wrappers `unwrapExpression` strips — parenthesization, `as`
@@ -896,6 +902,11 @@ Diagnostics emitted in all modes:
     non-lowerable computation sites still report this error (so `items[0].name`,
     `name.toUpperCase()` at lowerable top-level sites, and dynamic keys inside
     supported contexts validate clean)
+  - a destructuring default on or around a computed key in a collection
+    callback's element parameter, as in `rows.map(([{ [k]: v } = d]) => v)` or
+    `records.map(({ [k]: v = 0 }) => v)`: the key is read through an alias
+    lifted from the element and the key, which no default reaches
+    (`test/closures/array-method-utils.test.ts`)
 - **Error** `pattern-context:callback-container`
   - a callback passed to an **unsupported container** in pattern-facing JSX
     (the callback-boundary decision is `unsupported` with
@@ -1691,6 +1702,16 @@ rather than capture-rewritten here.
 Capture analysis:
 
 - captures identifiers/property chains declared outside callback scope
+- captures what a parameter's defaults and the computed keys of its
+  destructuring pattern read, at any depth, as `k` in
+  `rows.map(({ [k]: { x } }) => x)`: they are evaluated in the enclosing
+  scope's terms (`test/closures/array-method-utils.test.ts`)
+- captures a method call's receiver rather than its method: `c.get()` captures
+  `c`, and `state.counter.set(x)` captures `state.counter`. A transparent
+  wrapper around the callee keeps the reference, so `(c.get)()` and
+  `c.get!()` are method calls on `c` and capture `c` too, in a `computed()`
+  callback and in a pattern-body expression alike
+  (`test/transparent-wrapper-consistency.test.ts`, "method call captures")
 - excludes imports, module-scoped declarations, function declarations, type
   parameters, JSX tag names, property keys
 - skips syntax that is erased at emit, since no name in it is a runtime value:

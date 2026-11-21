@@ -295,6 +295,26 @@ export const h = ${declaration};`;
       ]);
     });
 
+    it("emits a cell state schema for a state the callback is asserted to be a cell", async () => {
+      // The asserted parameter type is printed, and a printed node is read
+      // whole: the cell's value type is printed from its type. The schema is
+      // the one the same parameter gets written as an annotation.
+
+      const asserted = await transform(handlers(
+        `handler(((e, state) => { console.log(e.n); }) as (e: { n: number }, state: Writable<number>) => void)`,
+      ));
+      const annotated = await transform(handlers(
+        `handler((e: { n: number }, state: Writable<number>) => { console.log(e.n); })`,
+      ));
+
+      expect(argumentValues(callOf(asserted, "h"))[1]).toEqual(
+        argumentValues(callOf(annotated, "h"))[1],
+      );
+      expect(argumentValues(callOf(asserted, "h"))[1]).toMatchObject({
+        type: "number",
+      });
+    });
+
     it("emits `unknown` for an untyped state parameter", async () => {
       const root = await transform(handlers(
         `handler((e, state) => { state.count.set(1); })`,
@@ -410,6 +430,113 @@ export function make(count: Writable<number>) {
           asCell: ["opaque"],
         });
       });
+    });
+  });
+
+  describe("a cell parameter narrowed to the capability its callback earns", () => {
+    // The cell is rewrapped in the capability its callback earns. Only a scope
+    // wrapper names the cell's scope, and a generic alias of a cell writes no
+    // wrapper out, so the value is read from the cell's type, one cell deep.
+
+    const module = (declaration: string) =>
+      `/// <cts-enable />
+import { handler, lift, type PerUser, Writable } from "commonfabric";
+type Slot<T> = Writable<T>;
+type MyState = PerUser<Writable<number>>;
+type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+type Owned = Confidential<Writable<string>, ["owner"]>;
+export const x = ${declaration};`;
+
+    /**
+     * The schema of the cell parameter `declaration`'s callback narrows: the
+     * second argument, a handler's state schema or a lift's input schema.
+     */
+    async function cellSchema(declaration: string): Promise<unknown> {
+      return argumentValues(
+        callOf(await transform(module(declaration)), "x"),
+      )[1];
+    }
+
+    it("keeps a handler state cell's scope on its readonly narrowing", async () => {
+      expect(
+        await cellSchema(
+          "handler((e: { n: number }, s: PerUser<Writable<number>>) => { console.log(e.n, s.get()); })",
+        ),
+      ).toEqual({
+        type: "number",
+        asCell: [{ kind: "readonly", scope: "user" }],
+      });
+    });
+
+    it("keeps a lift argument cell's scope on its readonly narrowing", async () => {
+      expect(
+        await cellSchema("lift((s: PerUser<Writable<number>>) => s.get())"),
+      ).toEqual({
+        type: "number",
+        asCell: [{ kind: "readonly", scope: "user" }],
+      });
+    });
+
+    it("keeps a handler state cell's scope when an alias writes the scope wrapper", async () => {
+      expect(
+        await cellSchema(
+          "handler((e: { n: number }, s: MyState) => { console.log(e.n, s.get()); })",
+        ),
+      ).toEqual({
+        type: "number",
+        asCell: [{ kind: "readonly", scope: "user" }],
+      });
+    });
+
+    it("keeps a lift argument cell's scope when an alias writes the scope wrapper", async () => {
+      expect(await cellSchema("lift((s: MyState) => s.get())")).toEqual({
+        type: "number",
+        asCell: [{ kind: "readonly", scope: "user" }],
+      });
+    });
+
+    it("keeps a handler state cell's confidentiality label on its readonly narrowing", async () => {
+      expect(
+        await cellSchema(
+          "handler((e: { n: number }, s: Owned) => { console.log(e.n, s.get()); })",
+        ),
+      ).toMatchObject({
+        type: "string",
+        asCell: ["readonly"],
+        ifc: { confidentiality: ["owner"] },
+      });
+    });
+
+    it("keeps a lift argument cell's confidentiality label on its readonly narrowing", async () => {
+      expect(await cellSchema("lift((s: Owned) => s.get())")).toMatchObject({
+        type: "string",
+        asCell: ["readonly"],
+        ifc: { confidentiality: ["owner"] },
+      });
+    });
+
+    it("keeps the cell a handler state cell holds when a generic alias writes the outer one", async () => {
+      const aliased = await cellSchema(
+        "handler((e: { n: number }, s: Slot<Writable<number>>) => { console.log(e.n, s.get().get()); })",
+      );
+
+      expect(aliased).toEqual({ type: "number", asCell: ["readonly", "cell"] });
+      expect(aliased).toEqual(
+        await cellSchema(
+          "handler((e: { n: number }, s: Writable<Writable<number>>) => { console.log(e.n, s.get().get()); })",
+        ),
+      );
+    });
+
+    it("keeps the cell a lift argument cell holds when a generic alias writes the outer one", async () => {
+      expect(
+        await cellSchema("lift((s: Slot<Writable<number>>) => s.get().get())"),
+      ).toEqual(
+        await cellSchema(
+          "lift((s: Writable<Writable<number>>) => s.get().get())",
+        ),
+      );
     });
   });
 

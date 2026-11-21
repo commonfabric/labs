@@ -455,4 +455,159 @@ type SchemaRoot = typeof result;
         .toBeUndefined();
     });
   });
+
+  describe("a member a mapped type maps", () => {
+    // A mapped type keeps the declaration of the member it maps, and a
+    // template can change the member's type. The member is read as the
+    // mapped type has it, never as its declaration writes it.
+
+    /** The schema of `v.w`, with `SchemaRoot` declaring `v: <mapped>`. */
+    async function mappedMemberSchema(
+      declarations: string,
+      mapped: string,
+    ): Promise<unknown> {
+      const schema = await schemaFor(`
+${declarations}
+interface SchemaRoot { v: ${mapped} }
+`);
+      const v = schema.properties?.v as {
+        properties?: Record<string, unknown>;
+      };
+      return v.properties?.w;
+    }
+
+    const LOOSE = "type Loose<T> = { [K in keyof T]: T[K] | string };";
+    const UNWRAP =
+      "type Unwrap<T> = { [K in keyof T]: T[K] extends Cell<infer U> ? U : T[K] };";
+    const WIDENED_CELL = {
+      anyOf: [{ type: "string" }, { type: "number", asCell: ["cell"] }],
+    };
+
+    it("emits both members of a union the template widens a cell member to", async () => {
+      expect(await mappedMemberSchema(LOOSE, "Loose<{ w: Cell<number> }>"))
+        .toEqual(WIDENED_CELL);
+    });
+
+    it("emits the value type the template unwraps a cell member to", async () => {
+      expect(await mappedMemberSchema(UNWRAP, "Unwrap<{ w: Cell<number> }>"))
+        .toEqual({ type: "number" });
+    });
+
+    it("emits the widened union for a cell member a generic declares", async () => {
+      expect(
+        await mappedMemberSchema(
+          `${LOOSE} interface Src<T> { w: Cell<T> }`,
+          "Loose<Src<number>>",
+        ),
+      ).toEqual(WIDENED_CELL);
+    });
+
+    it("emits the unwrapped value type for a cell member a generic declares", async () => {
+      expect(
+        await mappedMemberSchema(
+          `${UNWRAP} interface Src<T> { w: Cell<T> }`,
+          "Unwrap<Src<number>>",
+        ),
+      ).toEqual({ type: "number" });
+    });
+
+    it("keeps the scope of a member the template leaves as it is", async () => {
+      expect(
+        await mappedMemberSchema(UNWRAP, "Unwrap<{ w: PerSession<null> }>"),
+      )
+        .toMatchObject({ scope: "session" });
+    });
+
+    it("keeps a member the template leaves as it is optional, with its default, where the default holds `undefined`", async () => {
+      // A replica of `Default`, as `brand-payload-defaults.test.ts` declares.
+      const schema = await schemaFor(`
+declare const DEFAULT_MARKER: unique symbol;
+type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
+type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
+${UNWRAP}
+interface SchemaRoot { v: Unwrap<{ w: Default<number | undefined, 42> }> }
+`);
+      const v = schema.properties?.v as {
+        properties?: Record<string, { default?: unknown }>;
+        required?: string[];
+      };
+
+      expect(v.required ?? []).not.toContain("w");
+      expect(v.properties?.w?.default).toBe(42);
+    });
+
+    it("keeps the scope of a generic field an identity mapping reads under its type arguments", async () => {
+      const ROW = "interface Row<T> { w: PerSession<T> }";
+
+      expect(await mappedMemberSchema(ROW, "Readonly<Row<null>>"))
+        .toMatchObject({ scope: "session" });
+      expect(await mappedMemberSchema(ROW, 'Pick<Row<null>, "w">'))
+        .toMatchObject({ scope: "session" });
+    });
+
+    it("keeps a generic field an identity mapping reads under its type arguments optional where its default holds `undefined`", async () => {
+      const schema = await schemaFor(`
+declare const DEFAULT_MARKER: unique symbol;
+type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
+type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
+interface Fallback<T> { w: Default<T | undefined, T> }
+interface SchemaRoot { v: Readonly<Fallback<42>> }
+`);
+      const v = schema.properties?.v as { required?: string[] };
+
+      expect(v.required ?? []).not.toContain("w");
+    });
+
+    it("emits the permissive schema for a member a template maps to `any`", async () => {
+      const ANYTHING = "type Anything<T> = { [K in keyof T]: any };";
+
+      expect(await mappedMemberSchema(ANYTHING, "Anything<{ w: number }>"))
+        .toBe(true);
+      expect(
+        await mappedMemberSchema(ANYTHING, "Anything<{ w: Cell<number> }>"),
+      )
+        .toBe(true);
+    });
+
+    it("emits both members of the widened union for a cell member of a mapped type an identity mapping wraps", async () => {
+      // `Partial`'s `?` adds `undefined` beside the two members, so only the
+      // members are pinned.
+
+      const schema = await mappedMemberSchema(
+        LOOSE,
+        "Partial<Loose<{ w: Cell<number> }>>",
+      ) as { anyOf?: { type?: string | string[]; asCell?: unknown }[] };
+
+      expect(schema.anyOf).toContainEqual({ type: "number", asCell: ["cell"] });
+      expect(
+        schema.anyOf?.some(({ type }) =>
+          type === "string" || (Array.isArray(type) && type.includes("string"))
+        ),
+      ).toBe(true);
+    });
+
+    it("emits the unwrapped value type for a cell member of a mapped type an identity mapping wraps", async () => {
+      expect(
+        await mappedMemberSchema(
+          UNWRAP,
+          "Readonly<Unwrap<{ w: Cell<number> }>>",
+        ),
+      ).toEqual({ type: "number" });
+    });
+
+    it("emits the cell a `Pick` leaves as it is", async () => {
+      expect(
+        await mappedMemberSchema(
+          "",
+          'Pick<{ w: Cell<number>; x: string }, "w">',
+        ),
+      )
+        .toEqual({ type: "number", asCell: ["cell"] });
+    });
+
+    it("emits the cell a `Partial` makes optional", async () => {
+      expect(await mappedMemberSchema("", "Partial<{ w: Cell<number> }>"))
+        .toEqual({ type: "number", asCell: ["cell"] });
+    });
+  });
 });
