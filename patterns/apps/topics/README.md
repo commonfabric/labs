@@ -151,6 +151,13 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   mention universe; and the `topics` and `index` outputs, which carry each topic
   as a reference.
 
+  A topic holds the board's handle, so that it can ask which topics mention it,
+  and the board publishes the handle as `board` so that a topic can be linked to
+  it. Holding the handle does not let a topic, or anything else it is linked
+  into, write the board: the collection names a guard that only the board's own
+  ways of adding a topic may write, which are `addTopic`, `adoptTopics`,
+  `backfillNames` and the composer's submit.
+
   What the collection mirrors is state a verb stores, so it follows a topic that
   is not running. That is why a topic publishes `filedBy`, the author as the
   create stored it, beside `createdBy`, which a running topic derives from it.
@@ -184,7 +191,9 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
 - **A board that held its topics as a list adopts them.** The `topics` input is
   read by two verbs and by nothing else. `adoptTopics` adds every listed topic
   to the collection, and `backfillNames` does the same before it numbers them.
-  Until one of them has run, such a board shows no topics.
+  `backfillNames` numbers the topics the collection holds as well, which is
+  every topic of a board that never kept a list. Until one of them has run, such
+  a board shows no topics.
 
   A topic filed before the board held a collection also has nothing bound to its
   `board` input, so it shows no backlinks. `scripts/topics-bind-board.ts` links

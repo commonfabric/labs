@@ -15,8 +15,8 @@
  * re-reads, one for each topic that mentions it. That is the collection's
  * documented cost and is not bounded here.
  */
-import { action, assert, pattern, TESTS } from "commonfabric";
-import Topics from "./main.tsx";
+import { action, assert, pattern, TESTS, Writable } from "commonfabric";
+import Topics, { type TopicDemand } from "./main.tsx";
 import Topic from "./topic.tsx";
 
 /**
@@ -26,7 +26,11 @@ import Topic from "./topic.tsx";
 const WIDEST_ROW = 8;
 
 export default pattern(() => {
-  const board = Topics({});
+  // The board's legacy list, which the test fills so that `adoptTopics` adds
+  // each topic: the board's collection takes a write from the board's own
+  // verbs and from nothing else that holds its handle.
+  const listed = new Writable<TopicDemand[]>([]);
+  const board = Topics({ topics: listed });
   const hub = Topic({ title: "Hub", board: board.board });
   const spokeOne = Topic({ title: "Spoke one", board: board.board });
   const spokeTwo = Topic({ title: "Spoke two", board: board.board });
@@ -44,10 +48,8 @@ export default pattern(() => {
       (SELECT count(*) FROM topics_mentioned) AS edges`);
 
   const action_three_spokes_mention_the_hub = action(() => {
-    board.board.add("topics", hub);
-    board.board.add("topics", spokeOne);
-    board.board.add("topics", spokeTwo);
-    board.board.add("topics", spokeThree);
+    listed.set([hub, spokeOne, spokeTwo, spokeThree]);
+    board.adoptTopics.send({ agentName: "Sol" });
     spokeOne.mention?.send({ topic: hub });
     spokeTwo.mention?.send({ topic: hub });
     spokeThree.mention?.send({ topic: hub });
@@ -60,9 +62,16 @@ export default pattern(() => {
   );
 
   const action_three_more_spokes_mention_the_hub = action(() => {
-    board.board.add("topics", spokeFour);
-    board.board.add("topics", spokeFive);
-    board.board.add("topics", spokeSix);
+    listed.set([
+      hub,
+      spokeOne,
+      spokeTwo,
+      spokeThree,
+      spokeFour,
+      spokeFive,
+      spokeSix,
+    ]);
+    board.adoptTopics.send({ agentName: "Sol" });
     spokeFour.mention?.send({ topic: hub });
     spokeFive.mention?.send({ topic: hub });
     spokeSix.mention?.send({ topic: hub });

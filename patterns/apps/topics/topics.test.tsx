@@ -32,6 +32,7 @@ import { type NamesMap } from "../../product/collection-naming/naming.ts";
 import Topics, {
   activityOrderOf,
   submitProfileTopic,
+  type TopicDemand,
   type TopicPiece,
 } from "./main.tsx";
 import Topic, {
@@ -1074,15 +1075,17 @@ export default pattern(() => {
   // --- Backlinks: a topic asks the board's collection who mentions it ---
 
   // Topics the test holds, so that it reaches each one's verbs and outputs,
-  // wired to a board of their own and added to its collection.
-  const keyedBoard = Topics({});
+  // wired to a board of their own and added to its collection through
+  // `adoptTopics`: the collection takes a write from the board's own verbs
+  // and from nothing else that holds its handle.
+  const keyedListed = new Writable<TopicDemand[]>([]);
+  const keyedBoard = Topics({ topics: keyedListed });
   const keyedOne = Topic({ title: "Keyed one", board: keyedBoard.board });
   const keyedTwo = Topic({ title: "Keyed two", board: keyedBoard.board });
   const keyedThree = Topic({ title: "Keyed three", board: keyedBoard.board });
   const action_keyed_board_takes_three = action(() => {
-    keyedBoard.board.add("topics", keyedOne);
-    keyedBoard.board.add("topics", keyedTwo);
-    keyedBoard.board.add("topics", keyedThree);
+    keyedListed.set([keyedOne, keyedTwo, keyedThree]);
+    keyedBoard.adoptTopics.send({ agentName: "Sol" });
   });
   const action_keyed_mentions = action(() => {
     // The first topic is mentioned by the second and the third, and by

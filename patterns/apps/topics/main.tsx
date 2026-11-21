@@ -6,7 +6,6 @@
  * topic.
  */
 import {
-  action,
   computed,
   Default,
   handler,
@@ -22,6 +21,8 @@ import {
   type VNode,
   wish,
   Writable,
+  type WriteAuthorizedBy,
+  type WritePolicyAnyOf,
 } from "commonfabric";
 
 import { isMemberName } from "../../product/collection-naming/allocator.ts";
@@ -668,6 +669,137 @@ function adoptListed(
   return adopted;
 }
 
+/** What the handlers that create a topic are bound to. */
+interface BoardCreateState {
+  /** The board's collection, which the new topic is added to and handed. */
+  board: TopicBoard;
+
+  /** The mention universe, handed to the new topic as it arrives. */
+  mentionable: ReadonlyCell<TopicMentionable[] | Default<[]>>;
+
+  /** The namespace, written one key per create. */
+  // deno-lint-ignore ban-types
+  names: Writable<Default<NamesMap, {}>>;
+}
+
+/** What the handlers that adopt a listed board's topics are bound to. */
+interface BoardAdoptState {
+  /** The board's collection, which each listed topic is added to. */
+  board: TopicBoard;
+
+  /** The topics the board held as a list. */
+  topics: Writable<TopicDemand[] | Default<[]>>;
+}
+
+/** Files a topic: the number, the create and the add, in one transaction. */
+const addTopicHandler = handler<
+  AddTopicEvent,
+  BoardCreateState,
+  AddTopicResult
+>((
+  { title, body, agentName },
+  { board, mentionable, names },
+) => {
+  const trimmed = (title ?? "").trim();
+  const author = topicAuthorFromAgent(agentName) ??
+    rejectMutation("addTopic", "agentName must be non-blank");
+  if (!trimmed) rejectMutation("addTopic", "title must be non-empty");
+  // The number, the create, and the add are one transaction: the topic is
+  // built holding the number the map records it under, no reader observes the
+  // topic without its number, and a concurrent create serializes on the
+  // map's keys, re-running with the next number rather than taking the same
+  // one.
+  const filedAt = Date.now();
+  const { name, member: piece } = createNamed(names, (allocated) =>
+    Topic({
+      topicStateVersion: TOPIC_STATE_VERSION,
+      title: trimmed,
+      // Body at create is part of the create's atomic unit; created-with is
+      // not an update, so bodyUpdatedBy/At stay unset (createdBy covers it).
+      // Preserved verbatim, matching setBody and the UI save path — trimming
+      // would corrupt whitespace-sensitive Markdown (indented code blocks).
+      body: body ?? "",
+      createdAt: filedAt,
+      // Kept by the topic's verbs from here on; a new topic has no comment
+      // and no activity but its creation.
+      commentCount: 0,
+      lastActivityAt: filedAt,
+      createdBy: author,
+      // The number this create allocated, stored with the topic, which is
+      // what lets the topic report it without reading the board.
+      shortName: allocated,
+      // The board's mention universe, which the editor autocompletes over.
+      mentionable,
+      // The board's collection, which the topic asks for the topics that
+      // mention it.
+      board,
+    }));
+  // The session composer draft is `submitTopic`'s to clear; a headless
+  // create has no draft.
+  board.add("topics", piece);
+  return { topic: piece, name };
+});
+
+/** Adds every topic the board held as a list to its collection. */
+const adoptTopicsHandler = handler<
+  AdoptTopicsEvent,
+  BoardAdoptState,
+  AdoptTopicsResult
+>(
+  ({ agentName }, { board, topics }) => {
+    if (!topicAuthorFromAgent(agentName)) {
+      rejectMutation("adoptTopics", "agentName must be non-blank");
+    }
+    return { adopted: adoptListed(topics, board) };
+  },
+);
+
+/** Adopts the listed topics, then numbers the ones the namespace lacks. */
+const backfillNamesHandler = handler<
+  BackfillNamesEvent,
+  BoardAdoptState & Pick<BoardCreateState, "names"> & {
+    /** The topics the board's collection holds, in filing order. */
+    members: Writable<TopicDemand[] | Default<[]>>;
+  },
+  BackfillNamesResult
+>(
+  ({ agentName }, { board, topics, names, members }) => {
+    if (!topicAuthorFromAgent(agentName)) {
+      rejectMutation("backfillNames", "agentName must be non-blank");
+    }
+    adoptListed(topics, board);
+    // The listed topics first, which this run has only just added and the
+    // collection does not report yet, then the topics the collection holds,
+    // which a board that never kept a list has nowhere else. A topic in both
+    // is named by the first pass and found named by the second.
+    const listed = recordNames(topics, names);
+    const held = recordNames(members, names);
+    const union = (a: string[], b: string[]) => [...new Set([...a, ...b])];
+    const assigned = union(listed.assigned, held.assigned);
+    return {
+      assigned,
+      // A name the first pass assigned is not one the board found in place.
+      named: union(listed.named, held.named).filter((name) =>
+        !assigned.includes(name)
+      ),
+      pending: union(listed.pending, held.pending),
+    };
+  },
+);
+
+/**
+ * The count a write to the board also advances, and who may advance it. A
+ * topic holds the board's handle so that it can ask which topics mention it,
+ * and anything the board's handle is linked into holds it too; these four
+ * are the board's own ways of adding a topic.
+ */
+type BoardGuard = WritePolicyAnyOf<number, [
+  WriteAuthorizedBy<unknown, typeof addTopicHandler>,
+  WriteAuthorizedBy<unknown, typeof adoptTopicsHandler>,
+  WriteAuthorizedBy<unknown, typeof backfillNamesHandler>,
+  WriteAuthorizedBy<unknown, typeof submitProfileTopic>,
+]>;
+
 /** Shows another page of cards in the session that asked. */
 const showMoreCards = handler<void, { shown: Writable<number> }>(
   (_, { shown }) => {
@@ -684,6 +816,9 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
 
   // The board's topics. Membership lives here and nowhere else: every listing
   // below is a query, so none of them reads a topic.
+  // Who may write the board: see `BoardGuard`.
+  const guard = new Writable<BoardGuard>(0);
+
   const board = indexedCollections<{ topics: TopicMirrored }>({
     topics: {
       columns: {
@@ -701,7 +836,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
       // its links, once it has run.
       relations: ["mentioned", "mentions"],
     },
-  });
+  }, { guard });
 
   const counted = board.query<{ n: number }>(
     "SELECT count(*) AS n FROM topics",
@@ -769,67 +904,14 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   const profileName = profileWish.result?.name ?? "";
   const hasProfile = profileName.trim().length > 0;
 
-  const addTopic = action<AddTopicEvent, AddTopicResult>((
-    { title, body, agentName },
-  ) => {
-    const trimmed = (title ?? "").trim();
-    const author = topicAuthorFromAgent(agentName) ??
-      rejectMutation("addTopic", "agentName must be non-blank");
-    if (!trimmed) rejectMutation("addTopic", "title must be non-empty");
-    // The number, the create, and the add are one transaction: the topic is
-    // built holding the number the map records it under, no reader observes the
-    // topic without its number, and a concurrent create serializes on the
-    // map's keys, re-running with the next number rather than taking the same
-    // one.
-    const filedAt = Date.now();
-    const { name, member: piece } = createNamed(names, (allocated) =>
-      Topic({
-        topicStateVersion: TOPIC_STATE_VERSION,
-        title: trimmed,
-        // Body at create is part of the create's atomic unit; created-with is
-        // not an update, so bodyUpdatedBy/At stay unset (createdBy covers it).
-        // Preserved verbatim, matching setBody and the UI save path — trimming
-        // would corrupt whitespace-sensitive Markdown (indented code blocks).
-        body: body ?? "",
-        createdAt: filedAt,
-        // Kept by the topic's verbs from here on; a new topic has no comment
-        // and no activity but its creation.
-        commentCount: 0,
-        lastActivityAt: filedAt,
-        createdBy: author,
-        // The number this create allocated, stored with the topic, which is
-        // what lets the topic report it without reading the board.
-        shortName: allocated,
-        // The board's mention universe, which the editor autocompletes over.
-        mentionable,
-        // The board's collection, which the topic asks for the topics that
-        // mention it.
-        board,
-      }));
-    // The session composer draft is `submitTopic`'s to clear; a headless
-    // create has no draft.
-    board.add("topics", piece);
-    return { topic: piece, name };
+  const addTopic = addTopicHandler({ board, mentionable, names });
+  const adopt = adoptTopicsHandler({ board, topics });
+  const backfill = backfillNamesHandler({
+    board,
+    topics,
+    names,
+    members: topicList,
   });
-
-  const adopt = action<AdoptTopicsEvent, AdoptTopicsResult>(
-    ({ agentName }) => {
-      if (!topicAuthorFromAgent(agentName)) {
-        rejectMutation("adoptTopics", "agentName must be non-blank");
-      }
-      return { adopted: adoptListed(topics, board) };
-    },
-  );
-
-  const backfill = action<BackfillNamesEvent, BackfillNamesResult>(
-    ({ agentName }) => {
-      if (!topicAuthorFromAgent(agentName)) {
-        rejectMutation("backfillNames", "agentName must be non-blank");
-      }
-      adoptListed(topics, board);
-      return recordNames(topics, names);
-    },
-  );
 
   const submitTopic = submitProfileTopic({
     board,
