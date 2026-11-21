@@ -2605,6 +2605,13 @@ type LinkSourceProjection = {
   principalClaims: CfcAtom[];
 };
 
+/** A document whose resolved envelopes a refresh retired. */
+type RetiredEnvelope = {
+  space: MemorySpace;
+  scope: ReturnType<typeof normalizeCellScope>;
+  id: URI;
+};
+
 /**
  * Resolves input envelopes during one boundary preparation.
  *
@@ -2625,6 +2632,8 @@ export class VerifierMetadataResolver {
   >();
   #seenWrites = 0;
   #generation = 0;
+  #retired: RetiredEnvelope[] = [];
+  #resets = 0;
   #viewIndexes = new WeakMap<CfcMetadata, ConsumedLabelIndex>();
   #views = new WeakMap<CfcMetadata, Map<string, LinkSourceProjection>>();
   #labelIndexes = new WeakMap<CfcMetadata, ConsumedLabelIndex>();
@@ -2645,6 +2654,24 @@ export class VerifierMetadataResolver {
    */
   get generation(): number {
     return this.#generation;
+  }
+
+  /**
+   * The documents whose resolutions a refresh retired, one entry for each
+   * retirement, in order. It only grows: a caller holding results reads
+   * the entries behind the ones it has seen to learn which results no
+   * longer stand.
+   */
+  get retired(): readonly RetiredEnvelope[] {
+    return this.#retired;
+  }
+
+  /**
+   * Advances each time a refresh retires every resolution at once, which
+   * `retired` does not list.
+   */
+  get resets(): number {
+    return this.#resets;
   }
 
   /** Returns the current envelope, propagating unreadable-envelope errors. */
@@ -2872,6 +2899,7 @@ export class VerifierMetadataResolver {
       this.#covers = new WeakMap();
       this.#seenWrites = 0;
       this.#generation += 1;
+      this.#resets += 1;
       return;
     }
     for (let index = this.#seenWrites; index < writes.length; index++) {
@@ -2893,7 +2921,14 @@ export class VerifierMetadataResolver {
         this.#labels.delete(metadata);
         this.#linkSources.delete(metadata);
       }
-      if (documents?.delete(write.id)) this.#generation += 1;
+      if (documents?.delete(write.id)) {
+        this.#generation += 1;
+        this.#retired.push({
+          space: write.space,
+          scope: normalizeCellScope(write.scope),
+          id: write.id,
+        });
+      }
     }
     this.#seenWrites = writes.length;
   }
@@ -3096,22 +3131,59 @@ const identitiesForClaimPath = (
   return identities.length > 0 ? identities : [undefined];
 };
 
-/** The value paths the transaction attempted to write on `target`. */
-const valueWritePathsOf = (
-  tx: IExtendedStorageTransaction,
-  target: {
-    space: MemorySpace;
-    id: URI;
-    scope: ReturnType<typeof normalizeCellScope>;
-  },
-): readonly (readonly string[])[] =>
-  (getTransactionWriteAttempts(tx) ?? []).flatMap((write) => {
-    if (!sameDocument(write, target)) return [];
-    const path = canonicalizeDocumentPath(
-      toDocumentPath(write.path.map(String)),
-    );
-    return path === undefined ? [] : [path];
-  });
+/**
+ * The value paths a transaction attempted to write, by document, held for
+ * one boundary pass. A pass asks for the paths of each target it verifies,
+ * and the transaction's write attempts form a log that only grows while it
+ * prepares, so each attempt is read once, when the first ask after it
+ * arrives.
+ */
+export class WrittenValuePaths {
+  readonly #tx: IExtendedStorageTransaction;
+  readonly #paths = new Map<string, (readonly string[])[]>();
+  #seen = 0;
+
+  /** Binds the index to the transaction whose write attempts it reads. */
+  constructor(tx: IExtendedStorageTransaction) {
+    this.#tx = tx;
+  }
+
+  /**
+   * The value paths the transaction has attempted to write on `target` up
+   * to this ask, in the order of the attempts.
+   */
+  of(
+    target: {
+      space: MemorySpace;
+      id: URI;
+      scope: ReturnType<typeof normalizeCellScope>;
+    },
+  ): readonly (readonly string[])[] {
+    const writes = getTransactionWriteAttempts(this.#tx) ?? [];
+    if (writes.length < this.#seen) {
+      // Not the log the index was built from.
+      this.#paths.clear();
+      this.#seen = 0;
+    }
+    for (; this.#seen < writes.length; this.#seen++) {
+      const write = writes[this.#seen];
+      const path = canonicalizeDocumentPath(
+        toDocumentPath(write.path.map(String)),
+      );
+      if (path === undefined) continue;
+      const key = observedDocumentKey({
+        space: write.space,
+        scope: normalizeCellScope(write.scope),
+        id: write.id,
+      });
+      const held = this.#paths.get(key);
+      if (held === undefined) this.#paths.set(key, [path]);
+      else held.push(path);
+    }
+    // A copy: the paths of an ask do not grow with a later attempt.
+    return [...this.#paths.get(observedDocumentKey(target)) ?? []];
+  }
+}
 
 /**
  * The authoring identity for a field path: the schema input on this cell whose
@@ -8589,6 +8661,11 @@ export class InputReadView {
   #resolved?: {
     reads: readonly InputRead[];
     generation: number;
+    // How much of the resolver's record of retirements the envelopes below
+    // answer for, and the reads of each document, by their position.
+    resets: number;
+    retiredSeen: number;
+    readsOf: ReadonlyMap<string, readonly number[]>;
     sourceMetadata: readonly (CfcMetadata | undefined)[];
   };
   #gated?: {
@@ -8629,30 +8706,80 @@ export class InputReadView {
    * resolved through `resolver` as it stands after its refresh. Resolving
    * propagates an unreadable-envelope refusal, so a transaction that
    * consumed such a document fails closed whether or not anything asks what
-   * its label says.
+   * its label says. The same array is returned until the reads change or a
+   * refresh retires the envelope of a document one of them is of.
    */
   sourceMetadata(
     resolver: VerifierMetadataResolver,
   ): readonly (CfcMetadata | undefined)[] {
     const { reads } = this.#held();
     const generation = resolver.generation;
-    if (
-      this.#resolved?.reads !== reads ||
-      this.#resolved.generation !== generation
-    ) {
-      this.#resolved = {
-        reads,
-        generation,
-        sourceMetadata: reads.map((read) =>
-          resolver.read(
-            read.space,
-            read.id,
-            normalizeCellScope(read.scope),
-            read.type ?? "application/json",
-          )
-        ),
-      };
+    const held = this.#resolved;
+    if (held?.reads === reads && held.generation === generation) {
+      return held.sourceMetadata;
     }
+    const resolve = (read: InputRead) =>
+      resolver.read(
+        read.space,
+        read.id,
+        normalizeCellScope(read.scope),
+        read.type ?? "application/json",
+      );
+    if (held?.reads === reads && held.resets === resolver.resets) {
+      // The resolver retired the envelopes of some documents since the
+      // last ask. Only the reads of those documents resolve to anything
+      // else, so only they are resolved again, in the order of the reads:
+      // a boundary pass retires the envelope of each target it stores a
+      // label on, and most targets are documents no read is of.
+      const retired = resolver.retired;
+      const again = new Set<number>();
+      for (let at = held.retiredSeen; at < retired.length; at++) {
+        const { space, scope, id } = retired[at];
+        for (
+          const index of held.readsOf.get(
+            observedDocumentKey({ space, scope, id }),
+          ) ?? []
+        ) again.add(index);
+      }
+      let sourceMetadata = held.sourceMetadata;
+      if (again.size > 0) {
+        const next = [...sourceMetadata];
+        for (const index of [...again].sort((a, b) => a - b)) {
+          next[index] = resolve(reads[index]);
+        }
+        sourceMetadata = next;
+      }
+      this.#resolved = {
+        ...held,
+        generation,
+        retiredSeen: retired.length,
+        sourceMetadata,
+      };
+      return sourceMetadata;
+    }
+    const readsOf = new Map<string, number[]>();
+    reads.forEach((read, index) => {
+      const key = observedDocumentKey({
+        space: read.space,
+        scope: normalizeCellScope(read.scope),
+        id: read.id,
+      });
+      const indices = readsOf.get(key);
+      if (indices === undefined) readsOf.set(key, [index]);
+      else indices.push(index);
+    });
+    // The record of retirements is read before the envelopes resolve, so
+    // one made while they do is answered for at the next ask.
+    const resets = resolver.resets;
+    const retiredSeen = resolver.retired.length;
+    this.#resolved = {
+      reads,
+      generation,
+      resets,
+      retiredSeen,
+      readsOf,
+      sourceMetadata: reads.map(resolve),
+    };
     return this.#resolved.sourceMetadata;
   }
 
@@ -13306,6 +13433,7 @@ export function* prepareBoundaryCommitSteps(
   const bindCreator = creatorBinding(tx, currentLinkWrites);
   const metadataResolver = new VerifierMetadataResolver(tx);
   const inputReads = new InputReadView(tx);
+  const writtenValuePathsIndex = new WrittenValuePaths(tx);
   const linkLabels = createLinkLabelDeriver(
     tx,
     candidates,
@@ -13573,7 +13701,7 @@ export function* prepareBoundaryCommitSteps(
     // below, which keeps the stored schema over a candidate spelled another
     // way.
     let deferredPreservedOutput = false;
-    const writtenValuePaths = valueWritePathsOf(tx, target);
+    const writtenValuePaths = writtenValuePathsIndex.of(target);
     const policyApplication = writeIsPolicyApplication(
       tx,
       target,
