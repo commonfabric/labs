@@ -454,6 +454,7 @@ export class XHistoryView extends BaseView {
           data-kind="${step.kind}"
           data-seq="${step.seq}"
           data-event-index="${step.kind === "event" ? eventIndex : nothing}"
+          data-start-seq="${step.startSeq}"
           aria-current="${current ? "true" : "false"}"
           ?disabled="${this.open?.busy === true || current}"
           @click="${() =>
