@@ -4461,6 +4461,7 @@ describe("SchemaObjectTraverser slow-traverse reporting", () => {
     expect(report).toContain("trackerVals=2");
     expect(report).toContain("traverseSchema=1");
     expect(report).toContain("maxDepth=1");
+    expect(report).toContain("nativeDepthHandoffs=0");
     // docVisits is populated only under CF_TRAVERSE_DIAGNOSTICS=1.
     expect(report).toContain("topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)");
   });

@@ -148,6 +148,7 @@ import {
   type WireMemoryProtocolFlags,
 } from "../v2.ts";
 import { AdmissionWaiters } from "./admission-waiters.ts";
+import { retireBareDidLabels } from "./cfc-bare-did-migration.ts";
 import {
   type CommitRatesReport,
   CommitRateTracker,
@@ -165,15 +166,31 @@ import {
 } from "./session-reports.ts";
 import {
   advanceCurrencyCursor,
+  applyCurrencyImports,
   type CurrencyBatch,
   type CurrencyInstance,
   type CurrencyMarked,
   type CurrencyRefusal,
   type CurrencyStored,
+  dropUnreadCurrencyImports,
+  forgetCurrencyImports,
+  forgetCurrencySource,
   judgeCurrencyRoots,
+  pullCurrencyExports,
+  registerCurrencyReads,
+  selectCurrencyDeriver,
+  selectCurrencyExport,
+  selectCurrencyImports,
+  selectCurrencyNextExpiry,
   selectCurrencyPiece,
+  selectCurrencyReadersMoved,
+  selectCurrencySourcePosition,
+  selectCurrencySources,
+  selectCurrencyWriters,
   storeCurrencyRecords,
+  unregisterCurrencyReads,
 } from "./currency-index.ts";
+import { sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import * as Engine from "./engine.ts";
 import {
   executeInvite,
@@ -396,6 +413,138 @@ const SUBSCRIPTION_REFRESH_DELAY_MS = 5;
  * (`MAX_RESULT_LINK_DEPTH` in the runner's `ensure-piece-running.ts`).
  */
 const CURRENCY_ROOT_HOPS_MAX = 10;
+
+/**
+ * How many times the change behind a trigger may come back to a space before
+ * no other space rests on that space for a while (serving-loop.md §3b).
+ * Spaces whose pieces read each other pass a trigger around for as long as
+ * their computations keep changing each other's inputs, and nothing in one
+ * space sees the whole circle. A space a change keeps coming back to is
+ * held: a slice that read it is marked instead of armed, so each piece that
+ * reads it starts, as it would with no index kept, and no trigger leaves it
+ * until the hold ends.
+ */
+const CURRENCY_TRIGGER_LAPS_MAX = 8;
+
+/** How long a space's first hold lasts, in milliseconds. */
+const CURRENCY_HOLD_BASE_MS = 1_000;
+
+/**
+ * The longest a hold lasts, in milliseconds. Each hold of a space that was
+ * not left alone for as long again as its last one lasts twice as long, up
+ * to this.
+ */
+const CURRENCY_HOLD_MAX_MS = 300_000;
+
+/**
+ * What a space holds of the change behind the latest trigger it was sent
+ * (serving-loop.md §3b).
+ */
+type CurrencyTrail = {
+  /**
+   * The change the trigger leads back to, one with no trigger behind it,
+   * by the number this server gave it.
+   */
+  origin: number;
+
+  /** How many triggers lead from that change to the space. */
+  hops: number;
+
+  /** How many times that change came back to the space since its last hold. */
+  laps: number;
+
+  /**
+   * The spaces the latest trigger passed on its way here, the one that sent
+   * it last. Where this space is among them, the spaces before its first
+   * appearance are left out, so the list is no longer than one circle.
+   */
+  path: string[];
+
+  /**
+   * The circle the change last came round, from this space back to the one
+   * that sent it here. Absent while the change has not come back.
+   */
+  circle?: string[];
+
+  /** How many times the space was held. */
+  holds: number;
+
+  /** How long the space's last hold lasted, in milliseconds, `0` for none. */
+  gapMs: number;
+
+  /** The time until which no other space rests on this one, `0` for none. */
+  heldUntil: number;
+};
+
+/** The part of a trail a trigger carries. */
+type CurrencyTrailStep = Pick<CurrencyTrail, "origin" | "hops" | "path">;
+
+/** How many spaces `Server.currencyDelivery()` lists. */
+const CURRENCY_DELIVERY_SPACES_MAX = 50;
+
+/**
+ * What passed between the currency indexes of the spaces a memory server
+ * holds (serving-loop.md §3b), for the health route.
+ */
+export type CurrencyDeliveryReport = {
+  /** Triggers sent to a space that read another. */
+  triggers: number;
+
+  /** Pulls a space made from one it reads. */
+  pulls: number;
+
+  /** Advances of a cursor queued behind a commit, for an armed reader. */
+  advancesQueued: number;
+
+  /** Times a space was held because a change kept coming back to it. */
+  holds: number;
+
+  /** Pairs of a space and a space it is armed with. */
+  armed: number;
+
+  /**
+   * The spaces a change came back to, most often held first, at most
+   * `CURRENCY_DELIVERY_SPACES_MAX` of them.
+   */
+  spaces: Array<{
+    space: string;
+
+    /** The number of the change behind the latest trigger it was sent. */
+    origin: number;
+
+    /** How many triggers lead from that change to the space. */
+    hops: number;
+
+    /** How many times that change came back since the space's last hold. */
+    laps: number;
+
+    /** The circle it last came round, from the space back to its sender. */
+    circle: string[];
+
+    /** How many times the space was held. */
+    holds: number;
+
+    /** How long its last hold lasted, in milliseconds, `0` for none. */
+    gapMs: number;
+
+    /** The time its hold ends, where it is held now. */
+    heldUntil?: number;
+  }>;
+};
+
+/**
+ * Live servers' currency-delivery providers in construction order; a server
+ * removes its own on close(), so the newest LIVE server is always the one
+ * reported.
+ */
+const currencyDeliveryProviders: (() => CurrencyDeliveryReport)[] = [];
+
+/**
+ * The co-hosted memory server's currency delivery for the health route — the
+ * most recently constructed server still open; undefined when none is.
+ */
+export const getCurrencyDelivery = (): CurrencyDeliveryReport | undefined =>
+  currencyDeliveryProviders.at(-1)?.();
 const MIN_REFRESH_QUEUE_DRAIN_WAIT_MS = 500;
 /**
  * The duration, in milliseconds, past which an operation is recorded for
@@ -1385,6 +1534,14 @@ export type ServerExecutionObserver = {
   ) => void;
 
   /**
+   * `space`'s currency index changed from outside its serving loop
+   * (serving-loop.md §3b): a space it reads told it of a change, or a
+   * request the memory server made of the index for another space marked a
+   * slice here. A loop that holds a root unstarted judges it again.
+   */
+  currencyChanged?: (space: string) => void;
+
+  /**
    * A session's VIEW SET was set: a `session.watch.set` carried views,
    * which is the one message that registers, revises or withdraws them.
    * Fires beside the `demandChanged` the same message raises, and only
@@ -1430,7 +1587,54 @@ export type DemandedInstanceRow = {
    * root: a piece reached only through a data link (design §2.8 flag 4).
    */
   piece?: true;
+
+  /**
+   * For a row another space carried here (`Server.setCarriedDemand()`),
+   * the client session it is carried for and the space that session is
+   * of. A serving loop that carries the row's pair on names this origin
+   * again. Absent on a row of a session of this space.
+   */
+  origin?: { readonly space: string; readonly sessionId: string };
 };
+
+/**
+ * A demand carried into a space from another (serving-loop.md §3b): an
+ * instance of the space that a run in a reading space read under the actor
+ * of the session `origin` names. The space's demand set holds it as a row
+ * of that session's pair, as if the session watched the instance there.
+ */
+export type CarriedDemandRow = {
+  id: string;
+  scope: CellScope;
+  scopeKey: ScopeKey;
+
+  /**
+   * The client session the demand is carried for, and the space it is a
+   * session of. The row stands while that session does.
+   */
+  origin: {
+    readonly space: string;
+    readonly sessionId: string;
+  };
+};
+
+/** The demand carried for one origin session from one reading space. */
+type CarriedSession = {
+  /** The id the space's demand set and session mirror hold it under. */
+  readonly sessionId: string;
+  readonly origin: CarriedDemandRow["origin"];
+  readonly principal: string | undefined;
+  readonly share: SessionDemand;
+};
+
+/**
+ * The id a carried demand is held under among a space's sessions, which
+ * is not one a client's session is opened under.
+ */
+const carriedSessionId = (
+  reader: string,
+  origin: CarriedDemandRow["origin"],
+): string => `carried\0${reader}\0${origin.space}\0${origin.sessionId}`;
 
 /**
  * One client session's share of a space's demand set: its
@@ -3707,6 +3911,83 @@ export class Server {
   #serverExecutionObserver: ServerExecutionObserver | undefined;
 
   /**
+   * The spaces each space has told nothing since they last pulled from it
+   * (serving-loop.md §3b): the readers it tells of the next change to an
+   * instance they registered. Each is held with the position its pull
+   * returned, and with the time until which it may rest on hearing nothing,
+   * where the space or one it reads holds a slice that expires: no commit
+   * reports an expiry, so the reader pulls again then. It is held in
+   * memory, so after a restart every reader pulls from a source before it
+   * rests on it.
+   */
+  readonly #currencyArmed = new Map<
+    string,
+    Map<string, { position: number; until?: number }>
+  >();
+
+  /**
+   * The demand carried into each space, by the reading space that carries
+   * it and then by the id it is held under (`carriedSessionId()`). Held in
+   * memory: a reading loop sends its set again when it next serves.
+   */
+  readonly #carriedDemand = new Map<
+    string,
+    Map<string, Map<string, CarriedSession>>
+  >();
+
+  /**
+   * What each reading space offered to carry into each space, by the same
+   * keys: every row `setCarriedDemand()` admitted. `#carriedDemand` holds
+   * the rows of these that stand, which leaves out an instance the space's
+   * currency index proves current (`#refreshCarriedDemand()`).
+   */
+  readonly #carriedOffered = new Map<
+    string,
+    Map<string, Map<string, CarriedSession>>
+  >();
+
+  /**
+   * The position of each space through which its armed readers were told
+   * of what moved.
+   */
+  readonly #currencyToldThrough = new Map<string, number>();
+
+  /**
+   * What each space holds of the change behind the latest trigger it was
+   * sent. A space no trigger reached since a client's commit landed in it
+   * has no entry, and each change of its own is one with no trigger behind
+   * it.
+   */
+  readonly #currencyTrails = new Map<string, CurrencyTrail>();
+
+  /** How many changes with no trigger behind them this server numbered. */
+  #currencyOrigins = 0;
+
+  /**
+   * The spaces with an advance of the currency cursor queued behind a
+   * commit, which has not started.
+   */
+  readonly #currencyAdvancesQueued = new Set<string>();
+
+  /** The queued advances that have not finished. */
+  readonly #currencyAdvancing = new Set<Promise<void>>();
+
+  /**
+   * The slices of each space that an advance marked on a request other
+   * than its serving loop's, which that loop is handed with its next
+   * request.
+   */
+  readonly #currencyMarksOwed = new Map<string, Map<string, CurrencyMarked>>();
+
+  /** What passed between the currency indexes of the spaces held here. */
+  readonly #currencyDelivery = {
+    triggers: 0,
+    pulls: 0,
+    advancesQueued: 0,
+    holds: 0,
+  };
+
+  /**
    * What runs `pattern.lifecycle` requests: the deployment's serving side,
    * installed with `setPatternLifecycleHandler()`. `undefined` until one is
    * installed, and while it is the server refuses every such request.
@@ -3929,6 +4210,13 @@ export class Server {
       syncCidReferences?: boolean;
 
       /**
+       * Whether each store this server opens has its bare-DID confidentiality
+       * labels respelled as `User{subject}` before it is served, once per
+       * store (`cfc-bare-did-migration.ts`). Off unless `true`.
+       */
+      retireBareDidLabels?: boolean;
+
+      /**
        * Whether this server's posture names instances (INV-16): the
        * deployment's value of the `instanceNames` experimental flag. Asked at
        * every `session.open` that declares `instanceNames: true` of a space
@@ -4052,7 +4340,12 @@ export class Server {
       );
     }
     this.#sessions = options.sessions ?? new SessionRegistry();
-    this.#sessions.setObserver((event) => this.#notifySessionChanged(event));
+    this.#sessions.setObserver((event) => {
+      this.#notifySessionChanged(event);
+      if (event.kind === "removed") {
+        this.#dropCarriedDemandOf(event.space, event.sessionId);
+      }
+    });
     this.#store = options.store;
     this.#operationCodecs = options.operationCodecs ??
       createDefaultOperationCodecRegistry();
@@ -4077,6 +4370,7 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     commitRatesProviders.push(this.#commitRatesProvider);
+    currencyDeliveryProviders.push(this.#currencyDeliveryProvider);
     sessionReportsProviders.push(this.#sessionReportsProvider);
     documentInterestsProviders.push(this.#documentInterestsProvider);
   }
@@ -4127,6 +4421,7 @@ export class Server {
   #pushPriorityStatsProvider = () => this.pushPriorityStats();
   #documentCachesDiagnosticsProvider = () => this.documentCachesDiagnostics();
   #commitRatesProvider = () => this.commitRates();
+  #currencyDeliveryProvider = () => this.currencyDelivery();
   #sessionReportsProvider = () => this.sessionReports();
   #documentInterestsProvider = (query: DocumentInterestQuery) =>
     this.#sessions.documentInterests(query);
@@ -5054,6 +5349,9 @@ export class Server {
     }
     this.#revokeDeauthorizedSessions(engine, space, writerSessionId);
     this.#noticeAdmissions(engine, space);
+    // A space that rests on `space` may hold an instance of an actor the
+    // list no longer grants, so each pulls again before it rests on.
+    this.#disarmCurrencyReaders(space);
   }
 
   /**
@@ -5590,6 +5888,7 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     withdrawProvider(commitRatesProviders, this.#commitRatesProvider);
+    withdrawProvider(currencyDeliveryProviders, this.#currencyDeliveryProvider);
     withdrawProvider(sessionReportsProviders, this.#sessionReportsProvider);
     withdrawProvider(
       documentInterestsProviders,
@@ -5601,6 +5900,7 @@ export class Server {
     }
     // A verb still running writes through the engines closed below.
     await Promise.all(this.#lifecycleRuns);
+    await this.#currencyAdvancesSettled();
     await this.#refreshing;
     await this.#drainSpacePublicationLocks();
     this.#closed = true;
@@ -5640,6 +5940,7 @@ export class Server {
       ),
     );
     await this.#drainSpacePublicationLocks();
+    await this.#currencyAdvancesSettled();
     // Dirty spaces with no timer armed are manual mode's held fan-out.
     // idle() is an explicit synchronization point exactly like
     // flushSessions(), so it drains them rather than returning with
@@ -12150,9 +12451,10 @@ export class Server {
     space: string,
     options: { excludePrincipal?: string } = {},
   ): boolean {
-    return this.#sessions.sessionsForSpace(space).some((session) =>
-      !isServingSessionOf(session, options.excludePrincipal)
-    );
+    return this.#carriedDemand.has(space) ||
+      this.#sessions.sessionsForSpace(space).some((session) =>
+        !isServingSessionOf(session, options.excludePrincipal)
+      );
   }
 
   /** Whether ONE specific (principal, sessionId) pair holds a live
@@ -12365,6 +12667,9 @@ export class Server {
       }
       demand.push(share);
     }
+    // What another space carries here is demand of the session it names,
+    // whichever identity the reading loop signs with.
+    for (const { share } of this.#carriedSessions(space)) demand.push(share);
     return demand;
   }
 
@@ -12383,7 +12688,17 @@ export class Server {
     // Prune once for the batch before the targeted, non-pruning lookups.
     this.#sessions.sessionsForSpace(space);
     const demand: SessionDemand[] = [];
+    const carried = new Map(
+      this.#carriedSessions(space).map((
+        session,
+      ) => [session.sessionId, session.share]),
+    );
     for (const sessionId of sessionIds) {
+      const carriedShare = carried.get(sessionId);
+      if (carriedShare !== undefined) {
+        demand.push(carriedShare);
+        continue;
+      }
       const session = this.#sessions.peek(space, sessionId);
       if (
         session === undefined ||
@@ -12404,25 +12719,570 @@ export class Server {
 
   /**
    * Brings the marks of `space`'s currency index up to its store's head
-   * (serving-loop.md §3b), and returns the pieces the advance marked.
-   * Server-internal machinery and tests only, as `engineForSpace()` is.
+   * (serving-loop.md §3b), and returns the slices marked since `space`'s
+   * serving loop last asked: the ones this advance marked, and the ones an
+   * advance made on another request did. Server-internal machinery and tests
+   * only, as `engineForSpace()` is.
    */
   async advanceCurrency(space: string): Promise<CurrencyMarked[]> {
     const engine = await this.#openEngine(space);
-    return advanceCurrencyCursor(engine, { space });
+    const marked = advanceCurrencyCursor(engine, { space });
+    this.#tellCurrencyReaders(space, engine);
+    return this.#takeCurrencyMarks(space, marked);
+  }
+
+  /**
+   * What passed between the currency indexes of the spaces this server
+   * holds: the triggers sent, the pulls made, the advances a commit queued,
+   * how often a space was held because a change kept coming back to it, and
+   * the spaces one came back to, each with the circle it came round. The
+   * health route publishes it.
+   */
+  currencyDelivery(): CurrencyDeliveryReport {
+    const now = Date.now();
+    let armed = 0;
+    for (const readers of this.#currencyArmed.values()) armed += readers.size;
+    const spaces: CurrencyDeliveryReport["spaces"] = [];
+    for (const [space, trail] of this.#currencyTrails) {
+      if (trail.circle === undefined) continue;
+      spaces.push({
+        space,
+        origin: trail.origin,
+        hops: trail.hops,
+        laps: trail.laps,
+        circle: [...trail.circle],
+        holds: trail.holds,
+        gapMs: trail.gapMs,
+        ...(trail.heldUntil > now && { heldUntil: trail.heldUntil }),
+      });
+    }
+    spaces.sort((a, b) => b.holds - a.holds || b.laps - a.laps);
+    return {
+      ...this.#currencyDelivery,
+      armed,
+      spaces: spaces.slice(0, CURRENCY_DELIVERY_SPACES_MAX),
+    };
+  }
+
+  /**
+   * The spaces `source` tells of the next change to an instance they
+   * registered. Diagnostics and tests only.
+   */
+  currencyReadersArmedOn(source: string): string[] {
+    return [...this.#currencyArmed.get(source)?.keys() ?? []];
+  }
+
+  /**
+   * The engine of `source`, a space whose store a slice of another space
+   * read, or `undefined` where this server cannot ask it: another owner
+   * holds the space, it has no store, or it is deleted.
+   */
+  async #currencySourceEngine(
+    source: string,
+  ): Promise<Engine.Engine | undefined> {
+    if (
+      this.options.ownsSpace !== undefined && !this.options.ownsSpace(source)
+    ) return undefined;
+    // A record names the space, and opening a store that is not there
+    // would make one.
+    if (!(await this.#spaceStoreExists(source))) return undefined;
+    const engine = await this.#openEngine(source);
+    return this.#deletedRefusal(engine, source) === null ? engine : undefined;
+  }
+
+  /**
+   * Returns a check of whether the space `source` may tell another space of
+   * an instance of its store: a shared one always, and a user's or a
+   * session's own only while the actor its key names holds READ on
+   * `source` (protocol.md §2). A read that names no one instance is told of
+   * nothing. Each actor is looked up once.
+   */
+  #currencyGrantCheck(
+    sourceEngine: Engine.Engine,
+    source: string,
+  ): (instance: CurrencyInstance) => boolean {
+    const granted = new Map<string, boolean>();
+    return ({ scopeKey }) => {
+      if (scopeKey === "space") return true;
+      const actor = identityOfScopeKey(scopeKey)?.principal;
+      if (actor === undefined) return false;
+      let verdict = granted.get(actor);
+      if (verdict === undefined) {
+        verdict = this.#foreignGrantOn(sourceEngine, source, actor, "READ")
+          .granted;
+        granted.set(actor, verdict);
+      }
+      return verdict;
+    };
+  }
+
+  /**
+   * Forgets what `space`'s index holds of each instance of `source` it may
+   * not be told of any longer, because the actor the instance is the own
+   * of holds no READ on `source` now, and drops `space`'s registration of
+   * it there. Each slice that read one is marked `2`.
+   *
+   * @returns Whether a slice was marked.
+   */
+  #forgetUngrantedCurrencyReads(
+    engine: Engine.Engine,
+    space: string,
+    source: string,
+    sourceEngine: Engine.Engine,
+  ): boolean {
+    const mayBeTold = this.#currencyGrantCheck(sourceEngine, source);
+    const refused = selectCurrencyImports(engine, { space, source }).filter((
+      instance,
+    ) => !mayBeTold(instance));
+    if (refused.length === 0) return false;
+    unregisterCurrencyReads(sourceEngine, {
+      space: source,
+      reader: space,
+      reads: refused,
+    });
+    return forgetCurrencyImports(engine, {
+      space,
+      source,
+      instances: refused,
+    }).length > 0;
+  }
+
+  /**
+   * Hands `space`'s serving loop `marked`, the slices its own request
+   * marked, with the slices an advance made on another request marked since
+   * the loop last asked.
+   */
+  #takeCurrencyMarks(
+    space: string,
+    marked: CurrencyMarked[],
+  ): CurrencyMarked[] {
+    const owed = this.#currencyMarksOwed.get(space);
+    if (owed === undefined) return marked;
+    this.#currencyMarksOwed.delete(space);
+    return [...owed.values(), ...marked];
+  }
+
+  /**
+   * Keeps `marked`, slices of `space` an advance marked on a request that
+   * was not its serving loop's, for that loop's next request, and tells the
+   * loop. The loop re-arms a root it holds unstarted from the seq a slice
+   * was marked at, which no later advance returns.
+   */
+  #oweCurrencyMarks(space: string, marked: readonly CurrencyMarked[]): void {
+    if (marked.length === 0) return;
+    let owed = this.#currencyMarksOwed.get(space);
+    if (owed === undefined) {
+      owed = new Map();
+      this.#currencyMarksOwed.set(space, owed);
+    }
+    for (const entry of marked) {
+      const key = `${entry.slice}\0${entry.piece}`;
+      const known = owed.get(key);
+      if (known === undefined || entry.seq < known.seq) owed.set(key, entry);
+    }
+    this.#notifyCurrencyChanged(space);
+  }
+
+  /**
+   * Tells each armed reader of `space` that registered an instance whose
+   * row moved since its pull, once, and disarms it. Called after each
+   * change to `space`'s currency index, whose rows are current by then.
+   */
+  #tellCurrencyReaders(space: string, engine: Engine.Engine): void {
+    try {
+      this.#tellArmedCurrencyReaders(space, engine);
+    } finally {
+      // The index changed, and a reader may have been disarmed: either can
+      // change which demand carried into `space` stands.
+      this.#refreshCarriedDemand(space);
+    }
+  }
+
+  /** Helper for `#tellCurrencyReaders()`, which tells the armed readers. */
+  #tellArmedCurrencyReaders(space: string, engine: Engine.Engine): void {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined || armed.size === 0) return;
+    const moved = selectCurrencyReadersMoved(engine, {
+      space,
+      since: this.#currencyToldThrough.get(space) ?? 0,
+    });
+    this.#currencyToldThrough.set(space, moved.position);
+    let step: CurrencyTrailStep | undefined;
+    for (const { reader, position } of moved.readers) {
+      const pulledAt = armed.get(reader)?.position;
+      if (pulledAt === undefined || position <= pulledAt) continue;
+      armed.delete(reader);
+      step ??= this.#currencyTrailFrom(space);
+      this.#triggerCurrencyReader(reader, step);
+      this.#queueFollowForCarriedDemand(reader, space);
+    }
+    // A reader armed for longer than `space` now holds was told a later
+    // time, or none, by a pull made before a slice here was recorded as
+    // expiring sooner.
+    const until = this.#currencyRestsUntil(space, engine);
+    if (until === undefined) return;
+    for (const [reader, entry] of [...armed]) {
+      if (entry.until !== undefined && entry.until <= until) continue;
+      armed.delete(reader);
+      this.#triggerCurrencyReader(reader);
+      this.#queueFollowForCarriedDemand(reader, space);
+    }
+  }
+
+  /**
+   * The time until which another space may rest on hearing nothing from
+   * `space`, or `undefined` where no time bounds it: the earliest time a
+   * slice of `space` expires at, or `space`'s own arming with a space it
+   * reads runs out. No commit reports either.
+   */
+  #currencyRestsUntil(
+    space: string,
+    engine: Engine.Engine,
+  ): number | undefined {
+    let until = selectCurrencyNextExpiry(engine, { space });
+    const now = Date.now();
+    for (const source of selectCurrencySources(engine, { space })) {
+      const armed = this.#currencyArmed.get(source)?.get(space)?.until;
+      // An arming that ran out bounds nothing: `space` pulls from that
+      // source again before another space rests on it, except round a
+      // circle of spaces, where the time would never move on.
+      if (armed === undefined || armed <= now) continue;
+      if (until === undefined || armed < until) until = armed;
+    }
+    return until;
+  }
+
+  /**
+   * The step a trigger from `space` carries: one hop further along the
+   * change behind the latest trigger `space` was sent, or the first hop of
+   * a change of its own where none reached it.
+   */
+  #currencyTrailFrom(space: string): CurrencyTrailStep {
+    const trail = this.#currencyTrails.get(space);
+    if (trail === undefined) {
+      this.#currencyOrigins += 1;
+      return { origin: this.#currencyOrigins, hops: 1, path: [space] };
+    }
+    return {
+      origin: trail.origin,
+      hops: trail.hops + 1,
+      path: [...trail.path, space],
+    };
+  }
+
+  /**
+   * Notes that a trigger carrying `step` reached `space`. A change `space`
+   * has not been sent before starts its trail over, and ends a hold. The
+   * same change arriving through more triggers than before has come back
+   * round a circle of spaces, which is a lap; arriving through no more, it
+   * is a further change of a space upstream, and changes nothing. At
+   * `CURRENCY_TRIGGER_LAPS_MAX` laps `space` is held, for twice as long as
+   * its last hold unless it was left alone for as long again as that one
+   * lasted.
+   */
+  #noteCurrencyTrail(space: string, step: CurrencyTrailStep): void {
+    const trail = this.#currencyTrails.get(space);
+    // The spaces before this one's first appearance are not on the circle.
+    const from = step.path.indexOf(space);
+    const path = from < 0 ? step.path : step.path.slice(from);
+    if (trail === undefined || trail.origin !== step.origin) {
+      this.#currencyTrails.set(space, {
+        origin: step.origin,
+        hops: step.hops,
+        laps: 0,
+        path,
+        // What is known of the space's earlier circles is kept, for the
+        // report.
+        ...(trail?.circle !== undefined && { circle: trail.circle }),
+        holds: trail?.holds ?? 0,
+        gapMs: 0,
+        heldUntil: 0,
+      });
+      return;
+    }
+    if (step.hops <= trail.hops) return;
+    trail.hops = step.hops;
+    trail.path = path;
+    trail.circle = path;
+    trail.laps += 1;
+    if (trail.laps < CURRENCY_TRIGGER_LAPS_MAX) return;
+    const now = Date.now();
+    const rested = now - trail.heldUntil > trail.gapMs;
+    trail.gapMs = trail.gapMs === 0 || rested
+      ? CURRENCY_HOLD_BASE_MS
+      : Math.min(trail.gapMs * 2, CURRENCY_HOLD_MAX_MS);
+    trail.heldUntil = now + trail.gapMs;
+    trail.laps = 0;
+    trail.holds += 1;
+    this.#currencyDelivery.holds += 1;
+    console.warn(
+      `memory v2: a change came back to the space ${space} ` +
+        `${CURRENCY_TRIGGER_LAPS_MAX} times, round ` +
+        `${[...path, space].join(" -> ")}; no space rests on its currency ` +
+        `index for ${trail.gapMs} ms`,
+    );
+  }
+
+  /** Whether `space` is held, so that no other space rests on it. */
+  #currencyHeld(space: string): boolean {
+    return (this.#currencyTrails.get(space)?.heldUntil ?? 0) > Date.now();
+  }
+
+  /**
+   * Tells every armed reader of `space` that it may have moved, and disarms
+   * them: `space` no longer hears of each change to a space it reads, so
+   * no reader may rest on hearing nothing from it. `step` is what the
+   * triggers carry, where a change is behind them.
+   */
+  #disarmCurrencyReaders(space: string, step?: CurrencyTrailStep): void {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined || armed.size === 0) return;
+    const readers = [...armed.keys()];
+    armed.clear();
+    this.#refreshCarriedDemand(space);
+    for (const reader of readers) {
+      this.#triggerCurrencyReader(reader, step);
+      this.#queueFollowForCarriedDemand(reader, space);
+    }
+  }
+
+  /**
+   * Delivers a trigger to `reader`, which a space it reads has just
+   * disarmed: something in that space may have moved. `step` says which
+   * change is behind the trigger and how far it has come, where one is. The
+   * reader's serving loop is told, and judges again where it holds a root
+   * unstarted. Nothing is pulled here. The reader's own armed readers are
+   * told in turn, since what the reader computes from that space may have
+   * moved with it. A reader is told at most once between two pulls, so one
+   * trigger ends at the first space already told.
+   */
+  #triggerCurrencyReader(reader: string, step?: CurrencyTrailStep): void {
+    this.#currencyDelivery.triggers += 1;
+    if (step !== undefined) this.#noteCurrencyTrail(reader, step);
+    this.#notifyCurrencyChanged(reader);
+    this.#disarmCurrencyReaders(
+      reader,
+      step === undefined ? undefined : this.#currencyTrailFrom(reader),
+    );
+  }
+
+  /**
+   * Queues an advance of `space`'s currency cursor behind a commit that was
+   * just admitted, where a reader is armed and none is queued: the advance
+   * is what finds whether an instance a reader registered changed. It runs
+   * in a transaction of its own once the commit has landed.
+   */
+  #queueCurrencyAdvance(space: string): void {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined || armed.size === 0) return;
+    if (this.#currencyAdvancesQueued.has(space)) return;
+    this.#currencyAdvancesQueued.add(space);
+    this.#currencyDelivery.advancesQueued += 1;
+    const advancing = Promise.resolve().then(async () => {
+      // A commit admitted from here on queues another.
+      this.#currencyAdvancesQueued.delete(space);
+      if (this.#closed) return;
+      const engine = await this.#openEngine(space);
+      this.#oweCurrencyMarks(space, advanceCurrencyCursor(engine, { space }));
+      this.#tellCurrencyReaders(space, engine);
+    }).catch((error) => {
+      console.warn(
+        `memory v2: the currency advance queued for ${space} failed`,
+        error,
+      );
+    }).finally(() => {
+      this.#currencyAdvancing.delete(advancing);
+    });
+    this.#currencyAdvancing.add(advancing);
+  }
+
+  /** Settles once no advance a commit queued is waiting or running. */
+  async #currencyAdvancesSettled(): Promise<void> {
+    while (this.#currencyAdvancing.size > 0) {
+      await Promise.all(this.#currencyAdvancing);
+    }
+  }
+
+  /**
+   * Brings what `space`'s currency index holds of each of `sources` up to
+   * what that space reports now. `visiting` holds the spaces a request is
+   * already bringing up to date, so that spaces that read each other are
+   * each followed once.
+   *
+   * @returns Whether a slice of `space` was marked.
+   */
+  async #followCurrencySources(
+    engine: Engine.Engine,
+    space: string,
+    sources: readonly string[],
+    visiting: Set<string>,
+  ): Promise<boolean> {
+    let marked = false;
+    for (const source of sources) {
+      if (await this.#followCurrencySource(engine, space, source, visiting)) {
+        marked = true;
+      }
+    }
+    return marked;
+  }
+
+  /**
+   * Helper for `#followCurrencySources()`, which follows one source. A
+   * source `space` is armed with has told it nothing since its last pull,
+   * and is not asked until the time that arming runs to has come. One that
+   * cannot be asked, or is held, is forgotten,
+   * which marks each slice that read it. Any other is pulled from, and arms
+   * `space` in the same step. A source that is pulled from or held follows
+   * the spaces it reads itself first, so that it hears of a change upstream
+   * of it: that is what a reader armed with it rests on, and what ends a
+   * hold early.
+   */
+  async #followCurrencySource(
+    engine: Engine.Engine,
+    space: string,
+    source: string,
+    visiting: Set<string>,
+  ): Promise<boolean> {
+    let armed = this.#currencyArmed.get(source);
+    const sourceEngine = await this.#currencySourceEngine(source);
+    if (sourceEngine === undefined) {
+      armed?.delete(space);
+      this.#refreshCarriedDemand(source);
+      return forgetCurrencySource(engine, { space, source }).length > 0;
+    }
+    const resting = armed?.get(space);
+    if (
+      resting !== undefined && !this.#currencyHeld(source) &&
+      (resting.until === undefined || resting.until > Date.now())
+    ) return false;
+    if (!visiting.has(source)) {
+      visiting.add(source);
+      const marked = await this.#followCurrencySources(
+        sourceEngine,
+        source,
+        selectCurrencySources(sourceEngine, { space: source }),
+        visiting,
+      );
+      // The source's own loop may hold a root unstarted on a slice this
+      // marked.
+      if (marked) this.#notifyCurrencyChanged(source);
+    }
+    if (this.#currencyHeld(source)) {
+      this.#currencyArmed.get(source)?.delete(space);
+      this.#refreshCarriedDemand(source);
+      return forgetCurrencySource(engine, { space, source }).length > 0;
+    }
+    // A grant withdrawn since `space` registered an actor's own instance
+    // ends what it may be told of it.
+    const ungranted = this.#forgetUngrantedCurrencyReads(
+      engine,
+      space,
+      source,
+      sourceEngine,
+    );
+    const pulled = pullCurrencyExports(sourceEngine, {
+      space: source,
+      reader: space,
+      since: selectCurrencySourcePosition(engine, { space, source }),
+      dropped: dropUnreadCurrencyImports(engine, { space, source }),
+    });
+    this.#currencyDelivery.pulls += 1;
+    this.#oweCurrencyMarks(source, pulled.marked);
+    armed = this.#currencyArmed.get(source);
+    if (armed === undefined) {
+      armed = new Map();
+      this.#currencyArmed.set(source, armed);
+    }
+    // With no reader armed, nothing below this position is owed to anyone.
+    if (armed.size === 0) {
+      this.#currencyToldThrough.set(source, pulled.position);
+    }
+    const until = this.#currencyRestsUntil(source, sourceEngine);
+    armed.set(space, {
+      position: pulled.position,
+      ...(until !== undefined && { until }),
+    });
+    // The pull's advance may have moved a row another reader registered.
+    this.#tellCurrencyReaders(source, sourceEngine);
+    const applied = applyCurrencyImports(engine, {
+      space,
+      source,
+      entries: pulled.entries,
+      position: pulled.position,
+    }).length > 0;
+    return applied || ungranted;
   }
 
   /**
    * Stores the records a serving loop took of `space`'s pieces at a quiescent
-   * point in its currency index (serving-loop.md §3b). Server-internal
-   * machinery and tests only.
+   * point in its currency index (serving-loop.md §3b). Each instance of
+   * another space that a record read is registered with that space's index
+   * first, where this server holds its store and the space is not held, so
+   * the record is stored against what that space reports of it.
+   * Server-internal machinery and tests only.
    */
   async storeCurrencyRecords(
     space: string,
     batch: Omit<CurrencyBatch, "space">,
   ): Promise<CurrencyStored> {
     const engine = await this.#openEngine(space);
-    return storeCurrencyRecords(engine, { ...batch, space });
+    const reads = new Map<string, Map<string, CurrencyInstance>>();
+    for (const record of batch.records) {
+      for (const slice of record.slices) {
+        for (const { space: source, id, scopeKey } of slice.reads) {
+          if (source === space) continue;
+          let instances = reads.get(source);
+          if (instances === undefined) {
+            instances = new Map();
+            reads.set(source, instances);
+          }
+          instances.set(`${scopeKey}\0${id}`, { id, scopeKey });
+        }
+      }
+    }
+    let unheard = false;
+    for (const [source, instances] of reads) {
+      const sourceEngine = await this.#currencySourceEngine(source);
+      // A read of a space that cannot be asked, or is held, is stored with
+      // nothing reported of it, which leaves its slice marked.
+      if (sourceEngine === undefined || this.#currencyHeld(source)) continue;
+      // An instance that is a user's or a session's own is read under that
+      // actor's READ grant on the source (protocol.md §2), and what the
+      // source reports of it is told under the same grant. One whose actor
+      // holds none is not registered, and what an earlier record registered
+      // of it is forgotten, which leaves its slice marked too.
+      this.#forgetUngrantedCurrencyReads(engine, space, source, sourceEngine);
+      const mayBeTold = this.#currencyGrantCheck(sourceEngine, source);
+      const admitted = [...instances.values()].filter(mayBeTold);
+      const registered = registerCurrencyReads(sourceEngine, {
+        space: source,
+        reader: space,
+        reads: admitted,
+      });
+      this.#oweCurrencyMarks(source, registered.marked);
+      this.#tellCurrencyReaders(source, sourceEngine);
+      applyCurrencyImports(engine, {
+        space,
+        source,
+        entries: registered.entries,
+      });
+      unheard ||= this.#currencyArmed.get(source)?.has(space) !== true;
+    }
+    const stored = storeCurrencyRecords(engine, { ...batch, space });
+    // A space no slice of the batch reads any longer may hold registrations
+    // nothing here reads behind, which a pull from it drops.
+    await this.#followCurrencySources(
+      engine,
+      space,
+      stored.unread,
+      new Set([space]),
+    );
+    this.#tellCurrencyReaders(space, engine);
+    // A record that read a space `space` is not armed with rests on what a
+    // registration returned, and a later change there reaches nobody here.
+    // So no reader goes on resting on hearing nothing from `space`.
+    if (unheard) this.#disarmCurrencyReaders(space);
+    return { ...stored, marked: this.#takeCurrencyMarks(space, stored.marked) };
   }
 
   /**
@@ -12432,10 +13292,21 @@ export class Server {
    * sessions as `demandForSpace()` reads them, after bringing the currency
    * index's marks up to the store's head. A root that is no result document
    * is judged as the piece its `result` back-links lead to, which is the
-   * piece a structure load of it starts.
+   * piece a structure load of it starts. A `computed:` root that one
+   * recorded piece writes is judged as that piece without its back-links
+   * being read, so one a session names at an instance narrower than the
+   * space, which the space may hold no instance of, is judged too.
+   *
+   * A root may rest on a slice that read another space. Each space read by
+   * a slice the demand rows are resolved under is followed first: one that
+   * `space` is armed with is not asked, and any other is pulled from.
    *
    * @returns The roots that pass, each with the piece it was judged as, how
-   * many roots each reason refused, and the pieces the advance marked.
+   * many roots each reason refused, the slices marked since `space`'s
+   * serving loop last asked, and the earliest time a slice of `space`
+   * expires at or its arming with a space it reads runs out, where either
+   * does: the roots are to be judged again then, since no commit reports
+   * it.
    */
   async judgeCurrencyRoots(
     space: string,
@@ -12445,14 +13316,32 @@ export class Server {
     servable: Array<{ root: string; piece: string }>;
     refused: Partial<Record<CurrencyRefusal, number>>;
     marked: CurrencyMarked[];
+    nextExpiry?: number;
   }> {
     const engine = await this.#openEngine(space);
-    const marked = advanceCurrencyCursor(engine, { space });
+    const advanced = advanceCurrencyCursor(engine, { space });
+    this.#tellCurrencyReaders(space, engine);
+    const marked = this.#takeCurrencyMarks(space, advanced);
     const refused: Partial<Record<CurrencyRefusal, number>> = {};
-    if (roots.length === 0) return { servable: [], refused, marked };
+    /** What every return carries besides the roots that pass. */
+    const found = () => {
+      const nextExpiry = this.#currencyRestsUntil(space, engine);
+      return {
+        refused,
+        marked,
+        ...(nextExpiry !== undefined && { nextExpiry }),
+      };
+    };
+    if (roots.length === 0) return { servable: [], ...found() };
 
-    /** The recorded piece `root` leads to, if its back-links reach one. */
+    /**
+     * The recorded piece `root` leads to: the one piece recorded as deriving
+     * it where it is a computed document, or else the piece its back-links
+     * reach, if they reach one.
+     */
     const pieceOf = (root: string): string | undefined => {
+      const deriver = selectCurrencyDeriver(engine, { space, id: root });
+      if (deriver !== undefined) return deriver;
       let id = root;
       for (let hops = 0; hops <= CURRENCY_ROOT_HOPS_MAX; hops++) {
         if (selectCurrencyPiece(engine, { piece: id }) !== undefined) {
@@ -12478,7 +13367,7 @@ export class Server {
       if (piece !== undefined) pieces.set(root, piece);
       else refused["no-record"] = (refused["no-record"] ?? 0) + 1;
     }
-    if (pieces.size === 0) return { servable: [], refused, marked };
+    if (pieces.size === 0) return { servable: [], ...found() };
     const demand = this.demandForSpace(
       space,
       options.excludePrincipal === undefined
@@ -12492,6 +13381,19 @@ export class Server {
         }
       }
     };
+    const slices = new Set<string>([SPACE_SLICE]);
+    for (const { scopeKey } of rows()) {
+      if (slices.has(scopeKey)) continue;
+      for (const slice of sliceChain(scopeKey)) slices.add(slice);
+    }
+    await this.#followCurrencySources(
+      engine,
+      space,
+      selectCurrencySources(engine, { space, slices }),
+      new Set([space]),
+    );
+    // What a pull marked here may have moved a row another space reads.
+    this.#tellCurrencyReaders(space, engine);
     const judgment = judgeCurrencyRoots(engine, {
       space,
       roots: [...new Set(pieces.values())],
@@ -12511,7 +13413,7 @@ export class Server {
       const reason = reasons.get(piece);
       if (reason !== undefined) refused[reason] = (refused[reason] ?? 0) + 1;
     }
-    return { servable, refused, marked };
+    return { servable, ...found() };
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a
@@ -12573,6 +13475,11 @@ export class Server {
       for (const event of this.#sessions.snapshot()) {
         this.#notifySessionChanged(event);
       }
+      for (const space of this.#carriedDemand.keys()) {
+        for (const event of this.#carriedSnapshot(space)) {
+          this.#notifySessionChanged(event);
+        }
+      }
     }
   }
 
@@ -12581,7 +13488,344 @@ export class Server {
    * up to date, as installing an observer replays them for every space.
    */
   sessionSnapshot(space: string): SessionLifecycleEvent[] {
-    return this.#sessions.snapshot(space);
+    return [...this.#sessions.snapshot(space), ...this.#carriedSnapshot(space)];
+  }
+
+  /** The demands carried into `space`, each as the opening of a session. */
+  #carriedSnapshot(space: string): SessionLifecycleEvent[] {
+    return this.#carriedSessions(space).map(({ sessionId, principal }) => ({
+      kind: "opened" as const,
+      space,
+      sessionId,
+      ...(principal !== undefined && { principal }),
+    }));
+  }
+
+  /** The demands carried into `space`, from every reading space. */
+  #carriedSessions(space: string): CarriedSession[] {
+    const carried: CarriedSession[] = [];
+    for (const sessions of this.#carriedDemand.get(space)?.values() ?? []) {
+      for (const session of sessions.values()) carried.push(session);
+    }
+    return carried;
+  }
+
+  /**
+   * Replaces the demand the reading space `reader` carries into `space`
+   * with `rows` (serving-loop.md §3b): each instance a run of `reader` read
+   * here under the actor of a client session, which then demands it here
+   * as if it watched it. A row for the actor's own instance is admitted
+   * only where the actor holds READ on `space`, as a named scoped read is
+   * (protocol.md §2). A row for a shared instance is admitted without that,
+   * and then stands with no pair, as an anonymous session's does: the
+   * piece that computes it is loaded, and nothing is run for the actor. A
+   * row is refused where its origin is not a live client session on this
+   * server, which a serving session of `excludePrincipal`
+   * (`isServingSessionOf()`) is not; where that session is anonymous, and
+   * so names no actor to carry; where its instance is another actor's; and
+   * where this server cannot ask `space`'s store. A row stands until
+   * `reader` replaces it or its origin session ends.
+   *
+   * @returns How many of `rows` were refused.
+   */
+  async setCarriedDemand(
+    space: string,
+    reader: string,
+    rows: readonly CarriedDemandRow[],
+    options: { excludePrincipal?: string } = {},
+  ): Promise<{ refused: number }> {
+    const engine = rows.length === 0
+      ? undefined
+      : await this.#currencySourceEngine(space);
+    let refused = 0;
+    const next = new Map<
+      string,
+      {
+        origin: CarriedDemandRow["origin"];
+        principal: string | undefined;
+        rows: Map<string, DemandedInstanceRow>;
+      }
+    >();
+    /** Whether `principal` holds READ on `space`, asked once for each. */
+    const granted = new Map<string, boolean>();
+    for (const row of rows) {
+      const origin = this.#sessions.peek(
+        row.origin.space,
+        row.origin.sessionId,
+      );
+      const principal = origin?.principal;
+      const actor = row.scopeKey === "space"
+        ? principal
+        : identityOfScopeKey(row.scopeKey)?.principal;
+      let admitted = engine !== undefined && origin !== undefined &&
+        !isServingSessionOf(origin, options.excludePrincipal) &&
+        principal !== undefined && actor === principal;
+      // Whether the actor holds READ here, and so is carried as a pair.
+      let reads = false;
+      if (admitted) {
+        let verdict = granted.get(principal!);
+        if (verdict === undefined) {
+          verdict = this.#foreignGrantOn(engine!, space, principal!, "READ")
+            .granted;
+          granted.set(principal!, verdict);
+        }
+        reads = verdict;
+        // A serving loop reads a shared instance of another space whoever
+        // it runs for (protocol.md §2b), so the demand for one stands
+        // without the actor. The actor's own instance is read under the
+        // actor's grant alone, and so is demanded under it.
+        admitted = verdict || row.scopeKey === "space";
+      }
+      if (!admitted) {
+        refused += 1;
+        continue;
+      }
+      const sessionId = carriedSessionId(reader, row.origin);
+      let session = next.get(sessionId);
+      if (session === undefined) {
+        session = {
+          origin: { ...row.origin },
+          principal: reads ? principal : undefined,
+          rows: new Map(),
+        };
+        next.set(sessionId, session);
+      }
+      session.rows.set(toDirtyKey(row.id, row.scopeKey), {
+        id: row.id,
+        scope: row.scope,
+        scopeKey: row.scopeKey,
+        ...(reads && {
+          identity: { principal: principal!, sessionId: row.origin.sessionId },
+        }),
+        root: true,
+        origin: session.origin,
+      });
+    }
+    let offered = this.#carriedOffered.get(space);
+    if (next.size === 0) {
+      offered?.delete(reader);
+      if (offered?.size === 0) this.#carriedOffered.delete(space);
+    } else {
+      if (offered === undefined) {
+        offered = new Map();
+        this.#carriedOffered.set(space, offered);
+      }
+      offered.set(
+        reader,
+        new Map(
+          [...next].map(([sessionId, { origin, principal, rows }]) => [
+            sessionId,
+            { sessionId, origin, principal, share: { sessionId, rows } },
+          ]),
+        ),
+      );
+    }
+    this.#refreshCarriedDemand(space);
+    // What is proven current is proven for a reading space that hears of
+    // the next change, so one that offers demand is armed first.
+    if (next.size > 0) await this.#followForCarriedDemand(reader, space);
+    return { refused };
+  }
+
+  /**
+   * Has `reader` pull from `source`, which arms it, where it offers demand
+   * there and is not armed: `source`'s index can then prove an instance
+   * `reader` read current, and the offered row for it need not stand.
+   */
+  async #followForCarriedDemand(reader: string, source: string): Promise<void> {
+    if (this.#carriedOffered.get(source)?.has(reader) !== true) return;
+    const engine = await this.#currencySourceEngine(reader);
+    if (engine === undefined || this.#closed) return;
+    const marked = await this.#followCurrencySource(
+      engine,
+      reader,
+      source,
+      new Set([reader]),
+    );
+    // The reader's own loop may hold a root unstarted on a slice this
+    // marked.
+    if (marked) this.#notifyCurrencyChanged(reader);
+  }
+
+  /**
+   * Queues a pull by `reader` from `source`, which has just disarmed it,
+   * where `reader` offers demand there (`#followForCarriedDemand()`).
+   */
+  #queueFollowForCarriedDemand(reader: string, source: string): void {
+    if (this.#carriedOffered.get(source)?.has(reader) !== true) return;
+    const following = Promise.resolve().then(() =>
+      this.#followForCarriedDemand(reader, source)
+    ).catch((error) => {
+      console.warn(
+        `memory v2: the pull queued for ${reader} from ${source} failed`,
+        error,
+      );
+    }).finally(() => {
+      this.#currencyAdvancing.delete(following);
+    });
+    this.#currencyAdvancing.add(following);
+  }
+
+  /**
+   * Brings the demand that stands in `space` into line with what the
+   * reading spaces offered, and tells the serving host of each change. An
+   * offered row stands unless `space`'s currency index proves its instance
+   * current: the reading space registered the instance and is armed with
+   * `space` for no limited time, so that it hears of the next change, and
+   * the index holds the instance as one no piece here is behind on. With a
+   * row that stands, stands a row for each piece the index records as
+   * writing its document, for the same pair. Called whenever
+   * what is offered, the index, or the arming may have changed.
+   */
+  #refreshCarriedDemand(space: string): void {
+    const offered = this.#carriedOffered.get(space);
+    let readers = this.#carriedDemand.get(space);
+    if (offered === undefined && readers === undefined) return;
+    const engine = this.#resolvedEngines.get(space);
+    /** What to tell the serving host, once the rows below are in place. */
+    const told: Array<() => void> = [];
+    for (
+      const reader of new Set([
+        ...offered?.keys() ?? [],
+        ...readers?.keys() ?? [],
+      ])
+    ) {
+      const armed = this.#currencyArmed.get(space)?.get(reader);
+      const rests = engine !== undefined && armed !== undefined &&
+        armed.until === undefined && !this.#currencyHeld(space);
+      const held = readers?.get(reader) ?? new Map<string, CarriedSession>();
+      const stands = new Map<string, CarriedSession>();
+      for (const [sessionId, session] of offered?.get(reader) ?? []) {
+        const rows = new Map(
+          [...session.share.rows].filter(([, row]) =>
+            !rests ||
+            selectCurrencyExport(engine, {
+                space,
+                id: row.id,
+                scopeKey: row.scopeKey,
+              })?.stale !== false
+          ),
+        );
+        if (rows.size === 0) continue;
+        // A serving loop starts no piece for a demanded document that a
+        // computation derives, and an instance that is an actor's own may
+        // not exist yet for it to find the piece from. So each piece the
+        // index records as writing a row's document is demanded with it,
+        // for the same pair.
+        if (engine !== undefined) {
+          for (const row of [...rows.values()]) {
+            for (
+              const piece of selectCurrencyWriters(engine, {
+                space,
+                id: row.id,
+              })
+            ) {
+              const key = toDirtyKey(piece, "space");
+              if (rows.has(key)) continue;
+              rows.set(key, {
+                id: piece,
+                scope: "space",
+                scopeKey: "space",
+                ...(row.identity !== undefined && { identity: row.identity }),
+                root: true,
+                origin: session.origin,
+              });
+            }
+          }
+        }
+        stands.set(sessionId, {
+          ...session,
+          share: { sessionId, rows },
+        });
+      }
+      for (const [sessionId, session] of [...held]) {
+        if (stands.has(sessionId)) continue;
+        held.delete(sessionId);
+        told.push(() => {
+          this.#notifySessionChanged({ kind: "removed", space, sessionId });
+          this.#notifyCarriedDemandChanged(space, session);
+        });
+      }
+      for (const [sessionId, session] of stands) {
+        const before = held.get(sessionId);
+        if (
+          before !== undefined &&
+          before.share.rows.size === session.share.rows.size &&
+          [...session.share.rows.keys()].every((key) =>
+            before.share.rows.has(key)
+          )
+        ) continue;
+        held.set(sessionId, session);
+        told.push(() => {
+          if (before === undefined) {
+            this.#notifySessionChanged({
+              kind: "opened",
+              space,
+              sessionId,
+              ...(session.principal !== undefined &&
+                { principal: session.principal }),
+            });
+            this.#notifySessionOpened(space);
+          }
+          this.#notifyCarriedDemandChanged(space, session);
+        });
+      }
+      if (held.size === 0) {
+        readers?.delete(reader);
+      } else {
+        if (readers === undefined) {
+          readers = new Map();
+          this.#carriedDemand.set(space, readers);
+        }
+        readers.set(reader, held);
+      }
+    }
+    if (readers?.size === 0) this.#carriedDemand.delete(space);
+    // The host asks what stands when it is told, so it is told once every
+    // row is in place.
+    for (const tell of told) tell();
+  }
+
+  /**
+   * Drops every demand carried for the session `sessionId` of `origin`,
+   * which has ended, from each space it was carried into.
+   */
+  #dropCarriedDemandOf(origin: string, sessionId: string): void {
+    for (const [space, readers] of [...this.#carriedOffered]) {
+      let dropped = false;
+      for (const [reader, offered] of [...readers]) {
+        for (const [id, session] of [...offered]) {
+          if (
+            session.origin.space !== origin ||
+            session.origin.sessionId !== sessionId
+          ) continue;
+          offered.delete(id);
+          dropped = true;
+        }
+        if (offered.size === 0) readers.delete(reader);
+      }
+      if (readers.size === 0) this.#carriedOffered.delete(space);
+      if (dropped) this.#refreshCarriedDemand(space);
+    }
+  }
+
+  /** Tells the serving host that the demand `session` carries changed. */
+  #notifyCarriedDemandChanged(space: string, session: CarriedSession): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.demandChanged === undefined) return;
+    try {
+      observer.demandChanged(
+        space,
+        "watch",
+        session.principal,
+        session.sessionId,
+      );
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on demandChanged",
+        error,
+      );
+    }
   }
 
   /**
@@ -12631,6 +13875,10 @@ export class Server {
   }
 
   #notifyCommitAdmitted(notice: AdmittedCommitNotice): void {
+    // A change of the space after a commit a client authored there is one
+    // with no trigger behind it.
+    if (notice.class === "authored") this.#currencyTrails.delete(notice.space);
+    this.#queueCurrencyAdvance(notice.space);
     const observer = this.#serverExecutionObserver;
     if (observer?.commitAdmitted !== undefined) {
       try {
@@ -12677,6 +13925,19 @@ export class Server {
     } catch (error) {
       console.warn(
         "memory v2: server-execution observer threw on sessionOpened",
+        error,
+      );
+    }
+  }
+
+  #notifyCurrencyChanged(space: string): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.currencyChanged === undefined) return;
+    try {
+      observer.currencyChanged(space);
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on currencyChanged",
         error,
       );
     }
@@ -13383,6 +14644,38 @@ export class Server {
   }
 
   /**
+   * Helper for `#openEngineInner()`, which respells `space`'s bare-DID labels
+   * before its engine is served (`cfc-bare-did-migration.ts`). A failure is
+   * reported and serves the store as it stands, so it never makes the space
+   * unservable.
+   */
+  async #retireBareDidLabels(
+    engine: Engine.Engine,
+    space: string,
+  ): Promise<void> {
+    try {
+      const report = await retireBareDidLabels(engine, { space });
+      if (report.rewritten > 0) {
+        console.info(
+          `memory v2: respelled the bare-DID labels of ${report.rewritten} ` +
+            `document instance(s) in ${space}`,
+        );
+      }
+      for (const { id, scopeKey, reason } of report.skipped) {
+        console.error(
+          `memory v2: could not respell the bare-DID labels of ${id} ` +
+            `(${scopeKey}) in ${space}: ${reason}`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `memory v2: respelling the bare-DID labels of ${space} failed`,
+        error,
+      );
+    }
+  }
+
+  /**
    * The co-hosted direct-engine access of server-execution v2
    * (serving-loop.md §1): the wave commit step's sink runs its store
    * transaction (per-doc re-verification + derived-class apply + basis rows)
@@ -13680,7 +14973,7 @@ export class Server {
       if (url.protocol === "file:") {
         await FS.ensureDir(Path.toFileUrl(Path.dirname(Path.fromFileUrl(url))));
       }
-      return await Engine.open({
+      const engine = await Engine.open({
         url,
         operationCodecs: this.#operationCodecs,
         operationCheckpointInterval: this.options.operationCheckpointInterval,
@@ -13695,6 +14988,10 @@ export class Server {
         commitObserver: (decision) =>
           this.#observeCommit({ ...decision, space }),
       });
+      if (this.options.retireBareDidLabels === true) {
+        await this.#retireBareDidLabels(engine, space);
+      }
+      return engine;
     })();
     // The SYNC engine view, which the read paths that must not add a
     // microtask boundary consult.

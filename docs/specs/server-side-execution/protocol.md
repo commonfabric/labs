@@ -546,10 +546,12 @@ refused: a foreign scoped read naming no actor's instance, and one
 whose actor the list does not grant. Resolution against a per-doc
 grant store with `capabilityRef` carriage, the finer design OW13
 names, stays owed and would narrow this grant, never widen it. A
-granted read is a service-session read: it registers no
-identity-bearing demand in the foreign space, so the instance it reads
-is as the foreign space's own loop last derived it for that actor
-(verification-coverage.md OW35). Cross-space serving therefore reads
+granted read is a service-session read, which is not itself demand in
+the foreign space. The reading loop carries the actor's demand there
+apart from the read, where it keeps the currency index and one memory
+server holds both spaces (serving-loop.md §3b; verification-coverage.md
+OW35); elsewhere the instance it reads is as the foreign space's own loop
+last derived it for that actor. Cross-space serving therefore reads
 foreign SPACE-scope state freely (§2b's free-read row) and foreign
 SCOPED state under the actor's grant alone. A refusal is no load for
 served delivery to wait on, and it is never silently empty for the

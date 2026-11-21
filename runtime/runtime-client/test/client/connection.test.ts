@@ -290,6 +290,23 @@ describe("connection", () => {
     await connection.dispose();
   });
 
+  it("routes a space's seq advancing", async () => {
+    const transport = new FakeTransport();
+    const connection = await initializedConnection(transport);
+    const messages: unknown[] = [];
+    connection.on("spaceseqadvanced", (message) => messages.push(message));
+    const notification = {
+      type: NotificationType.SpaceSeqAdvanced,
+      space: "did:key:z6Mk-connection-seq",
+      seq: 12,
+    } as const;
+
+    transport.emit("message", notification);
+
+    expect(messages).toEqual([notification]);
+    await connection.dispose();
+  });
+
   it("routes collaborative operation notifications", async () => {
     const transport = new FakeTransport();
     const connection = await initializedConnection(transport);

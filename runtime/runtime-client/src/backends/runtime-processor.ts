@@ -323,6 +323,7 @@ import {
   type SpaceGetAclRequest,
   type SpaceHistoryListRequest,
   type SpaceHistoryListResponse,
+  type SpaceHistoryWatchRequest,
   type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
@@ -1115,6 +1116,12 @@ export class RuntimeProcessor {
   /** One abort per commit in flight, aborted when its client detaches. */
   #custodySealCommits = new Map<string, AbortController>();
   #detachedClients = new WeakSet<WorkerClient>();
+
+  /**
+   * What stops each client's report of a space's seq, keyed by the client
+   * and the space (`clientScopedKey`).
+   */
+  #historyWatches = new Map<string, () => void>();
   #telemetry: RuntimeTelemetry;
 
   /**
@@ -1659,6 +1666,8 @@ export class RuntimeProcessor {
           cancel();
         }
         this.#subscriptions.clear();
+        for (const cancel of this.#historyWatches.values()) cancel();
+        this.#historyWatches.clear();
         for (const subscription of this.#operationSubscriptions.values()) {
           subscription.cancelled = true;
           subscription.cancel?.();
@@ -1766,6 +1775,12 @@ export class RuntimeProcessor {
     }
     for (const [key, commit] of this.#custodySealCommits) {
       if (key.startsWith(prefix)) commit.abort(custodySealingUnavailable());
+    }
+
+    for (const [key, cancel] of [...this.#historyWatches]) {
+      if (!key.startsWith(prefix)) continue;
+      cancel();
+      this.#historyWatches.delete(key);
     }
 
     for (const [key, cancel] of [...this.#subscriptions]) {
@@ -4570,6 +4585,38 @@ export class RuntimeProcessor {
     await this.#historyProvider(request.space).deleteBranch(request.name);
   }
 
+  /**
+   * Starts or stops reporting to `client` each time the newest seq of the
+   * requested space the runtime has learned of moves forward.
+   */
+  handleSpaceHistoryWatch(
+    request: SpaceHistoryWatchRequest,
+    client: WorkerClient,
+  ): void {
+    if (!isDID(request.space)) {
+      throw new Error("space history requires a space DID");
+    }
+    const key = clientScopedKey(client, request.space);
+    if (!request.watch) {
+      this.#historyWatches.get(key)?.();
+      this.#historyWatches.delete(key);
+      return;
+    }
+    if (this.#historyWatches.has(key)) return;
+    const provider = this.#runtime.storageManager.open(request.space);
+    if (provider.subscribeServerSeq === undefined) {
+      throw new Error("the space's storage serves no history");
+    }
+    const space = request.space;
+    this.#historyWatches.set(
+      key,
+      provider.subscribeServerSeq((seq) => {
+        if (this.#isDisposed || this.#detachedClients.has(client)) return;
+        client.post({ type: NotificationType.SpaceSeqAdvanced, space, seq });
+      }),
+    );
+  }
+
   /** Restores the requested space to a point of history. */
   async handleSpaceRestore(
     request: SpaceRestoreRequest,
@@ -4881,6 +4928,8 @@ export class RuntimeProcessor {
         return this.handleBlobUrl(request);
       case RequestType.SpaceHistoryList:
         return await this.handleSpaceHistoryList(request);
+      case RequestType.SpaceHistoryWatch:
+        return this.handleSpaceHistoryWatch(request, client);
       case RequestType.SpaceBranchCreate:
         return await this.handleSpaceBranchCreate(request);
       case RequestType.SpaceBranchDelete:
