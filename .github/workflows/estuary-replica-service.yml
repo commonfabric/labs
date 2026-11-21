@@ -25,8 +25,9 @@ on:
 permissions:
   contents: read
 
-# A group of its own, not the production deployment's: a production run that
-# is waiting for approval holds its group, and this would wait behind it.
+# A group of its own, so installs run independently of production
+# deployments. In the production group, a production run that is waiting for
+# approval would hold the group and this would queue behind it.
 concurrency:
   group: estuary-replica-service-deployment
   cancel-in-progress: false

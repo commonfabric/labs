@@ -330,9 +330,10 @@ verifies the build's checksum and provenance before it touches Estuary. The
 bastion receives a short-lived token that reads `infra` and `loom` contents,
 because the play asks whether the pinned Loom commit is on Loom's `main`.
 
-It has its own concurrency group, not the production deployment's: a
-production run waiting for approval holds that group, and an install would
-wait behind it.
+It has a concurrency group of its own, so an install runs independently of
+production deployments. In the production deployment's group it would not: a
+production run that is waiting for approval holds that group, and an install
+would queue behind it until someone approved or cancelled the run.
 
 ## The wrappers are owned by infra
 

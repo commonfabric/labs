@@ -429,8 +429,9 @@ describe("rapids-workflows", () => {
     expect(dispatch.inputs).toEqual({
       infra_sha: { type: "string", required: true },
     });
-    // Not the production deployment's group: a production run waiting for
-    // approval holds that group, and this would wait behind it.
+    // A group of its own, so installs run independently. In the production
+    // deployment's group, a production run waiting for approval would hold
+    // the group and an install would queue behind it.
     expect(replica.concurrency).toEqual({
       group: "estuary-replica-service-deployment",
       "cancel-in-progress": false,
