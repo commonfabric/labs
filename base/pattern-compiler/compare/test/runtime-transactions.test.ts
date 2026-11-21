@@ -1065,8 +1065,8 @@ describe("a commit the preparation refuses", () => {
       const store = new Store();
       store.docs.set(doc, { kind: "result", value: { box: {} } });
       // The first transaction creates the document with a write record
-      // that binds none of its template's slots: the preparation refuses
-      // the commit.
+      // that names an output the plan does not have: the preparation
+      // refuses the commit.
       hooks.begin("send");
       const unbound = new InputsTable();
       hooks.change(
@@ -1076,7 +1076,7 @@ describe("a commit the preparation refuses", () => {
         undefined,
         [{
           target: { doc, path: ["elsewhere"] },
-          record: { output: 0 },
+          record: { output: 999 },
           instance: doc,
           keys: [],
           inputs: unbound.place({ slots: {} }),
@@ -1280,6 +1280,112 @@ describe("the write records of one transaction", () => {
     const perDocument = (large.counts.recordBytes - small.counts.recordBytes) /
       180;
     expect(perDocument).toBeLessThan(80);
+  });
+});
+
+// `fixtures/whole-after-push.tsx`: `all` is a text of everything the list
+// `items` holds, given here as references to a cell each, all under one
+// clause: an array of references whose members hold equal labels.
+describe("the write records of a change of one member of an array of references", () => {
+  /**
+   * Changes one of `size` records and returns the write records the
+   * change's transactions recorded, their size, how many labels the
+   * adapter was asked for, and the refused commits.
+   */
+  const changeOne = async (size: number) => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const artifact = await artifactOf("whole-after-push");
+    const id = identifierOf({ test: "one-member", size });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+      countRecordBytes: true,
+    });
+    try {
+      const schema = {
+        type: "object",
+        properties: { note: { type: "string" }, amount: { type: "number" } },
+        ifc: {
+          confidentiality: [inputClause("items", await scenarioAudience())],
+        },
+      } as JSONSchema;
+      const tx = runtime.edit();
+      const values = Array.from(
+        { length: size },
+        (_, index) => ({ note: `n${index}`, amount: index }),
+      );
+      const ids = values.map((value, index) => {
+        const cell = runtime.getCell(space, { member: index }, schema, tx);
+        const link = cell.getAsNormalizedFullLink();
+        recordRelevantSchemaWritePolicyInput(tx, link, schema);
+        cell.set(value);
+        hooks.external(link.id);
+        return link.id;
+      });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const instance = new Instance(
+        artifact,
+        { items: ids.map((doc) => ({ $link: { doc, path: [] } })) },
+        {
+          space,
+          id,
+          transactions: hooks,
+          documents: ids.map((doc, index) => ({
+            id: doc,
+            kind: "input",
+            value: values[index],
+          })),
+        },
+      );
+      expect(await hooks.settled()).toEqual([]);
+      let asked = 0;
+      const labelOf = hooks.labelOf.bind(hooks);
+      hooks.labelOf = (...given) => {
+        asked += 1;
+        return labelOf(...given);
+      };
+      const before = hooks.counts;
+
+      instance.writeArgument(["items", "4", "amount"], 99);
+
+      const refused = await hooks.settled();
+      const after = hooks.counts;
+      return {
+        refused,
+        asked,
+        given: after.recordsGiven - before.recordsGiven,
+        recorded: after.recordsRecorded - before.recordsRecorded,
+        bytes: after.recordBytes - before.recordBytes,
+        all: instance.result(),
+      };
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  it("records among 1,000 members the records it records among 10, of the same size but for the digits of a number, and asks for as many labels", async () => {
+    const small = await changeOne(10);
+    const large = await changeOne(1_000);
+
+    expect(small.refused).toEqual([]);
+    expect(large.refused).toEqual([]);
+    expect(small.recorded).toBeGreaterThan(0);
+    expect(large.given).toBe(small.given);
+    expect(large.recorded).toBe(small.recorded);
+    // The records differ by the digits of the number of members stated.
+    expect(Math.abs(large.bytes - small.bytes)).toBeLessThan(16);
+    expect(large.asked).toBe(small.asked);
   });
 });
 
