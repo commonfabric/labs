@@ -10099,3 +10099,54 @@ today's runtime; the site returns to that form if the declarations change.
      WeakMap pairs overflows; these runs used them with typed arrays in place of
      the two maps, a change to `skills/perf-investigation/scripts/` that goes to
      the main branch on its own.
+
+## The integration branch merged, and Topics on the runtime's storage
+
+Notes 567 on are about the merge of the integration branch
+(`claude/compiled-pattern-integration-m1` at `11d92e4776`: the executor on the
+runtime's storage and labels from templates at commit) into this branch, and
+about milestone 2 of `docs/plans/compiled-pattern-language-integration.md`:
+Topics at 100, 1,000 and 2,000 topics on the runtime's storage.
+
+567. **The merge, and which of two mechanisms for one defect stays.** Both
+     branches had fixed some of the same defects.
+     - _The name a body of another module returns._ Both read it in the module
+       the body is written in, with the same code in `src/plan.rs`
+       (`returned_origin`, `passed_on`). Each side's test stays; they have
+       another program each.
+     - _The walk of `patterns/apps/weekly-calendar/view-walk.ts`._ The
+       integration branch widens a path that repeats a sequence of segments that
+       holds a key, or holds three `*` in direct succession, and a key read
+       again on a value whose type declares no structure (`square_end`,
+       `holds_key`, `widen_repeated`; provisional decision P38, note 536). This
+       branch kept one summary per function written at module scope (FA §3.6)
+       and bounded the value a function returns at 512 nodes (`MAX_VALUE`, W7;
+       note 538). Kept as the rule for that walk: P38. It widens before the
+       value reaches 512 nodes, the walk records 45 read entries under it, and
+       the design documents state it. The summaries stay: they bound how often a
+       function is evaluated along a chain of calls, which P38 does not, and the
+       tests of both sides pass with them. The bound of 512 nodes stays as the
+       limit on the alternatives of one value that FA §5.2 names for W7, for a
+       value whose paths repeat no key. Its test
+       (`a_function_that_returns_a_value_over_the_bound_widens_and_reads_its_projections_in_full`)
+       gave every level the member names `a` and `b`, so under P38 its paths
+       widened as W6 before the bound; the members now have another name at each
+       level. **P38 is wider than W6 on declared types too:** over three types
+       that are not recursive, a body that reads `tree.a.a.name` records a
+       `value` read of `tree.a.a`, and one that reads `tree.a.b.name` records
+       that path. No plan of the corpus changed by it on the integration branch.
+     - _A child instance and the documents the executor was started with._ Both
+       sides keep an instance that a body makes from creating those documents
+       again. The integration branch's test (`this.root === this`) stays.
+     - _`Host.slot`_ binds the slot, as the integration branch does, and reads
+       under the declared schema, as this branch does. `Store.#copy` records the
+       position of a link a read crossed and stops where the declared schema
+       does not read.
+
+     This branch's notes 536 to 565 are 537 to 566, since the integration branch
+     has a note 536; the references among them moved with them. Its provisional
+     decisions P31 (`ReadInput.handle`) and P32 (`equalsKey`) are P40 and P41,
+     as `docs/plans/compiled-pattern-language.md` numbers them. Every fixture's
+     `plan.json` and `emit.json` is the output of the merged crate: 48 files
+     changed, by `handle: true` on entries of `Body.reads` and by four fixtures
+     whose patterns the committed files named without a hash.
