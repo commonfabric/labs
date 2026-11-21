@@ -34,6 +34,7 @@ import {
   RoomListServer,
   ROOMS,
   type Row,
+  SENT,
 } from "./fabrichat-room-list-fixture.ts";
 
 describe("fabrichat-room-list-kept-rooms", () => {
@@ -89,6 +90,17 @@ describe("fabrichat-room-list-kept-rooms", () => {
         rows.filter((row) => row.title !== "Later room")
           .map((row) => row.room.space).sort(),
       ).toEqual([...kept, deleted, revoked].sort());
+    });
+
+    it("lists each room with the message count its manager last heard", () => {
+      const counts = kept.map((space) =>
+        rows.find((row) => row.room.space === space)?.activity?.count
+      );
+      expect(counts).toEqual(kept.map((_, index) => SENT[index]));
+      expect(
+        rows.filter((row) => row.activity !== undefined)
+          .every((row) => row.activity?.newestAt !== undefined),
+      ).toBe(true);
     });
 
     it("receives no document from any room's space, from bring-up on", () => {
