@@ -763,6 +763,54 @@ describe("cfc-plan-labels", () => {
       });
     });
 
+    it("joins the label of a list's membership for a slot bound to a position of the list that holds no member, and not for one that holds a member", async () => {
+      await withSources(async (runtime, tx, identity, target) => {
+        const seed = runtime.edit();
+        seedStoredEnvelope(seed, memoryAddress("of:src-list", []), {
+          value: { list: ["x", "y"] },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["list"],
+                label: { confidentiality: ["secret-members"] },
+                origin: "derived",
+                observes: "enumerate",
+              }],
+            },
+          },
+        });
+        expect((await seed.commit().settled).error).toBeUndefined();
+        for (const [name, position] of [["a", "5"], ["b", "1"]] as const) {
+          tx.recordCfcWritePolicyInput(
+            {
+              ...planWrite(
+                identity,
+                { ...target, path: [name] },
+                0,
+                address("of:src-list", ["list", position]),
+              ),
+              slots: {
+                0: {
+                  chain: [address("of:src-list", ["list", position])],
+                  observes: "value",
+                },
+              },
+            },
+            runtimeWritePolicyAuthorization,
+          );
+        }
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        expect(confidentialityAt(labels, target, "a")).toEqual([
+          "secret-members",
+        ]);
+        expect(confidentialityAt(labels, target, "b")).toEqual([]);
+      });
+    });
+
     it("resolves a slot bound to an address the transaction did not read from the label stored there, without reading its value", async () => {
       // Ruling (c): a template label may rest on labels observed in an
       // earlier transaction. The pre-pass observes the stored label of the
