@@ -6473,7 +6473,15 @@ const deriveFlowJoinImpl = (
     identity !== undefined &&
     (confidentiality.length > 0 || integrity.length > 0)
   ) {
-    for (const atom of mintTransformedBy(identity, inputWitnesses)) {
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/59
+    // The viewer-bearing atoms are the proposal in
+    // `patterns/examples/cfc-exchange-rules/MODULE-NAMED-AUDIENCE-PROPOSAL.md`,
+    // a follow-up to that pull request's list release. A transaction records
+    // a viewer only under the `viewerBoundRelease` experimental option, which
+    // is off by default, so nothing is minted or stored here until it is on.
+    const { viewers } = tx.getCfcState();
+    const viewer = viewers.length === 1 ? viewers[0] : undefined;
+    for (const atom of mintTransformedBy(identity, inputWitnesses, viewer)) {
       integrity.push(atom);
     }
   }

@@ -73,6 +73,9 @@ export const EXPERIMENTAL_ENV_VARS = {
   // The creator record is default-off; env-reachable so a process can opt in
   // with an explicit "true".
   pieceCreatorRecord: "EXPERIMENTAL_PIECE_CREATOR_RECORD",
+  // The viewer-bound release is default-off; env-reachable so a process can
+  // opt in with an explicit "true".
+  viewerBoundRelease: "EXPERIMENTAL_VIEWER_BOUND_RELEASE",
   // Instance naming is default-off, and reachable programmatically only: one
   // process naming instances binds a parent's children to other documents
   // than the rest of its space does, so no environment may turn it on before
@@ -196,6 +199,9 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // The serving side binds an update-added owner field to the record, so
   // whether pieces carry one is the deployment's decision, not a client's.
   pieceCreatorRecord: "server",
+  // The serving side computes each viewer's instance and stamps it, so
+  // whether a computation may name its viewer is the deployment's decision.
+  viewerBoundRelease: "server",
   // Decides the identity a compiled pattern gives a `const`-bound child, so
   // two runtimes on different values bind one parent's children to
   // different documents.

@@ -926,6 +926,14 @@ export type PreparedDigestInput = {
   readonly assertedValueRoots?: readonly CfcAssertedValueRoot[];
 
   /**
+   * The principals whose computation this transaction is
+   * (`CfcTxState.viewers`). They decide whether preparation mints the
+   * viewer-bearing `TransformedBy`, so a transaction whose set changes must
+   * not keep its digest. Absent when empty, like the roots.
+   */
+  readonly viewers?: readonly string[];
+
+  /**
    * List-coordinator containers whose membership preparation re-stamps
    * (`CfcTxState.structureContainers`). Absent when empty, like the roots.
    */
@@ -1218,6 +1226,15 @@ export type CfcTxState = {
   // the entity's root and the slot with the entity as its `reference`). That
   // one pointer, at that one path, is part of the value the writer supplied.
   assertedValueRoots: CfcAssertedValueRoot[];
+  // The principals a reactive computation in this transaction asked the
+  // runtime to name as the one it is computed for (`currentPrincipal()` in a
+  // `lift` or a `computed`). The computation's value then depends on who it
+  // was computed for, and the flow stage says so on what it writes: with
+  // exactly one principal here it mints a `TransformedBy` carrying that
+  // principal as its `viewer` (`mintTransformedBy`). Recorded only under the
+  // runtime's authorization, with the value the computation was handed, so
+  // the stamp and the code agree on who that is.
+  viewers: string[];
   // Addresses whose invalidating writes scheduled this run (§8.9.2 trigger
   // reads): the decision to run *now* was influenced by their values, so
   // they join the flow-label derivation even when the run never re-reads

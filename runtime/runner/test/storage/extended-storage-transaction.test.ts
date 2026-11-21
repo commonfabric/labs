@@ -388,6 +388,17 @@ describe("extended-storage-transaction", () => {
           );
           tx.abort();
         });
+
+        it("invalidates it for a viewer recorded after it, and not for one recorded without the runtime's mark", () => {
+          const tx = prepared("late-viewer");
+          tx.recordCfcViewer("did:key:viewer", forgedAuthorization);
+          expect(tx.getCfcState().prepare.status).toBe("prepared");
+          expect(tx.getCfcState().viewers).toEqual([]);
+          tx.recordCfcViewer("did:key:viewer", runtimeWritePolicyAuthorization);
+          expect(invalidationReasons(tx)).toContain("viewer-added");
+          expect(tx.getCfcState().viewers).toEqual(["did:key:viewer"]);
+          tx.abort();
+        });
       });
 
       describe("markCfcPieceCreator()", () => {

@@ -48,7 +48,7 @@ import {
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import { Runtime } from "../src/runtime.ts";
+import { type ExperimentalOptions, Runtime } from "../src/runtime.ts";
 import { scopedArgumentInitializationTargets } from "../src/data-updating.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
@@ -120,6 +120,134 @@ const WISH_PATTERN = [
 ].join("\n");
 
 /** Whether any revision ever written under `scopeKey` held `needle`. */
+/**
+ * A tally whose state is sealed to its own policy, written only by `move`,
+ * and projected by `viewFor`, which asks who it is computed for. The rule
+ * releases what `viewFor` computed to that principal.
+ */
+const VIEWER_PATTERN = `/// <cts-enable />
+import {
+  type Confidential,
+  currentPrincipal,
+  type Default,
+  handler,
+  lift,
+  pattern,
+  type Stream,
+  type Writable,
+  type WriteAuthorizedBy,
+} from "commonfabric";
+import {
+  exchangeRule,
+  exchangeRules,
+  type PolicyOf,
+  THIS_POLICY,
+  v,
+} from "commonfabric/cfc";
+
+export const releaseOwnView = exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: {
+    integrity: [{
+      type: "https://commonfabric.org/cfc/atom/TransformedBy",
+      identity: {
+        kind: "verified",
+        moduleIdentity: THIS_POLICY.moduleIdentity,
+        symbol: "viewFor",
+      },
+      inputWitness: {
+        type: "https://commonfabric.org/cfc/atom/TransformedBy",
+        identity: {
+          kind: "verified",
+          moduleIdentity: THIS_POLICY.moduleIdentity,
+          symbol: "move",
+        },
+      },
+      viewer: v("viewer"),
+    }],
+  },
+  post: {
+    addAlternatives: [{
+      type: "https://commonfabric.org/cfc/atom/User",
+      subject: v("viewer"),
+    }],
+  },
+});
+
+export const tallyRules = exchangeRules([releaseOwnView]);
+
+type Sealed<T> = Confidential<T, readonly [PolicyOf<typeof tallyRules>]>;
+
+interface Tally {
+  claims: string[];
+}
+
+type Stored = WriteAuthorizedBy<Sealed<Tally | null>, typeof move>;
+
+interface MoveState {
+  state: Writable<Stored>;
+}
+
+export const move = handler<void, MoveState>((_, bound) => {
+  const actor = currentPrincipal();
+  if (actor === undefined) return;
+  bound.state.set({ claims: [...(bound.state.get()?.claims ?? []), actor] });
+});
+
+export const viewFor = lift((
+  { state }: { state: Tally | null | undefined },
+): { mine: number; all: number } => {
+  const viewer = currentPrincipal();
+  const claims = state?.claims ?? [];
+  return {
+    mine: claims.filter((claim) => claim === viewer).length,
+    all: claims.length,
+  };
+});
+
+export default pattern<
+  { state: Writable<Default<Stored, null>> },
+  { view: { mine: number; all: number }; move: Stream<void> }
+>(({ state }) => ({ view: viewFor({ state }), move: move({ state }) }));
+`;
+
+/**
+ * The viewers the `TransformedBy` atoms of the documents under `scopeKey`
+ * name, once each, and whether one of those atoms also carries an input
+ * witness naming `move`.
+ */
+const stampedViewers = (
+  engine: Engine.Engine,
+  scopeKey: string,
+): { viewers: string[]; witnessed: boolean } => {
+  const viewers = new Set<string>();
+  let witnessed = false;
+  for (const id of rowsUnder(engine, scopeKey).keys()) {
+    const record = Engine.read(engine, { id, scopeKey } as never) as {
+      cfc?: {
+        labelMap?: {
+          entries?: {
+            label?: {
+              integrity?: {
+                viewer?: string;
+                inputWitness?: { identity?: { symbol?: string } };
+              }[];
+            };
+          }[];
+        };
+      };
+    } | undefined;
+    for (const entry of record?.cfc?.labelMap?.entries ?? []) {
+      for (const atom of entry.label?.integrity ?? []) {
+        if (typeof atom?.viewer !== "string") continue;
+        viewers.add(atom.viewer);
+        witnessed ||= atom.inputWitness?.identity?.symbol === "move";
+      }
+    }
+  }
+  return { viewers: [...viewers], witnessed };
+};
+
 const everHeld = (
   engine: Engine.Engine,
   scopeKey: string,
@@ -334,6 +462,9 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
 
   let pokes = 0;
 
+  /** Experimental options every runtime here takes beside server execution. */
+  let experimental: ExperimentalOptions;
+
   /** Commit an authored poke and wait for the loop to cover it — one
    * wave cycle, ordered after anything the loop was going to run. */
   const settleACycle = async (engine: Engine.Engine): Promise<void> => {
@@ -366,9 +497,7 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
           apiUrl: new URL(import.meta.url),
           storageManager: manager,
           servingPosture: true,
-          experimental: {
-            serverExecution: true,
-          },
+          experimental: { ...experimental, serverExecution: true },
         });
         runtime.scheduler.setActionRunTraceEnabled(true);
         servingRuntime = runtime;
@@ -391,6 +520,7 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     activations = new ArrivalLog();
     cycles = new ArrivalLog();
     pokes = 0;
+    experimental = {};
     managers = [];
     runtimes = [];
     servingRuntime = undefined;
@@ -409,7 +539,7 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: manager,
-      experimental: { serverExecution: true },
+      experimental: { ...experimental, serverExecution: true },
     });
     managers.push(manager);
     runtimes.push(runtime);
@@ -423,6 +553,12 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     names: { arg: string; result: string };
     pattern?: string;
     userScopedNote?: boolean;
+    /**
+     * Run the piece over an argument of its own, which its setup fills from
+     * the pattern's defaults, where the default is an argument cell the
+     * test seeds and hands the piece.
+     */
+    ownArgument?: boolean;
     clients: Identity[];
     policy?: ConstructorParameters<typeof ExecutorHost>[0]["policy"];
   }) => {
@@ -448,7 +584,7 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     );
     await aliceArg.sync();
     await aliceResult.sync();
-    {
+    if (!options.ownArgument) {
       const seed = alice.edit();
       aliceArg.withTx(seed).set({
         n: 1,
@@ -468,7 +604,7 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     }
     {
       const tx = alice.edit();
-      alice.run(tx, compiled, aliceArg, aliceResult);
+      alice.run(tx, compiled, options.ownArgument ? {} : aliceArg, aliceResult);
       expect((await tx.commit().settled).error).toBeUndefined();
     }
     await alice.idle();
@@ -1903,6 +2039,64 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     // Never the sibling's value in either instance.
     expect(instanceHolds(engine, aliceKey, `"echo:b`)).toBe(false);
     expect(instanceHolds(engine, bobKey, `"echo:a`)).toBe(false);
+    setup.cancel();
+  });
+
+  it("(q) a derivation that asks who it is computed for runs for each demander as that demander, and stamps what it writes with them", async () => {
+    experimental = { viewerBoundRelease: true };
+    const setup = await standUp({
+      names: { arg: "fo-q-arg", result: "fo-q-result" },
+      pattern: VIEWER_PATTERN,
+      ownArgument: true,
+      clients: [aliceSigner, bobSigner],
+    });
+    const { engine, clients } = setup;
+    const aliceKey = setup.userKey(aliceSigner);
+    const bobKey = setup.userKey(bobSigner);
+    const claim = async (signer: Identity) => {
+      const runtime = clients.get(signer.did())!;
+      const result = runtime.getCell<Record<string, unknown>>(
+        space,
+        "fo-q-result",
+        setup.compiled.resultSchema,
+      );
+      await result.sync();
+      const tx = runtime.edit();
+      // deno-lint-ignore no-explicit-any
+      (result.withTx(tx) as any).key("move").send(undefined);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+      await runtime.storageManager.synced();
+    };
+
+    // Alice claims twice and Bob once, each through their own client. The
+    // serving loop runs `move` for whoever sent the event, and `viewFor`
+    // once for each of the two who watch.
+    await claim(aliceSigner);
+    await claim(bobSigner);
+    await claim(aliceSigner);
+    await awaitAdmitted(
+      server,
+      () =>
+        instanceHolds(engine, aliceKey, '"mine":2') &&
+        instanceHolds(engine, aliceKey, '"all":3') &&
+        instanceHolds(engine, bobKey, '"mine":1') &&
+        instanceHolds(engine, bobKey, '"all":3'),
+    );
+    // Each instance is stamped with the principal it was computed for and
+    // with nobody else, beside the witness the rule names.
+    expect(stampedViewers(engine, aliceKey)).toEqual({
+      viewers: [aliceSigner.did()],
+      witnessed: true,
+    });
+    expect(stampedViewers(engine, bobKey)).toEqual({
+      viewers: [bobSigner.did()],
+      witnessed: true,
+    });
+    // No instance was computed for the serving runtime's own identity, and
+    // nothing in the space's shared rows names a viewer.
+    expect(instanceHolds(engine, setup.serviceUserKey, '"mine"')).toBe(false);
+    expect(stampedViewers(engine, "space").viewers).toEqual([]);
     setup.cancel();
   });
 });

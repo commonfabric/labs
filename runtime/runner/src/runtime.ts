@@ -484,6 +484,18 @@ export interface ExperimentalOptions {
   pieceCreatorRecord?: boolean | undefined;
 
   /**
+   * Let a reactive computation ask who it is computed for, and let an
+   * exchange rule release what it computes to that principal. On,
+   * `currentPrincipal()` in a `lift` or a `computed` returns the principal
+   * the run's instance belongs to and makes the computation's value a
+   * per-user one, and the flow stage mints a `TransformedBy` naming that
+   * principal as its `viewer` on what the computation writes. Defaults to
+   * off; off, `currentPrincipal()` throws outside a handler and no such atom
+   * is minted.
+   */
+  viewerBoundRelease?: boolean | undefined;
+
+  /**
    * Compile a pattern factory call bound to a `const` as a named sub-pattern
    * instance, whose identity is the binding's name rather than its position
    * among its parent's anonymous roots

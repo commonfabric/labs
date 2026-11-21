@@ -2988,6 +2988,17 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   ): void;
 
   /**
+   * Records that a reactive computation in this transaction was handed
+   * `principal` as the one it is computed for, so the flow stamp on what it
+   * writes can name them. See `CfcTxState.viewers`. Dropped unless
+   * `authorization` carries the runtime's mark.
+   */
+  recordCfcViewer(
+    principal: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): void;
+
+  /**
    * Settles whether this transaction is CFC-relevant — the flow-label
    * relevance probe, then the sink-request ceiling probe — and runs the
    * verification `prepareCfc()` runs when it is, without reading the digest.

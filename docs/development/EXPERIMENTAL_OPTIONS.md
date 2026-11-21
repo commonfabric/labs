@@ -42,6 +42,7 @@ was last checked against the code.
 | [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
 | [`pieceCreatorRecord`](#piececreatorrecord) | `EXPERIMENTAL_PIECE_CREATOR_RECORD` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | off | Bernhard Seefeld (2026-11-01) | graduate once the ruling that binds an update-added owner field to the piece's creator merges, then delete the flag | implemented, off by default |
+| [`viewerBoundRelease`](#viewerboundrelease) | `EXPERIMENTAL_VIEWER_BOUND_RELEASE` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | off | Alex Komoroske (2026-11-21) | graduate once the ruling that lets a computation's label name its viewer merges, then delete the flag | implemented, off by default |
 | [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | make it reachable on servers, turn deployments' posture on, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default, with a runtime whose naming mode differs from its space's refused that space; must not turn on before deployments' posture names instances |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`sessionOpenProofs`](#sessionopenproofs) | Memory hello capability; toolshed withholds it under `MEMORY_ACL_DELEGATIONS=false` or `0` | on | Robin McCollum (2026-10-26) | retain as protocol negotiation while deployments may contain servers that admit no chain | implemented end to end and on by default; a profile space owns itself and its owner's runtime presents the chain Home records |
@@ -1097,6 +1098,50 @@ holds the measurements and the conditions for revisiting.
   authority and shell-source entries, the default, and the gate at the write
   site in `#setupInternal`; the meta field, the transaction mark and the
   admission in `prepare.ts` stay.
+
+### `viewerBoundRelease`
+
+- **Toggle via.** `EXPERIMENTAL_VIEWER_BOUND_RELEASE` environment variable
+  (through the canonical env registry) or
+  `RuntimeOptions.experimental.viewerBoundRelease`. The shell adopts it from
+  its deployment (`SHELL_FLAG_SOURCES` in
+  [`runtime/runner/src/deployment-meta.ts`](../../runtime/runner/src/deployment-meta.ts)),
+  and it is server-authoritative in `EXPERIMENTAL_FLAG_AUTHORITY`: the serving
+  side computes each viewer's instance and stamps it, so whether a computation
+  may name its viewer is the deployment's decision. The flag is consumed from
+  the Runtime instance in one place, `currentPrincipal()` in
+  [`runtime/runner/src/builder/current-principal.ts`](../../runtime/runner/src/builder/current-principal.ts);
+  there is no ambient control point.
+- **Added by.** Alex Komoroske, 2026-11-21.
+- **Purpose.** Gates the viewer-bound release
+  ([`patterns/examples/cfc-exchange-rules/MODULE-NAMED-AUDIENCE-PROPOSAL.md`](../../patterns/examples/cfc-exchange-rules/MODULE-NAMED-AUDIENCE-PROPOSAL.md)).
+  On, `currentPrincipal()` in a `lift()` or a `computed()` returns the
+  principal the run's instance is computed for, makes the computation's value
+  a per-user one, and records that principal on the run's transaction. The
+  flow stage then mints each `TransformedBy` atom of that run a second time
+  with the principal as its `viewer`, which an exchange rule can bind a `User`
+  alternative from. Off, `currentPrincipal()` throws outside a handler, no
+  transaction records a viewer, and no such atom is minted or stored.
+- **Current default and planned end state.** Off by default. Set
+  `EXPERIMENTAL_VIEWER_BOUND_RELEASE=true` or pass
+  `RuntimeOptions.experimental.viewerBoundRelease: true` to turn it on. The
+  `viewer` field and its mint are spec text under the CFC correspondence
+  procedure, so they land behind a `SPEC-PENDING` marker in
+  `runtime/runner/src/cfc/prepare.ts`. No specs pull request exists for the
+  proposal yet, so the marker names
+  [specs pull request 59](https://github.com/commonfabric/specs/pull/59), the
+  list release this follows up. Once a ruling merges, the behavior becomes
+  unconditional and the flag is deleted.
+- **Status on 2026-11-21.** Implemented and off. The call is covered by
+  `runtime/runner/test/current-principal.test.ts`, the mint by
+  `runtime/runner/test/cfc-transformed-by-input-witness.test.ts`, a served run
+  by case (q) of `runtime/runner/test/executor-fan-out.test.ts`, the release
+  at a display boundary by
+  `runtime/html/test/worker-display-fit-card-table.test.ts`, and the plumbing
+  by `runtime/runner/test/experimental-options.test.ts`.
+- **Path to removal.** Remove the env mapping, the runtime option and its
+  authority and shell-source entries, the default, and the gate in
+  `currentPrincipal()`; the transaction's viewer record and the mint stay.
 
 ### `instanceNames`
 

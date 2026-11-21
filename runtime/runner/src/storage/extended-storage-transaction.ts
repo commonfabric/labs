@@ -778,6 +778,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     dereferenceTraces: [],
     structureContainers: [],
     assertedValueRoots: [],
+    viewers: [],
     triggerReads: [],
     writePolicyInputs: [],
     writePolicyInputIdentities: new Map(),
@@ -2536,6 +2537,22 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
   }
 
+  recordCfcViewer(
+    principal: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): void {
+    // A viewer puts a principal on the flow stamp, so a record without the
+    // runtime's mark is dropped: other code holding this transaction could
+    // otherwise name a principal the computation was not run for.
+    if (!runtimeWritePolicyAuthorized(authorization)) return;
+    if (this.#cfcState.viewers.includes(principal)) return;
+    this.#noteCfcActivity();
+    this.#cfcState.viewers.push(principal);
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("viewer-added");
+    }
+  }
+
   static {
     restoreAmbientReadMeta = (tx, previous) => {
       tx.#ambientReadMeta = previous;
@@ -3497,6 +3514,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         writePolicyInputs: [...this.#cfcState.writePolicyInputs],
         ...(this.#cfcState.assertedValueRoots.length > 0
           ? { assertedValueRoots: [...this.#cfcState.assertedValueRoots] }
+          : {}),
+        ...(this.#cfcState.viewers.length > 0
+          ? { viewers: [...this.#cfcState.viewers] }
           : {}),
         ...(this.#cfcState.structureContainers.length > 0
           ? { structureContainers: [...this.#cfcState.structureContainers] }
@@ -4718,6 +4738,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     state.dereferenceTraces = [];
     state.structureContainers = [];
     state.assertedValueRoots = [];
+    state.viewers = [];
     state.nonBuiltinWrites = [];
     this.#nonBuiltinWriteKeys.clear();
     this.#processedClaimKeys.clear();
@@ -5446,6 +5467,13 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     reference?: CfcAddress,
   ): void {
     this.#wrapped.recordCfcAssertedValueRoot(address, authorization, reference);
+  }
+
+  recordCfcViewer(
+    principal: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): void {
+    this.#wrapped.recordCfcViewer(principal, authorization);
   }
 
   prepareForCommit(): void {

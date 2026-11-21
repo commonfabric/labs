@@ -631,6 +631,12 @@ export const canonicalizePreparedDigestInput = (
       ),
     }
     : {}),
+  // The viewers decide whether the flow stamp names one: an order-insensitive
+  // set. Empty collapses to absent, so a transaction that recorded none keeps
+  // its digest.
+  ...(input.viewers !== undefined && input.viewers.length > 0
+    ? { viewers: [...new Set(input.viewers)].sort() }
+    : {}),
   // Whole-value roots decide where the flow stamp lands, and a root's
   // reference decides which pointer its value may hold: an order-insensitive
   // set of (address, recording identity, reference). Empty collapses to

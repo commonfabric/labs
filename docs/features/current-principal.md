@@ -5,7 +5,7 @@ sender, to refuse a second request from the same person, or to refuse a request
 from someone who left. `currentPrincipal()`, exported to patterns through the
 `commonfabric` module, returns that principal's DID. This document says where
 the value comes from on each kind of runtime, what it can and cannot be made to
-say, and why it is available only in a handler.
+say, and what it returns in a computation.
 
 "Handler" here means any event handler a pattern defines, `action()` included:
 the compiler lowers an `action()` to a `handler()`.
@@ -166,28 +166,53 @@ needs a declassification. SC-57 in
 [the CFC spec change list](../specs/cfc-spec-changes.md) records the rule for
 the spec.
 
-## Why only in a handler
+## In a computation
 
-`currentPrincipal()` throws in a pattern body, a `computed()`, and a `lift()`.
+`currentPrincipal()` throws in a pattern body. A pattern body builds one graph
+for every viewer, so a value read there would be one person's, baked in for
+everyone.
 
-- A pattern body builds one graph for every viewer, so a value read there would
-  be one person's, baked in for everyone.
-- A computed could read the viewer — whoever the value is being computed for.
-  That value differs from one viewer to the next, so it has to be stored per
-  user on every runtime, clients included. And a viewer's DID is not otherwise
-  visible to pattern code, so reading one in a computed needs a label saying who
-  may see it.
+In a `lift()` or a `computed()` it throws too, unless the `viewerBoundRelease`
+experimental option is on
+([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md)). With
+the option on, it returns the viewer: the principal the run's instance is
+computed for.
 
-Until both are settled, a pattern shows the viewer by resolving `#profile`, as
-[multi-user patterns](../common/patterns/multi-user-patterns.md) describes.
+- **On a client runtime**, that is the runtime's own user.
+- **On a serving runtime**, it is the principal whose demand supplied the
+  run's identity, which `Runtime.homeSpacePrincipalFor()` reads from the run's
+  wave context. A run no principal demanded gets `undefined`, never the
+  serving runtime's own identity.
+
+Asking has two effects beside the value.
+
+- **The computation becomes a per-user one.** The call narrows the
+  transaction's read scope to `user`, as `spaceAccess()` in a computation
+  does, so the result is stored in an instance of the viewer's own and each
+  viewer who looks gets a run of their own
+  ([`scopes.md`](../specs/server-side-execution/scopes.md) §2).
+- **The run's label names the viewer.** The call records the viewer on the
+  transaction, and the flow stage mints the run's `TransformedBy` atoms a
+  second time carrying that principal as `viewer`
+  ([`cfc-transformed-by-input-witnesses.md`](../specs/cfc-transformed-by-input-witnesses.md),
+  "The viewer of a computation"). An exchange rule can bind a `User`
+  alternative from it, which is how a module releases what a computation
+  wrote to the principal it was computed for.
+  `patterns/examples/cfc-exchange-rules/card-table.tsx` is the worked case.
+
+The viewer's DID reaches pattern code this way, and nothing labels it. It is
+stored only in the viewer's own instance, and a handler already hands the same
+principal the same value.
 
 ## Tests
 
 `runtime/runner/test/current-principal.test.ts` covers the helper on both
 kinds of runtime — including the run on another user's instance, the run with no
 actor, and the read scope it leaves alone — and the function in each kind of
-frame, in a compiled pattern, and against an `authored-by` claim written in the
-same handler. The `currentPrincipal()` case in
+frame, in a computation with `viewerBoundRelease` on, in a compiled pattern,
+and against an `authored-by` claim written in the same handler. Case (q) of
+`runtime/runner/test/executor-fan-out.test.ts` drives a computation that asks
+for its viewer through the live serving loop, for two principals who watch. The `currentPrincipal()` case in
 `runtime/runner/test/executor-trust-attribution.test.ts` drives a handler
 through the live serving loop, with a payload naming someone else.
 `runtime/runner/test/cfc/authored-by-writer.test.ts` covers the claim on a

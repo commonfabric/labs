@@ -273,6 +273,117 @@ describe("current-principal", () => {
       expect(() => currentPrincipal()).toThrow(HANDLER_ONLY_MESSAGE);
     });
 
+    describe("in a `lift()` frame with `viewerBoundRelease` on", () => {
+      let viewerClient: Runtime;
+      let viewerStorage: ReturnType<typeof StorageManager.emulate>;
+      let viewerServing: Runtime;
+      let viewerServingStorage: ReturnType<typeof StorageManager.emulate>;
+
+      beforeEach(() => {
+        viewerStorage = StorageManager.emulate({ as: alice });
+        viewerClient = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: viewerStorage,
+          experimental: { viewerBoundRelease: true },
+        });
+        viewerServingStorage = StorageManager.emulate({ as: service });
+        viewerServing = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: viewerServingStorage,
+          servingPosture: true,
+          experimental: { viewerBoundRelease: true },
+        });
+      });
+
+      // The transactions these cases open are aborted by the suite's own
+      // hook, which runs after this one, so they are aborted here first.
+      afterEach(async () => {
+        for (const tx of openTxs.splice(0)) tx.abort(new Error("test-only"));
+        await viewerClient.dispose();
+        await viewerStorage.close();
+        await viewerServing.dispose();
+        await viewerServingStorage.close();
+      });
+
+      /** Opens a serving transaction stamped as a derivation's run. */
+      const servedDerivationTx = (
+        instanceOwner?: string,
+      ): IExtendedStorageTransaction => {
+        const tx = edit(viewerServing);
+        stampWaveRunContext(tx, {
+          actionId: "lift/current-principal",
+          kind: "derivation",
+          ...(instanceOwner !== undefined
+            ? {
+              scopeKeyIdentity: {
+                principal: instanceOwner,
+                sessionId: "owner-session",
+              },
+            }
+            : {}),
+        });
+        return tx;
+      };
+
+      it("returns the runtime's own user on a client, and records them as the viewer", () => {
+        const tx = edit(viewerClient);
+        expect(
+          inFrame(
+            { runtime: viewerClient, tx, kind: "lift" },
+            currentPrincipal,
+          ),
+        ).toBe(alice.did());
+        expect(tx.getCfcState().viewers).toEqual([alice.did()]);
+      });
+
+      it("returns the principal a served run's instance belongs to, and records them as the viewer", () => {
+        const tx = servedDerivationTx(bob.did());
+        expect(
+          inFrame(
+            { runtime: viewerServing, tx, kind: "lift" },
+            currentPrincipal,
+          ),
+        ).toBe(bob.did());
+        expect(tx.getCfcState().viewers).toEqual([bob.did()]);
+      });
+
+      it("returns `undefined` for a served run no principal demanded, and records no viewer", () => {
+        const tx = servedDerivationTx();
+        expect(
+          inFrame(
+            { runtime: viewerServing, tx, kind: "lift" },
+            currentPrincipal,
+          ),
+        ).toBeUndefined();
+        expect(tx.getCfcState().viewers).toEqual([]);
+      });
+
+      it("narrows the transaction's read scope to `user`", () => {
+        const tx = edit(viewerClient);
+        expect(tx.getNarrowestReadScope()).toBe("space");
+        inFrame({ runtime: viewerClient, tx, kind: "lift" }, currentPrincipal);
+        expect(tx.getNarrowestReadScope()).toBe("user");
+      });
+
+      it("records no viewer for a handler", () => {
+        const tx = edit(viewerClient);
+        inFrame(
+          { runtime: viewerClient, tx, kind: "handler" },
+          currentPrincipal,
+        );
+        expect(tx.getCfcState().viewers).toEqual([]);
+      });
+
+      it("throws in a pattern body still", () => {
+        expect(() =>
+          pattern(() => {
+            currentPrincipal();
+            return {};
+          })
+        ).toThrow(HANDLER_ONLY_MESSAGE);
+      });
+    });
+
     it("throws in a pattern body, even one built inside a handler", () => {
       // The handler frame beneath lends the pattern body its runtime and
       // transaction, so what the call has to refuse on is the body's own
