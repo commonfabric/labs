@@ -952,6 +952,8 @@ export type Totals = {
   planLabelBounds: number;
   unchangedRecords: number;
   labelEntriesChanged: number;
+  recordsGiven: number;
+  recordsRecorded: number;
 };
 
 /** The results of one module, as the results file holds them. */
@@ -1036,6 +1038,8 @@ const totals = (figures: readonly Figure[]): Totals => {
     planLabelBounds: sum("planLabelBounds"),
     unchangedRecords: sum("unchangedRecords"),
     labelEntriesChanged: sum("labelEntriesChanged"),
+    recordsGiven: sum("recordsGiven"),
+    recordsRecorded: sum("recordsRecorded"),
   };
 };
 
@@ -2453,7 +2457,11 @@ const report = async (file: string, tables: string | undefined) => {
         sum(arm, "planLabelBounds")
       }, records of writes that left the value as it was ${
         sum(arm, "unchangedRecords")
-      }, label entries they changed ${sum(arm, "labelEntriesChanged")}`,
+      }, label entries they changed ${
+        sum(arm, "labelEntriesChanged")
+      }, write records given ${sum(arm, "recordsGiven")} and recorded ${
+        sum(arm, "recordsRecorded")
+      }`,
     );
   }
   const today = (key: "compile" | "settle" | "events" | "reverted") =>

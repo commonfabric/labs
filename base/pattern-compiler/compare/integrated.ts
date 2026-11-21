@@ -111,6 +111,13 @@ export type Figure = Counted & {
    * write record was recorded (`RuntimeCounts.labelEntriesChanged`).
    */
   labelEntriesChanged: number;
+  /**
+   * The write records the executor gave, and the `plan-write` inputs the
+   * adapter recorded for them (`RuntimeCounts.recordsGiven`,
+   * `RuntimeCounts.recordsRecorded`).
+   */
+  recordsGiven: number;
+  recordsRecorded: number;
 };
 
 /** A run of a module one way. */
@@ -422,6 +429,8 @@ export const inStorage = async (
         unchangedRecords: after.unchangedRecords - before.unchangedRecords,
         labelEntriesChanged: after.labelEntriesChanged -
           before.labelEntriesChanged,
+        recordsGiven: after.recordsGiven - before.recordsGiven,
+        recordsRecorded: after.recordsRecorded - before.recordsRecorded,
       };
     };
     resetAllTimingStats();
