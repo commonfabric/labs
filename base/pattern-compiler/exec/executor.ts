@@ -2104,6 +2104,15 @@ export type TransactionHooks = {
   begin(cause: Transaction["cause"] | "send" | "watermark"): void;
 
   /**
+   * The executor made an instance of another artifact than the one it was
+   * started with: one a function body instantiates, or one of a pattern
+   * compiled alone. The write records of the instance (`plan-write.ts`,
+   * `NamedOutputInputs.instance`) name the records of that artifact's
+   * plan. Called before the instance writes.
+   */
+  instantiated?(instance: string, artifact: Artifact): void;
+
+  /**
    * The transaction in progress read a position of a document: one a
    * link the read followed was at, or the one the read ended at. `by` is
    * the body and the entry of its `Body.handles` that a read through a
@@ -2990,6 +2999,9 @@ export class Instance {
     this.id = options.id ?? "result";
     this.argument = argumentOf(this.id);
     this.root = options.parent?.root ?? this;
+    if (this.root !== this) {
+      this.root.options.transactions?.instantiated?.(this.id, artifact);
+    }
     this.plan = artifact.plan;
     this.code = artifact.code;
     for (const { id, schema } of artifact.schemas) {
