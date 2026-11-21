@@ -1253,9 +1253,9 @@ source-varying material-risk caveats an llm sink exists to process. Building
 that mechanism is planned in
 [`docs/plans/cfc-llm-sink-admission.md`](../plans/cfc-llm-sink-admission.md).
 And `sqliteQuery`, whose request is a read handed to the provider holding a
-space's replicas: the bound it wants is the database's own SPACE, which a
-clause list cannot express, so the sqlite builtin refuses a request carrying
-confidentiality for a database in another space before staging it. A
+space's replicas, in this space or another: every space is served by an
+attested runtime applying the same access rules, and the rows' labels decide
+what each reader is shown. A
 deployment that wants a confidentiality gate on sqlite reads declares a
 ceiling for the sink, which the seam then applies.
 The bundle names no enforcement mode, so a runtime taking it keeps the core's
