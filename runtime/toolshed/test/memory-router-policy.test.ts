@@ -86,7 +86,9 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
       write({ ...config, hostname });
       assertThrows(() => new MemoryRouterPolicy(path));
     }
-    for (const port of [0, -1, 65536, 8444.5]) {
+    write({ ...config, port: 0 });
+    expect(new MemoryRouterPolicy(path).config.port).toBe(0);
+    for (const port of [-1, 65536, 8444.5]) {
       write({ ...config, port });
       assertThrows(() => new MemoryRouterPolicy(path));
     }

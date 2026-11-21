@@ -19,6 +19,7 @@ import {
   CellHandle,
   isCellHandle,
   RequestType,
+  sourceOperationLabel,
 } from "@commonfabric/runtime-client";
 import type {
   JSONValue,
@@ -3252,29 +3253,6 @@ function navigationHref(command: NavigationCommand): string {
     );
   } catch {
     return appViewToUrlPath(command);
-  }
-}
-
-function sourceOperationLabel(
-  operation: PieceSourceRevisionView["operation"],
-): string {
-  switch (operation) {
-    case "baseline":
-      return "Baseline";
-    case "create":
-      return "Created from source";
-    case "edit":
-      return "Direct source edit";
-    case "origin-update":
-      return "Source update";
-    case "detach":
-      return "Stopped following source";
-    case "revert":
-      return "Restored source version";
-    case "follow":
-      return "Followed source";
-    case "repoint":
-      return "Followed earlier source";
   }
 }
 

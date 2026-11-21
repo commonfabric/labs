@@ -396,6 +396,10 @@ export default pattern<{ favorite: Cell<Donut> }, {
   a document its mirrored fields were read from is written.
 - A query over a collection needs no `reactOn`. It re-runs when the collection
   changes, and its result changes only when its rows do.
+- Anything holding the handle can write the collection. Pass `{ guard }`, a
+  cell declared `WriteAuthorizedBy<number, typeof yourHandler>`, to let only
+  that handler add, remove or run a statement. See "Who may write a
+  collection" in `docs/features/indexed-collections.md`.
 - A collection can gain columns, relations and indexes later. The runtime
   re-reads every member once to fill them in.
 - To join two kinds of cell in one statement, declare them as kinds of one

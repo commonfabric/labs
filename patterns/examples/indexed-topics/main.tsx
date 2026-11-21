@@ -25,6 +25,7 @@ import {
   UI,
   type VNode,
   Writable,
+  type WriteAuthorizedBy,
 } from "commonfabric";
 
 /** What the collection mirrors of a topic. */
@@ -166,14 +167,22 @@ const selectListed = handler<
   { topic: TopicRef; selected: Writable<SelectedTopic | undefined> }
 >((_event, { topic, selected }) => selected.set(topic));
 
+/**
+ * The count a write to the board also advances, which `addTopic` alone may
+ * write. A topic holds the board's handle so that it can ask it a question,
+ * and this is what keeps it from adding to the board as well.
+ */
+type BoardGuard = WriteAuthorizedBy<number, typeof addTopic>;
+
 export default pattern<Record<string, never>, BoardOutput>(() => {
+  const guard = new Writable<BoardGuard>(0);
   const board = indexedCollections<{ topics: TopicFields }>({
     topics: {
       columns: { title: "text" },
       relations: ["mentions"],
       indexes: [["title"]],
     },
-  });
+  }, { guard });
   const selected = new Writable<SelectedTopic | undefined>(undefined);
 
   const titles = board.query<ListedTopic>(

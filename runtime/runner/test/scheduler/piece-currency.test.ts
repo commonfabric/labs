@@ -14,12 +14,15 @@ import {
   type NodeStatus,
 } from "../../src/scheduler/node-record.ts";
 import {
+  clockDocumentKey,
   type PieceCurrencyState,
   snapshotPieceCurrency,
 } from "../../src/scheduler/piece-currency.ts";
+import { entityNameKey } from "../../src/scheduler/keys.ts";
 import type {
   Action,
   ReactivityLog,
+  SpaceScopeAndURI,
   TelemetryAnnotations,
 } from "../../src/scheduler/types.ts";
 import type {
@@ -46,13 +49,23 @@ type Read = Pick<IMemorySpaceAddress, "id"> & {
 };
 
 describe("piece-currency", () => {
+  /** The registry the last `snapshotOf()` built. */
+  let registry: NodeRegistry;
+
+  /** The computations that name no piece in that registry, in order. */
+  let unattributedWriters: Action[];
+
   /**
    * A snapshot of a piece with one live computation, of `status`, that
    * declares a write of `computed:out` at `declared`. `instances` are the
    * fan-out instances the computation ran at, each resolved under its own
    * identity and holding the reads given for it, of which those in `clean`
    * are current. With none, the computation has no fan-out state, and
-   * `reads` is what its one run read.
+   * `reads` is what its one run read. `clocks` are the documents of the
+   * space that a clock writes, and `sourceSeqs` the seq the replica holds
+   * each document of another space at, by id. Each of `unattributed` is a computation that
+   * names no piece, clean and live unless it says otherwise, with the
+   * document it writes and what it read.
    */
   const snapshotOf = (options: {
     declared?: CellScope;
@@ -62,9 +75,16 @@ describe("piece-currency", () => {
     clean?: ScopeKey[];
     status?: NodeStatus;
     reads?: Read[];
+    clocks?: Array<Read["id"]>;
+    sourceSeqs?: Record<string, number>;
+    unattributed?: Array<
+      { writes: Read["id"]; reads: Read[]; status?: NodeStatus; live?: boolean }
+    >;
   } = {}) => {
     const instances = options.instances ?? [];
     const nodes = new NodeRegistry();
+    registry = nodes;
+    unattributedWriters = [];
     const action: Action & Partial<TelemetryAnnotations> = function writer() {};
     action.schedulerObservationIdentity = {
       pieceId: `space:${PIECE}`,
@@ -106,6 +126,19 @@ describe("piece-currency", () => {
     if (options.reads !== undefined) {
       dependencies.set(action, logOf(options.reads));
     }
+    const writersByEntity = new Map<SpaceScopeAndURI, Set<Action>>();
+    for (const writer of options.unattributed ?? []) {
+      const write: Action = function unattributedWriter() {};
+      unattributedWriters.push(write);
+      const written = nodes.register(write, "computation");
+      nodes.setStatus(write, writer.status ?? "clean");
+      written.liveRefs = writer.live === false ? 0 : 1;
+      dependencies.set(write, logOf(writer.reads));
+      writersByEntity.set(
+        entityNameKey({ space: SPACE, id: writer.writes, scope: "space" }),
+        new Set([write]),
+      );
+    }
     const state: PieceCurrencyState = {
       nodes,
       liveness: {
@@ -114,9 +147,15 @@ describe("piece-currency", () => {
       } as unknown as SchedulerLivenessState,
       dependencies,
       writeIndex: {
-        writersByEntity: new Map(),
-        getSchedulingWrites: () => surface,
+        writersByEntity,
+        getSchedulingWrites: (of) => of === action ? surface : [],
       },
+      clockDocuments: new Set(
+        (options.clocks ?? []).map((id) =>
+          clockDocumentKey({ space: SPACE, id })
+        ),
+      ),
+      sourceSeqOf: ({ id }) => options.sourceSeqs?.[id],
     };
     return snapshotPieceCurrency(state, SPACE, PIECE)!;
   };
@@ -241,6 +280,179 @@ describe("piece-currency", () => {
         expect(sliceOf(taken, bobUser)?.unvouched).toEqual([]);
         expect(taken.unvouched).toEqual([]);
       });
+
+      it("names the seq of a read of another space's shared instance that the replica holds, and gives it as no reason", () => {
+        const far = "did:key:z6Mk-another-space" as MemorySpace;
+        const taken = snapshotOf({
+          reads: [
+            { space: far, id: "of:far" },
+            { space: far, id: "of:prefs", scope: "user" },
+          ],
+          sourceSeqs: { "of:far": 7, "of:prefs": 9 },
+        });
+
+        expect(sliceOf(taken, "space")?.reads).toEqual([
+          {
+            space: far,
+            id: "of:far",
+            scopeKey: "space",
+            derived: false,
+            seq: 7,
+          },
+          {
+            space: far,
+            id: "of:prefs",
+            scopeKey: ANY_INSTANCE,
+            derived: false,
+          },
+        ]);
+        expect(sliceOf(taken, "space")?.unvouched).toEqual(["foreign-read"]);
+        expect(
+          sliceOf(
+            snapshotOf({
+              reads: [{ space: far, id: "of:far" }],
+              sourceSeqs: { "of:far": 7 },
+            }),
+            "space",
+          )?.unvouched,
+        ).toEqual([]);
+      });
+
+      it("reports a read of a document a clock writes as a reason its slice alone is not vouched for", () => {
+        const taken = snapshotOf({
+          instances: [
+            { key: user, reads: [{ id: "of:tick" }, { id: "of:shared" }] },
+            { key: bobUser, identity: BOB, reads: [{ id: "of:shared" }] },
+          ],
+          clocks: ["of:tick"],
+        });
+
+        expect(sliceOf(taken, user)?.unvouched).toEqual(["clock-read"]);
+        expect(sliceOf(taken, bobUser)?.unvouched).toEqual([]);
+        expect(taken.unvouched).toEqual([]);
+      });
+
+      it("takes over what a clean writer that names no piece read, and reports the document it wrote as an input", () => {
+        const taken = snapshotOf({
+          reads: [{ id: "of:shared" }],
+          unattributed: [{ writes: "of:shared", reads: [{ id: "of:source" }] }],
+        });
+
+        expect(sliceOf(taken, "space")).toEqual({
+          key: "space",
+          unvouched: [],
+          reads: [
+            {
+              space: SPACE,
+              id: "of:shared",
+              scopeKey: "space",
+              derived: false,
+            },
+            {
+              space: SPACE,
+              id: "of:source",
+              scopeKey: "space",
+              derived: false,
+            },
+          ],
+          vouches: ["computed:out"],
+        });
+      });
+
+      it("takes over what a writer that names no piece read through a second such writer", () => {
+        const taken = snapshotOf({
+          reads: [{ id: "of:shared" }],
+          unattributed: [
+            { writes: "of:shared", reads: [{ id: "of:middle" }] },
+            { writes: "of:middle", reads: [{ id: "of:source" }] },
+          ],
+        });
+
+        expect(sliceOf(taken, "space")?.unvouched).toEqual([]);
+        expect(sliceOf(taken, "space")?.reads.map((read) => read.id)).toEqual(
+          ["of:shared", "of:middle", "of:source"],
+        );
+      });
+
+      it("has the registry report the piece as changed when a writer that names no piece, whose output it read, has its status written", () => {
+        snapshotOf({
+          reads: [{ id: "of:shared" }],
+          unattributed: [{
+            writes: "of:shared",
+            reads: [{ id: "of:source" }],
+            status: "invalid",
+          }],
+        });
+        registry.trackChangedPieces();
+
+        registry.setStatus(unattributedWriters[0], "clean");
+
+        expect(registry.takeChangedPieces()).toEqual([PIECE]);
+      });
+
+      it("has the registry stop reporting the piece for a writer whose output a later snapshot of it did not read", () => {
+        snapshotOf({
+          reads: [{ id: "of:shared" }],
+          unattributed: [{ writes: "of:shared", reads: [] }],
+        });
+        const [before] = unattributedWriters;
+        const nodes = registry;
+        snapshotPieceCurrency(
+          {
+            nodes,
+            liveness: {
+              nodes,
+              materializerIndex: { isMaterializer: () => false },
+            } as unknown as SchedulerLivenessState,
+            dependencies: new WeakMap(),
+            writeIndex: {
+              writersByEntity: new Map(),
+              getSchedulingWrites: () => [],
+            },
+            clockDocuments: new Set(),
+            sourceSeqOf: () => undefined,
+          },
+          SPACE,
+          PIECE,
+        );
+        nodes.trackChangedPieces();
+
+        nodes.setStatus(before, "invalid");
+
+        expect(nodes.takeChangedPieces()).toEqual([]);
+      });
+
+      for (
+        const [what, given] of [
+          ["is not clean", { status: "invalid" }],
+          ["is not live", { live: false }],
+        ] as const
+      ) {
+        it(`reports a read of a document whose writer names no piece and ${what} as a reason its slice is not vouched for`, () => {
+          const taken = snapshotOf({
+            reads: [{ id: "of:shared" }],
+            unattributed: [{
+              writes: "of:shared",
+              reads: [{ id: "of:source" }],
+              ...given,
+            }],
+          });
+
+          expect(sliceOf(taken, "space")).toEqual({
+            key: "space",
+            unvouched: ["unattributed-writer"],
+            reads: [
+              {
+                space: SPACE,
+                id: "of:shared",
+                scopeKey: "space",
+                derived: true,
+              },
+            ],
+            vouches: ["computed:out"],
+          });
+        });
+      }
     });
 
     it("reports the `space` slice of a piece with a live computation that is invalid as not clean, and vouches for nothing", () => {

@@ -1207,8 +1207,40 @@ executing:
   holds, which are those of the viewers demanding the piece then, and
   replaces them; a slice it does not name keeps its rows and its mark. A
   slice is stored marked when a live computation that ran at its key is not
-  clean, or read a document in another space or one whose writer names no
-  piece. Every slice of a record is stored marked when the piece's root is
+  clean, or read a document in another space at an instance narrower than
+  the space or at a seq its replica cannot name, or one a clock writes (the
+  interval cell of a `#now/N` wish), which no commit marks when its interval
+  passes, or one whose writer names no piece and is not live, not clean, or
+  runs once for each viewer. A read of another space's shared instance is
+  registered with that space's index when the record is stored, where one
+  memory server holds both stores: that index keeps the spaces that read
+  each of its instances and what it last told them, the instance's head and
+  whether a piece there computes it and does not answer for it at present,
+  and the reading index keeps what it was last told. A slice is stored
+  marked `2` where its read is behind that head or the space cannot be
+  asked, and `1` where the instance is stale there. A judgment that may rest
+  on such a slice first pulls, from each space the slices its demand rows
+  are resolved under read, what changed since its last pull, and the space
+  pulled from first pulls from the spaces it reads itself. A pull arms the
+  reading space: the memory server tells it, once, of the next change to an
+  instance it registered, and until then a judgment asks that space
+  nothing. A commit admitted into a space with an armed reader queues an
+  advance of its cursor, which is what finds the change. A space that is
+  told passes the word to each space armed with it, pulling nothing, and
+  its loop judges again each root it left unstarted. Which spaces are armed
+  is held in the memory server's memory, so after a restart every space
+  pulls before it rests on another. A trigger carries the number of the
+  change it leads back to, one with no trigger behind it, and how many
+  triggers lead from that change. The same change reaching a space through
+  more triggers than before has come round a circle of spaces, and at
+  eight such laps the space is held: no space rests on it, so a slice that
+  read it is marked `2` and its piece starts. A hold ends by itself, the
+  first after a second and each further one after twice as long as the
+  last, up to five minutes, and at once when a change the space has not
+  been sent reaches it. A
+  slice that read what a live, clean writer
+  that names no piece wrote, such as a wish's shared hashtag resolver, takes
+  over that writer's reads as its own. Every slice of a record is stored marked when the piece's root is
   narrower than the space, and when it records a source origin (§3e), since
   a start is where that origin is followed. A clean computation vouches for
   the instances its runs wrote: for a run at a fan-out instance, the
@@ -1219,8 +1251,9 @@ executing:
   bounded size, and the last names the pieces the earlier ones stored, so
   pieces that read each other's writes are judged clean together. Each row
   takes its instance's head seq where every commit to it above the settle's
-  visible input head is the loop's own, and that head otherwise, which
-  leaves the slice marked. The serving runtime can hold a frame above that
+  visible input head, or above the watermark where that is higher, is the
+  loop's own, and that seq otherwise, which leaves the slice marked. The
+  serving runtime can hold a frame above that
   head, so the loop takes such a piece's record again at its next settle
   that covers more, and a stored record that leaves one owed wakes the loop
   for it. A vouch row does not move up to a head a commit other than a
@@ -1228,7 +1261,11 @@ executing:
   overwrite does not wake it, and the slice stays marked until it writes
   the instance again. A vouch row a record no longer names is released and
   kept, so the seq the piece last answered for the instance at survives a
-  record taken while its writer was not running. An instance a recorded
+  record taken while its writer was not running. A record taken below a
+  commit to an instance answers for it at no seq: its vouch row keeps the
+  seq the piece last answered at, and is not written for a piece that never
+  did, so a client's first write of an instance is not read as an overwrite
+  once a later record covers it. An instance a recorded
   piece computes is a current input only while some piece vouches for it: a
   slice that read one the latest record of its writer's slice no longer
   vouches for is marked `1`, a slice of the same piece included, until the
@@ -1236,9 +1273,13 @@ executing:
   because a start is what re-fires an effect whose result never landed (§6
   step 3). The tables are `currency_slice`, `currency_under`,
   `currency_read`, `currency_write`, `currency_vouch` and
-  `currency_cursor`; `runtime/memory/v2/currency-index.ts` is their only
-  writer and reader, pinned in
-  `runtime/memory/test/v2-currency-index.test.ts`.
+  `currency_cursor`, and for reads across spaces `currency_slice_source`,
+  `currency_import` and `currency_source` on the reading side and
+  `currency_reader` and `currency_export` on the side read;
+  `runtime/memory/v2/currency-index.ts` is their only writer and reader,
+  pinned in `runtime/memory/test/v2-currency-index.test.ts`, and what
+  passes between two spaces' indexes in
+  `runtime/memory/test/v2-server-currency-across-spaces.test.ts`.
 
 The index's DDL, authored (closes scopes.md §8 item 1). This is the
 engine-v3 migration Phase 1 stage C reduces the observation tables

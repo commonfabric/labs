@@ -8,7 +8,6 @@ import { RoutedMemoryHost } from "@commonfabric/memory/v2/routed-host";
 import { Server } from "@commonfabric/memory/v2/server";
 import { identity } from "@/lib/identity.ts";
 import { connects } from "@/test/support/connects.ts";
-import { freePort } from "@/test/support/free-port.ts";
 import {
   MemoryRouterPolicy,
   type Repeat,
@@ -24,7 +23,6 @@ describe("MemoryRouterPolicy", () => {
       let space: string;
       let router: string;
       let server: Server;
-      let port: number;
       const configured = (certificate: string): MemoryRouterPolicy => {
         const path = `${root}/config.json`;
         Deno.writeTextFileSync(
@@ -33,7 +31,7 @@ describe("MemoryRouterPolicy", () => {
             version: 1,
             deployment: "test",
             hostname: "127.0.0.1",
-            port,
+            port: 0,
             certificate,
             key: fromFileUrl(new URL("localhost.key", TLS)),
             directory,
@@ -57,7 +55,6 @@ describe("MemoryRouterPolicy", () => {
 
       beforeEach(async () => {
         root = Deno.makeTempDirSync();
-        port = freePort();
         directory = `${root}/directory.json`;
         router = (await Identity.fromRaw(new Uint8Array(32).fill(17))).did();
         space = (await Identity.fromRaw(new Uint8Array(32).fill(18))).did();
@@ -80,9 +77,11 @@ describe("MemoryRouterPolicy", () => {
       it("listens on the configured private address until closed", async () => {
         const listener = await configured(certificate).start(server);
 
-        expect(await connects(port)).toBe(true);
+        expect(listener.port).toBeGreaterThan(0);
+        expect(listener.port).toBeLessThanOrEqual(65535);
+        expect(await connects(listener.port)).toBe(true);
         await listener.close();
-        expect(await connects(port)).toBe(false);
+        expect(await connects(listener.port)).toBe(false);
       });
 
       it("fences the host's contexts only when this toolshed's ownership changes", async () => {

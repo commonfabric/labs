@@ -35,10 +35,7 @@ describe("memory-v2-pending-splice-intended-array", () => {
   beforeEach(() => {
     // The server advertises `markedSplicesV1`, so each head insertion goes as
     // a marked splice, the shape these races are about.
-    server = newSharedServer({
-      subscriptionRefreshDelayMs: "manual",
-      markedSplices: true,
-    });
+    server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
     verdicts = [];
     heldIds = new Set();
     held = Promise.withResolvers<void>();

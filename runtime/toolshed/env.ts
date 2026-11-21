@@ -347,14 +347,13 @@ export const EnvSchema = z.object({
   MEMORY_SYNC_CID_REFERENCES: z.enum(["true", "1", "false", "0"]).default(
     "true",
   ).transform((v) => v === "true" || v === "1"),
-  // Whether this deployment's memory server advertises `markedSplicesV1`, so
-  // that clients send array changes as marked splices: on for "true" or "1",
-  // off for "false", "0" or no setting, and any other spelling refuses
-  // startup. Turn it on only once every serving worker that may read this
-  // deployment's rows, a rollback's included, reads marked splices. See
-  // docs/development/EXPERIMENTAL_OPTIONS.md, `markedSplicesV1`.
-  MEMORY_MARKED_SPLICES: z.enum(["true", "1", "false", "0"]).default(
-    "false",
+  // Whether this deployment's memory server respells, once per store as it
+  // opens, every stored confidentiality label naming a principal by bare DID
+  // as `User{subject}`: on unless set to "false" or "0", and any other
+  // spelling refuses startup. See docs/development/EXPERIMENTAL_OPTIONS.md,
+  // `MEMORY_RETIRE_BARE_DID_LABELS`.
+  MEMORY_RETIRE_BARE_DID_LABELS: z.enum(["true", "1", "false", "0"]).default(
+    "true",
   ).transform((v) => v === "true" || v === "1"),
   // Whether this deployment's memory server stores an admitted commit's reads
   // as a digest where nothing reads them afterward

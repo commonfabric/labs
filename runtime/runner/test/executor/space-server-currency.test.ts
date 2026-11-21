@@ -451,6 +451,7 @@ describe("SpaceServer", () => {
           refused: {},
           servedFromStore: 0,
           rearmed: 0,
+          indexWakes: 0,
           falseClean: 0,
         });
       });

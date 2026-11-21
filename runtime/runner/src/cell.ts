@@ -2416,6 +2416,23 @@ export class CellImpl<T extends FabricValue>
         .set(nextMaintenanceRevision());
       return;
     }
+    // A collection that names a guard has each of its writers write it too,
+    // here, in the transaction that carries the database write. The guard is
+    // an ordinary cell of the pattern's, so whatever writer policy the
+    // pattern declared on it decides this write, and a refusal takes the
+    // database write with it.
+    const guard = (handle as { guard?: unknown }).guard;
+    if (isCellLink(guard)) {
+      const cell = this.#runtime.getCellFromLink(
+        guard as Parameters<Runtime["getCellFromLink"]>[0],
+        undefined,
+        this.#tx,
+      ) as Cell<number>;
+      // A count, and a fresh one where the cell holds anything else: the
+      // write is what the guard is for, not the value.
+      const count: unknown = cell.get();
+      cell.set(typeof count === "number" ? count + 1 : 1);
+    }
     const rev = ((handle as { rev?: unknown }).rev as number | undefined) ?? 0;
     (this.withTx(this.#tx) as unknown as Cell<{ rev: number }>).key("rev").set(
       rev + 1,

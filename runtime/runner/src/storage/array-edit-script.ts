@@ -153,3 +153,67 @@ function hunksFromFrontiers(
   close();
   return hunks.reverse();
 }
+
+/**
+ * Returns, for each element of a sequence of `beforeLength` elements, the
+ * index in a sequence of `afterLength` elements of the element a shortest edit
+ * script keeps it as, or `-1` where the script removes it. `same(i, j)` says
+ * whether the old sequence's element `i` equals the new one's element `j`.
+ *
+ * The two sequences' common prefix and common suffix are kept first, compared
+ * by `same`, and the search for a script runs between them, within
+ * `maxEdits` removals and additions as {@link shortestEditHunks} bounds it.
+ * Where no script between them is that short, every old element between them
+ * is reported removed, so only the prefix and the suffix are kept.
+ */
+export function keptElementIndices(
+  beforeLength: number,
+  afterLength: number,
+  same: (beforeIndex: number, afterIndex: number) => boolean,
+  maxEdits: number,
+): Int32Array {
+  const kept = new Int32Array(beforeLength).fill(-1);
+  const shorter = Math.min(beforeLength, afterLength);
+  let prefix = 0;
+  while (prefix < shorter && same(prefix, prefix)) {
+    kept[prefix] = prefix;
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    prefix + suffix < shorter &&
+    same(beforeLength - 1 - suffix, afterLength - 1 - suffix)
+  ) {
+    kept[beforeLength - 1 - suffix] = afterLength - 1 - suffix;
+    suffix += 1;
+  }
+  const beforeBetween = beforeLength - prefix - suffix;
+  const afterBetween = afterLength - prefix - suffix;
+  if (beforeBetween === 0 || afterBetween === 0) return kept;
+  const hunks = shortestEditHunks(
+    beforeBetween,
+    afterBetween,
+    (beforeIndex, afterIndex) =>
+      same(beforeIndex + prefix, afterIndex + prefix),
+    maxEdits,
+  );
+  if (hunks === undefined) return kept;
+  // The elements outside the runs are kept, in order, in both sequences.
+  let beforeIndex = 0;
+  let afterIndex = 0;
+  for (const hunk of hunks) {
+    while (beforeIndex < hunk.start) {
+      kept[beforeIndex + prefix] = afterIndex + prefix;
+      beforeIndex += 1;
+      afterIndex += 1;
+    }
+    beforeIndex += hunk.remove;
+    afterIndex += hunk.add;
+  }
+  while (beforeIndex < beforeBetween) {
+    kept[beforeIndex + prefix] = afterIndex + prefix;
+    beforeIndex += 1;
+    afterIndex += 1;
+  }
+  return kept;
+}

@@ -773,6 +773,24 @@ process:
   cap. A count is exact to the second a commit landed in.
   [Alerting on a write storm](#alerting-on-a-write-storm) says what to do
   with it.
+- `currencyDelivery` — what passed between the currency indexes of the
+  spaces the memory server holds
+  ([`serving-loop.md` §3b](../../specs/server-side-execution/serving-loop.md)),
+  as `CurrencyDeliveryReport` in `runtime/memory/v2/server.ts` describes it.
+  `triggers`, `pulls`, `advancesQueued` and `holds` accumulate since the
+  server started: a trigger tells a space that a space it reads changed, a
+  pull is that space asking what changed, an advance is the work a commit
+  queues in a space another one is waiting to hear from, and a hold is a
+  space no other rests on for a while because the same change kept coming
+  back to it. `armed` is how many pairs of a space and a space it reads are
+  waiting to hear now. `spaces` lists the spaces a change came back to,
+  most often held first and fifty at most, each with `laps` since its last
+  hold, the `circle` of spaces the change last came round, `holds`, the
+  length of its last hold as `gapMs`, and `heldUntil` while it is held.
+  Triggers that climb with `holds` at zero are a pipeline doing its work. A
+  space listed with `holds` climbing is in a circle of spaces whose pieces
+  keep changing each other's inputs; `cf inspect currency-cycles` names the
+  pieces and documents on that circle from the stores.
 - `sessionReports` — the diagnostics clients reported about their own
   sessions over the memory protocol's `session.report`
   ([`04-protocol.md` §4.14](../../specs/memory-v2/04-protocol.md)), best-effort
