@@ -50,6 +50,29 @@ export const isCfcCarrierMember = (member: ts.Type): boolean => {
 };
 
 /**
+ * The policies `member`, a member of an intersection, records where it is a
+ * CFC carrier (`isCfcCarrierMember()`): those its `__ct_cfc__` member holds
+ * (`carrierStamps()`), or, for the `CfcTag` the checker defers, the stamp it
+ * is given as its third argument. `undefined` for any other type.
+ */
+export const carrierStampsOf = (
+  member: ts.Type,
+  checker: ts.TypeChecker,
+): CarrierStamp[] | undefined => {
+  const carrier = cfcCarrierProperty(member);
+  if (carrier) {
+    return carrierStamps(
+      memberValueType(carrier, checker.getTypeOfSymbol(carrier), checker),
+      checker,
+    );
+  }
+  const stamp = member.aliasTypeArguments?.[2];
+  return stamp && isCfcCarrierMember(member)
+    ? carrierStamps(stamp, checker)
+    : undefined;
+};
+
+/**
  * Whether `node`, a branch of a `CfcTag`, holds the carrier member alone and
  * the payload's nullish members, and nothing else.
  */
