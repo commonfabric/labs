@@ -11310,6 +11310,8 @@ export class Instance {
       const { place } = entry;
       const from = host.reads.length;
       let found: unknown;
+      // The state entry is a reference to a kept output's stored position.
+      let reference = false;
       if (place.slot !== undefined) {
         const bound = this.plan.slots[place.slot];
         // A cell that a cone writes statically: the writing cone
@@ -11348,7 +11350,19 @@ export class Instance {
           }
         }
       } else if (place.output !== undefined) {
-        found = host.whole(host.at(host.output(place.output), rest));
+        // A kept output of the pattern that the handler observes as a
+        // reference alone: the reference is to the position of the result
+        // document that holds the output, which the plan and the instance
+        // decide and nothing the output holds does (PL §2.2). A read
+        // through the handle is a read of that position, under the label
+        // stored there.
+        const held = read.observes === "identity"
+          ? this.#keptPlace(place.output, record.within.length)
+          : undefined;
+        if (held !== undefined) reference = true;
+        found = held !== undefined
+          ? new Ref(this.id, [...held, ...rest])
+          : host.whole(host.at(host.output(place.output), rest));
       } else if (place.stream !== undefined) {
         found = this.streamFor(place.stream, context);
       } else if (place.result === true) {
@@ -11367,9 +11381,22 @@ export class Instance {
           error: `the handler reads a failed value: ${found.$error.message}`,
         };
       }
-      const given = read.observes === "identity"
+      let given = read.observes === "identity"
         ? this.handleOf(found, undefined, slot)
         : host.v(found);
+      // A write through a handle to a value the instance computes fails
+      // (PL §3.11).
+      if (reference && given instanceof Handle) {
+        given = new Handle(
+          this,
+          given.target,
+          given.host,
+          given.slot,
+          given.below,
+          given.declared,
+          true,
+        );
+      }
       this.bindSlot(host, slot, from, found);
       // A literal the binding gives its state is a constant of the plan:
       // the slot contributes no label, where it read nothing else. A value
@@ -11381,7 +11408,15 @@ export class Instance {
         if (place.constant !== undefined) {
           host.bound.set(slot, { constant: true });
         } else if (place.output !== undefined) {
-          host.bound.set(slot, { output: place.output });
+          // A reference to the stored position of a kept output is a
+          // constant of the plan: an `identity` slot does not reach the
+          // target (PL §2.2). A copy of what the output holds, which the
+          // handler is given where the output has no stored position of
+          // its own, carries the output's label.
+          host.bound.set(
+            slot,
+            reference ? { constant: true } : { output: place.output },
+          );
         } else if (place.slot !== undefined) {
           host.bound.set(slot, { place: { slot: place.slot, rest } });
         }
@@ -11395,6 +11430,19 @@ export class Instance {
     }
     this.#bindEvent(host, body, stream);
     return this.#run(binding, body, run, event, state, host);
+  }
+
+  /**
+   * The path of the result document that holds the output `index`, where
+   * a binding written within `depth` elements can name it by a reference
+   * that the plan decides: the output is kept, at a path with no element
+   * position, and the binding is in no element. Otherwise nothing.
+   */
+  #keptPlace(index: number, depth: number): readonly string[] | undefined {
+    const output = this.plan.outputs[index];
+    return output.kept && depth === 0 && !output.path.includes("*")
+      ? output.path
+      : undefined;
   }
 
   /**
