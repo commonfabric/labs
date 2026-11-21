@@ -164,6 +164,13 @@ export class StoreCurrency {
    */
   readonly #abandoned = new Map<string, Set<string>>();
 
+  /**
+   * The pieces that run here, that a stored record left stale, and that a
+   * judgment then found with nothing upstream to start. A further record
+   * that leaves one stale asks nothing; a slice of it newly marked does.
+   */
+  readonly #noUpstream = new Set<string>();
+
   /** Whether the roots left unloaded are owed a fresh judgment. */
   #judgmentOwed = true;
 
@@ -587,8 +594,12 @@ export class StoreCurrency {
         // A piece stored marked for an input upstream of it, and one a
         // slice of which the store found marked, may be stale only through
         // a piece that does not run here.
+        const blocked = new Set(stored.blocked);
+        for (const { piece } of records) {
+          if (!blocked.has(piece)) this.#noUpstream.delete(piece);
+        }
         this.#noteStale([
-          ...stored.blocked,
+          ...stored.blocked.filter((piece) => !this.#noUpstream.has(piece)),
           ...upstreamMarked(stored.marked),
         ]);
         // A stored record is what clears a held root or a stale running
@@ -682,8 +693,10 @@ export class StoreCurrency {
       held: [...candidates.keys()].filter((key) => this.#held.has(key)),
       rearm: [],
     });
-    // The pieces that run here whose slices the judgment is asked about.
-    const asked = new Set(this.#staleRunning);
+    // The pieces that run here whose slices the judgment is asked about,
+    // and those of them asked about because the index held them stale.
+    const heldStale = new Set(this.#staleRunning);
+    const asked = new Set(heldStale);
     if (this.#runningOwed) {
       for (const piece of this.#readsUnstarted) asked.add(piece);
     }
@@ -714,7 +727,13 @@ export class StoreCurrency {
       const counts = this.#stats.currency.refused;
       counts[reason] = (counts[reason] ?? 0) + count;
     }
-    const upstream = this.#takeUpstream(judged.upstream);
+    const upstream = this.#takeUpstream(
+      judged.upstream,
+      new Set([...asked, ...judged.servable.map(({ piece }) => piece)]),
+    );
+    for (const piece of heldStale) {
+      if (!upstream.has(piece)) this.#noUpstream.add(piece);
+    }
     // A piece asked about that a read keeps stale runs here and is stale
     // upstream. One a slice of which this judgment found marked, and that
     // was not asked about, is asked about by the next.
@@ -791,9 +810,15 @@ export class StoreCurrency {
    * producers named. A piece that runs here stays among the stale running
    * ones only while a read of its own is among them.
    *
+   * `judged` are the pieces this judgment asked about, so one of them with
+   * no read named has nothing upstream left to wait on.
+   *
    * @returns The pieces a read of which was taken.
    */
-  #takeUpstream(upstream: readonly CurrencyUpstreamRead[]): Set<string> {
+  #takeUpstream(
+    upstream: readonly CurrencyUpstreamRead[],
+    judged: ReadonlySet<string>,
+  ): Set<string> {
     const named = new Map<string, Set<string>>();
     for (const { reader, piece } of upstream) {
       let pieces = named.get(reader);
@@ -806,9 +831,12 @@ export class StoreCurrency {
     for (const [reader, given] of this.#abandoned) {
       const pieces = named.get(reader);
       // Resolved, or a piece upstream that was not named before: either
-      // way the reader is asked about afresh.
+      // way the reader is asked about afresh. A judgment that did not ask
+      // about the reader says nothing of it.
       if (
-        pieces === undefined || [...pieces].some((piece) => !given.has(piece))
+        pieces === undefined
+          ? judged.has(reader)
+          : [...pieces].some((piece) => !given.has(piece))
       ) this.#abandoned.delete(reader);
     }
     const taken = upstream.filter((read) => !this.#abandoned.has(read.reader));
@@ -850,6 +878,7 @@ export class StoreCurrency {
    */
   #noteStale(pieces: readonly string[]): void {
     for (const piece of pieces) {
+      this.#noUpstream.delete(piece);
       if (this.#staleRunning.has(piece) || !this.#runs(piece)) continue;
       this.#staleRunning.add(piece);
       this.#judgmentOwed = true;

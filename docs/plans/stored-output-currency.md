@@ -293,7 +293,10 @@ slices marked `1` between, or an instance a recorded piece writes and none
 vouches for, as a viewer's own instance is before that piece has run for the
 viewer. A slice kept stale by anything else is not: a derived document no
 recorded piece writes, an instance of another space, a read that names no one
-instance. A root that would pass but for slices stale only upstream is
+instance, or an instance of a piece whose record was stored not vouched for.
+That last piece has run and been recorded, and a further run is recorded the
+same way, so starting it clears nothing; the index keeps, for each slice,
+whether its record was stored not vouched for. A root that would pass but for slices stale only upstream is
 **held**, whether those are slices of its own piece or of a piece beneath it
 that a demanded instance is resolved under, and the judgment names the pieces
 whose slices hold it. Under `skip` it is left unloaded, as a root the store
@@ -338,6 +341,10 @@ the loop has given up on what is upstream of each piece whose slices hold a
 root, that root is loaded, as a refused one is, and is not held again while
 the same pieces are named for them. `currency.upstreamAbandoned` counts the
 pieces given up on.
+
+A piece that runs and that each stored record leaves stale, with nothing
+upstream to start, is asked about once: a further record that leaves it stale
+asks nothing, and a slice of it newly marked asks again.
 
 A hold ends at a judgment, and a judgment follows a change in demand, a
 stored record or a mark. So that a hold cannot outlast the work that could

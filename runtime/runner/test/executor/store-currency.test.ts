@@ -511,6 +511,68 @@ describe("StoreCurrency", () => {
         expect((await settled()).servable).toEqual(["key"]);
       });
 
+      it("asks the memory server once about a running piece that each stored record leaves stale with nothing upstream to start", async () => {
+        const asked: string[][] = [];
+        const currency = new StoreCurrency({
+          space: SPACE,
+          server: {
+            judgeCurrencyRoots: (_space, _roots, options) => {
+              asked.push([...(options.running ?? [])]);
+              return Promise.resolve({
+                servable: [],
+                held: [],
+                upstream: [],
+                refused: {},
+                marked: [],
+              });
+            },
+            storeCurrencyRecords: () =>
+              Promise.resolve({
+                marked: [],
+                falseClean: [],
+                blocked: ["of:reader"],
+                blockedBy: [],
+                behind: [],
+                unread: [],
+              }),
+          } as Pick<
+            HostMemoryServer,
+            "judgeCurrencyRoots" | "storeCurrencyRecords"
+          > as HostMemoryServer,
+          mode: "record",
+          epoch: "epoch-one",
+          serviceIdentity: "did:key:service",
+          stats: emptyServingLoopStats(),
+          onOwed: () => {},
+          onMarked: () => {},
+          runs: () => true,
+        });
+        const snapshot = {
+          asOf: 1,
+          seen: [],
+          records: [{
+            piece: "of:reader",
+            under: [],
+            vouched: true,
+            writes: [],
+            owned: [],
+            slices: [{ key: "space", vouched: true, reads: [], vouches: [] }],
+          }],
+        };
+        const judgeNoRoot = () =>
+          currency.judge(runtime, new Map(), () => true, false);
+
+        currency.store(snapshot);
+        await currency.stored;
+        await judgeNoRoot();
+        currency.store(snapshot);
+        await currency.stored;
+        await judgeNoRoot();
+
+        expect(asked).toEqual([["of:reader"]]);
+        expect(currency.staleUpstream).toBe(false);
+      });
+
       it("holds the root until what is upstream of each piece whose read holds it was given up on", async () => {
         const currency = loop("skip");
         reads = [UPSTREAM, NESTED];

@@ -500,8 +500,10 @@ CREATE INDEX IF NOT EXISTS idx_scheduler_basis_entity
 -- One row per recorded slice: the raw id of the piece's result document, the
 -- slice's mark (0 clean, 1 a piece that writes one of its inputs is marked,
 -- 2 one of its own rows is behind or it was not vouched for), whether it has
--- been clean since its record was stored, and the epoch of the build that
--- recorded it. A recorded piece always has a 'space' slice.
+-- been clean since its record was stored, the epoch of the build that
+-- recorded it, and whether its record was stored not vouched for, which a
+-- further run of the piece does not change. A recorded piece always has a
+-- 'space' slice.
 CREATE TABLE IF NOT EXISTS currency_slice (
   branch    TEXT    NOT NULL,
   slice     TEXT    NOT NULL,
@@ -509,6 +511,7 @@ CREATE TABLE IF NOT EXISTS currency_slice (
   mark      INTEGER NOT NULL,
   was_clean INTEGER NOT NULL,
   epoch     TEXT    NOT NULL,
+  unvouched INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (branch, slice, piece)
 );
 CREATE INDEX IF NOT EXISTS idx_currency_slice_piece
@@ -2564,6 +2567,19 @@ const dropUnslicedCurrencyTables = (database: Database): void => {
   }).immediate();
 };
 
+/**
+ * Adds, to a currency index created without it, the column that says a
+ * slice's record was stored not vouched for. A row from before reads as one
+ * that was vouched for, until its piece is recorded again.
+ */
+const migrateCurrencySliceUnvouched = (database: Database): void => {
+  if (hasColumn(database, "currency_slice", "unvouched")) return;
+  database.exec(`
+ALTER TABLE currency_slice
+ADD COLUMN unvouched INTEGER NOT NULL DEFAULT 0;
+`);
+};
+
 export const open = async (
   {
     url,
@@ -2598,6 +2614,7 @@ export const open = async (
   database.exec(INIT);
   migrateScopedEntityTables(database);
   migrateHeadCurrentOp(database);
+  migrateCurrencySliceUnvouched(database);
   migrateCommitClass(database);
   migrateCommitHolder(database);
   migrateCommitWaveCarriage(database);

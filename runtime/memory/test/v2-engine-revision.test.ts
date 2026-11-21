@@ -9,6 +9,34 @@ const createEngine = async () => {
   return { engine, path };
 };
 
+Deno.test("memory v2 engine adds the not-vouched-for column to a currency index created without it", async () => {
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  const raw = await new Database(path);
+  raw.exec(`
+    CREATE TABLE currency_slice (
+      branch TEXT NOT NULL, slice TEXT NOT NULL, piece TEXT NOT NULL,
+      mark INTEGER NOT NULL, was_clean INTEGER NOT NULL, epoch TEXT NOT NULL,
+      PRIMARY KEY (branch, slice, piece)
+    );
+    INSERT INTO currency_slice VALUES ('', 'space', 'of:piece', 2, 0, 'epoch');
+  `);
+  raw.close();
+
+  const engine = await open({ url: toFileUrl(path) });
+
+  try {
+    assertEquals(
+      engine.database.prepare(
+        "SELECT piece, mark, unvouched FROM currency_slice",
+      ).all(),
+      [{ piece: "of:piece", mark: 2, unvouched: 0 }],
+    );
+  } finally {
+    await close(engine);
+    await Deno.remove(path);
+  }
+});
+
 Deno.test("memory v2 engine drops a currency index laid out one row per piece", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const raw = await new Database(path);

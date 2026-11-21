@@ -435,7 +435,10 @@ upstream when each read that keeps it stale is of an instance another recorded
 piece is to bring up to date: one a piece that is behind on its own rows
 decides, through any number of slices marked `1` between, or one a recorded
 piece writes and none vouches for, as a viewer's own instance is before that
-piece has run for the viewer. A root that passes but for such slices is held,
+piece has run for the viewer. A piece whose record was stored not vouched for
+is neither: it has run, and a further run is recorded the same way, so a
+slice that read its output is stale for a reason no start clears
+(`currency_slice.unvouched`). A root that passes but for such slices is held,
 whether they are slices of its own piece or of a piece beneath it that a
 demanded instance is resolved under, and the judgment names the pieces whose
 slices hold it. Under `skip` it is neither loaded nor started, and stays
@@ -448,7 +451,9 @@ demanded one, and its runs are supplied the reader's demanders. A piece that
 runs here and reads the output of one that does not is found stale the same
 way: the loop brings the index's marks up to the store's head on each cycle
 that drained input while one does, and asks about each such piece a commit or
-a stored record marked. Where the index changed from outside the loop, or a
+a stored record marked. One that each stored record leaves stale, with
+nothing upstream to start, is asked about once, until a slice of it is newly
+marked. Where the index changed from outside the loop, or a
 slice's record expired, it asks about each such piece in the judgment that
 follows, with or without a root to judge. A run withdrawn for a scoped
 instance its writer has not produced for the run's viewer (§3d) demands that

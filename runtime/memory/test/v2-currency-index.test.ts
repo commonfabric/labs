@@ -1737,6 +1737,29 @@ describe("currency-index", () => {
         });
       });
 
+      it("refuses the last one, and names nothing upstream of it, when the first one's record was stored not vouched for", () => {
+        // A further run of the first one would be recorded the same way, so
+        // starting it would clear nothing.
+
+        const asOf = storeChain();
+        store(asOf, [
+          record("of:a", {
+            vouched: false,
+            reads: [input("of:in")],
+            produces: ["computed:a"],
+          }),
+        ]);
+        advance();
+
+        expect(upstreamOf(["of:c"])).toEqual({
+          servable: [],
+          refused: ["of:c"],
+          held: [],
+          upstream: [],
+        });
+        expect(upstreamOf([], ["of:c"]).upstream).toEqual([]);
+      });
+
       it("refuses the last one when what it read is also a derived document no recorded piece writes", () => {
         const asOf = storeChain();
         store(asOf, [

@@ -307,7 +307,7 @@ type Statements = ReturnType<typeof statementsFor>;
 /** The prepared statements over the index, for `engine`. */
 const statementsFor = (engine: Engine) => ({
   selectSlice: engine.prepare(`
-SELECT mark, was_clean, epoch FROM currency_slice
+SELECT mark, was_clean, epoch, unvouched FROM currency_slice
 WHERE branch = :branch AND slice = :slice AND piece = :piece
 `),
   selectSlicesOfPiece: engine.prepare(`
@@ -318,10 +318,13 @@ WHERE branch = :branch AND piece = :piece
 SELECT COUNT(*) AS count FROM currency_slice WHERE branch = :branch
 `),
   upsertSlice: engine.prepare(`
-INSERT INTO currency_slice (branch, slice, piece, mark, was_clean, epoch)
-VALUES (:branch, :slice, :piece, :mark, 0, :epoch)
+INSERT INTO currency_slice (
+  branch, slice, piece, mark, was_clean, epoch, unvouched
+)
+VALUES (:branch, :slice, :piece, :mark, 0, :epoch, :unvouched)
 ON CONFLICT (branch, slice, piece)
-DO UPDATE SET mark = excluded.mark, was_clean = 0, epoch = excluded.epoch
+DO UPDATE SET mark = excluded.mark, was_clean = 0, epoch = excluded.epoch,
+  unvouched = excluded.unvouched
 `),
   setWasClean: engine.prepare(`
 UPDATE currency_slice SET was_clean = 1
@@ -623,16 +626,26 @@ type Context = {
   touched?: { ids: Set<string>; pieces: Set<string> };
 };
 
+/** What the index holds of one recorded slice. */
+type SliceRow = {
+  mark: CurrencyMark;
+  was_clean: number;
+  epoch: string;
+
+  /** `1` where the slice's record was stored not vouched for. */
+  unvouched: number;
+};
+
 /** The row of the slice `ref`, or `undefined` for one with no record. */
 const rowOf = (
   context: Context,
   ref: SliceRef,
-): { mark: CurrencyMark; was_clean: number; epoch: string } | undefined =>
+): SliceRow | undefined =>
   context.statements.selectSlice.get({
     branch: context.branch,
     slice: ref.slice,
     piece: ref.piece,
-  }) as { mark: CurrencyMark; was_clean: number; epoch: string } | undefined;
+  }) as SliceRow | undefined;
 
 /** The mark `ref` holds, or `undefined` for a slice with no record. */
 const markOf = (context: Context, ref: SliceRef): CurrencyMark | undefined =>
@@ -824,7 +837,8 @@ const staleInputsOf = (
  * clear `ref`, and starting its own piece is not. `undefined` where
  * something else keeps `ref` stale: a derived document no recorded piece
  * writes, an instance of another space, a read that names no one instance,
- * or nothing at all.
+ * an instance of a piece whose record was stored not vouched for, or
+ * nothing at all.
  */
 const upstreamReadsOf = (
   context: Context,
@@ -873,10 +887,19 @@ const upstreamReadsOf = (
         if (entity_scope_key === ANY_INSTANCE || writers.length === 0) {
           return undefined;
         }
-        for (const { piece } of writers) note(piece);
+        for (const { piece } of writers) {
+          // A writer recorded for the instance's key and not vouched for
+          // has run for it, and a further run vouches for no more.
+          const ran = sliceChain(entity_scope_key).some((slice) =>
+            rowOf(context, { piece, slice })?.unvouched === 1
+          );
+          if (ran) return undefined;
+          note(piece);
+        }
       }
       for (const producer of producers) {
-        if (markOf(context, producer) === 1) {
+        const row = rowOf(context, producer);
+        if (row?.mark === 1) {
           const key = refKey(producer);
           if (!seen.has(key)) {
             seen.add(key);
@@ -884,6 +907,10 @@ const upstreamReadsOf = (
           }
           continue;
         }
+        // A slice whose record was stored not vouched for stays marked
+        // however often its piece runs, so starting that piece clears
+        // nothing.
+        if (row?.unvouched === 1) return undefined;
         if (entity_scope_key === ANY_INSTANCE) return undefined;
         note(producer.piece);
       }
@@ -1526,6 +1553,7 @@ export const storeCurrencyRecords = (
           piece,
           mark: clean ? 0 : 2,
           epoch: batch.epoch,
+          unvouched: vouched ? 0 : 1,
         });
         refs.push(ref);
       }
