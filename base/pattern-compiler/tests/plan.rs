@@ -1166,11 +1166,25 @@ fn the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2() {
             // "`facts.main`, `facts.entries`, `facts.places` ... are
             // interim outputs".
             // "Kept outputs in the slice: the room's `messages` output
-            // (from `facts.list`)".
+            // (from `facts.list`)". The room gives `messages` as a record
+            // of members of `facts.list` beside the session's windows, so
+            // each member is a kept output below `messages`.
             if output["kept"] == json!(true) {
-                assert_eq!(
-                    output["path"].as_array().and_then(|path| path.last()),
-                    Some(&json!("messages"))
+                let path = output["path"].as_array().expect("a path");
+                let at = path.len().checked_sub(2).expect("a path below `messages`");
+                assert_eq!(path[at], json!("messages"), "{output}");
+                assert!(
+                    [
+                        "count",
+                        "oldestAt",
+                        "newestAt",
+                        "latest",
+                        "threads",
+                        "legacyReplies"
+                    ]
+                    .iter()
+                    .any(|member| path[at + 1] == json!(member)),
+                    "{output}"
                 );
                 continue;
             }

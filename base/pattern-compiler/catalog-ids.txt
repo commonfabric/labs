@@ -31,11 +31,14 @@ reactive:unsupported-call error
 reactive:unsupported-expression error
 opaque-get:invalid-call error
 pattern-context:self-access error
+element-body:result-stored-outside error
 ses-callback:callable-capture error
 removed-form:helper warning
 removed-form:helper-unsupported error
+removed-form:pattern-tool-interim warning
 removed-form:pattern-tool error
 removed-form:builtin error
+removed-form:schema-argument error
 collection:callback-parameters error
 collection:reduce-callback error
 collection:reduce-initial error
@@ -138,3 +141,5 @@ cfc-flow:writer-fit error
 cfc-flow:ui-contract warning
 default:not-static error
 scope:union-member error
+array-by-key:declaration error
+array-by-key:mismatch error
