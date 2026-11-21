@@ -5,6 +5,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
+import { Task } from "@lit/task";
 import { Identity } from "@commonfabric/identity";
 import {
   type ErrorNotification,
@@ -517,6 +518,35 @@ describe("XRootView", () => {
       expect(view.spaceResolved()).not.toBe(lookup);
       await view.spaceResolved();
       expect(view.getRuntimeSpaceDID()).toBe(atlas);
+    } finally {
+      restore();
+    }
+  });
+
+  it("reports a runtime task's rejection only while that task is in error", async () => {
+    const restore = installBrowserGlobals();
+    try {
+      const { XRootView } = await import("../src/views/RootView.ts");
+      const view = new XRootView();
+      const previous = view.accessForTestingOnly.rt;
+      const error = new Error("worker initialization failed");
+      const resumed = Promise.withResolvers<typeof previous.value>();
+      const task = new Task<
+        [typeof view.app | undefined],
+        typeof previous.value
+      >(view, {
+        task: ([app]) =>
+          app === undefined ? resumed.promise : Promise.reject(error),
+      });
+      view.accessForTestingOnly.rt = task;
+      await task.run([view.app]);
+      expect(view.accessForTestingOnly.runtimeTaskError).toBe(error);
+
+      const pending = task.run([undefined]);
+      expect(view.accessForTestingOnly.runtimeTaskError).toBeUndefined();
+      resumed.resolve(undefined);
+      await pending;
+      expect(view.accessForTestingOnly.runtimeTaskError).toBeUndefined();
     } finally {
       restore();
     }
