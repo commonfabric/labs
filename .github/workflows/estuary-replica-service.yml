@@ -5,9 +5,10 @@
 # one person at their own machine, with a hardware key. The bastion can run
 # the same play with nobody present, and this workflow is what asks it to.
 #
-# It asks for no approval yet. While the service is being brought up, nothing
-# depends on it and an install only ever applies what infra's main already
-# selects, so Wilk chose (2026-11-21) not to make each one wait for a reviewer.
+# It asks for no approval yet. While the service is being brought up, no
+# hosted pattern reads from it, and an install applies only what infra's main
+# selects now (the job refuses a commit that selects anything else), so Wilk
+# chose (2026-11-21) not to make each one wait for a reviewer.
 # The job therefore declares the `toolshed` environment, which holds the
 # bastion credentials and has no reviewers, as the Rapids release does. Once
 # the service is in use, declare `estuary` instead: it holds the same
@@ -80,6 +81,22 @@ jobs:
             ahead|identical) ;;
             *) echo '::error::The infra commit is not an ancestor of main.'; exit 1 ;;
           esac
+
+      # With no reviewer, whoever dispatches this must not be able to choose
+      # an older selection by naming an older commit. Only what infra's main
+      # selects now is installed; going back means landing that on main.
+      - name: 🔎 Verify the commit selects the build main selects now
+        id: validate-selection
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+        run: |
+          selection=repos/commonfabric/infra/contents/ansible/vars/replica-service-release.yml
+          named=$(gh api "$selection?ref=$INFRA_SHA" --jq .sha)
+          current=$(gh api "$selection?ref=main" --jq .sha)
+          if [[ ! "$named" =~ ^[0-9a-f]{40}$ || "$named" != "$current" ]]; then
+            echo '::error::The infra commit does not select the replica service build that main selects now.'
+            exit 1
+          fi
 
       - name: 🚀 Install the replica service that infra selects
         id: deploy

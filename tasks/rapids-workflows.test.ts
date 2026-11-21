@@ -455,6 +455,7 @@ describe("rapids-workflows", () => {
       "validate-input",
       "reader",
       "validate-ancestry",
+      "validate-selection",
       "deploy",
     ]);
     // The runner executes no code from any repository.
@@ -504,6 +505,57 @@ describe("rapids-workflows", () => {
       expect((await check(status)).code).not.toBe(0);
     }
     expect((await check("ahead", "42")).code).not.toBe(0);
+  });
+
+  it("installs only the replica service build that infra's main selects now", async () => {
+    // No reviewer stands between a dispatch and the bastion, so naming an
+    // older commit must not select an older build.
+    const { steps } = (await workflow("estuary-replica-service.yml")).jobs
+      .deploy;
+    const guard = oneStep(steps, (step) => step.id === "validate-selection");
+    const deploy = oneStep(steps, (step) => step.id === "deploy");
+    expect(steps.indexOf(guard)).toBeLessThan(steps.indexOf(deploy));
+    expect(guard.env.GH_TOKEN).toBe(readerToken);
+    const selection =
+      "repos/commonfabric/infra/contents/ansible/vars/replica-service-release.yml";
+    const blob = "a".repeat(40);
+    const check = (named: string, current: string, failOn = "") =>
+      runStep(guard, {
+        INFRA_SHA: infraSha,
+        NAMED: named,
+        CURRENT: current,
+        FAIL_ON: failOn,
+      }, {
+        gh: [
+          'printf "%s\\n" "$*" >> "$CALLS"',
+          'case "$2" in',
+          '  *"ref=main") answer=$CURRENT; which=main ;;',
+          "  *) answer=$NAMED; which=named ;;",
+          "esac",
+          '[ "$FAIL_ON" = "$which" ] && exit 22',
+          'printf "%s\\n" "$answer"',
+        ].join("\n"),
+      });
+    const same = await check(blob, blob);
+    expect(same.code).toBe(0);
+    expect(same.calls.split("\n")).toEqual([
+      `api ${selection}?ref=${infraSha} --jq .sha`,
+      `api ${selection}?ref=main --jq .sha`,
+    ]);
+    for (
+      const [named, current] of [
+        [blob, "b".repeat(40)], // an older commit's selection
+        ["", ""], // the file is on neither
+        ["null", "null"],
+        ["", blob],
+        [blob, ""],
+        [blob.slice(1), blob.slice(1)],
+      ]
+    ) {
+      expect((await check(named, current)).code).not.toBe(0);
+    }
+    expect((await check(blob, blob, "named")).code).not.toBe(0);
+    expect((await check(blob, blob, "main")).code).not.toBe(0);
   });
 
   it("gives the replica service's bastion run a token that only reads infra and Loom", async () => {
