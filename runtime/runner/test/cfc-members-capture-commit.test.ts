@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { cfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { aclDocId } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
@@ -73,16 +73,20 @@ const policyRef = (subject: string) =>
  * The output declares the owner's policy clause it carries, as a sealed
  * output does, and the list it is released to.
  */
-const outputSchema = (owner: string): JSONSchema => ({
+const outputSchema = (): JSONSchema => ({
   type: "string",
   ifc: {
     confidentiality: [{
-      ...policyRef(owner),
+      type: CFC_ATOM_TYPE.Policy,
+      policyRefKind: "module",
+      moduleIdentity: MODULE,
+      symbol: "locationRules",
+      policyDigest: artifact.policyDigest,
       subject: { __ctOwningSpace: true },
     }],
     members: "/liveList",
   },
-} as JSONSchema);
+});
 
 const createRuntime = (as: Identity) => {
   const storageManager = StorageManager.emulate({ as });
@@ -177,7 +181,6 @@ const writeOutput = async (
   runtime: Runtime,
   space: MemorySpace,
   actor: string,
-  owner = actor,
 ) => {
   const tx = runtime.edit();
   tx.setCfcEnforcementMode("enforce-strict");
@@ -205,7 +208,7 @@ const writeOutput = async (
       path: [],
       scope: "space",
     },
-    outputSchema(owner),
+    outputSchema(),
     tx,
   );
   where.set(fix.get().city);
@@ -255,12 +258,7 @@ describe("the Members capture check at commit (spec §8.7.5)", () => {
     try {
       const space = alice.did();
       await seedWorld(runtime, space, alice.did());
-      const { error } = await writeOutput(
-        runtime,
-        space,
-        eve.did(),
-        alice.did(),
-      );
+      const { error } = await writeOutput(runtime, space, eve.did());
       expect(String(error?.message)).toMatch(/solely owns/);
     } finally {
       await runtime.dispose();

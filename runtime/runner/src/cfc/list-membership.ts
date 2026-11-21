@@ -18,12 +18,12 @@ import {
 } from "@commonfabric/api/cfc";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
-
-import type { Cancel } from "../cancel.ts";
 import {
   type CfcConfClause,
   clauseAlternatives,
 } from "@commonfabric/memory/v2/cfc-release-authority";
+
+import type { Cancel } from "../cancel.ts";
 
 /**
  * One entry of a list as resolution sees it: the principal the entry pins,

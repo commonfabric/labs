@@ -1679,6 +1679,10 @@ const SELECTION_IFC_KEYS: {
   writeAuthorizedBy: "dropped",
   writePolicyAnyOf: "dropped",
   uiContract: "dropped",
+  // The list a write to the position is released to, which the runner admits
+  // only for a run of the module the value's policy names (spec §8.7.5). A
+  // selection is not that run.
+  members: "dropped",
   // How the value derives from another path of the document it is stored in,
   // which the runner checks against that document at the write.
   exactCopyOf: "dropped",

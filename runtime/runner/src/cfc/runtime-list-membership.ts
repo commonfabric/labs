@@ -1,5 +1,6 @@
 import type { CfcListPosition } from "@commonfabric/api/cfc";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type { Cancel } from "../cancel.ts";
 import type { Cell } from "../cell.ts";
@@ -7,9 +8,11 @@ import { ContextualFlowControl } from "../cfc.ts";
 import { isPrimitiveCellLink } from "../link-types.ts";
 import { type NormalizedFullLink, parseLink } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
-import type { IExtendedStorageTransaction } from "../storage/interface.ts";
-import type { MemorySpace, URI } from "../storage/interface.ts";
-import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import type {
+  IExtendedStorageTransaction,
+  MemorySpace,
+  URI,
+} from "../storage/interface.ts";
 import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
 import {
   listedInEntries,
