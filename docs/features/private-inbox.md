@@ -1025,12 +1025,13 @@ room's space DID, so there is one row per sender and room, `title` is empty,
 and `changes` is a record of the kinds of change, such as `{ title: true }`.
 The intake acts on a title change, and ignores every other key.
 
-The intake acts on a notice when its envelope is well formed, as an offer's
-must be, its `kind`, `id` and `changes` are as above with `title` set to
-`true`, Home's catalog lists its space as a saved `fabrichat-room`, Home's chat
-manager has a `joinRoom`, and the space passes the vetting a room's space
-does: the owner can open it, it declares `fabrichat-room`, and its root is at
-the reserved address. The sender's grant in the space is not checked. Acting
+The intake acts on a notice when its envelope is well formed and its `host`
+is the intake's own, as an offer's must be, its `kind`, `id` and `changes` are
+as above with `title` set to `true`, Home's catalog lists its space as a saved
+`fabrichat-room`, Home's chat manager has a `joinRoom`, and the space passes
+the vetting a room's space does, the sender included: `from` holds a `WRITE`
+or `OWNER` entry of its own in the space's access list, the owner can open it,
+it declares `fabrichat-room`, and its root is at the reserved address. Acting
 on it sends the space's root to the manager's `joinRoom`, with the notice's
 `from`, `id` and `sharedAt` as `notice`. For a room the person's chats list as
 saved, the manager brings the title the catalog lists the room under up to the
@@ -1046,7 +1047,11 @@ catalog, not the runtime, holds which notices were acted on, and a runtime
 that starts with many notices in the inbox reads only the rooms of those not
 yet marked. A row holding a `sharedAt` other than the marked one, an earlier
 one included, is acted on again. Any other notice is ignored, its room unread,
-for the life of the runtime worker. A notice whose vetting fails other than by
+for the life of the runtime worker. A row holding the same sender, `id` and
+`sharedAt` as a notice the intake has already sent is decided as acted on,
+since the first one's mark covers it. While Home's catalog cannot be read, a
+notice is left undecided, and taken up when its inbox next changes or a lost
+connection to the host comes back. A notice whose vetting fails other than by
 a refusal waits on its space's state, and one whose send fails is left
 undecided, as an offer is.
 
@@ -1054,7 +1059,10 @@ Anyone can append to an inbox, so a notice proves nothing about its sender. A
 forged one can make the intake read again the title of a room the person's
 catalog already lists, under the person's own access, and no more: it cannot
 list a room, restore one, reach a room the catalog does not list, or give a
-room a title the room does not hold.
+room a title the room does not hold. A forger naming a `from` that is no
+member of the room costs the intake the read of the room's access list; one
+naming a member's DID costs one read of the room per row, as a forged offer
+costs one vetting of its space.
 
 ## Joining a room the user visits
 

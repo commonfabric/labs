@@ -132,8 +132,9 @@ const profilesSchema = {
  * offers its catalog holds receipts for, by {@link offerIdentity}, with the
  * `profileConflict` each receipt carries, if any, the spaces Home records no
  * profile for, the spaces of the profiles a registration can record, the
- * spaces of the rooms the catalog lists as saved, and the notices it marks
- * handled, by {@link offerIdentity}, each with the `sharedAt` its mark holds.
+ * spaces of the rooms the catalog lists as saved, the notices it marks
+ * handled, by {@link offerIdentity}, each with the `sharedAt` its mark holds,
+ * and whether the catalog could be read at all.
  */
 interface HomeReceipts {
   received: Map<string, unknown>;
@@ -141,6 +142,7 @@ interface HomeReceipts {
   live: Set<string>;
   rooms: Set<string>;
   noticed: Map<string, unknown>;
+  catalogRead: boolean;
 }
 
 /**
@@ -267,14 +269,17 @@ export function startShareIntakeOf(
  * registered and carries no room data: it says only that the room's title,
  * as its `changes` says, is to be read again. The instance acts on one when:
  *
- * - its envelope is well formed, as an offer's must be;
+ * - its envelope is well formed, as an offer's must be, and its `host` is
+ *   this runtime's own, as an offer's must be;
  * - its `kind` is `fabrichat-room`, its `id` is `changed:` followed by its
  *   `space`, and its `changes` is a record whose `title` is `true`;
  * - Home's catalog lists that space as a saved room;
  * - the catalog's mark for its sender and `id`, under `notices`, holds a
- *   `sharedAt` other than the row's, or none;
+ *   `sharedAt` other than the row's, or none, and the instance has sent no
+ *   other row holding the same sender, `id` and `sharedAt`;
  * - Home's chat manager has a `joinRoom`, and the space passes the vetting a
- *   room's space does, its sender's grant aside.
+ *   room's space does, its sender holding a `WRITE` or `OWNER` entry of its
+ *   own there, as an offer's must.
  *
  * Acting on it sends the space's root to that `joinRoom` with the notice's
  * sender, `id` and `sharedAt` as `notice`, and the manager brings the title
@@ -282,9 +287,10 @@ export function startShareIntakeOf(
  * So the catalog, not the instance, holds which notices were acted on, and an
  * instance started afterwards reads no room for them; a row a sender replaces
  * with a later one is acted on again. Any other notice is ignored, its room
- * unread, for the life of the instance. One whose vetting fails other than by
- * a refusal waits on its space's state, and one whose send fails is left
- * undecided, as an offer is.
+ * unread, for the life of the instance. While Home's catalog cannot be read,
+ * a notice is left undecided, to be taken up as an offer left undecided is.
+ * One whose vetting fails other than by a refusal waits on its space's state,
+ * and one whose send fails is left undecided, as an offer is.
  */
 export class ShareIntake {
   #runtime: Runtime;
@@ -306,6 +312,12 @@ export class ShareIntake {
   /** What follows the state of each space a row of {@link #waiting} names. */
   #spaces = new Map<DID, Cancel>();
   #logged = new Set<string>();
+  /**
+   * The notices this instance has sent and not seen fail, each by its
+   * sender, `id` and `sharedAt`, so that another row holding one is not sent
+   * again.
+   */
+  #noticesSent = new Set<string>();
   #holdersChanged = false;
   #everyInbox = false;
   #changedInboxes = new Set<string>();
@@ -640,20 +652,22 @@ export class ShareIntake {
    * while the catalog cannot be read: the offers it holds receipts for, the
    * rooms it lists as saved, and the notices it marks handled, as
    * {@link HomeReceipts} holds them. Reading none of the receipts registers
-   * offers that Home's handler refuses as duplicates in any case, and reading
-   * none of the rooms leaves every notice ignored. Each receipt is read from
+   * offers that Home's handler refuses as duplicates in any case, and a
+   * catalog that cannot be read leaves every notice undecided. Each receipt
+   * is read from
    * the `from` and `id` it stores, whatever the key the catalog files it
    * under, and a receipt that stores no such pair is passed over. A room is
    * one whose entry is filed under the space it names, as a `fabrichat-room`
    * whose `state` is `saved`.
    */
   async #catalogRecords(): Promise<
-    Pick<HomeReceipts, "received" | "rooms" | "noticed">
+    Pick<HomeReceipts, "received" | "rooms" | "noticed" | "catalogRead">
   > {
     const records = {
       received: new Map<string, unknown>(),
       rooms: new Set<string>(),
       noticed: new Map<string, unknown>(),
+      catalogRead: false,
     };
     let catalog;
     try {
@@ -669,6 +683,7 @@ export class ShareIntake {
       }
       return records;
     }
+    records.catalogRead = true;
     if (isObjectNotArray(catalog?.offers)) {
       for (const receipt of Object.values(catalog.offers)) {
         if (
@@ -798,13 +813,26 @@ export class ShareIntake {
     address: string,
   ): Promise<void> {
     if (this.#settled.has(row)) return;
+    // Which rooms the catalog lists, and which notices it marks, is what
+    // decides a notice, so one is left for the next scan while the catalog
+    // cannot be read.
+    if (!receipts.catalogRead) return;
     const notice = roomNoticeOf(raw);
-    if (notice === undefined || !receipts.rooms.has(notice.space)) {
+    if (
+      notice === undefined || notice.host !== this.#host ||
+      !receipts.rooms.has(notice.space)
+    ) {
       this.#decide(row, raw, "notice-ignored", address);
       return;
     }
     const identity = offerIdentity(notice.from, notice.id);
-    if (receipts.noticed.get(identity) === notice.sharedAt) {
+    // A row holding a notice this instance has already sent is one more
+    // row for that same notice, which the send's mark will cover.
+    const sent = JSON.stringify([identity, notice.sharedAt]);
+    if (
+      receipts.noticed.get(identity) === notice.sharedAt ||
+      this.#noticesSent.has(sent)
+    ) {
       this.#decide(row, raw, "notice-handled", address);
       return;
     }
@@ -820,6 +848,7 @@ export class ShareIntake {
         notice.space,
         this.#identity,
         CHAT_ROOM_SPACE_KIND,
+        (acl) => isWriter(acl?.[notice.from]) ? undefined : "sender-not-member",
       );
     } catch (error) {
       if (this.#halted) return;
@@ -843,8 +872,13 @@ export class ShareIntake {
       `Sent Home's chat manager the notice ${identity}`,
     ]);
     this.#decide(row, raw, "sent", address);
+    this.#noticesSent.add(sent);
     this.#track(
-      this.#afterSend(row, identity, address, this.#scannedThrough, sending),
+      this.#afterSend(row, identity, address, this.#scannedThrough, sending)
+        .finally(() => {
+          // A send that failed left its row undecided, to be sent again.
+          if (this.#settled.get(row) !== "sent") this.#noticesSent.delete(sent);
+        }),
     );
   }
 
@@ -1202,6 +1236,9 @@ interface RoomNotice {
   /** The notice's `id`, `changed:` followed by the room's space. */
   id: string;
 
+  /** The origin of the host serving the room, as the notice names it. */
+  host: string;
+
   /** When the sender shared the notice, by the sender's clock. */
   sharedAt: number;
 }
@@ -1222,6 +1259,7 @@ function roomNoticeOf(raw: Record<string, unknown>): RoomNotice | undefined {
     space: offer.space,
     from: offer.from,
     id: offer.id,
+    host: offer.host,
     sharedAt: offer.sharedAt,
   };
 }

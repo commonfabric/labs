@@ -290,7 +290,9 @@ export function isSharedSpaceCatalog(
   if (
     value.notices !== undefined &&
     !(plainObject(value.notices) &&
-      Object.values(value.notices).every(admissionTime))
+      Object.entries(value.notices).every(([key, sharedAt]) =>
+        isNoticeKey(key) && admissionTime(sharedAt)
+      ))
   ) return false;
   const entries = value.entries;
   return Object.entries(value.offers).every(([key, receipt]) => {
@@ -354,6 +356,23 @@ function plainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" &&
     (Object.getPrototypeOf(value) === Object.prototype ||
       Object.getPrototypeOf(value) === null);
+}
+
+/**
+ * Whether `key` is the key a notice mark is filed under: the one
+ * {@link sharedSpaceOfferKey} makes of a sender DID and an `id` an offer may
+ * carry.
+ */
+function isNoticeKey(key: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(key);
+  } catch {
+    return false;
+  }
+  return Array.isArray(parsed) && parsed.length === 2 &&
+    isWellFormedDID(parsed[0]) && boundedString(parsed[1], 320) &&
+    JSON.stringify(parsed) === key;
 }
 
 /** Whether a text value fits its wire contract. */

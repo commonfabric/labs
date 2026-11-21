@@ -146,7 +146,10 @@ describe("fabrichat-room-change-notices", () => {
   /** The rooms' own titles, by space. */
   const titles = new Map<string, string>();
 
-  /** Has the owner's manager create a group titled `title`, and returns its space. */
+  /**
+   * Has the owner's manager create a group titled `title`, with the sender
+   * as a member, whom the room's space grants `OWNER`, and returns its space.
+   */
   const createGroup = async (
     home: Cell<unknown>,
     title: string,
@@ -156,7 +159,7 @@ describe("fabrichat-room-change-notices", () => {
       home,
       ["chatManager", "createGroup"],
       trusted(
-        { requestId: title, title, members: [] },
+        { requestId: title, title, members: [sender] },
         "ChatStartSurface",
         "ChatStart",
       ),

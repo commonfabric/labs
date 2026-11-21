@@ -1749,6 +1749,61 @@ describe("share-intake", () => {
       ]);
     });
 
+    it("is left undecided while Home's catalog cannot be read, and acted on when its inbox next changes once it can be", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await listInCatalog({ [space]: "saved" });
+      let readable = false;
+      // Home, but for a catalog whose every read fails until `readable`.
+      const unreadable = {
+        key: (name: string) =>
+          name === "sharedSpaceCatalog" && !readable
+            ? {
+              asSchema: () => ({
+                pull: () => Promise.reject(new Error("catalog unreadable")),
+              }),
+            }
+            : home.key(name as never),
+      };
+      const intake = startShareIntakeOf(
+        runtime,
+        unreadable as never,
+        identity.did(),
+      );
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      await deliver([noticeOf(space, SHARED_AT)]);
+      expect(await joinedNow(intake)).toEqual([]);
+      expect(
+        intake.accessForTestingOnly.decisionsFor(sender, `changed:${space}`),
+      ).toEqual([]);
+      readable = true;
+      const other = await offeredSpace({ [sender]: "WRITE" });
+      await deliver([offerOf(other, "once the catalog reads")]);
+      await registeredThrough("once the catalog reads");
+
+      expect((await joinedNow(intake)).map((each) => each.space)).toEqual([
+        space,
+      ]);
+    });
+
+    it("is sent once for two rows holding the same sender, `id` and `sharedAt`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await listInCatalog({ [space]: "saved" });
+      const intake = start();
+      await deliver([
+        noticeOf(space, SHARED_AT),
+        noticeOf(space, SHARED_AT, { ownerOrigin: "" }),
+      ]);
+
+      expect((await joinedNow(intake)).map((each) => each.space)).toEqual([
+        space,
+      ]);
+      expect(
+        intake.accessForTestingOnly.decisionsFor(sender, `changed:${space}`)
+          .sort(),
+      ).toEqual(["notice-handled", "sent"]);
+    });
+
     describe("is ignored", () => {
       // Each notice is delivered ahead of an offer that passes, whose
       // registration says the notice was decided, since the intake decides an
@@ -1852,6 +1907,28 @@ describe("share-intake", () => {
             noticeOf(space, SHARED_AT, { host: "not an origin" }),
             { [space]: "saved" },
           ),
+        ).toEqual(IGNORED);
+      });
+
+      it("when its `host` is not its own origin", async () => {
+        const space = await offeredSpace({ [sender]: "WRITE" });
+
+        expect(
+          await ignoring(
+            noticeOf(space, SHARED_AT, { host: "https://elsewhere.example" }),
+            { [space]: "saved" },
+          ),
+        ).toEqual(IGNORED);
+      });
+
+      it("when its sender holds no `WRITE` or `OWNER` entry of its own in its room's space", async () => {
+        const space = await offeredSpace({
+          [someoneElse]: "WRITE",
+          "*": "WRITE",
+        });
+
+        expect(
+          await ignoring(noticeOf(space, SHARED_AT), { [space]: "saved" }),
         ).toEqual(IGNORED);
       });
 

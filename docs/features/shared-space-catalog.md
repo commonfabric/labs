@@ -563,7 +563,8 @@ The catalog's `notices` records, for each notice that a space changed which
 the person's host has acted on, the `sharedAt` of the last one acted on. It is
 keyed as receipts are, by the pair of the notice's sender DID and its `id`,
 and each value is a nonnegative integer; the catalog holds no `notices` until
-one is marked. A notice is a row of the person's private inbox, and
+one is marked. A mark under any other key, or holding any other value, makes
+the catalog malformed, as a malformed receipt does. A notice is a row of the person's private inbox, and
 [the private inbox](private-inbox.md#a-notice-that-a-room-changed) says which
 the host acts on and how.
 
