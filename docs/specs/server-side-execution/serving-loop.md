@@ -2758,8 +2758,9 @@ ones it could not, by the first reason found;
 time a root is first left; `rearmed` the roots so left that were then
 loaded, because an input marked the piece or a session's demand reached an
 instance it does not vouch for; `falseClean` the pieces the index held
-clean that wrote an instance they vouched for again with no input of
-theirs changed, each one a judgment that would have served a stale value.
+clean that wrote an instance they vouched for again, to a value other than
+the one it held, with no input of theirs changed, each one a judgment that
+would have served a stale value.
 `ownedDefaultSeeds` the (piece root, demanding pair) seedings the passes
 completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
 scope narrower than its result (scoped-cell-instances.md, "A pattern-owned

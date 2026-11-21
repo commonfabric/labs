@@ -400,8 +400,9 @@ export type ServingLoopStats = {
     expiryWakes: number;
 
     /** Pieces the index held clean that wrote an instance they vouched for
-     * again with no input of theirs changed. Each one is a judgment that
-     * would have served a stale value. */
+     * again, to a value other than the one it held, with no input of theirs
+     * changed. Each one is a judgment that would have served a stale
+     * value. */
     falseClean: number;
   };
 

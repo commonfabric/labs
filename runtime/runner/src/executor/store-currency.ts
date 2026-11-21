@@ -276,8 +276,9 @@ export class StoreCurrency {
         if (stored.falseClean.length > 0) {
           logger.warn("currency-false-clean", () => [
             `space ${this.#space}: ${stored.falseClean.length} piece(s) the ` +
-            "currency index held clean wrote a vouched output again with " +
-            "no input changed: " + stored.falseClean.join(", "),
+            "currency index held clean wrote a different value to a " +
+            "vouched output with no input changed: " +
+            stored.falseClean.join(", "),
           ]);
         }
         let owed = false;

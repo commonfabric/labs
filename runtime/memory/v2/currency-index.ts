@@ -30,9 +30,10 @@
  * none of them runs at admission.
  */
 
-import { DEFAULT_BRANCH, scopeOfScopeKey } from "../v2.ts";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { DEFAULT_BRANCH, type ScopeKey, scopeOfScopeKey } from "../v2.ts";
 import { ANY_INSTANCE, sliceChain, SPACE_SLICE } from "./currency-keys.ts";
-import { type Engine, serverSeq } from "./engine.ts";
+import { type Engine, read, serverSeq } from "./engine.ts";
 
 /** What the id of a document some computation derives begins with. */
 const COMPUTED_ID_PREFIX = "computed:";
@@ -208,8 +209,9 @@ export type CurrencyStored = {
 
   /**
    * The pieces with a slice that had been clean since its last record, then
-   * wrote an instance it vouched for again with no input of its having
-   * changed: what it held was not what it computes.
+   * wrote an instance it vouched for again, to a value other than the one
+   * it held, with no input of its having changed: what it held was not what
+   * it computes.
    */
   falseClean: string[];
 
@@ -1152,8 +1154,8 @@ export const storeCurrencyRecords = (
 
   /**
    * Whether `ref`, clean since its last record, wrote an instance it
-   * vouched for again with nothing it read having changed. Read before its
-   * rows are replaced.
+   * vouched for again, to a value other than the one it held, with nothing
+   * it read having changed. Read before its rows are replaced.
    */
   const wroteAgainUnprompted = (ref: SliceRef): boolean => {
     const vouches = (statements.selectVouches.all({
@@ -1206,7 +1208,16 @@ export const storeCurrencyRecords = (
         if (headOf(row.entity, row.entity_scope_key) > row.seq) return false;
       }
     }
-    return vouches.some(({ id, seq }) => headOf(id, ref.slice) > seq);
+    // A start derives every output of a piece afresh, those of a slice that
+    // was current among them, so an instance written again as it stood is
+    // no sign that the stored value was stale.
+    return vouches.some(({ id, seq }) =>
+      headOf(id, ref.slice) > seq &&
+      !deepEqual(
+        read(engine, { id, scopeKey: ref.slice as ScopeKey, seq }),
+        read(engine, { id, scopeKey: ref.slice as ScopeKey }),
+      )
+    );
   };
 
   engine.database.transaction(() => {

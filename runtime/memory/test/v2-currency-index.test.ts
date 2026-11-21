@@ -1178,6 +1178,38 @@ describe("currency-index", () => {
         expect(stored.falseClean).toEqual(["of:piece"]);
       });
 
+      it("names no piece that wrote an instance it vouched for again with the value it held", () => {
+        // A start derives every output afresh, and writes what stands.
+
+        /** Commits a write of `{ n: 1 }` to `computed:out`. */
+        const writeTheSame = (): number => {
+          localSeq += 1;
+          return applyCommit(engine, {
+            sessionId: ALICE.sessionId,
+            principal: ALICE.principal,
+            space: SPACE,
+            commit: {
+              localSeq,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: "computed:out",
+                value: { value: { n: 1 } },
+              }],
+            },
+          }).seq;
+        };
+        write("of:a");
+        const asOf = writeTheSame();
+        store(asOf, [vouching()]);
+        const own = writeTheSame();
+
+        const stored = store(asOf, [vouching()], [own]);
+
+        expect(stored.falseClean).toEqual([]);
+        expect(markOf("of:piece")).toBe(0);
+      });
+
       it("names each piece of a wave stored in separate batches", () => {
         const second = record("of:second", {
           writes: ["computed:second"],

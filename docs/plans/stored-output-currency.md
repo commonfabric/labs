@@ -290,10 +290,13 @@ reaches clean ones.
 `SERVER_EXECUTION_CURRENCY_INDEX=record` records and judges and still starts
 everything. Each root the judgment would have served from the store is
 counted (`currency.servable`), and when a piece the index held clean writes
-an instance it vouched for again with no input of it changed, the judgment
-was wrong: the count of those is `currency.falseClean`, logged with the
-piece. Whether a piece had been clean is kept with its record, so a mark that
-lands before the next record is stored does not hide it. `skip` acts on the
+an instance it vouched for again, to a value other than the one it held,
+with no input of it changed, the judgment was wrong: the count of those is
+`currency.falseClean`, logged with the piece. A start derives every output
+of a piece afresh, those of a current slice among them, so an instance
+written again as it stood is not counted. Whether a piece had been clean is
+kept with its record, so a mark that lands before the next record is stored
+does not hide it. `skip` acts on the
 judgment, and only under an epoch: a record is trusted across builds only by
 the epoch it names, so a serving loop asked to skip with no epoch named runs
 as `record` and logs a warning. A toolshed's epoch is

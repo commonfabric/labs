@@ -1,6 +1,6 @@
 # Serving a stored output that depends on another space or on a wish
 
-Status: In progress. Steps 1 to 4 and step 7 are done; the rest is a
+Status: In progress. Steps 1 to 4, 7 and 8 are done; the rest is a
 design, with the steps to build it. It
 continues [`stored-output-currency.md`](stored-output-currency.md), whose
 stages 1 to 4 are built, and its steps 1 to 3 come before that plan's
@@ -619,7 +619,11 @@ One is owed:
    reads only until the earliest slice there expires.
 8. **Measure** a social space whose pieces read each viewer's profile, with
    two viewers and with many, for the starts saved and for what a change to
-   one profile costs its readers.
+   one profile costs its readers. Done:
+   [the record](../history/development/performance/2026-11-21-currency-index-across-spaces.md).
+   A return starts nothing. A judgment is repeated for every unstarted root
+   on each change of demand, and one watching viewer's change starts each
+   piece they watch for every viewer; both are costs still to take out.
 
 ## Acceptance tests
 
