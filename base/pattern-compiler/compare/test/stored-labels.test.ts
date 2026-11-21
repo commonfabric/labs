@@ -810,6 +810,25 @@ describe("stored-labels", () => {
     });
   });
 
+  // `fixtures/computed-row-cone.tsx`: each element of `marked` is computed
+  // from a row of an array that a computation returns and from a cell that
+  // the handler `setMark` writes.
+  describe("soundnessOfScenario() after an element computed from a row of an array a computation returned was computed again alone", () => {
+    it("finds the clause of each input the computation read in the stored label of the element", async () => {
+      const { soundness, refused } = await soundnessOfScenario(
+        "computed-row-cone",
+        await artifactOf("computed-row-cone"),
+        () => undefined,
+        { names: ["a", "b"], suffix: "!" },
+        [{ binding: 0, event: { mark: "?" } }],
+      );
+
+      expect(refused).toEqual([]);
+      expect(lines("computed-row-cone", soundness)).toEqual([]);
+      expect(soundness?.dependent).toBeGreaterThanOrEqual(4);
+    });
+  });
+
   // `fixtures/literal-state.tsx`: the state of `put` holds `item`, an object
   // of two literals, which the handler reads whole. The plan has no state
   // entry for `item` itself, so the records of `put` bind no position for

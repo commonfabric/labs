@@ -94,6 +94,10 @@ const WRITTEN: Record<string, Written[]> = {
     argument: { note: "n" },
     events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
   }],
+  "computed-row-cone": [{
+    argument: { names: ["a", "b"], suffix: "!" },
+    events: [{ binding: 0, event: { mark: "?" } }],
+  }],
   "computed-row-state": [{
     argument: { names: ["a", "b"], suffix: "!" },
     events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
