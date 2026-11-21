@@ -3533,10 +3533,11 @@ export interface IndexedCollectionsOptions {
    * `new Writable<WriteAuthorizedBy<number, typeof addTopic>>(0)` is, it
    * refuses the write of any handler the policy does not name, and the
    * database write goes with it. Without it, every holder of the handle
-   * writes. The runtime's own upkeep of the tables does not write it.
+   * writes. The runtime's own upkeep of the tables does not write it. It
+   * holds a count: a number, under whatever policy the cell is declared
+   * with.
    */
-  // deno-lint-ignore no-explicit-any
-  guard?: AnyCell<any>;
+  guard?: AnyCell<number> | AnyCell<Cfc<number, unknown>>;
 }
 
 /**

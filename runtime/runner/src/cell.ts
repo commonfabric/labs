@@ -2428,7 +2428,10 @@ export class CellImpl<T extends FabricValue>
         undefined,
         this.#tx,
       ) as Cell<number>;
-      cell.set(((cell.get() as number | undefined) ?? 0) + 1);
+      // A count, and a fresh one where the cell holds anything else: the
+      // write is what the guard is for, not the value.
+      const count: unknown = cell.get();
+      cell.set(typeof count === "number" ? count + 1 : 1);
     }
     const rev = ((handle as { rev?: unknown }).rev as number | undefined) ?? 0;
     (this.withTx(this.#tx) as unknown as Cell<{ rev: number }>).key("rev").set(
