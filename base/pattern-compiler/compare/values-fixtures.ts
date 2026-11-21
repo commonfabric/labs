@@ -94,6 +94,30 @@ const WRITTEN: Record<string, Written[]> = {
     argument: { note: "n" },
     events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
   }],
+  "computed-row-cone": [{
+    argument: { names: ["a", "b"], suffix: "!" },
+    events: [{ binding: 0, event: { mark: "?" } }],
+  }],
+  "computed-row-state": [{
+    argument: { names: ["a", "b"], suffix: "!" },
+    events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+  }],
+  "literal-state": [{
+    argument: { note: "n" },
+    events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+  }],
+  "set-then-push": [{
+    argument: { extra: "e", words: ["w"] },
+    events: [
+      { binding: 1, event: { word: "x" } },
+      { binding: 0, event: {} },
+      { binding: 1, event: { word: "y" } },
+    ],
+  }],
+  "time-of-day": [{
+    argument: { note: "n" },
+    events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+  }],
   // A pattern instantiated in a function body: two instances.
   "instantiate": [{
     argument: { note: "n" },

@@ -28,9 +28,6 @@ export const PROFILE_SOURCE = "the seeded profile";
 /** The reason `Instance.send` gives for an event no element holds. */
 const NO_ELEMENT = "no element holds the stream";
 
-/** The document of the clock (`CLOCK` of `../exec/executor.ts`). */
-const CLOCK = "clock";
-
 const resolve = (schema: Schema, root: Schema): Schema => {
   let current = schema;
   for (let hops = 0; hops < 16; hops++) {
@@ -190,8 +187,9 @@ const firstLine = (error: unknown): string =>
  * sent, each call of `advance` sends the next event to every run, `finish`
  * sends the events left to each run, one run after the other, and `runs`
  * gives the runs as they then are. Where the two runs as given
- * differ when `runs` is called, or the scenario read the clock, there are no
- * determined dependencies from then on, and `runs` gives the reason.
+ * differ when `runs` is called, there are no determined dependencies from
+ * then on, and `runs` gives the reason. The clock holds one time in every
+ * run, in memory and in storage, so a scenario that reads it is determined.
  */
 export const steppedRuns = (
   artifact: Artifact,
@@ -287,8 +285,7 @@ export const steppedRuns = (
   const sources: Source[] = [];
   const current = (): PerturbedRuns => {
     if (skipped === undefined && baseline !== undefined) {
-      if (baseline.store.docs.has(CLOCK)) skipped = "reads the clock";
-      else if (
+      if (
         JSON.stringify(baseline.result()) !== JSON.stringify(again?.result())
       ) skipped = "two runs on one scenario give different values";
     }
@@ -299,22 +296,17 @@ export const steppedRuns = (
   return {
     start: async (whole = false) => {
       try {
-        // Two runs that `advance` takes through each event one after the
-        // other handle the event within the same millisecond, and so agree
-        // on a value made from the time of day. So two runs handle every
-        // event one run after the other first, and where they differ no
-        // dependency is determined. With `whole`, they are the two runs as
-        // given, and `finish` sends the events to the other runs alone.
+        // Two runs handle every event one run after the other first, and
+        // where they differ no dependency is determined: a source of
+        // values that is not the same in every run, which the globals of
+        // the scenario do not replace. With `whole`, they are the two runs
+        // as given, and `finish` sends the events to the other runs alone.
         const first = await start(argument);
         for (const event of events) {
           delivered.set(event.index, send(first, event));
         }
         const second = await start(argument);
         for (const event of events) send(second, event);
-        if (first.store.docs.has(CLOCK)) {
-          skipped = "reads the clock";
-          return;
-        }
         if (
           JSON.stringify(first.result()) !== JSON.stringify(second.result())
         ) {
@@ -400,8 +392,8 @@ export const steppedRuns = (
 /**
  * Runs the scenario in memory as given, twice, and once for each labeled
  * input with that input alone changed (`perturbed`), with every event sent
- * (`steppedRuns`). A scenario whose two runs as given differ, or that reads
- * the clock, has no determined dependencies and is skipped with the reason.
+ * (`steppedRuns`). A scenario whose two runs as given differ has no
+ * determined dependencies and is skipped with the reason.
  */
 export const perturbedRuns = async (
   artifact: Artifact,

@@ -71,6 +71,7 @@ import {
   type PlanInputs,
   type PlanRecord,
   type PlanWrite,
+  type Reached,
   reachedBy,
   type SlotBinding,
   type SlotBindings,
@@ -692,6 +693,13 @@ type LabelReaders = {
 export type LabelChange = {
   doc: string;
   paths: readonly (readonly string[])[];
+  /**
+   * The paths of `paths` at which every entry that changed labels a read
+   * of the path itself and no read below it: the membership of a container,
+   * or the shape of a container node. The label of what a member holds, and
+   * of the reference to it, did not change with one of them.
+   */
+  alone?: readonly (readonly string[])[];
 };
 
 /**
@@ -2956,6 +2964,13 @@ export class Instance {
       /** What the clock holds when the executor starts. */
       now?: number;
       /**
+       * What the value code reads under each name here in place of the
+       * realm's global of that name, as `Date` and `crypto`: a caller
+       * that needs two runs to hold the same values gives the sources of
+       * the time of day and of random draws here.
+       */
+      globals?: Record<string, unknown>;
+      /**
        * `patches`: a transaction does not count the bytes of each
        * document it wrote as a whole (`Transaction.bytes`), which costs
        * a pass over the document.
@@ -3121,6 +3136,7 @@ export class Instance {
     this.store.journal = open.journal;
     this.root.#givenNow.clear();
     this.root.#inputsTable = new InputsTable();
+    this.root.#sharedInputs.clear();
     this.options.transactions?.begin(cause);
     return open;
   }
@@ -3488,12 +3504,14 @@ export class Instance {
     if (text === undefined) {
       throw new Unsupported("an import of a module the artifact does not hold");
     }
+    const globals = Object.entries(this.root.options.globals ?? {});
     const run = new Function(
       "$rt",
       "$exports",
+      ...globals.map(([name]) => name),
       `"use strict";\n${text.source}\n//# sourceURL=compiled:${text.path}`,
     );
-    run(this.#runtimeObject, exports);
+    run(this.#runtimeObject, exports, ...globals.map(([, value]) => value));
     return exports;
   }
 
@@ -7496,7 +7514,13 @@ export class Instance {
       }
       for (const inputs of Object.values(place.outputs ?? {})) visit(inputs);
     };
-    visit(write.inputs);
+    // A record that names the inputs of another element read its own
+    // element's positions, and none of that element's: a change of a label
+    // there changes the label of that element's record alone.
+    const own = this.#ownReads.get(key);
+    this.#ownReads.delete(key);
+    if (own === undefined) visit(write.inputs);
+    else for (const address of own) read(address);
     this.#recordReads.set(key, positions);
     for (const { doc, path } of positions) {
       const root: LabelReaders = this.#recordReaders.get(doc) ??
@@ -7674,7 +7698,10 @@ export class Instance {
     const hooks = this.#tx === undefined
       ? this.options.transactions
       : undefined;
-    if (hooks !== undefined) this.#inputsTable = new InputsTable();
+    if (hooks !== undefined) {
+      this.#inputsTable = new InputsTable();
+      this.#sharedInputs.clear();
+    }
     hooks?.begin(cause);
     this.#outside = hooks !== undefined;
     let committed = false;
@@ -7981,6 +8008,26 @@ export class Instance {
    * inputs that names them.
    */
   readonly #namedIndex = new Map<string, number>();
+  /**
+   * On the root: the index in `#inputsTable` of the inputs the first record
+   * of the transaction with a given key was given (`#shareKey`), which the
+   * records of the other elements with that key name too: N elements whose
+   * inputs hold equal labels are given one set of inputs, and so are one
+   * record for the runtime. `-1` for inputs no other record names.
+   */
+  readonly #sharedInputs = new Map<string, number>();
+  /**
+   * On the root: the stored positions that the element of a record read,
+   * for a record that names the inputs of another element, by the record's
+   * key. `#noteRecord` keeps them, so that a change of a label at one of
+   * them finds the record.
+   */
+  readonly #ownReads = new Map<string, Address[]>();
+  /** What `#shareKey` needs of each output's template, by the output. */
+  readonly #shareShapes = new Map<
+    number,
+    { reached: Reached; shareable: boolean; identity: boolean }
+  >();
 
   /** The bodies of cones being run, innermost last, each with its host. */
   readonly #invoking: { body: number; host: Host }[] = [];
@@ -9132,14 +9179,28 @@ export class Instance {
   #memberLabelsChanged(changes: readonly LabelChange[]): Set<string> {
     const found = new Set<string>();
     const touched = new Set<MemberGroups>();
-    for (const { doc, paths } of changes) {
+    for (const { doc, paths, alone } of changes) {
+      const own = new Set((alone ?? []).map((path) => canonical(path)));
       for (const table of this.#memberGroupsOf.get(doc) ?? []) {
+        if (doc !== table.doc) {
+          touched.add(table);
+          for (const member of table.byDoc.get(doc) ?? []) {
+            table.dirty.add(member);
+          }
+          continue;
+        }
+        // An entry at the container or above it that labels a read of its
+        // own path alone, as that of the container's membership, is one no
+        // member's link position takes its label from.
+        const below = paths.filter((path) =>
+          path.length > table.path.length || !own.has(canonical(path))
+        );
+        if (below.length === 0) continue;
         touched.add(table);
         for (const member of table.byDoc.get(doc) ?? []) {
           table.dirty.add(member);
         }
-        if (doc !== table.doc) continue;
-        for (const path of paths) {
+        for (const path of below) {
           const shared = Math.min(path.length, table.path.length);
           if (
             !table.path.slice(0, shared).every((segment, at) =>
@@ -9566,7 +9627,8 @@ export class Instance {
    * as `#indexBinding` binds it. An element is bound to the position it is
    * at, for a reference or a plain value in place, and to the output of the
    * upstream element that holds it, for an element of the result of another
-   * per-element construct.
+   * per-element construct. An element of an array a computation returned
+   * is bound to nothing (`#readComputedSource`).
    */
   #placeBinding(
     place: number,
@@ -9579,8 +9641,17 @@ export class Instance {
     const record = this.plan.slots[place];
     if (record.root.kind === "index") return this.#indexBinding(place, keys);
     if (record.root.kind !== "element") return undefined;
+    // An element of an array that a computation returned is at no stored
+    // position, and the handler's transaction read none for it: the slot
+    // stays unbound, and the transaction reads what the computation read,
+    // so that the bound a record with an unbound slot takes, the join of
+    // what the transaction read, holds what the element holds.
+    const computed = (): undefined => {
+      this.#readComputedSource(record.root.collection ?? -1, keys);
+      return undefined;
+    };
     const bound = this.#elementBound(place, new Map(keys));
-    if (bound === undefined) return undefined;
+    if (bound === undefined) return computed();
     if ("upstream" in bound) {
       const output = this.#upstreamOutput(
         bound.upstream.collection,
@@ -9594,14 +9665,128 @@ export class Instance {
       );
       return { output };
     }
-    if (!("at" in bound)) return undefined;
+    if (!("at" in bound)) return computed();
     const [at] = bound.at;
-    if (!(at instanceof Ref)) return undefined;
+    if (!(at instanceof Ref)) return computed();
     const chain = this.#addressesOf(
       [new Ref(at.doc, [...at.path, ...rest])],
       observes !== "identity",
     );
-    return chain.length === 0 ? undefined : this.#chainsOf(chain, observes);
+    return chain.length === 0 ? computed() : this.#chainsOf(chain, observes);
+  }
+
+  /**
+   * Has the transaction in progress read every stored position that the
+   * computation of the array `collection` iterates read (`#readBy`). The
+   * work is the number of those positions, which for an array made from a
+   * list grows with the list.
+   */
+  #readComputedSource(
+    collection: number,
+    keys: readonly [number, string][],
+  ): void {
+    const hooks = this.root.options.transactions;
+    const output = this.plan.collections[collection]?.source.output;
+    if (hooks === undefined || output === undefined) return;
+    this.#readBy(output, keys, ({ doc, path }) => hooks.read(doc, path), true);
+  }
+
+  /**
+   * Calls `read` with each stored position that the computation of an
+   * output read, for the element keys given, once: those its cone instance
+   * bound, those of the outputs it reads by name or that its slots are
+   * bound to, and those of the upstream elements its slots read. With
+   * `passed`, where an output passes the elements of another collection
+   * on, also those the cone instances of each of that collection's
+   * elements bound, with what gives its membership.
+   */
+  #readBy(
+    output: number,
+    keys: readonly [number, string][],
+    read: (address: Address) => void,
+    passed: boolean,
+  ): void {
+    const seen = new Set<string>();
+    const once = (address: Address) => {
+      const id = JSON.stringify([address.doc, address.path]);
+      if (seen.has(id)) return;
+      seen.add(id);
+      read(address);
+    };
+    const visited = new Set<ConeInputs>();
+    const outputsSeen = new Set<string>();
+    const readBound = (bound: Bound, pairs: readonly [number, string][]) => {
+      if ("constant" in bound || "place" in bound) return;
+      if ("output" in bound) {
+        readOutput(bound.output, pairs);
+      } else if ("upstream" in bound) {
+        const { collection, keys } = bound.upstream;
+        for (const each of this.#elementCones(collection)) {
+          readInputs(this.#inputsOf(each, this.#keysFor(each, keys)), keys);
+        }
+      } else {
+        for (const at of this.#addressesOf(bound.at)) once(at);
+      }
+    };
+    const readInputs = (
+      inputs: ConeInputs | undefined,
+      pairs: readonly [number, string][],
+    ) => {
+      if (inputs === undefined || visited.has(inputs)) return;
+      visited.add(inputs);
+      for (const bound of inputs.slots.values()) readBound(bound, pairs);
+    };
+    const readOutput = (
+      index: number,
+      pairs: readonly [number, string][],
+    ) => {
+      const name = JSON.stringify([index, pairs]);
+      if (outputsSeen.has(name)) return;
+      outputsSeen.add(name);
+      const byCollection = new Map(pairs);
+      const { cone, passesCollection, template } = this.plan.outputs[index];
+      const inputs = this.#inputsOf(cone, this.#keysFor(cone, pairs));
+      readInputs(inputs, pairs);
+      const reached = reachedBy(template, this.plan.templates ?? []);
+      // A slot of the template that the cone instance did not bind is one
+      // the result's own evaluation bound.
+      const result = this.#inputs.get(RESULT_INPUTS);
+      for (const slot of reached.slots) {
+        const bound = inputs?.slots.has(slot)
+          ? undefined
+          : result?.slots.get(slot);
+        if (bound !== undefined) readBound(bound, pairs);
+      }
+      // The outputs the computation read by name bind no slot of its cone.
+      for (const named of reached.outputs) readOutput(named, pairs);
+      if (!passed || passesCollection === undefined) return;
+      const around = this.#outerOf(passesCollection).map((step) =>
+        byCollection.get(step) ?? "?"
+      );
+      for (const { slot, source } of this.#membershipSlots(passesCollection)) {
+        const found = (source === undefined
+          ? undefined
+          : this.#sourceBinding(slot, byCollection, [source])) ??
+          this.#positionBinding(slot, pairs);
+        if (found !== undefined && "chain" in found) {
+          for (const at of found.chain) {
+            once(at);
+          }
+        }
+      }
+      const elements = this.#tables.get(
+        this.#name("assembly", passesCollection, around),
+      );
+      for (const key of elements?.byKey.keys() ?? []) {
+        for (const each of this.#elementCones(passesCollection)) {
+          readInputs(this.#inputsOf(each, [...around, key]), [
+            ...pairs,
+            [passesCollection, key],
+          ]);
+        }
+      }
+    };
+    readOutput(output, keys);
   }
 
   /**
@@ -10242,17 +10427,21 @@ export class Instance {
     // where it would otherwise take the label of a kept output above it.
     // A change of the array a kept output with a collection holds, other
     // than an addition at its end, decides anew which member stands at
-    // each position.
+    // each position, and an addition at its end leaves each member before
+    // it where it stood.
     const appends = splice !== undefined && Array.isArray(held) &&
       splice.removed === 0 && splice.start + splice.inserted === held.length;
     return found.map(({ output, at }) => {
       const write = this.#outputRecord(doc, output, at);
       this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
-      return !appends && this.plan.outputs[output].collection !== undefined &&
-          this.plan.outputs[output].kept && at.length === path.length &&
-          Array.isArray(held)
-        ? { ...write, membersChanged: true as const }
-        : write;
+      if (
+        this.plan.outputs[output].collection === undefined ||
+        !this.plan.outputs[output].kept || at.length !== path.length ||
+        !Array.isArray(held)
+      ) return write;
+      return appends
+        ? { ...write, membersAppended: true as const }
+        : { ...write, membersChanged: true as const };
     });
   }
 
@@ -10353,6 +10542,172 @@ export class Instance {
     | { output: number; path: readonly string[]; bound?: true }[]
     | undefined;
 
+  /**
+   * What names the inputs of the cone instance of an output for the element
+   * keys given, such that two elements with one name are given one label by
+   * the output's template: the output, and for each slot its cone instance
+   * bound the identifiers of the labels at the positions it was bound to
+   * (`TransactionHooks.labelOf`), with the branches and the children
+   * chosen, and the same of each output the template names. Nothing where
+   * the template has a `fold` or a `dynamic` node, where it reaches a slot
+   * no evaluation bound, where the store names no identifier for a
+   * position, as for one the transaction in progress wrote, or where the
+   * target holds a value in place and the template has a slot of the class
+   * `identity`, which `#storedInPlace` binds again by the target. The
+   * identifiers are asked for at each call: a label can change while the
+   * bindings stay.
+   */
+  #shareKey(
+    index: number,
+    pairs: readonly [number, string][],
+    linked: boolean,
+    depth = 0,
+  ): string | undefined {
+    if (this.root.options.transactions?.labelOf === undefined) return undefined;
+    // A chain of outputs is as long as the plan is deep.
+    if (depth > 64) return undefined;
+    const output = this.plan.outputs[index];
+    const templates = this.plan.templates ?? [];
+    let shape = this.#shareShapes.get(index);
+    if (shape === undefined) {
+      const reached = reachedBy(output.template, templates);
+      const slots = [
+        ...reached.slots,
+        ...[...reached.picks.values()].flatMap((body) => [
+          ...reachedBy(body, templates).slots,
+        ]),
+      ];
+      shape = {
+        reached,
+        shareable: reached.folds.size === 0 && reached.dynamic.size === 0,
+        identity: slots.some((slot) =>
+          this.plan.slots[slot].observes === "identity"
+        ),
+      };
+      this.#shareShapes.set(index, shape);
+    }
+    if (!shape.shareable || (!linked && shape.identity)) return undefined;
+    const inputs = this.#inputsOf(
+      output.cone,
+      this.#keysFor(output.cone, pairs),
+    );
+    const result = this.#inputs.get(RESULT_INPUTS);
+    if (inputs === undefined) return undefined;
+    const bound = (slot: number) =>
+      inputs.slots.has(slot) || result?.slots.has(slot) === true;
+    for (const slot of shape.reached.slots) {
+      if (!bound(slot)) return undefined;
+    }
+    for (const body of shape.reached.picks.values()) {
+      for (const slot of reachedBy(body, templates).slots) {
+        if (!bound(slot)) return undefined;
+      }
+    }
+    const own = this.#labelsOf(inputs, pairs, 0);
+    if (own === undefined) return undefined;
+    const parts = [`${index}`, own];
+    for (const named of [...shape.reached.outputs].sort((a, b) => a - b)) {
+      const below = this.#shareKey(named, pairs, linked, depth + 1);
+      if (below === undefined) return undefined;
+      parts.push(`(${below})`);
+    }
+    return parts.join(" ");
+  }
+
+  /**
+   * Helper for `#shareKey()`: the identifiers of the labels at the
+   * positions a cone instance bound its slots to, as `#idOf` forms them,
+   * asked for at this call and kept nowhere. Nothing where the store names
+   * no identifier for one of the positions.
+   */
+  #labelsOf(
+    inputs: ConeInputs,
+    pairs: readonly [number, string][],
+    depth: number,
+  ): string | undefined {
+    if (depth > 64) return undefined;
+    const parts: string[] = [];
+    for (const [slot, bound] of [...inputs.slots].sort(([a], [b]) => a - b)) {
+      if ("constant" in bound) {
+        parts.push(`${slot}:constant`);
+        continue;
+      }
+      if ("place" in bound) return undefined;
+      if ("output" in bound) {
+        const { cone } = this.plan.outputs[bound.output];
+        const upstream = this.#inputsOf(cone, this.#keysFor(cone, pairs));
+        const id = upstream === undefined
+          ? undefined
+          : this.#labelsOf(upstream, pairs, depth + 1);
+        if (id === undefined) return undefined;
+        parts.push(`${slot}>${bound.output}<${id}>`);
+        continue;
+      }
+      if ("upstream" in bound) {
+        const { collection, keys } = bound.upstream;
+        const ids: string[] = [];
+        for (const cone of this.#elementCones(collection)) {
+          const upstream = this.#inputsOf(cone, this.#keysFor(cone, keys));
+          const id = upstream === undefined
+            ? undefined
+            : this.#labelsOf(upstream, keys, depth + 1);
+          if (id === undefined) return undefined;
+          ids.push(id);
+        }
+        parts.push(`${slot}<${ids.join("|")}>`);
+        continue;
+      }
+      const labels = new Set<string>();
+      for (const address of this.#addressesOf(bound.at)) {
+        const label = this.#labelKey(address, bound.observes);
+        if (label === undefined) return undefined;
+        labels.add(label);
+      }
+      parts.push(`${slot}:${bound.observes}:${[...labels].sort().join(",")}`);
+    }
+    for (
+      const [selector, branch] of [...inputs.selections].sort(([a], [b]) =>
+        a - b
+      )
+    ) parts.push(`s${selector}=${branch}`);
+    for (const [pick, key] of [...inputs.picks].sort(([a], [b]) => a - b)) {
+      parts.push(`p${pick}=${JSON.stringify(key)}`);
+    }
+    return parts.join(";");
+  }
+
+  /**
+   * Whether no binding the inputs at `index` name, directly or through the
+   * inputs they name, covers the members of a container: such a binding
+   * names the container of one element, and the records that read it are
+   * found by that container.
+   */
+  #namesNoMembers(index: number): boolean {
+    const table = this.root.#inputsTable;
+    const visited = new Set<number>();
+    const none = (at: number): boolean => {
+      if (visited.has(at)) return true;
+      visited.add(at);
+      const place = table.inputs[at];
+      const plain = (slots: SlotBindings) =>
+        Object.values(slots).every((binding) => {
+          const found = table.bindings[binding];
+          return !("chain" in found) || found.members === undefined;
+        });
+      return plain(place.slots) &&
+        Object.values(place.picks ?? {}).every((chosen) =>
+          chosen === null || plain(chosen.slots)
+        ) &&
+        Object.values(place.outputs ?? {}).every(none) &&
+        Object.values(place.elements ?? {}).every((elements) =>
+          "uniform" in elements
+            ? none(elements.uniform)
+            : elements.groups.every(({ inputs }) => none(inputs))
+        );
+    };
+    return none(index);
+  }
+
   /** The record of the output `output` of this instance at the path `at`. */
   #outputRecord(doc: string, output: number, at: string[]): PlanWrite {
     const record = this.plan.outputs[output];
@@ -10370,18 +10725,44 @@ export class Instance {
     const ownKeys = this.#keysFor(record.cone, pairs);
     const inputs = this.#inputsOf(record.cone, ownKeys);
     const result = this.#inputs.get(RESULT_INPUTS);
-    const given = this.#storedInPlace(
-      record.template,
-      this.#inputsFor(
-        record.template,
-        this.collectionsOf(record.cone).map((collection, index) => [
-          collection,
-          ownKeys[index],
-        ]),
-        [inputs, result],
-      ),
-      { doc, path: at },
+    const keyed = this.collectionsOf(record.cone).map((
+      collection,
+      index,
+    ): [number, string] => [collection, ownKeys[index]]);
+    // The entry of an element whose inputs hold the labels another
+    // element's hold names that element's inputs: the template gives both
+    // the same label, and the runtime is given one record for the two.
+    const held = this.store.peek(doc, at);
+    const shared = pairs.length === 0 ? undefined : this.#shareKey(
+      output,
+      keyed,
+      held === undefined || isLink(held) || isStream(held),
     );
+    const sharing = shared === undefined
+      ? undefined
+      : `${this.id}\n${stored?.bound === true}\n${shared}`;
+    const first = sharing === undefined
+      ? undefined
+      : this.root.#sharedInputs.get(sharing);
+    let given: NamedOutputInputs;
+    if (first !== undefined && first >= 0) {
+      given = { instance: this.id, keys: keyed, inputs: first };
+      const own: Address[] = [];
+      this.#readBy(output, keyed, (address) => own.push(address), false);
+      this.root.#ownReads.set(this.#recordKey(output, at), own);
+    } else {
+      given = this.#storedInPlace(
+        record.template,
+        this.#inputsFor(record.template, keyed, [inputs, result]),
+        { doc, path: at },
+      );
+      if (sharing !== undefined && first === undefined) {
+        this.root.#sharedInputs.set(
+          sharing,
+          this.#namesNoMembers(given.inputs) ? given.inputs : -1,
+        );
+      }
+    }
     // The entry of an element held below a kept output, with a slot the
     // executor has no position for, as that of an element of an array a
     // computation returned: the record is given as bound, and the path

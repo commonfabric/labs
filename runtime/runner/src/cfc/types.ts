@@ -1137,6 +1137,14 @@ export type PlanWrite = {
   readonly membersChanged?: true;
 
   /**
+   * The target holds the result of a per-element construct, and the write
+   * added members at its end and changed no other: each member before them
+   * stands where it stood, so what is stored once for every position of
+   * the target stays.
+   */
+  readonly membersAppended?: true;
+
+  /**
    * The writer has no inputs that give the label of what the target holds:
    * the target takes the transaction's join, as a written path with no
    * record does.

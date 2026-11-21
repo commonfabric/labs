@@ -1454,6 +1454,13 @@ export const soundnessOf = (
   }
   // The last record of each target of a write edge.
   const seen = new Set<string>();
+  const recorded = new Set(
+    checks.flatMap((check) =>
+      "body" in check.record
+        ? [JSON.stringify([check.target.id, check.target.path])]
+        : []
+    ),
+  );
   for (const check of [...checks].reverse()) {
     if (!("body" in check.record)) continue;
     const key = JSON.stringify([check.target.id, check.target.path]);
@@ -1471,32 +1478,43 @@ export const soundnessOf = (
     if (!held(baseline) || !runs.sources.every((each) => held(each.instance))) {
       continue;
     }
-    compare(
-      "write",
-      `${JSON.stringify(check.record)} /${check.path.join("/")}`,
-      check.target,
-      templateOfRecord(plan, check.record).template,
-      (run) => run.store.read(refOf(run)),
-      {
-        path: check.path,
-        valueOf: (run, below) => {
-          const { doc, path } = refOf(run);
-          return run.store.read(
-            new Ref(doc, [
-              ...path.slice(0, path.length - check.path.length),
-              ...below,
-            ]),
-          );
+    // The position `below` the root of the target's document, in a run.
+    const refAt = (run: Instance, below: readonly string[]) => {
+      const { doc, path } = refOf(run);
+      return new Ref(doc, [
+        ...path.slice(0, path.length - check.path.length),
+        ...below,
+      ]);
+    };
+    const compareAt = (path: readonly string[]) =>
+      compare(
+        "write",
+        `${JSON.stringify(check.record)} /${path.join("/")}`,
+        { ...check.target, path: [...path] },
+        templateOfRecord(plan, check.record).template,
+        (run) => run.store.read(refAt(run, path)),
+        {
+          path,
+          valueOf: (run, below) => run.store.read(refAt(run, below)),
+          refOf: refAt,
         },
-        refOf: (run, below) => {
-          const { doc, path } = refOf(run);
-          return new Ref(doc, [
-            ...path.slice(0, path.length - check.path.length),
-            ...below,
-          ]);
-        },
-      },
-    );
+      );
+    compareAt(check.path);
+    // A read of one member of a list consumes less than a read of the
+    // list: each position the target holds in place is compared too, where
+    // no record of its own is.
+    const list = baseline.store.read(refOf(baseline));
+    if (!Array.isArray(list)) continue;
+    for (const index of list.keys()) {
+      const member = [...check.path, `${index}`];
+      const memberKey = JSON.stringify([
+        check.target.id,
+        [...check.target.path, `${index}`],
+      ]);
+      if (recorded.has(memberKey)) continue;
+      seen.add(memberKey);
+      compareAt(member);
+    }
   }
   return result;
 };

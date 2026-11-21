@@ -988,6 +988,144 @@ describe("the positions a slot's read reached through links", () => {
   });
 });
 
+// `fixtures/lists.tsx`: `rows` of `Plain` is a `map` over `items`, given
+// here as an array of references to a document each or as an array of plain
+// values in place, and `rows` of `Chained` a `map` over the result of a
+// `filter` over them, the result of another per-element construct.
+describe("the records of the elements of the result of a `map`", () => {
+  const patternOf = async (name: string): Promise<Artifact> => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL("../../compare/fixtures/lists.emit.json", import.meta.url),
+      ),
+    ) as { patterns: Artifact[] }[];
+    return patterns.find((pattern) => pattern.name === name)!;
+  };
+
+  /**
+   * An instance of a pattern of the fixture over `count` items, with the
+   * label each item is given by its position, `plain` where it has none.
+   */
+  const over = async (
+    pattern: string,
+    kind: "references" | "in place",
+    count: number,
+    labels = new Map<number, string>(),
+  ) => {
+    const positionOf = (doc: string, path: string[]) =>
+      doc.startsWith("item-")
+        ? Number(doc.slice("item-".length))
+        : path[0] === "items" && path.length > 1
+        ? Number(path[1])
+        : undefined;
+    const recorder = new Recorder((doc, path) => {
+      const position = positionOf(doc, path);
+      return position === undefined ? "other" : labels.get(position) ?? "plain";
+    });
+    const values = Array.from({ length: count }, (_, index) => ({
+      id: `id-${index}`,
+      title: `t${index}`,
+      done: false,
+    }));
+    const documents = kind === "in place" ? [] : values.map((value, index) => ({
+      id: `item-${index}`,
+      kind: "input",
+      value,
+    }));
+    const instance = new Instance(
+      await patternOf(pattern),
+      {
+        items: kind === "in place"
+          ? values
+          : documents.map(({ id }) => ({ $link: { doc: id, path: [] } })),
+      },
+      { transactions: recorder, documents },
+    );
+    /** The inputs each record of an element's `label` names, by position. */
+    const inputsOf = () => {
+      const found = new Map<string, number>();
+      for (const { write } of recorder.indexed) {
+        const { path } = write.target;
+        if (path[0] === "rows" && path[2] === "label") {
+          found.set(path[1], write.inputs);
+        }
+      }
+      return found;
+    };
+    return { instance, recorder, labels, inputsOf };
+  };
+
+  const CASES = [
+    ["an array of references", "Plain", "references"],
+    ["an array of plain values in place", "Plain", "in place"],
+    ["the result of another per-element construct", "Chained", "references"],
+  ] as const;
+
+  for (const [name, pattern, kind] of CASES) {
+    it(`name one set of inputs where the labels of the elements are equal, among 10 elements and among 1,000, over ${name}`, async () => {
+      for (const count of [10, 1_000]) {
+        const { inputsOf } = await over(pattern, kind, count);
+        const inputs = inputsOf();
+
+        expect(inputs.size).toBe(count);
+        expect(new Set(inputs.values()).size).toBe(1);
+      }
+    });
+
+    it(`name inputs of its own for each label the elements hold, over ${name}`, async () => {
+      const { inputsOf } = await over(
+        pattern,
+        kind,
+        12,
+        new Map([[2, "secret"], [5, "secret"], [7, "other secret"]]),
+      );
+      const inputs = inputsOf();
+
+      expect(new Set(inputs.values()).size).toBe(3);
+      expect(inputs.get("2")).toBe(inputs.get("5"));
+      expect(inputs.get("2")).not.toBe(inputs.get("0"));
+      expect(inputs.get("7")).not.toBe(inputs.get("2"));
+    });
+  }
+
+  it("gives the record of an element again when the label of what it alone read changed, with inputs that name its own positions", async () => {
+    const { instance, recorder, labels } = await over("Plain", "references", 8);
+    labels.set(3, "secret");
+    recorder.labelsChanged?.([{ doc: "item-3", paths: [[]] }], true);
+    instance.dispatch();
+
+    const again = recorder.left.flatMap(({ writes }) => writes).filter((
+      { target },
+    ) => target.path.join("/") === "rows/3/label");
+    expect(again.length).toBe(1);
+    expect(JSON.stringify(again[0].slots)).toContain("item-3");
+    expect(
+      recorder.left.flatMap(({ writes }) => writes).filter(({ target }) =>
+        target.path[0] === "rows" && target.path[1] !== "3"
+      ),
+    ).toEqual([]);
+  });
+
+  it("gives the record of the first element alone again when the label of what that element read changed, among 10 elements and among 1,000", async () => {
+    for (const count of [10, 1_000]) {
+      const { instance, recorder, labels } = await over(
+        "Plain",
+        "references",
+        count,
+      );
+      labels.set(0, "secret");
+      recorder.labelsChanged?.([{ doc: "item-0", paths: [[]] }], true);
+      instance.dispatch();
+
+      expect(
+        recorder.left.flatMap(({ writes }) => writes).filter(({ target }) =>
+          target.path[0] === "rows"
+        ).map(({ target }) => target.path.join("/")),
+      ).toEqual(["rows/0/label"]);
+    }
+  });
+});
+
 // `fixtures/whole-after-push.tsx`: `all` is a text of everything the list
 // `items` holds, given here as references to a document each: an array of
 // references. The read of the list goes through each link to its record.
@@ -1062,6 +1200,23 @@ describe("a read that covers the members of an array of references", () => {
 
     expect(small).toBeGreaterThan(0);
     expect(await asks(1_000)).toBe(small);
+  });
+
+  it("asks for no label where the entry of the list's membership alone changed, among 10 members and among 1,000", async () => {
+    const asks = async (count: number) => {
+      const { instance, recorder, asked } = await over(count);
+      asked.length = 0;
+      recorder.labelsChanged?.([{
+        doc: instance.argument,
+        paths: [["items"]],
+        alone: [["items"]],
+      }]);
+      instance.dispatch();
+      return asked.length;
+    };
+
+    expect(await asks(10)).toBe(0);
+    expect(await asks(1_000)).toBe(0);
   });
 
   it("moves a member whose label changed to the group of its label, and forms the label of the output that read the list again", async () => {
