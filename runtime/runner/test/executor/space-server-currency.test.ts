@@ -455,6 +455,8 @@ describe("SpaceServer", () => {
           expiryWakes: 0,
           carried: 0,
           carriedRefused: 0,
+          heldUpstream: 0,
+          upstreamAbandoned: 0,
           falseClean: 0,
         });
       });

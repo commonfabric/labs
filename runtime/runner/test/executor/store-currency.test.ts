@@ -266,6 +266,8 @@ describe("StoreCurrency", () => {
               asked.push([...roots]);
               return Promise.resolve({
                 servable: roots.map((root) => ({ root, piece: "of:piece" })),
+                held: [],
+                upstream: [],
                 refused: {},
                 marked: [],
               });
@@ -332,6 +334,8 @@ describe("StoreCurrency", () => {
               await held?.promise;
               return {
                 servable: roots.map((root) => ({ root, piece: root })),
+                held: [],
+                upstream: [],
                 refused: {},
                 marked: [],
               };

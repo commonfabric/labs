@@ -254,6 +254,7 @@ export type PlaneRequests = {
       roots: string[];
       excludePrincipal: string | undefined;
       epoch: string;
+      running: string[] | undefined;
     };
     result: Awaited<ReturnType<Server["judgeCurrencyRoots"]>>;
   };

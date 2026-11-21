@@ -1538,6 +1538,171 @@ describe("currency-index", () => {
       ).toEqual({ "of:outer": "owner-not-clean" });
     });
 
+    describe("with three pieces, each reading the output of the one before", () => {
+      /**
+       * Stores clean records of `of:a`, which derives `computed:a` from
+       * `of:in`, of `of:b`, which derives `computed:b` from `computed:a`,
+       * and of `of:c`, which derives `computed:c` from `computed:b`.
+       */
+      const storeChain = (): number => {
+        const asOf = write(
+          "of:in",
+          "of:a",
+          "of:b",
+          "of:c",
+          "computed:a",
+          "computed:b",
+          "computed:c",
+        );
+        store(asOf, [
+          record("of:a", {
+            reads: [input("of:in")],
+            produces: ["computed:a"],
+          }),
+          record("of:b", {
+            reads: [derived("computed:a")],
+            produces: ["computed:b"],
+          }),
+          record("of:c", {
+            reads: [derived("computed:b")],
+            produces: ["computed:c"],
+          }),
+        ]);
+        return asOf;
+      };
+
+      /** What a judgment of `roots` holds and names upstream. */
+      const upstreamOf = (roots: string[], running: string[] = []) => {
+        const { servable, refused, held, upstream } = judgeCurrencyRoots(
+          engine,
+          { space: SPACE, roots, rows: [], epoch: EPOCH, running },
+        );
+        return {
+          servable,
+          refused: refused.map(({ root }) => root),
+          held,
+          upstream,
+        };
+      };
+
+      it("holds the last one once an input of the first changed, and names the read of the first one's output that the one between made", () => {
+        storeChain();
+        write("of:in");
+        advance();
+
+        expect(upstreamOf(["of:c"])).toEqual({
+          servable: [],
+          refused: [],
+          held: ["of:c"],
+          upstream: [{
+            reader: "of:c",
+            slice: "space",
+            id: "computed:a",
+            scopeKey: "space",
+            piece: "of:a",
+          }],
+        });
+      });
+
+      it("holds the last one once the output the one between read was overwritten, and names its own read of that one's output", () => {
+        storeChain();
+        write("computed:a");
+        advance();
+
+        expect(upstreamOf(["of:c"])).toMatchObject({
+          held: ["of:c"],
+          upstream: [{
+            reader: "of:c",
+            slice: "space",
+            id: "computed:b",
+            scopeKey: "space",
+            piece: "of:b",
+          }],
+        });
+      });
+
+      it("refuses the one whose own input changed, and names nothing upstream of it", () => {
+        storeChain();
+        write("of:in");
+        advance();
+
+        expect(upstreamOf(["of:a"])).toEqual({
+          servable: [],
+          refused: ["of:a"],
+          held: [],
+          upstream: [],
+        });
+      });
+
+      it("returns the last one as servable while nothing changed", () => {
+        storeChain();
+
+        expect(upstreamOf(["of:c"])).toMatchObject({
+          servable: ["of:c"],
+          held: [],
+          upstream: [],
+        });
+      });
+
+      it("names what is upstream of a running piece asked about, and holds no root for it", () => {
+        storeChain();
+        write("of:in");
+        advance();
+
+        expect(upstreamOf([], ["of:b"])).toEqual({
+          servable: [],
+          refused: [],
+          held: [],
+          upstream: [{
+            reader: "of:b",
+            slice: "space",
+            id: "computed:a",
+            scopeKey: "space",
+            piece: "of:a",
+          }],
+        });
+      });
+
+      it("holds the last one for a viewer whose own instance of what it read no piece vouches for, and names the piece that writes it", () => {
+        // The piece between derived its output for no one but the viewers it
+        // ran for, and the last one read this viewer's instance of it.
+
+        const asOf = storeChain();
+        store(asOf, [
+          record("of:c", {
+            reads: [derived("computed:b")],
+            produces: ["computed:c"],
+            slices: [slice(ALICE_USER, [derived("computed:b", ALICE_USER)])],
+          }),
+        ]);
+
+        expect(upstreamOf(["of:c"], ["of:c"]).upstream).toEqual([{
+          reader: "of:c",
+          slice: ALICE_USER,
+          id: "computed:b",
+          scopeKey: ALICE_USER,
+          piece: "of:b",
+        }]);
+      });
+
+      it("refuses the last one when what it read is also a derived document no recorded piece writes", () => {
+        const asOf = storeChain();
+        store(asOf, [
+          record("of:c", {
+            reads: [derived("computed:b"), derived("computed:unrecorded")],
+            produces: ["computed:c"],
+          }),
+        ]);
+        write("of:in");
+        advance();
+
+        expect(upstreamOf(["of:c"])).toMatchObject({
+          refused: ["of:c"],
+          held: [],
+        });
+      });
+    });
+
     describe("with a piece recorded for two viewers", () => {
       const ALICE_ROW = { id: "computed:out", scopeKey: ALICE_USER };
       const BOB_ROW = { id: "computed:out", scopeKey: BOB_USER };

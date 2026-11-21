@@ -172,6 +172,7 @@ import {
   type CurrencyMarked,
   type CurrencyRefusal,
   type CurrencyStored,
+  type CurrencyUpstreamRead,
   dropUnreadCurrencyImports,
   forgetCurrencyImports,
   forgetCurrencySource,
@@ -13301,19 +13302,32 @@ export class Server {
    * a slice the demand rows are resolved under is followed first: one that
    * `space` is armed with is not asked, and any other is pulled from.
    *
-   * @returns The roots that pass, each with the piece it was judged as, how
-   * many roots each reason refused, the slices marked since `space`'s
-   * serving loop last asked, and the earliest time a slice of `space`
-   * expires at or its arming with a space it reads runs out, where either
-   * does: the roots are to be judged again then, since no commit reports
-   * it.
+   * A root that would pass but for slices that are stale only through
+   * what is upstream of them is held: what the store holds of it is not
+   * current, and starting its piece would not make it so. `running` are
+   * pieces `space`'s serving loop runs already, asked about for what is
+   * upstream of them alone.
+   *
+   * @returns The roots that pass, each with the piece it was judged as, the
+   * roots that are held, the reads that keep a held root or a running piece
+   * stale upstream, each with the piece to start for it, how many roots
+   * each reason refused, the slices marked since `space`'s serving loop
+   * last asked, and the earliest time a slice of `space` expires at or its
+   * arming with a space it reads runs out, where either does: the roots are
+   * to be judged again then, since no commit reports it.
    */
   async judgeCurrencyRoots(
     space: string,
     roots: readonly string[],
-    options: { excludePrincipal?: string; epoch: string },
+    options: {
+      excludePrincipal?: string;
+      epoch: string;
+      running?: readonly string[];
+    },
   ): Promise<{
     servable: Array<{ root: string; piece: string }>;
+    held: Array<{ root: string; piece: string }>;
+    upstream: CurrencyUpstreamRead[];
     refused: Partial<Record<CurrencyRefusal, number>>;
     marked: CurrencyMarked[];
     nextExpiry?: number;
@@ -13332,7 +13346,10 @@ export class Server {
         ...(nextExpiry !== undefined && { nextExpiry }),
       };
     };
-    if (roots.length === 0) return { servable: [], ...found() };
+    const running = options.running ?? [];
+    if (roots.length === 0 && running.length === 0) {
+      return { servable: [], held: [], upstream: [], ...found() };
+    }
 
     /**
      * The recorded piece `root` leads to: the one piece recorded as deriving
@@ -13367,7 +13384,9 @@ export class Server {
       if (piece !== undefined) pieces.set(root, piece);
       else refused["no-record"] = (refused["no-record"] ?? 0) + 1;
     }
-    if (pieces.size === 0) return { servable: [], ...found() };
+    if (pieces.size === 0 && running.length === 0) {
+      return { servable: [], held: [], upstream: [], ...found() };
+    }
     const demand = this.demandForSpace(
       space,
       options.excludePrincipal === undefined
@@ -13399,21 +13418,28 @@ export class Server {
       roots: [...new Set(pieces.values())],
       rows: rows(),
       epoch: options.epoch,
+      running,
     });
     const passing = new Set(judgment.servable);
+    const holding = new Set(judgment.held);
     const reasons = new Map(
       judgment.refused.map(({ root, reason }) => [root, reason]),
     );
     const servable: Array<{ root: string; piece: string }> = [];
+    const held: Array<{ root: string; piece: string }> = [];
     for (const [root, piece] of pieces) {
       if (passing.has(piece)) {
         servable.push({ root, piece });
         continue;
       }
+      if (holding.has(piece)) {
+        held.push({ root, piece });
+        continue;
+      }
       const reason = reasons.get(piece);
       if (reason !== undefined) refused[reason] = (refused[reason] ?? 0) + 1;
     }
-    return { servable, ...found() };
+    return { servable, held, upstream: judgment.upstream, ...found() };
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a
@@ -13526,6 +13552,12 @@ export class Server {
    * where this server cannot ask `space`'s store. A row stands until
    * `reader` replaces it or its origin session ends.
    *
+   * `reader` may be `space` itself: its loop then offers the instances its
+   * own index named as stale upstream of what a session demands, so that
+   * the pieces that write them start (serving-loop.md §1, "A root stale
+   * upstream"). Each of those rows stands, and an origin that is a session
+   * of `space` is carried as a pair without the grant being asked.
+   *
    * @returns How many of `rows` were refused.
    */
   async setCarriedDemand(
@@ -13546,7 +13578,10 @@ export class Server {
         rows: Map<string, DemandedInstanceRow>;
       }
     >();
-    /** Whether `principal` holds READ on `space`, asked once for each. */
+    /**
+     * Whether a principal reads `space`, asked once for each, apart for an
+     * origin in `space` and one in another space.
+     */
     const granted = new Map<string, boolean>();
     for (const row of rows) {
       const origin = this.#sessions.peek(
@@ -13563,11 +13598,15 @@ export class Server {
       // Whether the actor holds READ here, and so is carried as a pair.
       let reads = false;
       if (admitted) {
-        let verdict = granted.get(principal!);
+        // A session of `space` itself reads it already: its own loop offers
+        // a row for it, for a piece upstream of what it demands.
+        const own = row.origin.space === space;
+        const asked = `${own}\0${principal!}`;
+        let verdict = granted.get(asked);
         if (verdict === undefined) {
-          verdict = this.#foreignGrantOn(engine!, space, principal!, "READ")
-            .granted;
-          granted.set(principal!, verdict);
+          verdict = own ||
+            this.#foreignGrantOn(engine!, space, principal!, "READ").granted;
+          granted.set(asked, verdict);
         }
         reads = verdict;
         // A serving loop reads a shared instance of another space whoever
@@ -13622,8 +13661,12 @@ export class Server {
     }
     this.#refreshCarriedDemand(space);
     // What is proven current is proven for a reading space that hears of
-    // the next change, so one that offers demand is armed first.
-    if (next.size > 0) await this.#followForCarriedDemand(reader, space);
+    // the next change, so one that offers demand is armed first. A space
+    // that offers demand to itself asks for what its own index named stale,
+    // and every such row stands.
+    if (next.size > 0 && reader !== space) {
+      await this.#followForCarriedDemand(reader, space);
+    }
     return { refused };
   }
 

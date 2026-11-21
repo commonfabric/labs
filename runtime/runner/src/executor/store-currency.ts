@@ -9,6 +9,7 @@ import { getLogger } from "@commonfabric/logger";
 import type {
   CurrencyMarked,
   CurrencyRecord,
+  CurrencyUpstreamRead,
 } from "@commonfabric/memory/v2/currency-index";
 import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
 import { entityKindOfIdString } from "../entity-kind.ts";
@@ -39,11 +40,13 @@ export type CurrencySnapshot = {
 };
 
 /**
- * An instance in another space that a run of a piece read, with the slice
- * the run belongs to, which says whose run it was.
+ * An instance a serving loop demands for a read of it: one in another space
+ * that a run of a piece read, or one in the loop's own space that keeps a
+ * slice stale until the piece that writes it has run. `slice` is the key of
+ * the slice the read belongs to, which says whose read it was.
  */
 export type ForeignRead = {
-  /** The key of the slice the run that read belongs to. */
+  /** The key of the slice the read belongs to. */
   slice: string;
 
   /** The space the instance is in. */
@@ -72,6 +75,9 @@ export class StoreCurrency {
   readonly #onOwed: () => void;
   readonly #onMarked: (rearm: CurrencyRearm[]) => void;
 
+  /** Whether the piece `piece` has nodes on the tenure's runtime. */
+  readonly #runs: (piece: string) => boolean;
+
   /** The pieces a later snapshot covers whether or not they change again. */
   readonly #owed = new Set<string>();
 
@@ -83,6 +89,9 @@ export class StoreCurrency {
 
   /** Whether `#foreignReads` changed since `takeForeignReadsChanged()`. */
   #foreignReadsChanged = false;
+
+  /** Whether `#upstream` changed since `takeUpstreamChanged()`. */
+  #upstreamChanged = false;
 
   /**
    * The owed pieces a record of which was stored behind a commit its settle
@@ -101,6 +110,43 @@ export class StoreCurrency {
 
   /** The demand keys left unloaded, each with the piece it is the root of. */
   readonly #served = new Map<string, string>();
+
+  /**
+   * The demand keys left unloaded because what the store holds of them is
+   * stale only through what is upstream, each with the piece it is the root
+   * of. Starting that piece would not make it current, so the pieces
+   * upstream are started and the root is judged again.
+   */
+  readonly #held = new Map<string, string>();
+
+  /**
+   * The pieces that run here and that the index holds stale only through
+   * what is upstream of them.
+   */
+  readonly #staleRunning = new Set<string>();
+
+  /**
+   * The reads that keep a held root or a stale running piece from being
+   * current, as the last judgment found them.
+   */
+  #upstream: CurrencyUpstreamRead[] = [];
+
+  /**
+   * The pieces `#upstream` names as the ones to start, each with how many
+   * judgments have named it in a row and whether a record of it was stored
+   * since the first of them.
+   */
+  readonly #producers = new Map<
+    string,
+    { judgments: number; recorded: boolean }
+  >();
+
+  /**
+   * The pieces whose upstream the loop has given up on, each with the
+   * producers that were named for it then: a judgment that names no other
+   * producer for it holds nothing for it.
+   */
+  readonly #abandoned = new Map<string, Set<string>>();
 
   /** Whether the roots left unloaded are owed a fresh judgment. */
   #judgmentOwed = true;
@@ -127,8 +173,10 @@ export class StoreCurrency {
    * Constructs an instance for the tenure serving `space`, whose records are
    * stored and whose roots are judged by `server`. `onOwed` is called when a
    * stored record leaves a piece owed another snapshot, which only a further
-   * cycle of the loop takes. `onMarked` is called with the keys left
-   * unloaded whose pieces storing a record found marked.
+   * cycle of the loop takes, and when a judgment is owed for what is stale
+   * upstream. `onMarked` is called with the keys left unloaded whose pieces
+   * storing a record found marked. `runs` says whether a piece has nodes on
+   * the tenure's runtime.
    */
   constructor(options: {
     space: MemorySpace;
@@ -139,7 +187,9 @@ export class StoreCurrency {
     stats: ServingLoopStats;
     onOwed: () => void;
     onMarked: (rearm: CurrencyRearm[]) => void;
+    runs?: (piece: string) => boolean;
   }) {
+    this.#runs = options.runs ?? (() => false);
     this.#space = options.space;
     this.#server = options.server;
     this.#mode = options.mode;
@@ -174,7 +224,87 @@ export class StoreCurrency {
 
   /** Whether any root is left unloaded on a judgment. */
   get servesFromStore(): boolean {
-    return this.#served.size > 0;
+    return this.#served.size > 0 || this.#held.size > 0;
+  }
+
+  /**
+   * Whether a root is held, or a running piece is stale, through what is
+   * upstream of it, with the pieces to start for it not yet run: what a
+   * session reads of it is not current, so the watermark waits.
+   */
+  get staleUpstream(): boolean {
+    return this.#held.size > 0 || this.#staleRunning.size > 0;
+  }
+
+  /**
+   * The instances of this space that keep a held root or a stale running
+   * piece from being current, which the loop demands so that the pieces
+   * that write them run.
+   */
+  get upstreamReads(): readonly ForeignRead[] {
+    return this.#upstream.map(({ slice, id, scopeKey }) => ({
+      slice,
+      space: this.#space,
+      id,
+      scopeKey,
+    }));
+  }
+
+  /**
+   * The pieces the last judgment named as the ones to start, by the root's
+   * piece or the running piece each is upstream of.
+   */
+  get upstreamProducers(): ReadonlyMap<string, ReadonlySet<string>> {
+    const producers = new Map<string, Set<string>>();
+    for (const { reader, piece } of this.#upstream) {
+      let pieces = producers.get(reader);
+      if (pieces === undefined) {
+        pieces = new Set();
+        producers.set(reader, pieces);
+      }
+      pieces.add(piece);
+    }
+    return producers;
+  }
+
+  /**
+   * What the loop knows of `piece`, which the last judgment named as one
+   * to start: whether that judgment was the first to name it, and whether
+   * a record of it is still on its way, owed, or not yet stored since it
+   * was named.
+   */
+  producerProgress(piece: string): { named: boolean; unrecorded: boolean } {
+    const known = this.#producers.get(piece);
+    return {
+      named: (known?.judgments ?? 0) <= 1,
+      unrecorded: known?.recorded !== true || this.#owed.has(piece) ||
+        this.#storing > 0,
+    };
+  }
+
+  /** The demand keys held as roots of the piece `reader`. */
+  heldKeysOf(reader: string): string[] {
+    return [...this.#held].filter(([, piece]) => piece === reader)
+      .map(([key]) => key);
+  }
+
+  /**
+   * Gives up on what is upstream of `reader`, a held root's piece or a
+   * stale running piece: none of the pieces named for it can be started,
+   * or each has run and been recorded and it is stale still. Its roots are
+   * no longer held, so the caller loads them as it loads a refused root.
+   */
+  abandonUpstream(reader: string): void {
+    const producers = this.upstreamProducers.get(reader);
+    if (producers === undefined) return;
+    this.#abandoned.set(reader, new Set(producers));
+    this.#upstream = this.#upstream.filter((read) => read.reader !== reader);
+    this.#upstreamChanged = true;
+    this.#staleRunning.delete(reader);
+    for (const [key, piece] of this.#held) {
+      if (piece === reader) this.#held.delete(key);
+    }
+    this.#stats.currency.upstreamAbandoned += 1;
   }
 
   /**
@@ -184,7 +314,7 @@ export class StoreCurrency {
    * No commit marks such a slice, so the loop has to ask at that time.
    */
   get nextExpiry(): number | undefined {
-    return this.#served.size > 0 ? this.#nextExpiry : undefined;
+    return this.servesFromStore ? this.#nextExpiry : undefined;
   }
 
   /**
@@ -203,6 +333,16 @@ export class StoreCurrency {
   takeForeignReadsChanged(): boolean {
     const changed = this.#foreignReadsChanged;
     this.#foreignReadsChanged = false;
+    return changed;
+  }
+
+  /**
+   * Whether a judgment, or a given-up reader, changed the reads that keep
+   * something stale upstream since this was last called.
+   */
+  takeUpstreamChanged(): boolean {
+    const changed = this.#upstreamChanged;
+    this.#upstreamChanged = false;
     return changed;
   }
 
@@ -365,6 +505,23 @@ export class StoreCurrency {
             owed = true;
           }
         }
+        for (const { piece } of records) {
+          const producer = this.#producers.get(piece);
+          if (producer !== undefined) producer.recorded = true;
+        }
+        // A piece stored marked for an input upstream of it, and one a
+        // slice of which the store found marked, may be stale only through
+        // a piece that does not run here.
+        this.#noteStale([
+          ...stored.blocked,
+          ...stored.marked.map(({ piece }) => piece),
+        ]);
+        // A stored record is what clears a held root or a stale running
+        // piece, or shows that it stays stale, so either is judged again.
+        if (this.staleUpstream) {
+          this.#judgmentOwed = true;
+          owed = true;
+        }
         if (owed) this.#onOwed();
         if (stored.marked.length > 0) {
           this.#judgmentOwed = true;
@@ -397,19 +554,23 @@ export class StoreCurrency {
    * documents and that `eligible` passes: the ones awaiting their first
    * structure load that are not warm demand. A root whose piece is running
    * here is not judged. `demandChanged` says whether any session's rows
-   * changed since the last call.
+   * changed since the last call. The pieces that run here and are stale
+   * upstream are asked about with them, and alone where no root is.
    *
    * @returns The keys the store can serve, which the caller leaves unloaded
-   * under `skip` and loads anyway under `record`, and the keys a judgment
-   * had left unloaded that an input has since marked, which the caller
-   * re-arms at that input's seq and leaves to the re-arm's retry.
+   * under `skip` and loads anyway under `record`; the keys held because what
+   * the store holds of them is stale only upstream, which the caller leaves
+   * unloaded while the pieces upstream are started (`upstreamReads`); and
+   * the keys a judgment had left unloaded that an input has since marked,
+   * which the caller re-arms at that input's seq and leaves to the re-arm's
+   * retry.
    */
   async judge(
     runtime: Runtime,
     rootKeys: ReadonlyMap<string, { id: string; scope: string }>,
     eligible: (key: string, root: { id: string; scope: string }) => boolean,
     demandChanged: boolean,
-  ): Promise<{ servable: string[]; rearm: CurrencyRearm[] }> {
+  ): Promise<{ servable: string[]; held: string[]; rearm: CurrencyRearm[] }> {
     const eligibleRoots = new Map<string, string>();
     for (const [key, root] of rootKeys) {
       // A root narrower than the space is judged only where it is a
@@ -422,26 +583,36 @@ export class StoreCurrency {
         eligibleRoots.set(key, root.id);
       } else {
         this.#served.delete(key);
+        this.#held.delete(key);
       }
     }
-    if (eligibleRoots.size === 0) return { servable: [], rearm: [] };
     // A root left unloaded whose piece has nodes was started some other
     // way, as an event's auto-start does, and is loaded like any other.
     const candidates = new Map<string, string>();
     for (const [key, root] of eligibleRoots) {
-      const piece = this.#served.get(key);
+      const piece = this.#served.get(key) ?? this.#held.get(key);
       if (
         piece !== undefined && runtime.scheduler.hasNodesUnderDemandRoot(piece)
       ) {
         this.#served.delete(key);
+        this.#held.delete(key);
       } else {
         candidates.set(key, root);
       }
     }
-    if (candidates.size === 0) return { servable: [], rearm: [] };
+    const unloaded = () => ({
+      servable: [...candidates.keys()].filter((key) => this.#served.has(key)),
+      held: [...candidates.keys()].filter((key) => this.#held.has(key)),
+      rearm: [],
+    });
+    if (candidates.size === 0 && this.#staleRunning.size === 0) {
+      return unloaded();
+    }
     const settled = !this.#judgmentOwed && !demandChanged &&
-      [...candidates.keys()].every((key) => this.#served.has(key));
-    if (settled) return { servable: [...candidates.keys()], rearm: [] };
+      [...candidates.keys()].every((key) =>
+        this.#served.has(key) || this.#held.has(key)
+      );
+    if (settled) return unloaded();
     this.#judgmentOwed = false;
     this.#stats.currency.judged += candidates.size;
     this.#judging += 1;
@@ -451,6 +622,8 @@ export class StoreCurrency {
       {
         excludePrincipal: this.#serviceIdentity,
         epoch: this.#epoch,
+        ...(this.#staleRunning.size > 0 &&
+          { running: [...this.#staleRunning] }),
       },
     ).finally(() => {
       this.#judging -= 1;
@@ -460,10 +633,16 @@ export class StoreCurrency {
       const counts = this.#stats.currency.refused;
       counts[reason] = (counts[reason] ?? 0) + count;
     }
+    this.#noteStale(judged.marked.map(({ piece }) => piece));
+    const upstream = this.#takeUpstream(judged.upstream);
     const pieces = new Map(
       judged.servable.map(({ root, piece }) => [root, piece]),
     );
+    const holding = new Map(
+      judged.held.map(({ root, piece }) => [root, piece]),
+    );
     const servable: string[] = [];
+    const held: string[] = [];
     const rearm: CurrencyRearm[] = [];
     for (const [key, root] of candidates) {
       const piece = pieces.get(root);
@@ -473,6 +652,7 @@ export class StoreCurrency {
         piece !== undefined &&
         !runtime.scheduler.hasNodesUnderDemandRoot(piece)
       ) {
+        this.#held.delete(key);
         servable.push(key);
         this.#stats.currency.servable += 1;
         if (this.#mode === "skip" && !this.#served.has(key)) {
@@ -481,6 +661,28 @@ export class StoreCurrency {
         }
         continue;
       }
+      const stale = holding.get(root);
+      // A root stale only upstream is held under `skip` while the pieces
+      // upstream are started. Under `record` it is loaded, and its piece
+      // is then one that runs here and is stale upstream.
+      if (stale !== undefined && upstream.has(stale)) {
+        this.#served.delete(key);
+        if (
+          this.#mode === "skip" &&
+          !runtime.scheduler.hasNodesUnderDemandRoot(stale)
+        ) {
+          held.push(key);
+          if (!this.#held.has(key)) {
+            this.#held.set(key, stale);
+            this.#stats.currency.heldUpstream += 1;
+          }
+          continue;
+        }
+        this.#held.delete(key);
+        this.#staleRunning.add(stale);
+        continue;
+      }
+      this.#held.delete(key);
       const left = this.#served.get(key);
       if (left === undefined) continue;
       this.#served.delete(key);
@@ -488,7 +690,78 @@ export class StoreCurrency {
       const seq = markingSeq(judged.marked, left);
       if (seq !== undefined) rearm.push({ key, seq });
     }
-    return { servable, rearm };
+    return { servable, held, rearm };
+  }
+
+  /**
+   * Takes `upstream`, the reads a judgment found keeping a root or a
+   * running piece stale upstream, in place of the last judgment's, leaving
+   * out those of a piece whose upstream the loop gave up on with the same
+   * producers named. A piece that runs here stays among the stale running
+   * ones only while a read of its own is among them.
+   *
+   * @returns The pieces a read of which was taken.
+   */
+  #takeUpstream(upstream: readonly CurrencyUpstreamRead[]): Set<string> {
+    const named = new Map<string, Set<string>>();
+    for (const { reader, piece } of upstream) {
+      let pieces = named.get(reader);
+      if (pieces === undefined) {
+        pieces = new Set();
+        named.set(reader, pieces);
+      }
+      pieces.add(piece);
+    }
+    for (const [reader, given] of this.#abandoned) {
+      const pieces = named.get(reader);
+      // Resolved, or a piece upstream that was not named before: either
+      // way the reader is asked about afresh.
+      if (
+        pieces === undefined || [...pieces].some((piece) => !given.has(piece))
+      ) this.#abandoned.delete(reader);
+    }
+    const taken = upstream.filter((read) => !this.#abandoned.has(read.reader));
+    const signature = (reads: readonly CurrencyUpstreamRead[]) =>
+      reads.map(({ slice, id, scopeKey }) => `${slice}\0${scopeKey}\0${id}`)
+        .sort().join("\n");
+    if (signature(taken) !== signature(this.#upstream)) {
+      this.#upstreamChanged = true;
+    }
+    this.#upstream = taken;
+    const readers = new Set(taken.map(({ reader }) => reader));
+    for (const piece of [...this.#staleRunning]) {
+      if (!readers.has(piece)) this.#staleRunning.delete(piece);
+    }
+    const producers = new Set(taken.map(({ piece }) => piece));
+    for (const piece of [...this.#producers.keys()]) {
+      if (!producers.has(piece)) this.#producers.delete(piece);
+    }
+    for (const piece of producers) {
+      const known = this.#producers.get(piece);
+      if (known !== undefined) {
+        known.judgments += 1;
+        continue;
+      }
+      this.#producers.set(piece, { judgments: 1, recorded: false });
+      // One that runs here already may have nothing to recompute, and is
+      // recorded all the same: its record is what says whether what reads
+      // it is still stale.
+      if (this.#runs(piece)) this.#owed.add(piece);
+    }
+    return readers;
+  }
+
+  /**
+   * Notes that the index marked a slice of each of `pieces`, or stored one
+   * marked for an input upstream of it. One that runs here may be stale
+   * only through what is upstream, which the next judgment is asked.
+   */
+  #noteStale(pieces: readonly string[]): void {
+    for (const piece of pieces) {
+      if (this.#staleRunning.has(piece) || !this.#runs(piece)) continue;
+      this.#staleRunning.add(piece);
+      this.#judgmentOwed = true;
+    }
   }
 
   /**
@@ -499,11 +772,12 @@ export class StoreCurrency {
    * seq at or below that input, which the caller re-arms.
    */
   async advance(head: number): Promise<CurrencyRearm[]> {
-    if (this.#served.size === 0 || head <= this.#advancedThrough) return [];
+    if (!this.servesFromStore || head <= this.#advancedThrough) return [];
     this.#advancedThrough = head;
     const marked = await this.#server.advanceCurrency(this.#space);
     if (marked.length === 0) return [];
     this.#judgmentOwed = true;
+    this.#noteStale(marked.map(({ piece }) => piece));
     return this.#rearmsFor(marked);
   }
 
@@ -517,12 +791,14 @@ export class StoreCurrency {
    */
   noteIndexChanged(): boolean {
     this.#judgmentOwed = true;
-    return this.#served.size > 0 || this.#judging > 0;
+    return this.servesFromStore || this.#staleRunning.size > 0 ||
+      this.#judging > 0;
   }
 
   /** Forgets the demand key `key`, which no session demands any longer. */
   forget(key: string): void {
     this.#served.delete(key);
+    this.#held.delete(key);
   }
 
   /**

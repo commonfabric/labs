@@ -413,6 +413,18 @@ export type ServingLoopStats = {
 
     /** Rows of carried demand the space they were sent to refused. */
     carriedRefused: number;
+
+    /** Roots a `skip` loop left unloaded because what the store held of
+     * them was stale only through what is upstream: starting their own
+     * piece would not have made them current, so the loop started the
+     * pieces upstream instead (serving-loop.md §1). */
+    heldUpstream: number;
+
+    /** Roots and running pieces the loop gave up waiting on what is
+     * upstream of them for: no piece named for them could be started, or
+     * each ran and was recorded and they were stale still. A root given up
+     * on is loaded as a refused one is. */
+    upstreamAbandoned: number;
   };
 
   /** SERVER SETTLE per authored input (serving-loop.md §7; stage-C design
@@ -928,6 +940,8 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     falseClean: 0,
     carried: 0,
     carriedRefused: 0,
+    heldUpstream: 0,
+    upstreamAbandoned: 0,
   },
   settle: { series: [], dropped: 0 },
   settleAdvances: { count: 0, lastDelta: 0, series: [], dropped: 0 },

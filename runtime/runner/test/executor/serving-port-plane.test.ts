@@ -287,6 +287,14 @@ describe("serving-port-plane", () => {
         asked.push(params);
         return {
           servable: [{ root: "of:argument", piece: "of:piece" }],
+          held: [{ root: "of:held", piece: "of:reader" }],
+          upstream: [{
+            reader: "of:reader",
+            slice: "space",
+            id: "computed:out",
+            scopeKey: "space",
+            piece: "of:producer",
+          }],
           refused: { marked: 2 },
           marked: [],
         };
@@ -305,9 +313,18 @@ describe("serving-port-plane", () => {
         await plane.server.judgeCurrencyRoots(space, ["of:argument"], {
           excludePrincipal: alice,
           epoch: "release-7",
+          running: ["of:running"],
         }),
       ).toEqual({
         servable: [{ root: "of:argument", piece: "of:piece" }],
+        held: [{ root: "of:held", piece: "of:reader" }],
+        upstream: [{
+          reader: "of:reader",
+          slice: "space",
+          id: "computed:out",
+          scopeKey: "space",
+          piece: "of:producer",
+        }],
         refused: { marked: 2 },
         marked: [],
       });
@@ -319,6 +336,7 @@ describe("serving-port-plane", () => {
           roots: ["of:argument"],
           excludePrincipal: alice,
           epoch: "release-7",
+          running: ["of:running"],
         },
       ]);
     });
