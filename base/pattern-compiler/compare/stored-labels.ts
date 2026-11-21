@@ -197,6 +197,8 @@ export const templateOfRecord = (
     const output = plan.outputs[record.output];
     return { template: output?.template, kept: output?.kept === true };
   }
+  // An envelope has no template.
+  if ("envelope" in record) return { template: undefined, kept: false };
   if ("body" in record) {
     return {
       template: plan.bodies?.[record.body]?.writes?.[record.write]?.template,

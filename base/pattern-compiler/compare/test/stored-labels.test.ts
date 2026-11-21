@@ -6,7 +6,7 @@ import type { Artifact } from "../../exec/executor.ts";
 import { generateInputs } from "../generate.ts";
 import { scenarioAudience } from "../harness.ts";
 import { instanceOptions, inStorage } from "../integrated.ts";
-import { perturbedRuns } from "../perturbation.ts";
+import { perturbedRuns, sentEvents } from "../perturbation.ts";
 import {
   checkSoundness,
   deepStoredAt,
@@ -644,6 +644,66 @@ describe("stored-labels", () => {
       );
 
       expect(label?.confidentiality).toContainEqual("alice");
+    });
+  });
+
+  // `fixtures/handle-methods.tsx`: `putIfNoted` writes `key(at).set()` where
+  // the input `note` holds one text. The plan has an envelope for that
+  // write and no write edge, so no template gives its label.
+  describe("deepStoredAt() in the class `shape` after a write the plan has only an envelope for added a member", () => {
+    it("holds the clause of the input the write depends on, for the list and for what a `map` gives over it", async () => {
+      const artifact = await artifactOf("handle-methods");
+      const space = (await Identity.fromPassphrase("pattern-compiler-compare"))
+        .did();
+      const options = instanceOptions("handle-methods", space, () => undefined);
+      const binding = (name: string) =>
+        artifact.plan.bindings.findIndex((each) => each.name === name);
+      const sent = sentEvents(artifact, { note: "n" }, [
+        { binding: binding("addOnce"), event: { word: "x" } },
+        { binding: binding("putIfNoted"), event: { at: 1 } },
+      ], options);
+      const labels: Record<string, string> = {};
+      const refused: string[] = [];
+      await inStorage(
+        artifact,
+        { note: "n" },
+        sent,
+        options,
+        undefined,
+        true,
+        true,
+        {
+          refused: (reasons) => {
+            for (const reason of reasons) refused.push(reason);
+          },
+          end: (runtime, hooks, instance) => {
+            const tx = runtime.edit();
+            try {
+              for (const name of ["words", "shouted"]) {
+                labels[name] = JSON.stringify(
+                  deepStoredAt(
+                    tx,
+                    {
+                      space,
+                      id: hooks.entityOf(instance.id),
+                      scope: "space",
+                      path: [name],
+                    },
+                    [],
+                    "shape",
+                  ).label.confidentiality,
+                );
+              }
+            } finally {
+              tx.abort();
+            }
+          },
+        },
+      );
+
+      expect(refused).toEqual([]);
+      expect(labels.words).toContain("input:note");
+      expect(labels.shouted).toContain("input:note");
     });
   });
 

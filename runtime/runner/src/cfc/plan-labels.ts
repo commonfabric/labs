@@ -496,18 +496,6 @@ export const instantiatePlanLabels = (
       return wishOutcomeLabel(plan, input, input.record.operation);
     }
     const { template, kept } = templateOf(plan, input.record);
-    if (template === undefined || input.bound === true) {
-      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
-      // A kept output the plan has no template for, and a record the
-      // writer gives as `bound`, take the transaction's join, as a written
-      // path with no record does, and not the label of a covered path
-      // above it. Behind `compiledPatterns`.
-      bounds++;
-      return join;
-    }
-    const shared = input.decided === undefined && input.observed === undefined
-      ? undefined
-      : sharedTemplateLabels.get(input.slots);
     // What decided a change that removed members: the label of the
     // record's template joined with what the change compared.
     const withDecision = (own: InternedLabel): InternedLabel => {
@@ -516,6 +504,19 @@ export const instantiatePlanLabels = (
       }
       return withObserved(own, input);
     };
+    if (template === undefined || input.bound === true) {
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // A kept output the plan has no template for, a write the plan has
+      // an envelope and no write edge for, and a record the writer gives
+      // as `bound`, take the transaction's join, as a written path with no
+      // record does, and not the label of a covered path above it. Behind
+      // `compiledPatterns`.
+      bounds++;
+      return withDecision(join);
+    }
+    const shared = input.decided === undefined && input.observed === undefined
+      ? undefined
+      : sharedTemplateLabels.get(input.slots);
     if (shared !== undefined && sameTemplateInputs(shared.input, input)) {
       work.memoHits++;
       return withDecision(shared.label);
@@ -937,6 +938,8 @@ const templateOf = (
   if ("output" in record) {
     const output = plan.outputs[record.output];
     found = output && { template: output.template, kept: output.kept === true };
+  } else if ("envelope" in record) {
+    found = plan.bodies[record.body] && { template: undefined, kept: false };
   } else if ("body" in record) {
     const edge = plan.bodies[record.body]?.writes[record.write];
     found = edge && { template: edge.template, kept: false };

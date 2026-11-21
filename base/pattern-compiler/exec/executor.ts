@@ -9186,9 +9186,40 @@ export class Instance {
       { address: { doc, path: [...path] }, observes: "enumeration" },
     ];
     return writing.records.flatMap(({ record, template }) => {
-      // A write edge the plan has no template for has no record either.
-      if (template === undefined) return [];
       const writes: PlanWrite[] = [];
+      // A record the plan has no template for has no inputs, and is given
+      // as bound.
+      if (template === undefined) {
+        const bound = (target: Address) => ({
+          target,
+          record,
+          instance: writing.instance.id,
+          keys,
+          slots: {},
+          bound: true as const,
+          ...held,
+        });
+        for (let at = splice.start; at < end; at++) {
+          writes.push(bound({ doc, path: [...path, `${at}`] }));
+        }
+        if (kept || splice.removed !== splice.inserted) {
+          writes.push({
+            ...bound({ doc, path: [...path, "length"] }),
+            observed: membership,
+          });
+        }
+        writes.push({
+          ...bound({ doc, path: [...path] }),
+          observed: membership,
+          enumeration: true,
+          ...(members.removes ? { removes: true as const } : {}),
+          ...(runs.length === 0 ? {} : { moves: runs }),
+          ...(members.start === undefined || origin === undefined
+            ? {}
+            : { start: members.start }),
+        });
+        return writes;
+      }
       // A member added is recorded at its own position with the label of
       // the write and of what the method compared, and with nothing of
       // what the list stored of its membership: an addition at the end
@@ -9607,17 +9638,25 @@ export class Instance {
       if (covered) this.counts.writesCovered += 1;
       else this.counts.writesNotCovered += 1;
     }
-    // A write that no write edge covers has no record. It is a write
-    // through a handle all the same, so one that adds a member to a list
-    // is given to the transaction hooks as the positions it wrote.
+    // A write that no write edge covers has the record of the envelope
+    // that covers it, which has no template: a change it makes of a list's
+    // members is recorded with no inputs, and the runtime gives each record
+    // the label of a write it has no record of.
+    const envelope = body.envelopes.findIndex((each) =>
+      each.kind === "handle" && covers(each)
+    );
     return this.#recording(
       host === undefined ? undefined : {
         instance: this,
         host,
-        records: write < 0 ? [] : [{
-          record: { body: index, write },
-          template: body.writes[write].template,
-        }],
+        records: write >= 0
+          ? [{
+            record: { body: index, write },
+            template: body.writes[write].template,
+          }]
+          : envelope >= 0
+          ? [{ record: { body: index, envelope }, template: undefined }]
+          : [],
         members: { decided: decided ?? [] },
       },
     );

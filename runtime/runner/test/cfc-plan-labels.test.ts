@@ -744,6 +744,43 @@ describe("cfc-plan-labels", () => {
       });
     });
 
+    it("returns the transaction's join for a record of an envelope and for a record given as bound", async () => {
+      await withSources((_runtime, tx, identity, target) => {
+        tx.recordCfcWritePolicyInput(
+          {
+            kind: "plan-write",
+            target: { ...target, path: ["a"] },
+            compiledPattern: identity,
+            record: { body: 0, envelope: 0 },
+            instance: target.id,
+            keys: [],
+            slots: {},
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        tx.recordCfcWritePolicyInput(
+          {
+            ...planWrite(
+              identity,
+              { ...target, path: ["b"] },
+              0,
+              address("of:src-a"),
+            ),
+            bound: true,
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        for (const name of ["a", "b"]) {
+          expect(confidentialityAt(labels, target, name).sort()).toEqual([
+            "secret-a",
+            "secret-b",
+          ]);
+        }
+      });
+    });
+
     it("returns the selected branch alone where the selection was reported", async () => {
       await withSources((_runtime, tx, identity, target) => {
         tx.recordCfcWritePolicyInput(

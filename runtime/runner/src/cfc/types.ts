@@ -957,6 +957,11 @@ export type PlanWrite = PlanInputs & {
   readonly record:
     | { readonly output: number }
     | { readonly body: number; readonly write: number }
+    /**
+     * An entry of `Body.envelopes`: a write the plan bounds and has no
+     * template for.
+     */
+    | { readonly body: number; readonly envelope: number }
     | { readonly cone: number; readonly write: number }
     | { readonly stateFirst: number }
     /**

@@ -54,6 +54,8 @@ export type PlanRecord =
   | { output: number }
   /** An entry of `Body.writes`, of a handler or of a body of a cone. */
   | { body: number; write: number }
+  /** An entry of `Body.envelopes`, which has no template. */
+  | { body: number; envelope: number }
   /** An entry of `Cone.writes`. */
   | { cone: number; write: number }
   /** The first value of a state cell, by `StateCell.first`. */
