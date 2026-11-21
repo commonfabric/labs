@@ -357,10 +357,13 @@ export type ServingLoopStats = {
     recordsStored: number;
 
     /** Records sent of a piece the loop could not vouch for, by reason:
-     * `not-clean` (a live computation was not clean), `foreign-read` and
-     * `foreign-write` (another space), `unattributed-writer` (it read a
-     * document whose writer names no piece), `scoped-root`, `source-origin`
-     * and `no-pattern`. A record with two reasons counts under both. */
+     * `not-clean` (a live computation was not clean), `foreign-read` (a read
+     * in another space that the snapshot cannot name the instance or the seq
+     * of), `foreign-write` (another space), `unattributed-writer` (it read a
+     * document whose writer names no piece and is not live, not clean, or
+     * runs once for each viewer), `clock-read` (it read a document a clock
+     * writes), `scoped-root`, `source-origin` and `no-pattern`. A record with
+     * two reasons counts under both. */
     unvouched: Record<string, number>;
 
     /** Roots put to a judgment, counted at each judgment made. */
@@ -372,8 +375,9 @@ export type ServingLoopStats = {
 
     /** Roots a judgment found the store could not serve, by the first reason
      * found: `no-record`, `marked`, `other-epoch` (the root's piece), and
-     * `unvouched-instance`, `absent-owned`, `owner-not-clean` (a demanded
-     * instance of the piece or of one beneath it). */
+     * `unvouched-instance`, `absent-owned`,
+     * `owner-not-clean` (a demanded instance of the piece or of one beneath
+     * it). */
     refused: Record<string, number>;
 
     /** Roots left unloaded and unstarted on that judgment, which only the
@@ -384,6 +388,12 @@ export type ServingLoopStats = {
      * marked the piece, or a session's demand reached an instance the
      * piece does not vouch for. */
     rearmed: number;
+
+    /** Times the loop was woken to judge a root it had left unloaded
+     * because the index changed from outside it: a space a slice read told
+     * this one of a change, or a request made for another space marked a
+     * slice here. */
+    indexWakes: number;
 
     /** Pieces the index held clean that wrote an instance they vouched for
      * again with no input of theirs changed. Each one is a judgment that
@@ -899,6 +909,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     refused: {},
     servedFromStore: 0,
     rearmed: 0,
+    indexWakes: 0,
     falseClean: 0,
   },
   settle: { series: [], dropped: 0 },

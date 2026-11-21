@@ -37,6 +37,7 @@ import {
   waitForSettledText,
   waitForText,
 } from "./cfc-browser-helpers.ts";
+import { directRoomLabel } from "./fabrichat-room-fixture.ts";
 import { clickButtonWithExactText } from "./note-button-helpers.ts";
 import { initializePiecesController } from "./pieces-controller.ts";
 import { clickCellLink } from "./topics-navigation-helpers.ts";
@@ -112,7 +113,11 @@ describe("fabrichat-join", () => {
     await openChatManager(firstShell, firstIdentity);
     await fillCfInput(first, "#fabrichat-start-direct", address);
     await clickTrustedAction(first, START_ACTION);
-    await waitForSettledText(first, "#fabrichat-rooms", `With ${address}`);
+    await waitForSettledText(
+      first,
+      "#fabrichat-rooms",
+      directRoomLabel(address),
+    );
 
     // The notice for the second person links to the room, and following it
     // opens the room's page.
@@ -151,7 +156,7 @@ describe("fabrichat-join", () => {
     await waitForSettledText(
       second,
       "#fabrichat-rooms",
-      `With ${firstIdentity.did()}`,
+      directRoomLabel(firstIdentity.did()),
     );
 
     // The first person starts a second chat, whose row's link opens the new
@@ -159,7 +164,11 @@ describe("fabrichat-join", () => {
     // on the page, where a room would offer a chat with each of its
     // participants as well.
     await openChatManager(firstShell, firstIdentity);
-    await waitForSettledText(first, "#fabrichat-rooms", `With ${address}`);
+    await waitForSettledText(
+      first,
+      "#fabrichat-rooms",
+      directRoomLabel(address),
+    );
 
     // A reloaded page is a new session, whose group draft starts out empty,
     // and a group composed there is created with the title typed into it.
@@ -171,8 +180,15 @@ describe("fabrichat-join", () => {
     const thirdAddress = thirdIdentity.did();
     await fillCfInput(first, "#fabrichat-start-direct", thirdAddress);
     await clickTrustedAction(first, START_ACTION);
-    await waitForSettledText(first, "#fabrichat-rooms", `With ${thirdAddress}`);
-    const newRoomId = await clickCellLink(first, `With ${thirdAddress}`);
+    await waitForSettledText(
+      first,
+      "#fabrichat-rooms",
+      directRoomLabel(thirdAddress),
+    );
+    const newRoomId = await clickCellLink(
+      first,
+      directRoomLabel(thirdAddress),
+    );
     const newRoomView = await waitForPieceSelected(first, newRoomId);
     expect(newRoomView.spaceDid).not.toBe(roomView.spaceDid);
     expect(newRoomView.spaceDid).not.toBe(firstIdentity.did());
@@ -219,7 +235,7 @@ describe("fabrichat-join", () => {
     await waitForSettledText(
       member,
       "#fabrichat-rooms",
-      `With ${groupOwnerIdentity.did()}`,
+      directRoomLabel(groupOwnerIdentity.did()),
     );
   });
 

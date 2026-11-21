@@ -115,9 +115,10 @@ dropping the ones they overwrote (server-side-execution serving-loop.md §3d),
 which it cannot do to part of a splice.
 
 Edit-script splices go marked (`pinned` on the `splice` op), and only over a
-connection that is up to a server that advertises `markedSplicesV1` (see
-[`EXPERIMENTAL_OPTIONS.md`](../../development/EXPERIMENTAL_OPTIONS.md#markedsplicesv1));
-otherwise the change goes per index. What a commit's marked splices overwrote
+connection that is up to a server that advertises `markedSplicesV1`, as every
+server of a build that reads the mark does; otherwise the change goes per index.
+A server that predates the mark reads a stored marked splice as overwriting
+nothing, so under server execution a deployment must not roll back to one. What a commit's marked splices overwrote
 is read back by comparing the array's values before and after the commit, from
 the first splice's index on (`overwrittenArrayElements()` in memory
 `v2/engine.ts`, for server-side-execution serving-loop.md §3d). That is exact

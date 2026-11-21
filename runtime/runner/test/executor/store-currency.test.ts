@@ -16,6 +16,7 @@ import {
 import type { HostMemoryServer } from "../../src/executor/host-memory-server.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import { StoreCurrency } from "../../src/executor/store-currency.ts";
+import type { Runtime } from "../../src/runtime.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 
 const SPACE = "did:key:z6Mk-store-currency-test-space" as MemorySpace;
@@ -162,6 +163,86 @@ describe("StoreCurrency", () => {
         expect([...currency.accessForTestingOnly.owed]).toEqual(
           records.map(({ piece }) => piece),
         );
+      });
+    });
+
+    describe("noteIndexChanged()", () => {
+      /** The root every judgment of these cases is asked about. */
+      const ROOT = "of:root";
+
+      /** How many judgments the memory server was asked for. */
+      let judgments: number;
+
+      /** What holds a judgment back until it is resolved, where one is set. */
+      let held: PromiseWithResolvers<void> | undefined;
+
+      /** A loop that leaves unloaded each root the store can serve. */
+      let skipping: StoreCurrency;
+
+      /** A runtime that runs no piece. */
+      const idleRuntime = {
+        scheduler: { hasNodesUnderDemandRoot: () => false },
+      } as unknown as Runtime;
+
+      beforeEach(() => {
+        judgments = 0;
+        held = undefined;
+        skipping = new StoreCurrency({
+          space: SPACE,
+          server: {
+            judgeCurrencyRoots: async (_space, roots) => {
+              judgments += 1;
+              await held?.promise;
+              return {
+                servable: roots.map((root) => ({ root, piece: root })),
+                refused: {},
+                marked: [],
+              };
+            },
+          } as Pick<HostMemoryServer, "judgeCurrencyRoots"> as HostMemoryServer,
+          mode: "skip",
+          epoch: "epoch-one",
+          serviceIdentity: "did:key:service",
+          stats: emptyServingLoopStats(),
+          onOwed: () => {},
+          onMarked: () => {},
+        });
+      });
+
+      /** Judges `ROOT` with no session's demand changed. */
+      const judge = () =>
+        skipping.judge(
+          idleRuntime,
+          new Map([["key", { id: ROOT, scope: "space" }]]),
+          () => true,
+          false,
+        );
+
+      it("returns `false` while no root is left unloaded and no judgment is under way", () => {
+        expect(skipping.noteIndexChanged()).toBe(false);
+      });
+
+      it("returns `true` once a root is left unloaded, and has the next judgment ask the memory server again", async () => {
+        await judge();
+        await judge();
+        expect(judgments).toBe(1);
+
+        expect(skipping.noteIndexChanged()).toBe(true);
+        await judge();
+
+        expect(judgments).toBe(2);
+      });
+
+      it("returns `true` while a judgment is under way, and has the one after it ask the memory server again", async () => {
+        held = Promise.withResolvers<void>();
+        const judging = judge();
+
+        expect(skipping.noteIndexChanged()).toBe(true);
+        held.resolve();
+        await judging;
+        await judge();
+
+        expect(judgments).toBe(2);
       });
     });
   });

@@ -7947,10 +7947,10 @@ export class SpaceReplica
    * connection does not advertise the mark (memory client
    * `isMarkedSpliceRefusal()`), which `#pushCommit()` takes as a local
    * conflict. A resend of one already sent keeps its bytes, so that the store
-   * can answer a resend of a commit it already took (its replay identity);
-   * the readers-first rollout (`markedSplicesV1` in
-   * docs/development/EXPERIMENTAL_OPTIONS.md) is what makes such a resend
-   * safe on a server that stopped advertising it.
+   * can answer a resend of a commit it already took (its replay identity).
+   * That resend reaches a server that does not read the mark only after a
+   * rollback past marked splices, which under server execution a deployment
+   * must not make (docs/specs/memory-v2/08-conflict-granularity.md).
    */
   markedSplices(): boolean {
     return advertisesMarkedSplices(this.#sessionClient);

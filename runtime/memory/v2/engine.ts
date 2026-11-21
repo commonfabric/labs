@@ -574,6 +574,64 @@ CREATE TABLE IF NOT EXISTS currency_cursor (
   branch TEXT    NOT NULL PRIMARY KEY,
   seq    INTEGER NOT NULL
 );
+-- The other spaces a slice read, one row for each, so that a judgment finds
+-- the spaces to ask about a slice without reading its read rows.
+CREATE TABLE IF NOT EXISTS currency_slice_source (
+  branch TEXT NOT NULL,
+  slice  TEXT NOT NULL,
+  piece  TEXT NOT NULL,
+  source TEXT NOT NULL,
+  PRIMARY KEY (branch, slice, piece, source)
+);
+-- What another space last said of an instance of its store that a slice
+-- here read: the instance's head seq there, and whether what it holds is
+-- stale upstream (stale = 1). That is a derived document no recorded piece
+-- of that space writes, or an instance a recorded piece there computes
+-- while a slice that decides it is marked or none vouches for it.
+CREATE TABLE IF NOT EXISTS currency_import (
+  branch    TEXT    NOT NULL,
+  source    TEXT    NOT NULL,
+  id        TEXT    NOT NULL,
+  scope_key TEXT    NOT NULL,
+  head      INTEGER NOT NULL,
+  stale     INTEGER NOT NULL,
+  PRIMARY KEY (branch, source, id, scope_key)
+);
+-- How far this store has followed each space it reads: the position of that
+-- space its last pull returned.
+CREATE TABLE IF NOT EXISTS currency_source (
+  branch   TEXT    NOT NULL,
+  source   TEXT    NOT NULL,
+  position INTEGER NOT NULL,
+  PRIMARY KEY (branch, source)
+);
+-- The other spaces whose slices read an instance of this store, each
+-- registered when one of them recorded the read.
+CREATE TABLE IF NOT EXISTS currency_reader (
+  branch    TEXT NOT NULL,
+  reader    TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  scope_key TEXT NOT NULL,
+  PRIMARY KEY (branch, reader, id, scope_key)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_reader_instance
+  ON currency_reader (branch, id, scope_key);
+-- What this store last told the spaces that read a registered instance: its
+-- head seq, whether it is stale upstream, and the position at which either
+-- last changed, 0 for a row that has not changed since its instance was
+-- first registered. A position is a counter of this store's own, which a
+-- reading space pulls from.
+CREATE TABLE IF NOT EXISTS currency_export (
+  branch    TEXT    NOT NULL,
+  id        TEXT    NOT NULL,
+  scope_key TEXT    NOT NULL,
+  head      INTEGER NOT NULL,
+  stale     INTEGER NOT NULL,
+  position  INTEGER NOT NULL,
+  PRIMARY KEY (branch, id, scope_key)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_export_position
+  ON currency_export (branch, position);
 
 -- Server-execution v2: the DURABLE half of the outbox
 -- (docs/specs/server-side-execution/serving-loop.md §5, FP1 RULED

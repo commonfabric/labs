@@ -20,6 +20,7 @@ import {
   type HistoryStep,
   PieceHandle,
   type PieceSourceView,
+  type PieceUpdateSourceResponse,
   Program,
   RuntimeClient,
   RuntimeClientEvents,
@@ -30,6 +31,13 @@ import {
 import { WebWorkerRuntimeTransport } from "@commonfabric/runtime-client/transports/web-worker";
 import { getLogger } from "@commonfabric/logger";
 import { readBuildHash } from "./build-hash.ts";
+import {
+  type PatternChange,
+  type PieceSourceOfScope,
+  type SpaceHistoryStep,
+  withOlderSteps,
+  withPatternChanges,
+} from "./space-history.ts";
 
 const logger = getLogger("lib-shell.runtime", {
   enabled: false,
@@ -77,7 +85,8 @@ export function defaultRenderConfidentialityCeiling(
   return defaultDisplayCeiling(actingUser);
 }
 
-export type { HistoryStep };
+export type { HistoryStep, PatternChange, SpaceHistoryStep };
+export { withOlderSteps };
 
 export type RuntimeNavigationTarget = { spaceDid: DID; pieceId: string };
 
@@ -915,17 +924,114 @@ export class RuntimeInternals extends EventTarget {
   /**
    * Returns a stretch of the history of `space`, newest first: its steps
    * that began below `before`, or its newest ones, and the seq to pass as
-   * `before` for the stretch older than this one.
+   * `before` for the stretch older than this one. Each step carries the
+   * changes of pattern code the space's pieces recorded during it, as a
+   * piece's own source history lists them: the pieces the space lists, and
+   * those `pieces` names beside them, which is how a piece the space does
+   * not list has its changes shown.
    */
   async spaceHistory(
     space: DID,
     before?: number,
-  ): Promise<{ steps: HistoryStep[]; next?: number }> {
+    pieces: readonly { id: string; scope?: CellScope }[] = [],
+  ): Promise<{ steps: SpaceHistoryStep[]; next?: number }> {
     this.#check();
-    return await this.#client.spaceHistory({
-      space,
-      ...(before !== undefined ? { before } : {}),
+    const [page, sources] = await Promise.all([
+      this.#client.spaceHistory({
+        space,
+        ...(before !== undefined ? { before } : {}),
+      }),
+      this.#pieceSources(space, pieces),
+    ]);
+    return { ...page, steps: withPatternChanges(page.steps, sources) };
+  }
+
+  /**
+   * Helper for `spaceHistory()`, which returns the source of each piece the
+   * space lists and each `named` adds beside them. A piece whose source
+   * cannot be read is left out, and so is every listed piece when the list
+   * cannot be: a history is still worth showing without what it says of
+   * pattern code.
+   */
+  async #pieceSources(
+    space: DID,
+    named: readonly { id: string; scope?: CellScope }[],
+  ): Promise<PieceSourceOfScope[]> {
+    let pieces: { id: string; scope?: CellScope }[] = [];
+    try {
+      // A piece registered a moment ago is on the list once the space's
+      // pending writes have landed.
+      await this.#client.synced(space);
+      const list = await this.#client.getPiecesListCell<unknown>(space);
+      await list.sync();
+      pieces = (list.get() ?? []).flatMap((piece) => {
+        const entry = piece as {
+          id?: () => unknown;
+          ref?: () => { scope?: CellScope };
+          $ID?: unknown;
+        } | null;
+        const id = typeof entry?.id === "function" ? entry.id() : entry?.$ID;
+        if (typeof id !== "string") return [];
+        const scope = typeof entry?.ref === "function"
+          ? entry.ref().scope
+          : undefined;
+        return [{ id, ...(scope !== undefined ? { scope } : {}) }];
+      });
+    } catch (error) {
+      logger.warn("space-history-pieces", () => [
+        `listing the pieces of ${space}:`,
+        error,
+      ]);
+    }
+    // A listed piece is named by its full URI and a routed one without the
+    // scheme, so the two are compared without it, and an omitted scope is
+    // the space's.
+    const key = ({ id, scope }: { id: string; scope?: CellScope }) =>
+      `${scope ?? "space"}\n${id.replace(/^of:/, "")}`;
+    const listed = new Set(pieces.map(key));
+    for (const piece of named) {
+      if (listed.has(key(piece))) continue;
+      listed.add(key(piece));
+      pieces.push(piece);
+    }
+    const sources = await Promise.allSettled(
+      pieces.map(({ id, scope }) =>
+        this.#client.getPieceSource(id, space, scope)
+      ),
+    );
+    return sources.flatMap((outcome, index) => {
+      if (outcome.status !== "fulfilled") return [];
+      const { scope } = pieces[index];
+      return [{
+        source: outcome.value,
+        ...(scope !== undefined ? { scope } : {}),
+      }];
     });
+  }
+
+  /**
+   * Restores the pattern code of a piece of `space` to the source revision
+   * `change` names, and leaves the piece's data as it is: what "Origin and
+   * history" in the piece's menu does for that revision. Returns the
+   * runtime's answer, which carries a `compatibilityWarning` and a
+   * `confirmationToken` where the earlier source does not fit the piece's
+   * data; passing the token back as `confirmationToken` restores it anyway.
+   */
+  async restorePiecePattern(
+    space: DID,
+    change: Pick<PatternChange, "pieceId" | "revisionId" | "scope">,
+    confirmationToken?: string,
+  ): Promise<PieceUpdateSourceResponse> {
+    this.#check();
+    return await this.#client.updatePieceSource(
+      change.pieceId,
+      space,
+      { kind: "restore", revisionId: change.revisionId },
+      {
+        ...(confirmationToken !== undefined ? { confirmationToken } : {}),
+        ...(change.scope !== undefined ? { scope: change.scope } : {}),
+      },
+    );
   }
 
   /**

@@ -7,6 +7,9 @@ synthetic Topics board and a counter in the browser
 ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md));
 a deployed space and the production board are not measured. Stages 5 to 8
 are not started.
+[`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)
+continues this plan for a piece that reads another space or a wish, and its
+steps 1 to 3 come before stage 5.
 
 A serving loop starts a piece whenever a session's demand reaches one of its
 documents, and a fresh serving runtime runs every demanded computation of the
@@ -113,8 +116,22 @@ of its runs at the snapshot:
 
 - a live computation is not clean, which covers one a throttle, a debounce
   or a convergence backoff is holding;
-- one read a document in another space;
-- one read a document whose writer in this runtime names no piece.
+- one read a document in another space at an instance narrower than the
+  space, at a seq its replica cannot name, or in a space whose store
+  another memory server holds;
+- one read a document whose writer in this runtime names no piece and
+  cannot be answered for. A writer that is live, clean and runs once is
+  answered for by the slice, which takes over what it read;
+- one read a document a clock writes, which is the interval cell of a wish
+  for `#now/N`: no commit marks the slice when the interval passes while no
+  runtime holds the clock.
+
+Any other read in another space is registered with that space's index when
+the record is stored
+([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)),
+and the slice is stored against what that index reports. That space tells
+the reading one of its next change, so the slice is a current input of
+another slice while it is clean.
 
 No slice of a piece is vouched for when its root is not space-scoped, when a
 computation of it declares a write in another space, or when it records a
@@ -154,7 +171,11 @@ A later record does not take an overwrite back: a vouch row moves up only to
 a head a derivation put there, since the piece's writer reads nothing it
 writes and so was not woken by the overwrite. A vouch row a record no longer
 names is released and kept for its sequence number, so the overwrite is
-still known when the piece vouches for the instance again.
+still known when the piece vouches for the instance again. A record taken
+below a commit to an instance answers for it at no sequence number: its
+vouch row keeps the one the piece last answered at, and is not written for
+a piece that never did, so a client's first write of an instance is not
+taken for an overwrite once a later record covers it.
 
 Each slice that just became marked marks `1` every clean slice of another
 piece that reads an instance it writes, at its own key or narrower beneath
@@ -175,7 +196,10 @@ inputs is stale, and `0` otherwise. An input is stale when:
 
 - a slice that decides it is marked, a broader slice of the same piece
   included;
-- it is a derived document no recorded piece writes;
+- it is a derived document no recorded piece writes. A document whose only
+  writer names no piece, and which the slice answers for, is not one of
+  these: the slice took over what that writer read, and records the
+  document as an input;
 - a recorded piece computes it and no piece vouches for the instance read. A
   record taken while a computation was not running drops its vouches, and
   marks `1` each clean slice that read one of those instances. A viewer's
@@ -303,19 +327,25 @@ wrong.
   session's documents.
 - **A space with effects always in flight records nothing.** Attributing an
   outbox entry to its piece lifts this.
-- **A piece with a source origin, a foreign read, or a root narrower than the
-  space always starts.**
+- **A piece with a source origin, or a root narrower than the space, always
+  starts.**
 - **A write a computation makes outside its declared surface is not in the
   write rows.** A document written that way reads as an input nothing
   computes.
+  [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
+  under "Computations that run without demand", is the plan for it and for
+  a materializer's envelope.
 - **A view plan names no producers for a piece that is not started**
   (`viewExecutionNodes`). A browser client renders such a piece from the
   store, checked on a counter in the shell; a pattern whose view depends on
   a producer's proof has not been checked.
 - **A judgment reads every demand row of the space's sessions**, at about
   15 µs each on the memory server's thread.
-- **A piece whose output depends on something that is not a read**, such as
-  a clock, is held clean while what it would compute moves.
+- **A piece whose output depends on something that is not a read** is held
+  clean while what it would compute moves. The interval clock of a wish is
+  the one such input the index knows, and a slice that read it is never
+  vouched for, so its piece always starts. The same plan gives that slice
+  an expiry.
 - **A crash loses what the last cycles would have recorded.** The affected
   pieces are marked by their own later commits and start again.
 
@@ -347,7 +377,10 @@ wrong.
 4. **Not starting a current piece.** `skip` mode: the demand pass leaves a
    servable root unloaded, re-judges it, and re-arms it when it is marked.
 5. **Starting stale producers.** The index lists the marked producers of a
-   set of pieces, and the loop demands them itself.
+   set of pieces, and the loop demands them itself. A producer in another
+   space is demanded through the same step
+   ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
+   step 5), so the two are built together.
 6. **Judging before activation.** The host judges when a session opens a
    parked space and activates only when a root fails or events are pending. A
    commit into a space with live sessions and no serving loop advances the
@@ -355,9 +388,10 @@ wrong.
    is marked.
 7. **Releasing a piece when its last demand leaves**, the loop's own demand
    included (`serving-worker-heap.md`, step 3).
-8. **Narrowing what always starts**: reads across spaces through the owner
-   route, effects attributed to their piece, and an origin followed without a
-   start.
+8. **Narrowing what always starts**: effects attributed to their piece, and
+   an origin followed without a start. Reads across spaces have a plan of
+   their own
+   ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)).
 
 ## Acceptance tests
 
@@ -434,9 +468,19 @@ of which exist:
     once one vouches for it again with the instance unchanged.
 24. An output that was overwritten, that one record stops vouching for and a
     later one vouches for again, is stored marked.
+25. A piece whose first record was taken below a client's write of an
+    instance it vouches for is stored clean once a record covers that
+    write.
+26. A slice that read the interval clock of a wish is stored marked, and
+    under `skip` its piece is started by a demand made after the interval
+    passed, for a session that runs nothing itself
+    (`space-server-currency-wish.test.ts`).
 
 ## Related
 
+- [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md):
+  the index for a slice that read another space, a wish's own computations,
+  and the interval clock.
 - `served-reference-reads.md` (labs #9998): the cost this removes for a
   recorded board. Its question 1(a), a resolution watch that is not demand,
   and its question 2, a narrower arrival seed, save a start only for a piece

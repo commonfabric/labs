@@ -34,6 +34,15 @@
  * `--membership-store`. A refused join answers the index's status, or 400
  * for a link or chain that is not one and 409 for a conflicting membership.
  *
+ * `op: chain` answers `{chain}`, the text of a chain file holding the chain
+ * the person's index root issued to `--identity` (renewed first, as every
+ * call renews it), for `cf index join --chain` on another machine that holds
+ * the same identity key: a Weaver user's Mac, whose `cf` acts for the
+ * membership a Common Fabric Service on a cloud host joined. It needs
+ * `--membership-store`; 404 when this machine holds no membership, and 409
+ * when it holds no live chain to hand over: the identity is the membership's
+ * own root, which presents none, or the chain lapsed with its root elsewhere.
+ *
  * `--membership-store <dir>` names the directory `cf index join` keeps
  * memberships under (`~/.local/state/commonfabric/pattern-index` by default
  * for `cf`). With it, each call presents the chain the person's index root
@@ -49,7 +58,8 @@ import {
   PatternIndexClient,
   PatternIndexError,
 } from "./src/client.ts";
-import { openPatternIndexClient } from "./src/access.ts";
+import { chainForSigner, openPatternIndexClient } from "./src/access.ts";
+import { checkIndexChain } from "./src/membership.ts";
 import { PatternIndexStore } from "./src/store.ts";
 import {
   adoptIndexChain,
@@ -60,6 +70,7 @@ import {
 import {
   decodeDelegationChains,
   type DIDKey,
+  encodeDelegationChains,
   Identity,
   isCanonicalEd25519DID,
 } from "@commonfabric/identity";
@@ -141,6 +152,53 @@ const join = async (
     };
   }
   return { ok: false, status: 400, error: "join needs a link or a chain" };
+};
+
+/**
+ * The chain this identity presents for the membership, as a chain file's
+ * text, so another machine holding the same key can act for the same member.
+ */
+const chain = async (context: HelperContext): Promise<CliAnswer> => {
+  const { store, signer } = context;
+  if (store === undefined) {
+    return {
+      ok: false,
+      status: 400,
+      error: "chain needs --membership-store, where the membership is kept",
+    };
+  }
+  const membership = await store.membership();
+  if (membership === undefined) {
+    return {
+      ok: false,
+      status: 404,
+      error: "this machine holds no index membership",
+    };
+  }
+  if (membership.root === signer.did()) {
+    return {
+      ok: false,
+      status: 409,
+      error: "this identity is its membership's root, which presents no chain",
+    };
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const held = await chainForSigner(store, signer, now);
+  // Where the root is kept elsewhere a lapsed chain is still "held"; handing
+  // it over would only fail later, on the other machine.
+  const checked = held === undefined
+    ? undefined
+    : await checkIndexChain(held, signer.did(), now).catch(() => undefined);
+  // A chain from another root would join the other machine as someone else.
+  const usable = checked !== undefined && checked.root === membership.root;
+  if (held === undefined || !usable) {
+    return {
+      ok: false,
+      status: 409,
+      error: "this machine holds no live chain for this identity",
+    };
+  }
+  return { ok: true, value: { chain: encodeDelegationChains([held]) } };
 };
 
 /** The most patterns one `source` request reads. */
@@ -251,6 +309,8 @@ const answerRequest = async (
       }
       case "join":
         return await join(context, body);
+      case "chain":
+        return await chain(context);
       case "view": {
         // A person used something in a loom: a piece (counts toward settling
         // the version of theirs deployed to it) or a pattern they placed from
@@ -312,7 +372,7 @@ const answerRequest = async (
           ok: false,
           status: 400,
           error:
-            "op must be search, feedback, source, whoami, admit, join, view, getSharing or setSharing",
+            "op must be search, feedback, source, whoami, admit, join, chain, view, getSharing or setSharing",
         };
     }
   } catch (error) {
