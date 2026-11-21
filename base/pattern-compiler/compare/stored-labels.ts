@@ -53,9 +53,9 @@ import { deepLabelAlong, storedReader } from "./deep-label.ts";
 import { cfcCommitmentNormalForm } from "../../../runtime/runner/src/cfc/label-representation.ts";
 import { readStoredCfcMetadata } from "../../../runtime/runner/src/cfc/metadata.ts";
 import { observationLabelResolverFor } from "../../../runtime/runner/src/cfc/prepare.ts";
+import type { NestedPlanInputs as PlanInputs } from "../../../runtime/runner/src/cfc/plan-inputs.ts";
 import type {
   CfcAddress,
-  PlanInputs,
   SlotBinding,
 } from "../../../runtime/runner/src/cfc/types.ts";
 import { parseLink } from "../../../runtime/runner/src/link-utils.ts";

@@ -55,13 +55,18 @@ import {
   labelForConsumedEntries,
 } from "../../../runtime/runner/src/cfc/consumed-label.ts";
 import { readStoredCfcMetadata } from "../../../runtime/runner/src/cfc/metadata.ts";
+import {
+  type NestedPlanInputs,
+  type NestedPlanWrite,
+  nestedPlanWrite,
+  PlanInputsInterner,
+} from "../../../runtime/runner/src/cfc/plan-inputs.ts";
 import { runtimeOwnedStoreOwnerKey } from "../../../runtime/runner/src/cfc/runtime-owned-stores.ts";
 import {
   type CfcAddress,
   type CfcMetadata,
   type ObservedPosition as RuntimeObserved,
   type PlanElements,
-  type PlanInputs as RuntimePlanInputs,
   type PlanWrite as RuntimePlanWrite,
   runtimeWritePolicyAuthorization,
   type SlotBinding as RuntimeSlotBinding,
@@ -84,8 +89,8 @@ import type {
 import type {
   Address,
   FoldElements,
+  InputsTable,
   Observed,
-  PlanInputs,
   PlanWrite,
   SlotBinding,
   SlotBindings,
@@ -118,9 +123,16 @@ export type RuntimeCounts = {
 
 /**
  * A write record as the adapter recorded it with the runtime: the runtime's
- * `plan-write` input without its kind.
+ * `plan-write` input without its kind, with the inputs it names in the
+ * transaction's table of inputs held by value.
  */
-export type RecordedPlanWrite = RuntimePlanWrite;
+export type RecordedPlanWrite = NestedPlanWrite;
+
+/** The write records of one transaction, with the table they name. */
+type Recorded = {
+  writes: RuntimePlanWrite[];
+  interner: PlanInputsInterner;
+};
 
 /** Keeps the documents of one executor in one space of a runtime. */
 export class RuntimeTransactions implements TransactionHooks {
@@ -143,11 +155,33 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #readAfterWrite = new Set<string>();
   readonly #receipts: {
     receipt: TransactionCommitReceipt;
-    writes: RecordedPlanWrite[];
+    recorded: Recorded;
     created: string[];
   }[] = [];
-  /** The write records recorded in the transaction in progress. */
-  #recorded: RecordedPlanWrite[] = [];
+  /**
+   * The write records recorded in the transaction in progress, with the
+   * table of inputs they name.
+   */
+  #recorded: Recorded = { writes: [], interner: new PlanInputsInterner() };
+  /**
+   * The executor's table of inputs that the records of the transaction in
+   * progress name, and for each of its entries the index it was given in
+   * the runtime's table, with what that index was formed under: for a
+   * binding whether its position takes the label the transaction staged,
+   * and for a set of inputs the state of the transaction's reads and
+   * writes (`#stagedState`).
+   */
+  #converted: {
+    table: InputsTable;
+    bindings: Map<number, { staged: boolean; index: number }>;
+    inputs: Map<number, { state: number; index: number }>;
+  } | undefined;
+  /**
+   * The number of changes of what decides whether a binding takes a staged
+   * label, in the transaction in progress: its writes, and its reads of a
+   * position it wrote.
+   */
+  #stagedState = 0;
   /**
    * The label entries each document stored before the transaction in
    * progress, for the documents it recorded a write for that left the
@@ -376,7 +410,9 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#readAfterWrite.clear();
     this.#written.clear();
     this.#metadata.clear();
-    this.#recorded = [];
+    this.#recorded = { writes: [], interner: new PlanInputsInterner() };
+    this.#converted = undefined;
+    this.#stagedState = 0;
     this.#created = [];
   }
 
@@ -385,7 +421,10 @@ export class RuntimeTransactions implements TransactionHooks {
     const tx = this.#open();
     const text = JSON.stringify([doc, path]);
     const wrote = this.#wrote({ doc, path });
-    if (wrote) this.#readAfterWrite.add(text);
+    if (wrote && !this.#readAfterWrite.has(text)) {
+      this.#readAfterWrite.add(text);
+      this.#stagedState += 1;
+    }
     if (this.#read.has(text)) return;
     this.#read.add(text);
     if (!wrote) this.#readBeforeWrite.add(text);
@@ -457,9 +496,11 @@ export class RuntimeTransactions implements TransactionHooks {
     schema?: Schema,
     writes?: readonly PlanWrite[],
     splice?: { start: number; removed: number; inserted: number },
+    inputs?: InputsTable,
   ): void {
     const tx = this.#open();
     this.#counts.writes += 1;
+    this.#stagedState += 1;
     const written = this.#written.get(doc) ?? [];
     this.#written.set(doc, written);
     const document = store.docs.get(doc);
@@ -541,10 +582,17 @@ export class RuntimeTransactions implements TransactionHooks {
     // value as it was, so the path stores the label of the write for the
     // value it holds. A transaction that keeps no log of its writes gives
     // every record as that of a write.
+    if (writes === undefined || writes.length === 0) return;
+    if (inputs === undefined) {
+      throw new Error(
+        "Write records were given without their table of inputs.",
+      );
+    }
     this.#record(
       tx,
-      writes ?? [],
+      writes,
       attempts !== undefined && tx.getWriteAttemptLog?.().length === attempts,
+      inputs,
     );
   }
 
@@ -649,6 +697,7 @@ export class RuntimeTransactions implements TransactionHooks {
     store: Store,
     schema: Schema | undefined,
     writes: readonly PlanWrite[],
+    inputs: InputsTable,
   ): void {
     if (this.#compiledPattern === undefined) return;
     const tx = this.#open();
@@ -667,23 +716,26 @@ export class RuntimeTransactions implements TransactionHooks {
         store,
       );
     }
-    this.#record(tx, writes, true);
+    this.#record(tx, writes, true, inputs);
   }
 
   /**
    * Records each write record with the runtime as an authorized
    * `plan-write` input: `unchanged` for a write that left the value at its
-   * target as it was.
+   * target as it was. The inputs a record names in `table`, the executor's
+   * table of inputs, are recorded as entries of the runtime's, each
+   * distinct one once for the transaction.
    */
   #record(
     tx: IExtendedStorageTransaction,
     writes: readonly PlanWrite[],
     unchanged: boolean,
+    table: InputsTable,
   ): void {
     if (this.#compiledPattern === undefined) return;
     // The records of one change of the members of a list hold one array of
-    // what the change compared, and one set of bindings: each is given to
-    // the runtime as one object.
+    // what the change compared, which is given to the runtime as one
+    // object.
     const observed = (positions: readonly Observed[]) =>
       positions.map(({ address, observes, alone }) => ({
         address: this.#cfcAddress(address),
@@ -691,10 +743,7 @@ export class RuntimeTransactions implements TransactionHooks {
         ...(alone ? { alone: true as const } : {}),
       }));
     const decidedOf = new Map<readonly Observed[], RuntimeObserved[]>();
-    const inputsOf = new Map<
-      SlotBindings,
-      { write: PlanWrite; inputs: RuntimePlanInputs }
-    >();
+    const recorded: RuntimePlanWrite[] = [];
     for (const write of writes) {
       let decided = write.decided === undefined
         ? undefined
@@ -703,19 +752,8 @@ export class RuntimeTransactions implements TransactionHooks {
         decided = observed(write.decided);
         decidedOf.set(write.decided, decided);
       }
-      let shared = inputsOf.get(write.slots);
-      if (
-        shared === undefined || shared.write.selections !== write.selections ||
-        shared.write.picks !== write.picks ||
-        shared.write.elements !== write.elements ||
-        shared.write.dynamic !== write.dynamic ||
-        shared.write.outputs !== write.outputs
-      ) {
-        shared = { write, inputs: this.#inputs(write) };
-        inputsOf.set(write.slots, shared);
-      }
-      const recorded: RecordedPlanWrite = {
-        ...shared.inputs,
+      recorded.push({
+        inputs: this.#inputs(table, write.inputs),
         target: this.#cfcAddress(write.target),
         compiledPattern: this.#compiledPattern,
         record: write.record,
@@ -733,32 +771,65 @@ export class RuntimeTransactions implements TransactionHooks {
         ...(write.relabel ? { relabel: true as const } : {}),
         ...(write.bound ? { bound: true as const } : {}),
         ...(write.membersChanged ? { membersChanged: true as const } : {}),
-      };
-      this.#recorded.push(recorded);
+      });
       if (unchanged) {
         this.#counts.unchangedRecords += 1;
         this.#noteUnchanged(write.target.doc);
       }
-      // The runtime's mark: this adapter stands in for the runner, which
-      // records what its own code computed.
+    }
+    // The runtime's mark: this adapter stands in for the runner, which
+    // records what its own code computed.
+    const part = this.#recorded.interner.take();
+    if (part !== undefined) {
       tx.recordCfcWritePolicyInput(
-        { kind: "plan-write", ...recorded },
+        {
+          kind: "plan-inputs",
+          compiledPattern: this.#compiledPattern,
+          ...part,
+        },
+        runtimeWritePolicyAuthorization,
+      );
+    }
+    for (const write of recorded) {
+      this.#recorded.writes.push(write);
+      tx.recordCfcWritePolicyInput(
+        { kind: "plan-write", ...write },
         runtimeWritePolicyAuthorization,
       );
     }
   }
 
-  /** The inputs of one place of a write record, as the runtime reads them. */
-  #inputs(place: PlanInputs): RuntimePlanInputs {
+  /**
+   * The index, in the runtime's table of inputs of the transaction in
+   * progress, of the entry `index` of the executor's table `table`, as the
+   * runtime reads it. An entry is given an index again where what decides
+   * whether one of its bindings takes a staged label changed since
+   * (`#stagedState`), and the same index where it reads as it did.
+   */
+  #inputs(table: InputsTable, index: number): number {
+    if (this.#converted?.table !== table) {
+      this.#converted = { table, bindings: new Map(), inputs: new Map() };
+    }
+    const known = this.#converted.inputs.get(index);
+    if (known?.state === this.#stagedState) return known.index;
+    const { interner } = this.#recorded;
+    const place = table.inputs[index];
     const entries = <T, U>(
       record: Record<number, T> | undefined,
       as: (value: T) => U,
     ): Record<number, U> | undefined =>
       record === undefined ? undefined : Object.fromEntries(
-        Object.entries(record).map(([index, value]) => [index, as(value)]),
+        Object.entries(record).map(([at, value]) => [at, as(value)]),
       );
-    return {
-      slots: this.#slots(place.slots),
+    const elements = (given: FoldElements): PlanElements =>
+      "uniform" in given ? { uniform: this.#inputs(table, given.uniform) } : {
+        groups: given.groups.map(({ inputs, count }) => ({
+          inputs: this.#inputs(table, inputs),
+          count,
+        })),
+      };
+    const formed = interner.inputs({
+      slots: this.#slots(table, place.slots),
       ...(place.selections === undefined
         ? {}
         : { selections: place.selections }),
@@ -766,15 +837,14 @@ export class RuntimeTransactions implements TransactionHooks {
         picks: entries(
           place.picks,
           (chosen) =>
-            chosen === null ? null : { slots: this.#slots(chosen.slots) },
+            chosen === null
+              ? null
+              : { slots: this.#slots(table, chosen.slots) },
         ),
       }),
-      ...(place.elements === undefined ? {} : {
-        elements: entries(
-          place.elements,
-          (elements) => this.#elements(elements),
-        ),
-      }),
+      ...(place.elements === undefined
+        ? {}
+        : { elements: entries(place.elements, elements) }),
       ...(place.dynamic === undefined ? {} : {
         dynamic: entries(
           place.dynamic,
@@ -782,62 +852,77 @@ export class RuntimeTransactions implements TransactionHooks {
         ),
       }),
       ...(place.outputs === undefined ? {} : {
-        outputs: entries(place.outputs, (inputs) => this.#inputs(inputs)),
+        outputs: entries(
+          place.outputs,
+          (inputs) => this.#inputs(table, inputs),
+        ),
       }),
-    };
-  }
-
-  /** The elements of a fold, as the runtime reads them. */
-  #elements(elements: FoldElements): PlanElements {
-    return "uniform" in elements
-      ? { uniform: this.#inputs(elements.uniform) }
-      : {
-        groups: elements.groups.map(({ count, ...inputs }) => ({
-          ...this.#inputs(inputs),
-          count,
-        })),
-      };
+    });
+    this.#converted.inputs.set(index, {
+      state: this.#stagedState,
+      index: formed,
+    });
+    return formed;
   }
 
   /**
-   * The bindings of slots, as the runtime reads them. A plan's class
-   * `identity` is the runtime's `followRef`. A slot whose position the
+   * The bindings of slots that name theirs in `table`, as the runtime reads
+   * them: each the index of the binding in the runtime's table. A plan's
+   * class `identity` is the runtime's `followRef`. A slot whose position the
    * transaction in progress wrote takes the label staged there.
    */
-  #slots(slots: SlotBindings): RuntimeSlotBindings {
+  #slots(table: InputsTable, slots: SlotBindings): RuntimeSlotBindings {
+    const converted = this.#converted!.bindings;
     return Object.fromEntries(
-      Object.entries(slots).map(([slot, binding]) => [
-        slot,
-        this.#binding(binding),
-      ]),
+      Object.entries(slots).map(([slot, at]) => {
+        const binding = table.bindings[at];
+        const staged = this.#takesStaged(binding);
+        const known = converted.get(at);
+        if (known?.staged === staged) return [slot, known.index];
+        const index = this.#recorded.interner.binding(
+          this.#binding(binding, staged),
+        );
+        converted.set(at, { staged, index });
+        return [slot, index];
+      }),
     );
   }
 
-  /** Helper for `#slots()`, for one binding. */
-  #binding(binding: SlotBinding): RuntimeSlotBinding {
+  /**
+   * Whether the position a binding's chain ends at takes, for the slot,
+   * the label the transaction in progress staged there. A position the
+   * transaction read before it wrote it, and only then, holds for the slot
+   * what the read found: its stored label, and not the label the write
+   * stages, which a write edge that reads its own target would make depend
+   * on itself. A position it read after the write holds what the write
+   * made, whose label is the staged one; the binding names no read, so a
+   * position read both before and after the write takes the staged label,
+   * and a slot whose label then depends on itself is refused as a cycle.
+   */
+  #takesStaged(binding: SlotBinding): boolean {
+    if (!("chain" in binding)) return false;
+    const last = binding.chain.at(-1);
+    if (last === undefined || !this.#wrote(last)) return false;
+    const position = JSON.stringify([last.doc, last.path]);
+    return this.#readAfterWrite.has(position) ||
+      !this.#readBeforeWrite.has(position);
+  }
+
+  /**
+   * Helper for `#slots()`, for one binding, with whether its position
+   * takes the staged label (`#takesStaged`).
+   */
+  #binding(binding: SlotBinding, staged: boolean): RuntimeSlotBinding {
     if ("output" in binding) return { output: binding.output };
     if ("constant" in binding) return { constant: true };
     if ("staged" in binding) {
       return { staged: this.#cfcAddress(binding.staged) };
     }
-    const last = binding.chain.at(-1);
-    // A position the transaction read before it wrote it, and only then,
-    // holds for the slot what the read found: its stored label, and not
-    // the label the write stages, which a write edge that reads its own
-    // target would make depend on itself. A position it read after the
-    // write holds what the write made, whose label is the staged one; the
-    // binding names no read, so a position read both before and after the
-    // write takes the staged label, and a slot whose label then depends on
-    // itself is refused as a cycle.
     // A staged position that the read crossed links to, or that holds
     // links the read followed, keeps those positions: the binding names
     // them all, marked as read after the write.
-    const position = JSON.stringify([last?.doc, last?.path]);
-    const staged = last !== undefined && this.#wrote(last) &&
-      (this.#readAfterWrite.has(position) ||
-        !this.#readBeforeWrite.has(position));
     if (staged && binding.chain.length === 1 && binding.below === undefined) {
-      return { staged: this.#cfcAddress(last) };
+      return { staged: this.#cfcAddress(binding.chain[0]) };
     }
     // A position the transaction did not read, such as the one an element
     // of a fold's group read in an earlier transaction, is the runtime's to
@@ -900,12 +985,13 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     this.#receipts.push({
       receipt: tx.commit(),
-      writes: this.#recorded,
+      recorded: this.#recorded,
       // A document forgotten here may be written again by a later
       // transaction before this one settles.
       created: refused ? [] : this.#created,
     });
-    this.#recorded = [];
+    this.#recorded = { writes: [], interner: new PlanInputsInterner() };
+    this.#converted = undefined;
     this.#created = [];
     this.#reportLabels();
     if (refused) this.#unchanged.clear();
@@ -921,10 +1007,18 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   async settled(): Promise<string[]> {
     const refused: string[] = [];
-    for (const { receipt, writes, created } of this.#receipts.splice(0)) {
+    for (const { receipt, recorded, created } of this.#receipts.splice(0)) {
       const { error } = await receipt.settled;
       if (error === undefined) {
-        this.#onCommitted?.(writes);
+        if (this.#onCommitted !== undefined) {
+          const expanded = new Map<number, NestedPlanInputs>();
+          const { table } = recorded.interner;
+          this.#onCommitted(
+            recorded.writes.map((write) =>
+              nestedPlanWrite(write, table, expanded)
+            ),
+          );
+        }
         continue;
       }
       refused.push(`${error.name}: ${error.message}`);

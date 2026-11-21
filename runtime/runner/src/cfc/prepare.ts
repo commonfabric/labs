@@ -289,7 +289,10 @@ import {
   type ImplementationIdentity,
   type LabelMapEntry,
   type LabelObservationClass,
+  type PlanInputs,
+  type PlanInputsTable,
   runtimeWritePolicyAuthorization,
+  type SlotBinding,
   type StoredCfcMetadata,
   type TrustSnapshot,
   type WritePolicyInput,
@@ -5224,6 +5227,46 @@ export const planWritesByTarget = (
   return result;
 };
 
+/**
+ * The table of inputs the honored `plan-inputs` inputs of `tx` give for each
+ * compiled pattern, by the pattern's identity: each part's entries at the
+ * indices the part names, whatever the order the parts were recorded in.
+ * Honored are the parts `planWritesByTarget` would honor as records.
+ */
+export const planInputsTables = (
+  tx: IExtendedStorageTransaction,
+): Map<string, PlanInputsTable> => {
+  const tables = new Map<
+    string,
+    { inputs: PlanInputs[]; bindings: SlotBinding[] }
+  >();
+  const state = tx.getCfcState();
+  if (!state.planLabels) return tables;
+  const registry = tx.compiledPlans(runtimeWritePolicyAuthorization);
+  if (registry === undefined) return tables;
+  for (const input of state.writePolicyInputs) {
+    if (
+      input.kind !== "plan-inputs" || !tx.isRuntimeWritePolicyInput(input) ||
+      registry.plan(input.compiledPattern, runtimeWritePolicyAuthorization) ===
+        undefined
+    ) {
+      continue;
+    }
+    let table = tables.get(input.compiledPattern);
+    if (table === undefined) {
+      table = { inputs: [], bindings: [] };
+      tables.set(input.compiledPattern, table);
+    }
+    input.inputs.forEach((inputs, index) => {
+      table.inputs[input.firstInput + index] = inputs;
+    });
+    input.bindings.forEach((binding, index) => {
+      table.bindings[input.firstBinding + index] = binding;
+    });
+  }
+  return tables;
+};
+
 const resultWiringsByTarget = (
   tx: IExtendedStorageTransaction,
 ): Map<
@@ -5590,6 +5633,7 @@ export const planLabelsFor = (
     });
   return instantiatePlanLabels(writes, {
     registry,
+    tables: planInputsTables(tx),
     resolver: resolver ?? observationLabelResolverFor(tx),
     join,
     noteWork: (kind, count) => tx.noteCfcPreparationWork?.(kind, count),

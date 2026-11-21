@@ -1162,12 +1162,6 @@ export interface CfcRuntimeStats {
   /** Selections, choices and prefix folds instantiated as their bound. */
   planLabelBounds: number;
 
-  /**
-   * Content keys formed of the inputs a write record reports for a place,
-   * which key the memo of an `output` or `shared` label: one per place.
-   */
-  planInputKeys: number;
-
   cfcPreparedTx: number;
   cfcPrepareRejects: number;
   cfcDigestInvalidations: number;
@@ -1228,7 +1222,6 @@ const initialCfcRuntimeStats = (): CfcRuntimeStats => ({
   planTemplateNodes: 0,
   planSlotLabels: 0,
   planLabelMemoHits: 0,
-  planInputKeys: 0,
   planLabelBounds: 0,
   cfcPreparedTx: 0,
   cfcPrepareRejects: 0,

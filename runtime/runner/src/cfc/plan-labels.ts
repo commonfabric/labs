@@ -18,9 +18,7 @@
  * violation refuses the commit.
  */
 
-import type { FabricValue } from "@commonfabric/api";
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { hashStringOf } from "@commonfabric/data-model";
 import {
   cfcCanonicalClauseDigest,
 } from "@commonfabric/memory/v2/cfc-clause-identity";
@@ -57,6 +55,7 @@ import {
   type CfcPreparationWork,
   type PlanElements,
   type PlanInputs,
+  type PlanInputsTable,
   type PlanWrite,
   runtimeWritePolicyAuthorization,
   type SlotBinding,
@@ -84,6 +83,12 @@ export interface JournaledRead {
 export interface PlanLabelEnvironment {
   readonly registry: CompiledPlanRegistry;
   readonly resolver: ObservationLabelResolver;
+
+  /**
+   * The table of inputs the transaction holds for each compiled pattern
+   * (`planInputsTables` in `prepare.ts`), by the pattern's identity.
+   */
+  readonly tables: ReadonlyMap<string, PlanInputsTable>;
 
   /**
    * The journaled read of `address` in the class `observes`, or `undefined`
@@ -187,7 +192,8 @@ export interface MembershipLabel {
  * reported for each output it or an enclosing place names.
  */
 interface PlaceInputs extends TemplateInputs {
-  reported(output: number): PlanInputs | undefined;
+  /** The index, in the table of inputs, of what is reported for `output`. */
+  reported(output: number): number | undefined;
 }
 
 /** Thrown inside the pre-pass for a report the transaction does not back. */
@@ -439,11 +445,36 @@ export const instantiatePlanLabels = (
   // container's members compared, by the array its records share.
   const decidedClauses = new Map<object, readonly CfcConfClause[]>();
   // Per transaction: the template label of the records of one change of a
-  // container's members, which share their bindings, by those bindings.
+  // container's members, which name one entry of the table of inputs, by
+  // the compiled pattern and that entry.
   const sharedTemplateLabels = new Map<
-    object,
+    string,
     { input: PlanWriteInput; label: InternedLabel }
   >();
+  const sharedKey = (input: PlanWriteInput): string =>
+    stringKey([input.compiledPattern, String(input.inputs)]);
+
+  /** The entry at `index` of the table of inputs `write` names. */
+  const placeAt = (write: PlanWrite, index: number): PlanInputs => {
+    const place = env.tables.get(write.compiledPattern)?.inputs[index];
+    if (place === undefined) {
+      throw new PlanLabelError(
+        `a plan-write names entry ${index} of the transaction's table of inputs, which holds none there`,
+      );
+    }
+    return place;
+  };
+
+  /** The binding at `index` of the table of inputs `write` names. */
+  const bindingAt = (write: PlanWrite, index: number): SlotBinding => {
+    const binding = env.tables.get(write.compiledPattern)?.bindings[index];
+    if (binding === undefined) {
+      throw new PlanLabelError(
+        `a plan-write names binding ${index} of the transaction's table of inputs, which holds none there`,
+      );
+    }
+    return binding;
+  };
 
   /**
    * `label` joined with the labels stored at the positions `input` names
@@ -526,19 +557,19 @@ export const instantiatePlanLabels = (
     }
     const shared = input.decided === undefined && input.observed === undefined
       ? undefined
-      : sharedTemplateLabels.get(input.slots);
+      : sharedTemplateLabels.get(sharedKey(input));
     if (shared !== undefined && sameTemplateInputs(shared.input, input)) {
       work.memoHits++;
       return withDecision(shared.label);
     }
-    const inputs = inputsFor(plan, input, input, undefined);
+    const inputs = ownInputs(plan, input);
     let label = instantiateTemplate(template, inputs, table, work);
     if (
       input.decided !== undefined || input.observed !== undefined ||
       input.enumeration === true
     ) {
       const own = label === NEUTRAL ? table.empty : label;
-      sharedTemplateLabels.set(input.slots, { input, label: own });
+      sharedTemplateLabels.set(sharedKey(input), { input, label: own });
       return withDecision(own);
     }
     if (kept) {
@@ -573,7 +604,7 @@ export const instantiatePlanLabels = (
         "a plan-write names an operation that is no `wish` of the plan",
       );
     }
-    const inputs = inputsFor(plan, input, input, undefined);
+    const inputs = ownInputs(plan, input);
     const operands = instantiateTemplate(operation.input, inputs, table, work);
     const reads = (plan.dynamicReads ?? []).findIndex(({ why }) =>
       why?.kind === "search" && why.operation === index
@@ -647,23 +678,40 @@ export const instantiatePlanLabels = (
     return minted;
   };
 
+  /** The `TemplateInputs` of a write's own place. */
+  const ownInputs = (plan: CompiledPlan, write: PlanWrite): PlaceInputs =>
+    inputsFor(
+      plan,
+      write,
+      placeAt(write, write.inputs),
+      undefined,
+      String(write.inputs),
+    );
+
   /**
    * The `TemplateInputs` of one place: `place` holds its bindings, and an
    * enclosing place's bindings answer a slot, selection or output it does
-   * not name.
+   * not name. `at` names the place among those of the write's compiled
+   * pattern in the transaction: the index of its inputs in the table, behind
+   * the name of the place enclosing it where it has one, so that equal
+   * names stand for equal inputs.
    */
   const inputsFor = (
     plan: CompiledPlan,
     write: PlanWrite,
     place: PlanInputs,
     enclosing: PlaceInputs | undefined,
+    at: string,
   ): PlaceInputs => {
     const memberships = new Map<number, InternedLabel>();
     const self: PlaceInputs = {
       reported: (output) =>
         place.outputs?.[output] ?? enclosing?.reported(output),
       slotLabel: (slot) => {
-        const binding = place.slots[slot];
+        const index = place.slots[slot];
+        const binding = index === undefined
+          ? undefined
+          : bindingAt(write, index);
         if (binding !== undefined && "output" in binding) {
           const label = self.outputLabel(binding.output);
           return label === NEUTRAL ? table.empty : label;
@@ -677,7 +725,7 @@ export const instantiatePlanLabels = (
       elements: (collection) => {
         const elements = place.elements?.[collection];
         if (elements !== undefined) {
-          return elementsOf(plan, write, elements, self);
+          return elementsOf(plan, write, elements, self, at);
         }
         if (enclosing !== undefined) return enclosing.elements(collection);
         throw new TemplateInstantiationError(
@@ -688,9 +736,13 @@ export const instantiatePlanLabels = (
         const reported = place.picks?.[pick];
         if (reported === undefined) return enclosing?.chosen(pick);
         return {
-          chosen: reported === null
-            ? undefined
-            : inputsFor(plan, write, { slots: reported.slots }, self),
+          chosen: reported === null ? undefined : inputsFor(
+            plan,
+            write,
+            { slots: reported.slots },
+            self,
+            `${at} pick ${pick}`,
+          ),
         };
       },
       children: (pick, from) => {
@@ -747,21 +799,25 @@ export const instantiatePlanLabels = (
           );
         }
         const reported = self.reported(output);
+        // The inputs reported for an output stand in the table once, so
+        // every place that names them by one index shares the label.
         return cached(
           [
             "output",
             write.compiledPattern,
             String(output),
-            ...(reported === undefined
-              ? [writeKey(write), inputsKey(place)]
-              : [inputsKey(reported)]),
+            ...(reported === undefined ? ["at", at] : ["in", String(reported)]),
           ],
           () =>
             instantiateTemplate(
               template,
-              reported === undefined
-                ? self
-                : inputsFor(plan, write, reported, undefined),
+              reported === undefined ? self : inputsFor(
+                plan,
+                write,
+                placeAt(write, reported),
+                undefined,
+                String(reported),
+              ),
               table,
               work,
             ),
@@ -775,13 +831,7 @@ export const instantiatePlanLabels = (
           );
         }
         return cached(
-          [
-            "shared",
-            write.compiledPattern,
-            String(index),
-            writeKey(write),
-            inputsKey(place),
-          ],
+          ["shared", write.compiledPattern, String(index), at],
           () => instantiateTemplate(template, self, table, work),
         );
       },
@@ -810,21 +860,32 @@ export const instantiatePlanLabels = (
     return self;
   };
 
-  /** The element inputs of a reported collection. */
+  /**
+   * The element inputs of a reported collection, each set a place inside
+   * `enclosing`, the place named `at`.
+   */
   const elementsOf = (
     plan: CompiledPlan,
     write: PlanWrite,
     elements: PlanElements,
     enclosing: PlaceInputs,
-  ): ElementInputs =>
-    "uniform" in elements
-      ? { uniform: inputsFor(plan, write, elements.uniform, enclosing) }
-      : {
-        groups: elements.groups.map((group) => ({
-          inputs: inputsFor(plan, write, group, enclosing),
-          count: group.count,
-        })),
-      };
+    at: string,
+  ): ElementInputs => {
+    const within = (index: number): PlaceInputs =>
+      inputsFor(
+        plan,
+        write,
+        placeAt(write, index),
+        enclosing,
+        `${at} element ${index}`,
+      );
+    return "uniform" in elements ? { uniform: within(elements.uniform) } : {
+      groups: elements.groups.map(({ inputs, count }) => ({
+        inputs: within(inputs),
+        count,
+      })),
+    };
+  };
 
   /** The label under `key`, instantiated once per transaction. */
   const cached = (
@@ -925,15 +986,12 @@ export const instantiatePlanLabels = (
 };
 
 /**
- * Whether two writes of one compiled pattern name one record and hold the
- * same objects as their inputs, so that their template instantiates to one
- * label.
+ * Whether two writes of one compiled pattern name one record and one entry
+ * of the table of inputs, so that their template instantiates to one label.
  */
 const sameTemplateInputs = (a: PlanWrite, b: PlanWrite): boolean =>
   a.compiledPattern === b.compiledPattern && a.instance === b.instance &&
-  a.slots === b.slots && a.selections === b.selections &&
-  a.picks === b.picks && a.elements === b.elements &&
-  a.dynamic === b.dynamic && a.outputs === b.outputs && a.keys === b.keys &&
+  a.inputs === b.inputs &&
   JSON.stringify(a.record) === JSON.stringify(b.record);
 
 /** Reports the counts of one pre-pass. */
@@ -948,8 +1006,6 @@ const noteWork = (
   env.noteWork("planSlotLabels", work.slotLabels);
   env.noteWork("planLabelMemoHits", work.memoHits);
   env.noteWork("planLabelBounds", bounds);
-  env.noteWork("planInputKeys", inputKeysFormed);
-  inputKeysFormed = 0;
 };
 
 /** The template and keep flag of the plan record a write names. */
@@ -990,53 +1046,6 @@ const isFoldOver = (
     ? plan.templates[template.template]
     : template;
   return expanded?.op === "fold" && expanded.collection === collection;
-};
-
-/** The content keys `inputsKey` formed since the last pass reported them. */
-let inputKeysFormed = 0;
-
-/**
- * The content key of each place's inputs formed so far, by the object. A
- * write-policy input is frozen when it is recorded, so the key of one
- * object stays what it is.
- */
-const inputKeys = new WeakMap<object, string>();
-
-/** The content key of a place's inputs, formed once per object. */
-const inputsKey = (inputs: object): string => {
-  let key = inputKeys.get(inputs);
-  if (key === undefined) {
-    inputKeysFormed++;
-    key = hashStringOf(inputs as unknown as FabricValue);
-    inputKeys.set(inputs, key);
-  }
-  return key;
-};
-
-/** The key `writeKey` formed for each write so far, by the write. */
-const writeKeys = new WeakMap<PlanWrite, string>();
-
-/**
- * The content key of a write's own inputs, without its target and record,
- * so that two writes with equal inputs share their `output` and `shared`
- * labels.
- */
-const writeKey = (write: PlanWrite): string => {
-  let key = writeKeys.get(write);
-  if (key === undefined) {
-    key = inputsKey({
-      slots: write.slots,
-      ...(write.selections === undefined
-        ? {}
-        : { selections: write.selections }),
-      ...(write.picks === undefined ? {} : { picks: write.picks }),
-      ...(write.elements === undefined ? {} : { elements: write.elements }),
-      ...(write.dynamic === undefined ? {} : { dynamic: write.dynamic }),
-      ...(write.outputs === undefined ? {} : { outputs: write.outputs }),
-    });
-    writeKeys.set(write, key);
-  }
-  return key;
 };
 
 /** Joins key parts unambiguously. */

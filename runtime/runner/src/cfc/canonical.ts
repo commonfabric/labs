@@ -381,6 +381,7 @@ export const canonicalizeWritePolicyInput = (
         ? input
         : { ...input, target: canonicalizeAttemptedWrite(input.target) };
     case "sink-request":
+    case "plan-inputs":
       return input;
   }
 };

@@ -19,15 +19,21 @@ import type { CompiledPlan } from "../src/cfc/compiled-plans.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { observedDocumentKey } from "../src/cfc/observation-label.ts";
 import {
+  type NestedPlanElements,
+  type NestedPlanWrite,
+  type NestedSlotBindings,
+  PlanInputsInterner,
+} from "../src/cfc/plan-inputs.ts";
+import {
   deriveFlowJoin,
   planLabelsFor,
   planWritesByTarget,
 } from "../src/cfc/prepare.ts";
 import {
   type CfcAddress,
-  type PlanElements,
+  type PlanInputs,
   runtimeWritePolicyAuthorization,
-  type SlotBindings,
+  type SlotBinding,
   type WritePolicyInput,
 } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -123,13 +129,68 @@ const withRuntime = async (
   }
 };
 
+/** A `plan-write` input with its inputs held by value. */
+type NestedWriteInput = { readonly kind: "plan-write" } & NestedPlanWrite;
+
+/** The table of inputs built for each transaction, by compiled pattern. */
+const interners = new WeakMap<object, Map<string, PlanInputsInterner>>();
+
+/**
+ * Records `input` on `tx`. A `plan-write` input that holds its inputs by
+ * value is recorded as one that names them in the transaction's table of
+ * inputs, behind the parts of the table that hold what it names, each with
+ * the authorization given. Returns the input recorded for `input`.
+ */
+const recordInput = (
+  tx: IExtendedStorageTransaction,
+  input: WritePolicyInput | NestedWriteInput,
+  authorization?: typeof runtimeWritePolicyAuthorization,
+): WritePolicyInput => {
+  if (input.kind !== "plan-write" || "inputs" in input) {
+    tx.recordCfcWritePolicyInput(input, authorization);
+    return input;
+  }
+  const byPattern = interners.get(tx) ?? new Map<string, PlanInputsInterner>();
+  interners.set(tx, byPattern);
+  const interner = byPattern.get(input.compiledPattern) ??
+    new PlanInputsInterner();
+  byPattern.set(input.compiledPattern, interner);
+  const {
+    slots,
+    selections,
+    picks,
+    elements,
+    dynamic,
+    outputs,
+    ...rest
+  } = input;
+  const inputs = interner.nested({
+    slots,
+    ...(selections === undefined ? {} : { selections }),
+    ...(picks === undefined ? {} : { picks }),
+    ...(elements === undefined ? {} : { elements }),
+    ...(dynamic === undefined ? {} : { dynamic }),
+    ...(outputs === undefined ? {} : { outputs }),
+  });
+  const part = interner.take();
+  if (part !== undefined) {
+    tx.recordCfcWritePolicyInput(
+      { kind: "plan-inputs", compiledPattern: input.compiledPattern, ...part },
+      authorization,
+    );
+  }
+  const recorded: WritePolicyInput = { ...rest, inputs };
+  tx.recordCfcWritePolicyInput(recorded, authorization);
+  return recorded;
+};
+
 /** A `plan-write` input for body 0's write `write` at `target`. */
 const planWrite = (
   compiledPattern: string,
   target: CfcAddress,
   write: number,
   source: CfcAddress,
-): Extract<WritePolicyInput, { kind: "plan-write" }> => ({
+): NestedWriteInput => ({
   kind: "plan-write",
   target,
   compiledPattern,
@@ -206,9 +267,13 @@ describe("cfc-plan-labels", () => {
             0,
             address("of:source"),
           );
-          tx.recordCfcWritePolicyInput(input, runtimeWritePolicyAuthorization);
+          const recorded = recordInput(
+            tx,
+            input,
+            runtimeWritePolicyAuthorization,
+          );
           const honored = [...planWritesByTarget(tx).values()].flat();
-          expect(honored).toEqual([input]);
+          expect(honored).toEqual([recorded]);
         } finally {
           tx.abort();
         }
@@ -224,7 +289,8 @@ describe("cfc-plan-labels", () => {
         );
         const tx = runtime.edit();
         try {
-          tx.recordCfcWritePolicyInput(
+          recordInput(
+            tx,
             planWrite(identity, address("of:t", ["a"]), 0, address("of:s")),
           );
           expect(planWritesByTarget(tx).size).toBe(0);
@@ -238,7 +304,8 @@ describe("cfc-plan-labels", () => {
       await withRuntime(true, (runtime) => {
         const tx = runtime.edit();
         try {
-          tx.recordCfcWritePolicyInput(
+          recordInput(
+            tx,
             planWrite(
               hashStringOf({
                 plan: plan as unknown as FabricValue,
@@ -266,7 +333,8 @@ describe("cfc-plan-labels", () => {
         );
         const tx = runtime.edit();
         try {
-          tx.recordCfcWritePolicyInput(
+          recordInput(
+            tx,
             planWrite(identity, address("of:t", ["a"]), 0, address("of:s")),
             runtimeWritePolicyAuthorization,
           );
@@ -346,10 +414,208 @@ describe("cfc-plan-labels", () => {
         ?.confidentiality ?? []),
     ];
 
+    describe("with the table of inputs", () => {
+      /** A `plan-inputs` input of `identity` for the entries given. */
+      const tablePart = (
+        identity: string,
+        part: {
+          firstInput?: number;
+          inputs?: PlanInputs[];
+          firstBinding?: number;
+          bindings?: SlotBinding[];
+        },
+      ): WritePolicyInput => ({
+        kind: "plan-inputs",
+        compiledPattern: identity,
+        firstInput: part.firstInput ?? 0,
+        inputs: part.inputs ?? [],
+        firstBinding: part.firstBinding ?? 0,
+        bindings: part.bindings ?? [],
+      });
+
+      /** A `plan-write` input of body 0's write `write` at the path `name`. */
+      const writeAt = (
+        identity: string,
+        target: CfcAddress,
+        name: string,
+        write: number,
+        inputs: number,
+      ): WritePolicyInput => ({
+        kind: "plan-write",
+        target: { ...target, path: [name] },
+        compiledPattern: identity,
+        record: { body: 0, write },
+        instance: target.id,
+        keys: [],
+        inputs,
+      });
+
+      it("takes the inputs of a record from the entry of the table that the record names", async () => {
+        await withSources((_runtime, tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, {
+              inputs: [{ slots: { 0: 0 } }, { slots: { 1: 1 } }],
+              bindings: [
+                { chain: [address("of:src-a")], observes: "value" },
+                { chain: [address("of:src-b")], observes: "value" },
+              ],
+            }),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "a", 0, 0),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "b", 1, 1),
+            runtimeWritePolicyAuthorization,
+          );
+
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+
+          expect(labels.reasons).toEqual([]);
+          expect(confidentialityAt(labels, target, "a")).toEqual(["secret-a"]);
+          expect(confidentialityAt(labels, target, "b")).toEqual(["secret-b"]);
+        });
+      });
+
+      it("holds each entry at the index its part gives it, whatever the order the parts were recorded in", async () => {
+        await withSources((_runtime, tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, {
+              firstInput: 1,
+              inputs: [{ slots: { 1: 1 } }],
+              firstBinding: 1,
+              bindings: [{ chain: [address("of:src-b")], observes: "value" }],
+            }),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "b", 1, 1),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, {
+              inputs: [{ slots: { 0: 0 } }],
+              bindings: [{ chain: [address("of:src-a")], observes: "value" }],
+            }),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "a", 0, 0),
+            runtimeWritePolicyAuthorization,
+          );
+
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+
+          expect(labels.reasons).toEqual([]);
+          expect(confidentialityAt(labels, target, "a")).toEqual(["secret-a"]);
+          expect(confidentialityAt(labels, target, "b")).toEqual(["secret-b"]);
+        });
+      });
+
+      it("instantiates the template of an output once for the records that name its inputs by one index", async () => {
+        await withSources((runtime, tx, _identity, target) => {
+          // Both writes are the template of output 0, whose inputs are
+          // entry 1 of the table.
+          const identity = runtime.compiledPlans.register(
+            {
+              ...plan,
+              bodies: [{
+                writes: [
+                  { template: { op: "output", output: 0 } },
+                  { template: { op: "output", output: 0 } },
+                ],
+              }],
+            },
+            "code",
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, {
+              inputs: [
+                { slots: {}, outputs: { 0: 1 } },
+                { slots: { 0: 0 } },
+                { slots: {}, outputs: { 0: 1 } },
+              ],
+              bindings: [{ chain: [address("of:src-a")], observes: "value" }],
+            }),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "a", 0, 0),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "b", 1, 2),
+            runtimeWritePolicyAuthorization,
+          );
+          const before = runtime.getCfcStats();
+
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+
+          const after = runtime.getCfcStats();
+          expect(labels.reasons).toEqual([]);
+          expect(confidentialityAt(labels, target, "a")).toEqual(["secret-a"]);
+          expect(confidentialityAt(labels, target, "b")).toEqual(["secret-a"]);
+          // The template of each write, and that of output 0 once.
+          expect(
+            after.planTemplatesInstantiated - before.planTemplatesInstantiated,
+          ).toBe(3);
+          expect(after.planSlotLabels - before.planSlotLabels).toBe(1);
+        });
+      });
+
+      it("refuses a record that names an entry the table does not hold", async () => {
+        await withSources((_runtime, tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, { inputs: [{ slots: { 0: 4 } }] }),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "a", 0, 0),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "b", 1, 7),
+            runtimeWritePolicyAuthorization,
+          );
+
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+
+          expect(labels.reasons).toHaveLength(2);
+          expect(labels.reasons[0]).toContain("binding 4");
+          expect(labels.reasons[1]).toContain("entry 7");
+          expect(labels.byTarget.size).toBe(0);
+        });
+      });
+
+      it("ignores a part of the table recorded without the runtime's authorization", async () => {
+        await withSources((_runtime, tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, {
+              inputs: [{ slots: { 0: 0 } }],
+              bindings: [{ chain: [address("of:src-a")], observes: "value" }],
+            }),
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "a", 0, 0),
+            runtimeWritePolicyAuthorization,
+          );
+
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+
+          expect(labels.reasons).toHaveLength(1);
+          expect(labels.reasons[0]).toContain("entry 0");
+        });
+      });
+    });
+
     it("returns for each path the label of the slot its write is bound to", async () => {
       await withSources((_runtime, tx, identity, target) => {
         for (const [write, name] of [[0, "a"], [1, "b"]] as const) {
-          tx.recordCfcWritePolicyInput(
+          recordInput(
+            tx,
             planWrite(
               identity,
               { ...target, path: [name] },
@@ -371,24 +637,21 @@ describe("cfc-plan-labels", () => {
       // the link leads to: the binding lists the second position as a chain
       // below the slot's own, and the label holds the clauses of both.
       await withSources((_runtime, tx, identity, target) => {
-        tx.recordCfcWritePolicyInput(
-          {
-            ...planWrite(
-              identity,
-              { ...target, path: ["a"] },
-              0,
-              address("of:src-a"),
-            ),
-            slots: {
-              0: {
-                chain: [address("of:src-a")],
-                observes: "value",
-                below: [[address("of:src-b")]],
-              },
+        recordInput(tx, {
+          ...planWrite(
+            identity,
+            { ...target, path: ["a"] },
+            0,
+            address("of:src-a"),
+          ),
+          slots: {
+            0: {
+              chain: [address("of:src-a")],
+              observes: "value",
+              below: [[address("of:src-b")]],
             },
           },
-          runtimeWritePolicyAuthorization,
-        );
+        }, runtimeWritePolicyAuthorization);
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
         expect(confidentialityAt(labels, target, "a").sort()).toEqual([
@@ -400,7 +663,8 @@ describe("cfc-plan-labels", () => {
 
     it("returns the label staged at an address the transaction wrote", async () => {
       await withSources((_runtime, tx, identity, target) => {
-        tx.recordCfcWritePolicyInput(
+        recordInput(
+          tx,
           planWrite(
             identity,
             { ...target, path: ["a"] },
@@ -409,13 +673,10 @@ describe("cfc-plan-labels", () => {
           ),
           runtimeWritePolicyAuthorization,
         );
-        tx.recordCfcWritePolicyInput(
-          {
-            ...planWrite(identity, { ...target, path: ["b"] }, 2, target),
-            slots: { 2: { staged: { ...target, path: ["a"] } } },
-          },
-          runtimeWritePolicyAuthorization,
-        );
+        recordInput(tx, {
+          ...planWrite(identity, { ...target, path: ["b"] }, 2, target),
+          slots: { 2: { staged: { ...target, path: ["a"] } } },
+        }, runtimeWritePolicyAuthorization);
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
         expect(confidentialityAt(labels, target, "b")).toEqual(["secret-a"]);
@@ -424,7 +685,8 @@ describe("cfc-plan-labels", () => {
 
     it("returns, for a staged address below a path a write covers, the label of that write", async () => {
       await withSources((_runtime, tx, identity, target) => {
-        tx.recordCfcWritePolicyInput(
+        recordInput(
+          tx,
           planWrite(
             identity,
             { ...target, path: ["a"] },
@@ -433,13 +695,10 @@ describe("cfc-plan-labels", () => {
           ),
           runtimeWritePolicyAuthorization,
         );
-        tx.recordCfcWritePolicyInput(
-          {
-            ...planWrite(identity, { ...target, path: ["b"] }, 2, target),
-            slots: { 2: { staged: { ...target, path: ["a", "inner"] } } },
-          },
-          runtimeWritePolicyAuthorization,
-        );
+        recordInput(tx, {
+          ...planWrite(identity, { ...target, path: ["b"] }, 2, target),
+          slots: { 2: { staged: { ...target, path: ["a", "inner"] } } },
+        }, runtimeWritePolicyAuthorization);
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
         // The transaction's join holds `secret-b` too, which a staged
@@ -450,13 +709,10 @@ describe("cfc-plan-labels", () => {
 
     it("returns the join for a staged address below the target of the write that reads it", async () => {
       await withSources((_runtime, tx, identity, target) => {
-        tx.recordCfcWritePolicyInput(
-          {
-            ...planWrite(identity, { ...target, path: ["a"] }, 2, target),
-            slots: { 2: { staged: { ...target, path: ["a", "inner"] } } },
-          },
-          runtimeWritePolicyAuthorization,
-        );
+        recordInput(tx, {
+          ...planWrite(identity, { ...target, path: ["a"] }, 2, target),
+          slots: { 2: { staged: { ...target, path: ["a", "inner"] } } },
+        }, runtimeWritePolicyAuthorization);
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
         expect(confidentialityAt(labels, target, "a").sort()).toEqual([
@@ -468,7 +724,8 @@ describe("cfc-plan-labels", () => {
 
     it("joins, for a binding read after the transaction wrote the end of its chain, the label staged there with the label of each position below it", async () => {
       await withSources((_runtime, tx, identity, target) => {
-        tx.recordCfcWritePolicyInput(
+        recordInput(
+          tx,
           planWrite(
             identity,
             { ...target, path: ["a"] },
@@ -477,20 +734,17 @@ describe("cfc-plan-labels", () => {
           ),
           runtimeWritePolicyAuthorization,
         );
-        tx.recordCfcWritePolicyInput(
-          {
-            ...planWrite(identity, { ...target, path: ["b"] }, 2, target),
-            slots: {
-              2: {
-                chain: [{ ...target, path: ["a"] }],
-                observes: "value",
-                below: [[address("of:src-b")]],
-                staged: true,
-              },
+        recordInput(tx, {
+          ...planWrite(identity, { ...target, path: ["b"] }, 2, target),
+          slots: {
+            2: {
+              chain: [{ ...target, path: ["a"] }],
+              observes: "value",
+              below: [[address("of:src-b")]],
+              staged: true,
             },
           },
-          runtimeWritePolicyAuthorization,
-        );
+        }, runtimeWritePolicyAuthorization);
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
         expect(confidentialityAt(labels, target, "b").sort()).toEqual([
@@ -502,20 +756,17 @@ describe("cfc-plan-labels", () => {
 
     it("reads a position of such a binding that the write itself covers as it was stored", async () => {
       await withSources((_runtime, tx, identity, target) => {
-        tx.recordCfcWritePolicyInput(
-          {
-            ...planWrite(identity, { ...target, path: ["b"] }, 2, target),
-            slots: {
-              2: {
-                chain: [address("of:src-a")],
-                observes: "value",
-                below: [[{ ...target, path: ["b"] }]],
-                staged: true,
-              },
+        recordInput(tx, {
+          ...planWrite(identity, { ...target, path: ["b"] }, 2, target),
+          slots: {
+            2: {
+              chain: [address("of:src-a")],
+              observes: "value",
+              below: [[{ ...target, path: ["b"] }]],
+              staged: true,
             },
           },
-          runtimeWritePolicyAuthorization,
-        );
+        }, runtimeWritePolicyAuthorization);
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
         expect(confidentialityAt(labels, target, "b")).toEqual(["secret-a"]);
@@ -537,34 +788,31 @@ describe("cfc-plan-labels", () => {
           "code",
           runtimeWritePolicyAuthorization,
         );
-        tx.recordCfcWritePolicyInput(
-          {
-            kind: "plan-write",
-            target: { ...target, path: ["a"] },
-            compiledPattern: overOutput,
-            record: { body: 0, write: 6 },
-            instance: target.id,
-            keys: [],
-            slots: {},
-            elements: {
-              1: {
-                uniform: {
-                  slots: {
-                    3: { chain: [address("of:src-a")], observes: "value" },
-                  },
-                },
-              },
-            },
-            outputs: {
-              0: {
+        recordInput(tx, {
+          kind: "plan-write",
+          target: { ...target, path: ["a"] },
+          compiledPattern: overOutput,
+          record: { body: 0, write: 6 },
+          instance: target.id,
+          keys: [],
+          slots: {},
+          elements: {
+            1: {
+              uniform: {
                 slots: {
-                  0: { chain: [address("of:src-b")], observes: "value" },
+                  3: { chain: [address("of:src-a")], observes: "value" },
                 },
               },
             },
           },
-          runtimeWritePolicyAuthorization,
-        );
+          outputs: {
+            0: {
+              slots: {
+                0: { chain: [address("of:src-b")], observes: "value" },
+              },
+            },
+          },
+        }, runtimeWritePolicyAuthorization);
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
         expect(confidentialityAt(labels, target, "a").sort()).toEqual([
@@ -588,7 +836,7 @@ describe("cfc-plan-labels", () => {
       runtime: Runtime,
       target: CfcAddress,
       operation: number,
-    ): Extract<WritePolicyInput, { kind: "plan-write" }> => ({
+    ): NestedWriteInput => ({
       kind: "plan-write",
       target,
       compiledPattern: runtime.compiledPlans.register(
@@ -605,7 +853,8 @@ describe("cfc-plan-labels", () => {
 
     it("returns for the outcome of a `wish` the label of its operands joined with the label of what its resolution read, with no integrity", async () => {
       await withSources((runtime, tx, _identity, target) => {
-        tx.recordCfcWritePolicyInput(
+        recordInput(
+          tx,
           outcomeWrite(runtime, { ...target, path: ["a"] }, 0),
           runtimeWritePolicyAuthorization,
         );
@@ -624,13 +873,10 @@ describe("cfc-plan-labels", () => {
 
     it("returns for the outcome of a `wish` that read nothing the label of its operands alone", async () => {
       await withSources((runtime, tx, _identity, target) => {
-        tx.recordCfcWritePolicyInput(
-          {
-            ...outcomeWrite(runtime, { ...target, path: ["a"] }, 0),
-            dynamic: { 0: [] },
-          },
-          runtimeWritePolicyAuthorization,
-        );
+        recordInput(tx, {
+          ...outcomeWrite(runtime, { ...target, path: ["a"] }, 0),
+          dynamic: { 0: [] },
+        }, runtimeWritePolicyAuthorization);
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
         expect(confidentialityAt(labels, target, "a")).toEqual(["secret-a"]);
@@ -639,7 +885,8 @@ describe("cfc-plan-labels", () => {
 
     it("refuses a write that names as its `wish` an operation of another kind", async () => {
       await withSources((runtime, tx, _identity, target) => {
-        tx.recordCfcWritePolicyInput(
+        recordInput(
+          tx,
           outcomeWrite(runtime, { ...target, path: ["a"] }, 1),
           runtimeWritePolicyAuthorization,
         );
@@ -676,7 +923,8 @@ describe("cfc-plan-labels", () => {
           "code",
           runtimeWritePolicyAuthorization,
         );
-        tx.recordCfcWritePolicyInput(
+        recordInput(
+          tx,
           planWrite(
             identity,
             { ...target, path: ["a"] },
@@ -699,17 +947,14 @@ describe("cfc-plan-labels", () => {
     it("returns the bound of a selection that was not reported, and counts it", async () => {
       await withSources((runtime, tx, identity, target) => {
         const before = runtime.getCfcStats().planLabelBounds;
-        tx.recordCfcWritePolicyInput(
-          {
-            ...planWrite(identity, { ...target, path: ["a"] }, 3, target),
-            slots: {
-              0: { chain: [address("of:src-a")], observes: "value" },
-              1: { chain: [address("of:src-b")], observes: "value" },
-              2: { chain: [address("of:src-a")], observes: "value" },
-            },
+        recordInput(tx, {
+          ...planWrite(identity, { ...target, path: ["a"] }, 3, target),
+          slots: {
+            0: { chain: [address("of:src-a")], observes: "value" },
+            1: { chain: [address("of:src-b")], observes: "value" },
+            2: { chain: [address("of:src-a")], observes: "value" },
           },
-          runtimeWritePolicyAuthorization,
-        );
+        }, runtimeWritePolicyAuthorization);
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(confidentialityAt(labels, target, "a").sort()).toEqual([
           "secret-a",
@@ -722,18 +967,15 @@ describe("cfc-plan-labels", () => {
     it("returns the transaction's join for an output the plan has no template for, and counts it as a bound", async () => {
       await withSources((runtime, tx, identity, target) => {
         const before = runtime.getCfcStats().planLabelBounds;
-        tx.recordCfcWritePolicyInput(
-          {
-            kind: "plan-write",
-            target: { ...target, path: ["a"] },
-            compiledPattern: identity,
-            record: { output: 1 },
-            instance: target.id,
-            keys: [],
-            slots: {},
-          },
-          runtimeWritePolicyAuthorization,
-        );
+        recordInput(tx, {
+          kind: "plan-write",
+          target: { ...target, path: ["a"] },
+          compiledPattern: identity,
+          record: { output: 1 },
+          instance: target.id,
+          keys: [],
+          slots: {},
+        }, runtimeWritePolicyAuthorization);
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
         expect(confidentialityAt(labels, target, "a").sort()).toEqual([
@@ -746,30 +988,24 @@ describe("cfc-plan-labels", () => {
 
     it("returns the transaction's join for a record of an envelope and for a record given as bound", async () => {
       await withSources((_runtime, tx, identity, target) => {
-        tx.recordCfcWritePolicyInput(
-          {
-            kind: "plan-write",
-            target: { ...target, path: ["a"] },
-            compiledPattern: identity,
-            record: { body: 0, envelope: 0 },
-            instance: target.id,
-            keys: [],
-            slots: {},
-          },
-          runtimeWritePolicyAuthorization,
-        );
-        tx.recordCfcWritePolicyInput(
-          {
-            ...planWrite(
-              identity,
-              { ...target, path: ["b"] },
-              0,
-              address("of:src-a"),
-            ),
-            bound: true,
-          },
-          runtimeWritePolicyAuthorization,
-        );
+        recordInput(tx, {
+          kind: "plan-write",
+          target: { ...target, path: ["a"] },
+          compiledPattern: identity,
+          record: { body: 0, envelope: 0 },
+          instance: target.id,
+          keys: [],
+          slots: {},
+        }, runtimeWritePolicyAuthorization);
+        recordInput(tx, {
+          ...planWrite(
+            identity,
+            { ...target, path: ["b"] },
+            0,
+            address("of:src-a"),
+          ),
+          bound: true,
+        }, runtimeWritePolicyAuthorization);
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
         for (const name of ["a", "b"]) {
@@ -783,18 +1019,15 @@ describe("cfc-plan-labels", () => {
 
     it("returns the selected branch alone where the selection was reported", async () => {
       await withSources((_runtime, tx, identity, target) => {
-        tx.recordCfcWritePolicyInput(
-          {
-            ...planWrite(identity, { ...target, path: ["a"] }, 3, target),
-            slots: {
-              0: { chain: [address("of:src-a")], observes: "value" },
-              1: { chain: [address("of:src-b")], observes: "value" },
-              2: { chain: [address("of:src-a")], observes: "value" },
-            },
-            selections: { 0: 0 },
+        recordInput(tx, {
+          ...planWrite(identity, { ...target, path: ["a"] }, 3, target),
+          slots: {
+            0: { chain: [address("of:src-a")], observes: "value" },
+            1: { chain: [address("of:src-b")], observes: "value" },
+            2: { chain: [address("of:src-a")], observes: "value" },
           },
-          runtimeWritePolicyAuthorization,
-        );
+          selections: { 0: 0 },
+        }, runtimeWritePolicyAuthorization);
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(confidentialityAt(labels, target, "a")).toEqual(["secret-a"]);
       });
@@ -821,23 +1054,20 @@ describe("cfc-plan-labels", () => {
         });
         expect((await seed.commit().settled).error).toBeUndefined();
         for (const [name, position] of [["a", "5"], ["b", "1"]] as const) {
-          tx.recordCfcWritePolicyInput(
-            {
-              ...planWrite(
-                identity,
-                { ...target, path: [name] },
-                0,
-                address("of:src-list", ["list", position]),
-              ),
-              slots: {
-                0: {
-                  chain: [address("of:src-list", ["list", position])],
-                  observes: "value",
-                },
+          recordInput(tx, {
+            ...planWrite(
+              identity,
+              { ...target, path: [name] },
+              0,
+              address("of:src-list", ["list", position]),
+            ),
+            slots: {
+              0: {
+                chain: [address("of:src-list", ["list", position])],
+                observes: "value",
               },
             },
-            runtimeWritePolicyAuthorization,
-          );
+          }, runtimeWritePolicyAuthorization);
         }
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
@@ -866,7 +1096,8 @@ describe("cfc-plan-labels", () => {
           },
         });
         expect((await seed.commit().settled).error).toBeUndefined();
-        tx.recordCfcWritePolicyInput(
+        recordInput(
+          tx,
           planWrite(
             identity,
             { ...target, path: ["a"] },
@@ -892,20 +1123,18 @@ describe("cfc-plan-labels", () => {
 
     it("refuses a staged slot at an address the transaction did not write", async () => {
       await withSources((_runtime, tx, identity, target) => {
-        tx.recordCfcWritePolicyInput(
-          {
-            ...planWrite(identity, { ...target, path: ["a"] }, 2, target),
-            slots: { 2: { staged: address("of:src-a") } },
-          },
-          runtimeWritePolicyAuthorization,
-        );
+        recordInput(tx, {
+          ...planWrite(identity, { ...target, path: ["a"] }, 2, target),
+          slots: { 2: { staged: address("of:src-a") } },
+        }, runtimeWritePolicyAuthorization);
         expect(planLabelsFor(tx, deriveFlowJoin(tx)).reasons).toHaveLength(1);
       });
     });
 
     it("refuses a write whose target the transaction did not write", async () => {
       await withSources((_runtime, tx, identity) => {
-        tx.recordCfcWritePolicyInput(
+        recordInput(
+          tx,
           planWrite(
             identity,
             address("of:elsewhere", ["a"]),
@@ -921,13 +1150,10 @@ describe("cfc-plan-labels", () => {
     it("refuses staged labels that form a cycle", async () => {
       await withSources((_runtime, tx, identity, target) => {
         for (const [from, to] of [["a", "b"], ["b", "a"]]) {
-          tx.recordCfcWritePolicyInput(
-            {
-              ...planWrite(identity, { ...target, path: [from] }, 2, target),
-              slots: { 2: { staged: { ...target, path: [to] } } },
-            },
-            runtimeWritePolicyAuthorization,
-          );
+          recordInput(tx, {
+            ...planWrite(identity, { ...target, path: [from] }, 2, target),
+            slots: { 2: { staged: { ...target, path: [to] } } },
+          }, runtimeWritePolicyAuthorization);
         }
         expect(planLabelsFor(tx, deriveFlowJoin(tx)).reasons.length)
           .toBeGreaterThan(0);
@@ -1088,7 +1314,8 @@ describe("cfc-plan-labels", () => {
       target: CfcAddress,
     ) => {
       for (const [write, name] of [[0, "a"], [1, "b"]] as const) {
-        tx.recordCfcWritePolicyInput(
+        recordInput(
+          tx,
           planWrite(
             identity,
             { ...target, path: [name] },
@@ -1146,18 +1373,15 @@ describe("cfc-plan-labels", () => {
         true,
         (tx, identity, target) => {
           recordBoth(tx, identity, target);
-          tx.recordCfcWritePolicyInput(
-            {
-              kind: "plan-write",
-              target: { ...target, path: ["c"] },
-              compiledPattern: identity,
-              record: { body: 0, write: 5 },
-              instance: target.id,
-              keys: [],
-              slots: {},
-            },
-            runtimeWritePolicyAuthorization,
-          );
+          recordInput(tx, {
+            kind: "plan-write",
+            target: { ...target, path: ["c"] },
+            compiledPattern: identity,
+            record: { body: 0, write: 5 },
+            instance: target.id,
+            keys: [],
+            slots: {},
+          }, runtimeWritePolicyAuthorization);
         },
         true,
       );
@@ -1181,7 +1405,8 @@ describe("cfc-plan-labels", () => {
       target: CfcAddress,
     ) => {
       sources.forEach((name, index) => {
-        tx.recordCfcWritePolicyInput(
+        recordInput(
+          tx,
           planWrite(
             identity,
             { ...target, path: ["items", String(index)] },
@@ -1230,20 +1455,17 @@ describe("cfc-plan-labels", () => {
         identity: string,
         target: CfcAddress,
       ) =>
-        tx.recordCfcWritePolicyInput(
-          {
-            kind: "plan-write",
-            target: { ...target, path: ["a"] },
-            compiledPattern: identity,
-            record: { output: 0 },
-            instance: target.id,
-            keys: [],
-            slots: {
-              0: { chain: [address("of:src-a")], observes: "followRef" },
-            },
+        recordInput(tx, {
+          kind: "plan-write",
+          target: { ...target, path: ["a"] },
+          compiledPattern: identity,
+          record: { output: 0 },
+          instance: target.id,
+          keys: [],
+          slots: {
+            0: { chain: [address("of:src-a")], observes: "followRef" },
           },
-          runtimeWritePolicyAuthorization,
-        );
+        }, runtimeWritePolicyAuthorization);
       const alone = await commitWrites(true, record, false, {
         plan: kept,
         a: () => link,
@@ -1275,20 +1497,17 @@ describe("cfc-plan-labels", () => {
       const { error, derived } = await commitWrites(
         true,
         (tx, identity, target) => {
-          tx.recordCfcWritePolicyInput(
-            {
-              kind: "plan-write",
-              target: { ...target, path: ["a"] },
-              compiledPattern: identity,
-              record: { output: 0 },
-              instance: target.id,
-              keys: [],
-              slots: {
-                0: { chain: [address("of:src-a")], observes: "followRef" },
-              },
+          recordInput(tx, {
+            kind: "plan-write",
+            target: { ...target, path: ["a"] },
+            compiledPattern: identity,
+            record: { output: 0 },
+            instance: target.id,
+            keys: [],
+            slots: {
+              0: { chain: [address("of:src-a")], observes: "followRef" },
             },
-            runtimeWritePolicyAuthorization,
-          );
+          }, runtimeWritePolicyAuthorization);
         },
         false,
         {
@@ -1318,18 +1537,15 @@ describe("cfc-plan-labels", () => {
       const { error, derived } = await commitWrites(
         true,
         (tx, identity, target) => {
-          tx.recordCfcWritePolicyInput(
-            {
-              kind: "plan-write",
-              target: { ...target, path: ["a"] },
-              compiledPattern: identity,
-              record: { output: 0 },
-              instance: target.id,
-              keys: [],
-              slots: {},
-            },
-            runtimeWritePolicyAuthorization,
-          );
+          recordInput(tx, {
+            kind: "plan-write",
+            target: { ...target, path: ["a"] },
+            compiledPattern: identity,
+            record: { output: 0 },
+            instance: target.id,
+            keys: [],
+            slots: {},
+          }, runtimeWritePolicyAuthorization);
         },
         false,
         { plan: kept, readA: false, readB: false },
@@ -1344,7 +1560,7 @@ describe("cfc-plan-labels", () => {
       /** Records one `plan-write` input for the path, with `more` in it. */
       type RecordWrite = (
         path: string[],
-        more?: Partial<Extract<WritePolicyInput, { kind: "plan-write" }>>,
+        more?: Partial<NestedWriteInput>,
       ) => void;
 
       /** What a scenario on the list is given to commit with. */
@@ -1357,7 +1573,7 @@ describe("cfc-plan-labels", () => {
          * the number of members, and which positions the list has.
          */
         membership: NonNullable<
-          Extract<WritePolicyInput, { kind: "plan-write" }>["observed"]
+          NestedWriteInput["observed"]
         >;
 
         /**
@@ -1446,18 +1662,15 @@ describe("cfc-plan-labels", () => {
             }
             const write = ["a", "b", "c"].indexOf(source);
             records((path, more = {}) =>
-              tx.recordCfcWritePolicyInput(
-                {
-                  ...planWrite(
-                    identity,
-                    at(...path),
-                    write,
-                    address(`of:src-${source}`),
-                  ),
-                  ...more,
-                },
-                runtimeWritePolicyAuthorization,
-              )
+              recordInput(tx, {
+                ...planWrite(
+                  identity,
+                  at(...path),
+                  write,
+                  address(`of:src-${source}`),
+                ),
+                ...more,
+              }, runtimeWritePolicyAuthorization)
             );
             expect((await tx.commit().settled).error).toBeUndefined();
           };
@@ -1721,7 +1934,8 @@ describe("cfc-plan-labels", () => {
           first.readOrThrow(memoryAddress("of:src-a", ["value"]));
           first.readOrThrow(memoryAddress("of:src-b", ["value"]));
           first.writeValueOrThrow({ ...link, path: ["a"] }, { x: "1" });
-          first.recordCfcWritePolicyInput(
+          recordInput(
+            first,
             planWrite(
               identity,
               { ...target, path: ["a"] },
@@ -1730,34 +1944,28 @@ describe("cfc-plan-labels", () => {
             ),
             runtimeWritePolicyAuthorization,
           );
-          first.recordCfcWritePolicyInput(
-            {
-              ...planWrite(
-                identity,
-                { ...target, path: ["a", "x"] },
-                1,
-                address("of:src-b"),
-              ),
-              record: { output: 0 },
-            },
-            runtimeWritePolicyAuthorization,
-          );
+          recordInput(first, {
+            ...planWrite(
+              identity,
+              { ...target, path: ["a", "x"] },
+              1,
+              address("of:src-b"),
+            ),
+            record: { output: 0 },
+          }, runtimeWritePolicyAuthorization);
           expect((await first.commit().settled).error).toBeUndefined();
           const again = runtime.edit();
           again.readOrThrow(memoryAddress("of:src-b", ["value"]));
-          again.recordCfcWritePolicyInput(
-            {
-              ...planWrite(
-                identity,
-                { ...target, path: ["a"] },
-                1,
-                address("of:src-b"),
-              ),
-              unchanged: true,
-              ...(relabel ? { relabel: true as const } : {}),
-            },
-            runtimeWritePolicyAuthorization,
-          );
+          recordInput(again, {
+            ...planWrite(
+              identity,
+              { ...target, path: ["a"] },
+              1,
+              address("of:src-b"),
+            ),
+            unchanged: true,
+            ...(relabel ? { relabel: true as const } : {}),
+          }, runtimeWritePolicyAuthorization);
           expect((await again.commit().settled).error).toBeUndefined();
           const reader = runtime.edit();
           try {
@@ -1892,13 +2100,10 @@ describe("cfc-plan-labels", () => {
             const tx = runtime.edit();
             tx.readOrThrow(memoryAddress("of:src-a", ["value"]));
             tx.writeValueOrThrow({ ...link, path: ["a"] }, "");
-            tx.recordCfcWritePolicyInput(
-              {
-                ...planWrite(identity, target, 0, address("of:src-a")),
-                unchanged: true,
-              },
-              runtimeWritePolicyAuthorization,
-            );
+            recordInput(tx, {
+              ...planWrite(identity, target, 0, address("of:src-a")),
+              unchanged: true,
+            }, runtimeWritePolicyAuthorization);
             runtime.prepareTxForCommit(tx);
             return tx;
           };
@@ -2016,7 +2221,8 @@ describe("cfc-plan-labels", () => {
         true,
         (tx, identity, target) => {
           for (const [write, name] of [[0, "a"], [1, "b"]] as const) {
-            tx.recordCfcWritePolicyInput(
+            recordInput(
+              tx,
               planWrite(
                 identity,
                 { ...target, path: [name] },
@@ -2036,7 +2242,8 @@ describe("cfc-plan-labels", () => {
       const { error, value } = await commitWrites(
         true,
         (tx, identity, target) => {
-          tx.recordCfcWritePolicyInput(
+          recordInput(
+            tx,
             planWrite(
               identity,
               { ...target, path: ["a"] },
@@ -2077,7 +2284,8 @@ describe("cfc-plan-labels", () => {
       const { error, value } = await commitWrites(
         true,
         (tx, identity, target) => {
-          tx.recordCfcWritePolicyInput(
+          recordInput(
+            tx,
             planWrite(
               identity,
               { ...target, path: ["a"] },
@@ -2125,18 +2333,15 @@ describe("cfc-plan-labels", () => {
             runtime.getCell(space, "plan-target", undefined, tx).key("a").set(
               "x",
             );
-            tx.recordCfcWritePolicyInput(
-              {
-                kind: "plan-write",
-                target: { space, id: link.id, scope: "space", path: ["a"] },
-                compiledPattern: identity,
-                record: { body: 0, write: 5 },
-                instance: link.id,
-                keys: [],
-                slots: {},
-              },
-              runtimeWritePolicyAuthorization,
-            );
+            recordInput(tx, {
+              kind: "plan-write",
+              target: { space, id: link.id, scope: "space", path: ["a"] },
+              compiledPattern: identity,
+              record: { body: 0, write: 5 },
+              instance: link.id,
+              keys: [],
+              slots: {},
+            }, runtimeWritePolicyAuthorization);
             expect(tx.getCfcState().relevant).toBe(enabled);
             runtime.prepareTxForCommit(tx);
             expect(tx.getCfcState().prepare.status).toBe(
@@ -2386,7 +2591,8 @@ describe("cfc-plan-labels", () => {
       const tx = runtime.edit();
       tx.readOrThrow(memoryAddress("of:src-a", ["value"]));
       runtime.getCell(space, "plan-target", undefined, tx).key("a").set("x");
-      tx.recordCfcWritePolicyInput(
+      recordInput(
+        tx,
         planWrite(identity, { ...target, path: ["a"] }, 0, address("of:src-b")),
         runtimeWritePolicyAuthorization,
       );
@@ -2455,11 +2661,12 @@ describe("cfc-plan-labels", () => {
      */
     const foldCounters = async (
       size: number,
-      elements: (list: string, last: string) => PlanElements,
-      over: { write: number; collection: number; slots?: SlotBindings } = {
-        write: 4,
-        collection: 0,
-      },
+      elements: (list: string, last: string) => NestedPlanElements,
+      over: { write: number; collection: number; slots?: NestedSlotBindings } =
+        {
+          write: 4,
+          collection: 0,
+        },
     ) => {
       let counters: Record<string, number> = {};
       await withRuntime(true, async (runtime) => {
@@ -2511,19 +2718,16 @@ describe("cfc-plan-labels", () => {
           const cell = runtime.getCell(space, "plan-target", undefined, tx);
           cell.set({ total: size });
           const link = cell.getAsNormalizedFullLink();
-          tx.recordCfcWritePolicyInput(
-            {
-              kind: "plan-write",
-              target: { space, id: link.id, scope: "space", path: ["total"] },
-              compiledPattern: identity,
-              record: { body: 0, write: over.write },
-              instance: link.id,
-              keys: [],
-              slots: over.slots ?? {},
-              elements: { [over.collection]: elements(list, last) },
-            },
-            runtimeWritePolicyAuthorization,
-          );
+          recordInput(tx, {
+            kind: "plan-write",
+            target: { space, id: link.id, scope: "space", path: ["total"] },
+            compiledPattern: identity,
+            record: { body: 0, write: over.write },
+            instance: link.id,
+            keys: [],
+            slots: over.slots ?? {},
+            elements: { [over.collection]: elements(list, last) },
+          }, runtimeWritePolicyAuthorization);
           const before = runtime.getCfcStats();
           const labels = planLabelsFor(tx, deriveFlowJoin(tx));
           expect(labels.reasons).toEqual([]);
@@ -2551,68 +2755,9 @@ describe("cfc-plan-labels", () => {
       return counters;
     };
 
-    /**
-     * Registers a plan whose one write is a derivation of `nodes` `shared`
-     * nodes that each name the template of slot 0, records a write of it,
-     * and returns the content keys of inputs the pre-pass formed.
-     */
-    const inputKeysFor = async (nodes: number): Promise<number> => {
-      let formed = -1;
-      await withRuntime(true, (runtime) => {
-        const identity = runtime.compiledPlans.register(
-          {
-            ...plan,
-            templates: [{ op: "slot", slot: 0 }],
-            bodies: [{
-              writes: [{
-                template: {
-                  op: "derive",
-                  by: { expression: true },
-                  inputs: Array.from(
-                    { length: nodes },
-                    () => ({ op: "shared", template: 0 }) as const,
-                  ),
-                },
-              }],
-            }],
-          },
-          "code",
-          runtimeWritePolicyAuthorization,
-        );
-        const tx = runtime.edit();
-        try {
-          const cell = runtime.getCell(space, "shared-target", undefined, tx);
-          cell.set({ total: 1 });
-          const link = cell.getAsNormalizedFullLink();
-          tx.recordCfcWritePolicyInput(
-            planWrite(
-              identity,
-              { space, id: link.id, scope: "space", path: ["total"] },
-              0,
-              address("of:nothing"),
-            ),
-            runtimeWritePolicyAuthorization,
-          );
-          const before = runtime.getCfcStats().planInputKeys;
-          expect(planLabelsFor(tx, deriveFlowJoin(tx)).reasons).toEqual([]);
-          formed = runtime.getCfcStats().planInputKeys - before;
-        } finally {
-          tx.abort();
-        }
-      });
-      return formed;
-    };
-
-    it("forms the content key of a place's inputs once, however many `shared` nodes its template has", async () => {
-      const two = await inputKeysFor(2);
-
-      expect(two).toBeGreaterThan(0);
-      expect(await inputKeysFor(40)).toBe(two);
-    });
-
     it("counts the same work for one changed element among 10 and among 1,000 in the uniform form", async () => {
       // An array of plain values in place: one set of bindings at `*`.
-      const uniform = (list: string): PlanElements => ({
+      const uniform = (list: string): NestedPlanElements => ({
         uniform: {
           slots: {
             3: {

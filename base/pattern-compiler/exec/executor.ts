@@ -64,6 +64,7 @@ import type { PartsOptions, Sealed } from "./parts.ts";
 import {
   type Address,
   type FoldElements,
+  InputsTable,
   isUniformBody,
   type NamedOutputInputs,
   type Observed,
@@ -1967,7 +1968,9 @@ export type TransactionHooks = {
    * that added a member behind the last one: the position it starts at,
    * and how many members of the array it removed and put there. Whoever
    * stores the array then writes those positions and the number of
-   * members, and no other position.
+   * members, and no other position. `inputs` is the table the records name
+   * their inputs in, one for the transaction, which gains entries as
+   * records are given.
    */
   change(
     doc: string,
@@ -1976,12 +1979,14 @@ export type TransactionHooks = {
     schema?: Schema,
     writes?: readonly PlanWrite[],
     splice?: { start: number; removed: number; inserted: number },
+    inputs?: InputsTable,
   ): void;
 
   /**
    * A write of a body of the transaction in progress left the value at a
    * path of a document as it was. `writes` holds the record of each path of
-   * the plan the write covers, as `change` has it. The value is not written
+   * the plan the write covers, and `inputs` the table they name their inputs
+   * in, as `change` has them. The value is not written
    * again; whoever stores labels stores the label of the records for the
    * value the path holds, since what the body read decided that the value
    * stays (ruling Z67).
@@ -1992,6 +1997,7 @@ export type TransactionHooks = {
     store: Store,
     schema: Schema | undefined,
     writes: readonly PlanWrite[],
+    inputs: InputsTable,
   ): void;
 
   /**
@@ -2530,6 +2536,7 @@ export class Instance {
         added || writes.some(({ enumeration }) => enumeration)
           ? splice
           : undefined,
+        this.#inputsTable,
       );
     }
     if (open !== undefined) {
@@ -2823,7 +2830,14 @@ export class Instance {
           if (this.#tx === undefined || this.#writing === undefined) return;
           const writes = this.#writesOf(doc, path, undefined);
           if (writes.length > 0) {
-            hooks.unchanged?.(doc, path, this.store, schema, writes);
+            hooks.unchanged?.(
+              doc,
+              path,
+              this.store,
+              schema,
+              writes,
+              this.#inputsTable,
+            );
           }
         };
       }
@@ -2894,6 +2908,7 @@ export class Instance {
     this.#tx = open;
     this.store.journal = open.journal;
     this.root.#givenNow.clear();
+    this.root.#inputsTable = new InputsTable();
     this.options.transactions?.begin(cause);
     return open;
   }
@@ -5062,12 +5077,17 @@ export class Instance {
     const path = at.slice(0, nearest.path.length);
     const key = this.#recordKey(nearest.output, path);
     if (root.#givenNow.has(key)) return;
+    root.#namedIndex.clear();
     const write = this.#outputRecord(this.id, nearest.output, [...path]);
     root.#noteRecord(key, this.id, write);
-    hooks.unchanged(this.id, path, this.store, undefined, [{
-      ...write,
-      relabel: true,
-    }]);
+    hooks.unchanged(
+      this.id,
+      path,
+      this.store,
+      undefined,
+      [{ ...write, relabel: true }],
+      root.#inputsTable,
+    );
   }
 
   /**
@@ -7181,8 +7201,10 @@ export class Instance {
       seen.add(id);
       positions.push(address);
     };
-    const visit = (place: PlanInputs) => {
-      for (const binding of Object.values(place.slots)) {
+    const table = this.#inputsTable;
+    const bindings = (slots: SlotBindings) => {
+      for (const at of Object.values(slots)) {
+        const binding = table.bindings[at];
         if ("staged" in binding && typeof binding.staged === "object") {
           read(binding.staged);
         }
@@ -7192,11 +7214,19 @@ export class Instance {
           for (const address of chain) read(address);
         }
       }
+    };
+    // Each entry of the table once, however many entries name it.
+    const visited = new Set<number>();
+    const visit = (index: number) => {
+      if (visited.has(index)) return;
+      visited.add(index);
+      const place = table.inputs[index];
+      bindings(place.slots);
       for (const addresses of Object.values(place.dynamic ?? {})) {
         for (const address of addresses) read(address);
       }
       for (const chosen of Object.values(place.picks ?? {})) {
-        if (chosen !== null) visit({ slots: chosen.slots });
+        if (chosen !== null) bindings(chosen.slots);
       }
       for (
         const [collection, elements] of Object.entries(place.elements ?? {})
@@ -7206,11 +7236,11 @@ export class Instance {
         held.add(key);
         this.#recordFolds.set(folds, held);
         if ("uniform" in elements) visit(elements.uniform);
-        else for (const group of elements.groups) visit(group);
+        else for (const group of elements.groups) visit(group.inputs);
       }
       for (const inputs of Object.values(place.outputs ?? {})) visit(inputs);
     };
-    visit(write);
+    visit(write.inputs);
     this.#recordReads.set(key, positions);
     for (const { doc, path } of positions) {
       const root: LabelReaders = this.#recordReaders.get(doc) ??
@@ -7277,6 +7307,7 @@ export class Instance {
     const keys = [...this.#relabels];
     this.#relabels.clear();
     this.#within("derivation", () => {
+      this.#namedIndex.clear();
       const byInstance = new Map<Instance, PlanWrite[]>();
       for (const key of keys) {
         const [id, output, at] = JSON.parse(key) as [string, number, string[]];
@@ -7294,7 +7325,14 @@ export class Instance {
         byInstance.set(instance, writes);
       }
       for (const [instance, writes] of byInstance) {
-        hooks.unchanged?.(instance.id, [], this.store, undefined, writes);
+        hooks.unchanged?.(
+          instance.id,
+          [],
+          this.store,
+          undefined,
+          writes,
+          this.#inputsTable,
+        );
       }
     });
   }
@@ -7380,6 +7418,7 @@ export class Instance {
     const hooks = this.#tx === undefined
       ? this.options.transactions
       : undefined;
+    if (hooks !== undefined) this.#inputsTable = new InputsTable();
     hooks?.begin(cause);
     this.#outside = hooks !== undefined;
     let committed = false;
@@ -7665,6 +7704,22 @@ export class Instance {
       this.#invoking.pop();
     }
   }
+
+  /**
+   * On the root: the table the write records of the transaction in
+   * progress name their inputs in.
+   */
+  #inputsTable = new InputsTable();
+  /**
+   * On the root: the index in `#inputsTable` of the inputs of each cone instance
+   * of an output formed for the records being given, by the instance, the
+   * output and the element keys. It holds what was formed since the records
+   * of one change, or of one write that left a value as it was, began to be
+   * formed: nothing is evaluated or written in between, so the inputs of a
+   * cone instance are formed once for every record and every other set of
+   * inputs that names them.
+   */
+  readonly #namedIndex = new Map<string, number>();
 
   /** The bodies of cones being run, innermost last, each with its host. */
   readonly #invoking: { body: number; host: Host }[] = [];
@@ -8622,7 +8677,7 @@ export class Instance {
   #bindingOf(
     slot: number,
     bound: Bound,
-    outputs: Record<number, PlanInputs>,
+    outputs: Record<number, number>,
     depth: number,
     keys: [number, string][] = [],
   ): SlotBinding {
@@ -8726,7 +8781,7 @@ export class Instance {
     place: number,
     rest: readonly string[],
     observes: string,
-    outputs: Record<number, PlanInputs>,
+    outputs: Record<number, number>,
     depth: number,
     keys: [number, string][],
   ): SlotBinding | undefined {
@@ -8813,9 +8868,10 @@ export class Instance {
       return undefined;
     };
     const templates = this.plan.templates ?? [];
+    const table = this.root.#inputsTable;
     const reached = reachedBy(template, templates);
     const slots: SlotBindings = {};
-    const outputs: Record<number, PlanInputs> = {};
+    const outputs: Record<number, number> = {};
     const elements: Record<number, FoldElements> = {};
     const selections: Record<number, number> = {};
     const picks: Record<number, { slots: SlotBindings } | null> = {};
@@ -8838,12 +8894,14 @@ export class Instance {
             ) ??
             this.#otherConeBound(slot, keys);
           if (bound !== undefined) {
-            into[slot] = this.#bindingOf(slot, bound, outputs, depth, keys);
+            into[slot] = table.binding(
+              this.#bindingOf(slot, bound, outputs, depth, keys),
+            );
             continue;
           }
           const source = this.#sourceBinding(slot, byCollection) ??
             this.#positionBinding(slot, keys);
-          if (source !== undefined) into[slot] = source;
+          if (source !== undefined) into[slot] = table.binding(source);
         }
         return into;
       };
@@ -8857,7 +8915,9 @@ export class Instance {
           if (slots[slot] !== undefined) continue;
           const bound = first((inputs) => inputs.slots.get(slot));
           if (bound !== undefined) {
-            slots[slot] = this.#bindingOf(slot, bound, outputs, depth, keys);
+            slots[slot] = table.binding(
+              this.#bindingOf(slot, bound, outputs, depth, keys),
+            );
           } else {
             // A source whose assembly found no stored array, as that of a
             // `flatMap` before its first element, is read at the position
@@ -8873,7 +8933,7 @@ export class Instance {
                 ]),
               );
             if (found !== undefined) {
-              slots[slot] = found;
+              slots[slot] = table.binding(found);
             }
           }
         }
@@ -8922,21 +8982,41 @@ export class Instance {
     return {
       instance: this.id,
       keys,
-      slots,
-      ...(Object.keys(selections).length === 0 ? {} : { selections }),
-      ...(Object.keys(picks).length === 0 ? {} : { picks }),
-      ...(Object.keys(dynamic).length === 0 ? {} : { dynamic }),
-      ...(Object.keys(outputs).length === 0 ? {} : { outputs }),
-      ...(Object.keys(elements).length === 0 ? {} : { elements }),
+      inputs: table.place({
+        slots,
+        ...(Object.keys(selections).length === 0 ? {} : { selections }),
+        ...(Object.keys(picks).length === 0 ? {} : { picks }),
+        ...(Object.keys(dynamic).length === 0 ? {} : { dynamic }),
+        ...(Object.keys(outputs).length === 0 ? {} : { outputs }),
+        ...(Object.keys(elements).length === 0 ? {} : { elements }),
+      }),
     };
   }
 
-  /** The inputs of the cone instance of an output, for the keys given. */
+  /**
+   * The inputs of the cone instance of an output, for the keys given: their
+   * index in the table of inputs of the transaction, formed once for the
+   * records being given (`#namedIndex`).
+   */
   #namedInputs(
     index: number,
     pairs: readonly [number, string][],
     depth: number,
-  ): NamedOutputInputs {
+  ): number {
+    const name = JSON.stringify([this.id, index, pairs]);
+    const known = this.root.#namedIndex.get(name);
+    if (known !== undefined) return known;
+    const formed = this.#formNamedInputs(index, pairs, depth);
+    this.root.#namedIndex.set(name, formed);
+    return formed;
+  }
+
+  /** Helper for `#namedInputs()`, which forms the inputs. */
+  #formNamedInputs(
+    index: number,
+    pairs: readonly [number, string][],
+    depth: number,
+  ): number {
     const output = this.plan.outputs[index];
     const own = this.#keysFor(output.cone, pairs);
     const inputs = this.#inputsOf(output.cone, own);
@@ -8956,7 +9036,7 @@ export class Instance {
       ],
       [inputs, result],
       depth,
-    );
+    ).inputs;
   }
 
   /**
@@ -8974,6 +9054,7 @@ export class Instance {
     depth: number,
   ): FoldElements {
     const templates = this.plan.templates ?? [];
+    const inputsTable = this.root.#inputsTable;
     const outer = this.#outerOf(collection);
     const byCollection = new Map(pairs);
     const around = outer.map((step) => byCollection.get(step) ?? "?");
@@ -8994,7 +9075,7 @@ export class Instance {
       const array = this.#arrayChain(name);
       const [first] = table?.byKey.keys() ?? [];
       const uniform: SlotBindings = {};
-      const outputs: Record<number, PlanInputs> = {};
+      const outputs: Record<number, number> = {};
       for (const slot of [...reached.slots].sort((a, b) => a - b)) {
         const record = this.plan.slots[slot];
         if (
@@ -9002,13 +9083,13 @@ export class Instance {
           record.root.collection === collection
         ) {
           const last = array.at(-1);
-          uniform[slot] = {
+          uniform[slot] = inputsTable.binding({
             chain: last === undefined ? [] : [
               ...array.slice(0, -1),
               { doc: last.doc, path: [...last.path, "*", ...record.path] },
             ],
             observes: record.observes,
-          };
+          });
           continue;
         }
         const bound = first === undefined
@@ -9016,24 +9097,27 @@ export class Instance {
           : sourcesFor(first).map((source) => source?.slots.get(slot))
             .find((found) => found !== undefined);
         if (bound !== undefined) {
-          uniform[slot] = this.#bindingOf(slot, bound, outputs, depth);
+          uniform[slot] = inputsTable.binding(
+            this.#bindingOf(slot, bound, outputs, depth),
+          );
         }
       }
       return {
-        uniform: {
+        uniform: inputsTable.place({
           slots: uniform,
           ...(Object.keys(outputs).length === 0 ? {} : { outputs }),
-        },
+        }),
       };
     }
     const groups = [...table?.groups.values() ?? []].map((members) => {
       const [key] = members;
-      const {
-        instance: _instance,
-        keys: _keys,
-        ...inputs
-      } = this.#inputsFor(body, keysOf(key), sourcesFor(key), depth);
-      return { ...inputs, count: members.size };
+      const { inputs } = this.#inputsFor(
+        body,
+        keysOf(key),
+        sourcesFor(key),
+        depth,
+      );
+      return { inputs, count: members.size };
     });
     return { groups };
   }
@@ -9060,6 +9144,7 @@ export class Instance {
     path: readonly string[],
     splice: { start: number; removed: number; inserted: number } | undefined,
   ): PlanWrite[] {
+    this.#namedIndex.clear();
     const owner = doc === this.id ? this : this.#instances.get(doc);
     if (owner !== undefined && owner.id === doc) {
       return owner.#outputWrites(doc, path, splice);
@@ -9195,7 +9280,7 @@ export class Instance {
           record,
           instance: writing.instance.id,
           keys,
-          slots: {},
+          inputs: this.#inputsTable.place({ slots: {} }),
           bound: true as const,
           ...held,
         });
@@ -9277,6 +9362,7 @@ export class Instance {
       root.#tx === undefined || writing?.members === undefined ||
       hooks?.unchanged === undefined
     ) return;
+    root.#namedIndex.clear();
     const writes = root.#memberWrites(
       list.doc,
       list.path,
@@ -9285,7 +9371,14 @@ export class Instance {
       writing.instance.contextKeys(writing.host.context),
     );
     if (writes.length > 0) {
-      hooks.unchanged(list.doc, list.path, this.store, undefined, writes);
+      hooks.unchanged(
+        list.doc,
+        list.path,
+        this.store,
+        undefined,
+        writes,
+        root.#inputsTable,
+      );
     }
   }
 
@@ -9483,8 +9576,8 @@ export class Instance {
       segment === "*" ? [index] : []
     );
     const pairs = this.#keysAlong(at, stars);
-    const own = this.#keysFor(record.cone, pairs);
-    const inputs = this.#inputsOf(record.cone, own);
+    const ownKeys = this.#keysFor(record.cone, pairs);
+    const inputs = this.#inputsOf(record.cone, ownKeys);
     const result = this.#inputs.get(RESULT_INPUTS);
     const given = this.#storedInPlace(
       record.template,
@@ -9492,7 +9585,7 @@ export class Instance {
         record.template,
         this.collectionsOf(record.cone).map((collection, index) => [
           collection,
-          own[index],
+          ownKeys[index],
         ]),
         [inputs, result],
       ),
@@ -9504,6 +9597,8 @@ export class Instance {
     // takes the label of a write with no record, where the template could
     // only be refused.
     const templates = this.plan.templates ?? [];
+    const table = this.root.#inputsTable;
+    const own = table.inputs[given.inputs];
     const lacks = (
       template: Template | undefined,
       place: PlanInputs | undefined,
@@ -9513,8 +9608,8 @@ export class Instance {
       if (template === undefined || depth > 64) return false;
       switch (template.op) {
         case "slot": {
-          const binding = place?.slots[template.slot] ??
-            given.slots[template.slot];
+          const at = place?.slots[template.slot] ?? own.slots[template.slot];
+          const binding = at === undefined ? undefined : table.bindings[at];
           return binding === undefined ||
             ("chain" in binding && binding.chain.length === 0);
         }
@@ -9527,18 +9622,20 @@ export class Instance {
             template.branches.some((branch) => lacks(branch, place, depth + 1));
         case "shared":
           return lacks(templates[template.template], place, depth + 1);
-        case "output":
+        case "output": {
+          const at = place?.outputs?.[template.output] ??
+            own.outputs?.[template.output];
           return lacks(
             this.plan.outputs[template.output]?.template,
-            place?.outputs?.[template.output] ??
-              given.outputs?.[template.output],
+            at === undefined ? undefined : table.inputs[at],
             depth + 1,
           );
+        }
         default:
           return false;
       }
     };
-    const unbound = !record.kept && lacks(record.template, given, 0);
+    const unbound = !record.kept && lacks(record.template, own, 0);
     return {
       target: { doc, path: at },
       record: { output },
@@ -9557,7 +9654,7 @@ export class Instance {
    * then that of what the slot's positions hold, and not that of the
    * reference alone.
    */
-  #storedInPlace<T extends PlanInputs>(
+  #storedInPlace<T extends { inputs: number }>(
     template: Template | undefined,
     inputs: T,
     target: Address,
@@ -9565,59 +9662,80 @@ export class Instance {
     const held = this.store.peek(target.doc, target.path);
     if (held === undefined || isLink(held) || isStream(held)) return inputs;
     const templates = this.plan.templates ?? [];
-    const visit = (
+    const table = this.root.#inputsTable;
+    // The index of the inputs at `index` with the slot bound again, which
+    // is `index` where nothing is.
+    const rebound = (
       at: Template | undefined,
-      place: PlanInputs | undefined,
+      index: number | undefined,
       depth: number,
-    ): void => {
+    ): number | undefined => {
       // A chain of outputs is as long as the plan is deep.
-      if (at === undefined || place === undefined || depth > 64) return;
+      if (at === undefined || index === undefined || depth > 64) return index;
+      const place = table.inputs[index];
       switch (at.op) {
         case "shared":
-          visit(templates[at.template], place, depth + 1);
-          return;
-        case "output":
-          visit(
+          return rebound(templates[at.template], index, depth + 1);
+        case "output": {
+          const named = place.outputs?.[at.output];
+          const again = rebound(
             this.plan.outputs[at.output]?.template,
-            place.outputs?.[at.output],
+            named,
             depth + 1,
           );
-          return;
-        case "select":
-          for (const branch of at.branches) visit(branch, place, depth + 1);
-          return;
-        case "slot": {
-          const binding = place.slots[at.slot];
-          if (
-            binding !== undefined && "chain" in binding &&
-            binding.observes === "identity" && binding.chain.length > 0
-          ) {
-            // A read of the value goes through each link the value holds.
-            const last = binding.chain[binding.chain.length - 1];
-            const reads: Position[] = [];
-            this.#quietly(() =>
-              this.store.read(new Ref(last.doc, last.path), reads)
-            );
-            const seen = new Set<string>();
-            const addresses = [
-              ...binding.chain,
-              ...this.#addressesOf(reads),
-            ].filter(({ doc, path }) => {
-              const id = JSON.stringify([doc, path]);
-              if (seen.has(id)) return false;
-              seen.add(id);
-              return true;
-            });
-            place.slots[at.slot] = this.#chainsOf(addresses, "value");
+          return again === undefined || again === named ? index : table.place({
+            ...place,
+            outputs: { ...place.outputs, [at.output]: again },
+          });
+        }
+        case "select": {
+          let now: number | undefined = index;
+          for (const branch of at.branches) {
+            now = rebound(branch, now, depth + 1);
           }
-          return;
+          return now;
+        }
+        case "slot": {
+          const bound = place.slots[at.slot];
+          const binding = bound === undefined
+            ? undefined
+            : table.bindings[bound];
+          if (
+            binding === undefined || !("chain" in binding) ||
+            binding.observes !== "identity" || binding.chain.length === 0
+          ) return index;
+          // A read of the value goes through each link the value holds.
+          const last = binding.chain[binding.chain.length - 1];
+          const reads: Position[] = [];
+          this.#quietly(() =>
+            this.store.read(new Ref(last.doc, last.path), reads)
+          );
+          const seen = new Set<string>();
+          const addresses = [
+            ...binding.chain,
+            ...this.#addressesOf(reads),
+          ].filter(({ doc, path }) => {
+            const id = JSON.stringify([doc, path]);
+            if (seen.has(id)) return false;
+            seen.add(id);
+            return true;
+          });
+          return table.place({
+            ...place,
+            slots: {
+              ...place.slots,
+              [at.slot]: table.binding(this.#chainsOf(addresses, "value")),
+            },
+          });
         }
         default:
-          return;
+          return index;
       }
     };
-    visit(template, inputs, 0);
-    return inputs;
+    const again = rebound(template, inputs.inputs, 0);
+    return again === undefined || again === inputs.inputs
+      ? inputs
+      : { ...inputs, inputs: again };
   }
 
   /**

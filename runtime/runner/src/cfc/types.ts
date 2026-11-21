@@ -848,7 +848,20 @@ export type WritePolicyInput =
    * with the experimental option `compiledPatterns` on, and for a compiled
    * pattern the runtime registered (`CompiledPlanRegistry`).
    */
-  | ({ readonly kind: "plan-write" } & PlanWrite);
+  | ({ readonly kind: "plan-write" } & PlanWrite)
+  /**
+   * A part of the table of inputs that the `plan-write` inputs of one
+   * compiled pattern name their inputs in, for the transaction: the entries
+   * from `firstInput` and from `firstBinding` on. The table of a transaction
+   * is what its parts hold, each at its indices, in whatever order they were
+   * recorded. Honored as a `plan-write` input is.
+   */
+  | ({
+    readonly kind: "plan-inputs";
+    readonly compiledPattern: string;
+    readonly firstInput: number;
+    readonly firstBinding: number;
+  } & PlanInputsTable);
 
 /**
  * Where a compiled pattern's slot is bound: the chain of addresses its
@@ -889,10 +902,18 @@ export type SlotBinding =
    */
   | { readonly constant: true };
 
-/** The bindings of a template's slots, by index into the plan's slots. */
-export type SlotBindings = { readonly [slot: number]: SlotBinding };
+/**
+ * The bindings of a template's slots, by index into the plan's slots: each
+ * the index of a binding in the table of inputs (`PlanInputsTable`).
+ */
+export type SlotBindings = { readonly [slot: number]: number };
 
-/** The inputs of one place a template is instantiated at. */
+/**
+ * The inputs of one place a template is instantiated at. What they name of
+ * other inputs and of slot bindings they name by index into the
+ * transaction's table of inputs (`PlanInputsTable`), so that inputs several
+ * places reach stand in the table once.
+ */
 export type PlanInputs = {
   /** Every slot the template reaches. */
   readonly slots: SlotBindings;
@@ -916,25 +937,40 @@ export type PlanInputs = {
 
   /**
    * The inputs of the cone instance of each output an `output` node or an
-   * output slot binding names here; an enclosing place's answer one this
-   * place does not name.
+   * output slot binding names here, by index into the table; an enclosing
+   * place's answer one this place does not name.
    */
-  readonly outputs?: { readonly [output: number]: PlanInputs };
+  readonly outputs?: { readonly [output: number]: number };
 };
 
 /**
- * The elements of a collection, in one of two forms. `uniform` is one set of
- * bindings whose addresses hold `*` at the element position, for a body with
- * no node whose label depends on a value: an array of plain values in place.
- * `groups` is one entry per distinct set of element inputs with the number of
- * elements that have it: an array of references, or the result of another
+ * The elements of a collection, in one of two forms, each set of inputs
+ * named by its index in the table. `uniform` is one set of bindings whose
+ * addresses hold `*` at the element position, for a body with no node whose
+ * label depends on a value: an array of plain values in place. `groups` is
+ * one entry per distinct set of element inputs with the number of elements
+ * that have it: an array of references, or the result of another
  * per-element construct.
  */
 export type PlanElements =
-  | { readonly uniform: PlanInputs }
+  | { readonly uniform: number }
   | {
-    readonly groups: readonly (PlanInputs & { readonly count: number })[];
+    readonly groups: readonly {
+      readonly inputs: number;
+      readonly count: number;
+    }[];
   };
+
+/**
+ * The inputs and the slot bindings that the write records of one compiled
+ * pattern name by index in one transaction: each distinct set of inputs and
+ * each distinct binding once, whatever the number of records and of paths
+ * through named outputs that reach it.
+ */
+export type PlanInputsTable = {
+  readonly inputs: readonly PlanInputs[];
+  readonly bindings: readonly SlotBinding[];
+};
 
 /** A stored position with the class a write record observes it in. */
 export type ObservedPosition = {
@@ -946,7 +982,14 @@ export type ObservedPosition = {
 };
 
 /** One write of a compiled pattern, as the executor reports it. */
-export type PlanWrite = PlanInputs & {
+export type PlanWrite = {
+  /**
+   * The inputs the template of the record is instantiated with: their
+   * index in the table of inputs the transaction holds for
+   * `compiledPattern` (`PlanInputsTable`).
+   */
+  readonly inputs: number;
+
   /** The written document and path. */
   readonly target: CfcAddress;
 
@@ -1611,5 +1654,4 @@ export type CfcPreparationWork =
   | "planTemplateNodes"
   | "planSlotLabels"
   | "planLabelMemoHits"
-  | "planLabelBounds"
-  | "planInputKeys";
+  | "planLabelBounds";

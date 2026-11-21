@@ -25,6 +25,7 @@ import {
   Instance,
   type LabelChange,
 } from "../../exec/executor.ts";
+import { InputsTable } from "../../exec/plan-write.ts";
 import { identifierOf, isLink, Ref, Store } from "../../exec/store.ts";
 import { generateInputs, inputClause } from "../generate.ts";
 import { scenarioAudience } from "../harness.ts";
@@ -1067,13 +1068,22 @@ describe("a commit the preparation refuses", () => {
       // that binds none of its template's slots: the preparation refuses
       // the commit.
       hooks.begin("send");
-      hooks.change(doc, [], store, undefined, [{
-        target: { doc, path: ["elsewhere"] },
-        record: { output: 0 },
-        instance: doc,
-        keys: [],
-        slots: {},
-      }]);
+      const unbound = new InputsTable();
+      hooks.change(
+        doc,
+        [],
+        store,
+        undefined,
+        [{
+          target: { doc, path: ["elsewhere"] },
+          record: { output: 0 },
+          instance: doc,
+          keys: [],
+          inputs: unbound.place({ slots: {} }),
+        }],
+        undefined,
+        unbound,
+      );
       hooks.end({ committed: true });
       // The second, begun before the first settled, writes below the root.
       store.put(doc, ["box"], { n: 1 });
@@ -1123,14 +1133,26 @@ describe("a change that leaves the stored value as it was", () => {
       // a write that left the value as it was, which names a path the
       // transaction did not write.
       hooks.begin("send");
-      hooks.change(doc, ["shout"], store, undefined, [{
-        target: { doc, path: ["shout"] },
-        record: { output: 0 },
-        instance: doc,
-        keys: [],
-        slots: { 0: { constant: true }, 1: { constant: true } },
-        selections: { 0: 0 },
-      }]);
+      const constants = new InputsTable();
+      const constant = constants.binding({ constant: true });
+      hooks.change(
+        doc,
+        ["shout"],
+        store,
+        undefined,
+        [{
+          target: { doc, path: ["shout"] },
+          record: { output: 0 },
+          instance: doc,
+          keys: [],
+          inputs: constants.place({
+            slots: { 0: constant, 1: constant },
+            selections: { 0: 0 },
+          }),
+        }],
+        undefined,
+        constants,
+      );
       hooks.end({ committed: true });
       expect(await hooks.settled()).toEqual([]);
       expect(hooks.counts.unchangedRecords).toBe(1);

@@ -8,7 +8,12 @@ import {
   type Transaction,
   type TransactionHooks,
 } from "../executor.ts";
-import type { PlanWrite } from "../plan-write.ts";
+import {
+  type InputsTable,
+  type NestedPlanWrite as PlanWrite,
+  nestedWrite,
+  type PlanWrite as IndexedWrite,
+} from "../plan-write.ts";
 import { argumentOf, type Store, type Undo } from "../store.ts";
 
 const artifactOf = async (name: string): Promise<Artifact> => {
@@ -111,7 +116,9 @@ class Recorder implements TransactionHooks {
     path: readonly string[],
     store: Store,
     _schema?: unknown,
-    writes?: readonly PlanWrite[],
+    writes?: readonly IndexedWrite[],
+    _splice?: unknown,
+    inputs?: InputsTable,
   ): void {
     this.changed.push({
       at: this.brackets.length,
@@ -119,8 +126,22 @@ class Recorder implements TransactionHooks {
       doc,
       path: [...path],
       value: structuredClone(store.peek(doc, path)),
-      ...(writes === undefined ? {} : { writes }),
+      ...(writes === undefined || inputs === undefined
+        ? {}
+        : { writes: this.#nested(writes, inputs) }),
     });
+  }
+
+  /** Each write record given with a table, with the table. */
+  readonly indexed: { write: IndexedWrite; inputs: InputsTable }[] = [];
+
+  /** `writes` with the inputs each names in `inputs` held by value. */
+  #nested(
+    writes: readonly IndexedWrite[],
+    inputs: InputsTable,
+  ): PlanWrite[] {
+    for (const write of writes) this.indexed.push({ write, inputs });
+    return writes.map((write) => nestedWrite(write, inputs));
   }
 
   /** Each write that left the value at its path as it was. */
@@ -136,9 +157,15 @@ class Recorder implements TransactionHooks {
     path: readonly string[],
     _store: Store,
     _schema: unknown,
-    writes: readonly PlanWrite[],
+    writes: readonly IndexedWrite[],
+    inputs: InputsTable,
   ): void {
-    this.left.push({ cause: this.#cause, doc, path: [...path], writes });
+    this.left.push({
+      cause: this.#cause,
+      doc,
+      path: [...path],
+      writes: this.#nested(writes, inputs),
+    });
   }
 
   end(
@@ -825,6 +852,61 @@ describe("a binding's state that the pattern computes", () => {
         chain: [{ doc: instance.argument, path: ["n"] }],
         observes: "value",
       });
+    }
+  });
+});
+
+describe("the table of inputs of a transaction", () => {
+  it("holds the inputs of an output once for the records that name them", async () => {
+    // `bump` writes through two write edges whose templates both reach
+    // the interim output 0.
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("binding-output"),
+      { n: 2, log: [] },
+      { transactions: recorder },
+    );
+    const begun = recorder.indexed.length;
+
+    instance.send(bindingOf(instance, "bump"), {});
+
+    const given = recorder.indexed.slice(begun).filter(({ write }) =>
+      "body" in write.record
+    );
+    expect(given.length).toBeGreaterThan(1);
+    const tables = new Set(given.map(({ inputs }) => inputs));
+    expect(tables.size).toBe(1);
+    const [table] = tables;
+    const named = new Set(
+      given.map(({ write }) => table.inputs[write.inputs].outputs?.[0]),
+    );
+    expect(named.size).toBe(1);
+    const [index] = named;
+    expect(table.bindings[table.inputs[index!].slots[0]]).toEqual({
+      chain: [{ doc: instance.argument, path: ["n"] }],
+      observes: "value",
+    });
+  });
+
+  it("holds no two entries with equal content", async () => {
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("chain"),
+      {
+        items: [{ title: "a", done: false }, { title: "b", done: false }],
+        tags: ["x", "y"],
+      },
+      { transactions: recorder },
+    );
+    instance.writeArgument(["items", "1", "title"], "c");
+
+    const tables = new Set(recorder.indexed.map(({ inputs }) => inputs));
+    expect(tables.size).toBeGreaterThan(1);
+    for (const table of tables) {
+      const inputs = table.inputs.map((entry) => JSON.stringify(entry));
+      const bindings = table.bindings.map((entry) => JSON.stringify(entry));
+      expect(new Set(inputs).size).toBe(inputs.length);
+      expect(new Set(bindings).size).toBe(bindings.length);
     }
   });
 });

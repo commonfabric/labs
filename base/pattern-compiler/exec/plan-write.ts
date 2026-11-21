@@ -13,6 +13,13 @@
  * the body template has no node whose outcome differs by element, and
  * otherwise one entry per distinct group of element inputs with the
  * number of elements in it.
+ *
+ * What the inputs of a place name of other inputs and of slot bindings
+ * they name by index into the table of inputs of the transaction
+ * (`InputsTable`), which holds each distinct set of inputs and each
+ * distinct binding once: the size of what a transaction records follows
+ * the number of distinct inputs and of records, and not the number of paths
+ * through named outputs that reach an input.
  */
 
 /** A position of a document: the document and the path in it. */
@@ -45,8 +52,11 @@ export type SlotBinding =
   /** A constant of the plan, which contributes no label. */
   | { constant: true };
 
-/** The bindings of the slots a template reaches, by the slot's index. */
-export type SlotBindings = Record<number, SlotBinding>;
+/**
+ * The bindings of the slots a template reaches, by the slot's index: each
+ * the index of a binding in the table of inputs (`InputsTable.bindings`).
+ */
+export type SlotBindings = Record<number, number>;
 
 /** Which record of the plan a write belongs to (PL §4.1). */
 export type PlanRecord =
@@ -79,31 +89,158 @@ export type PlanInputs = {
   elements?: Record<number, FoldElements>;
   /** The positions read through each entry of `Plan.dynamicReads`. */
   dynamic?: Record<number, Address[]>;
-  /** The inputs of the cone instance of each output named here. */
-  outputs?: Record<number, PlanInputs>;
+  /**
+   * The inputs of the cone instance of each output named here, by index
+   * into the table of inputs (`InputsTable.inputs`).
+   */
+  outputs?: Record<number, number>;
 };
 
 /** One group of the elements of a `fold` (provisional decision P31). */
-export type ElementGroup = PlanInputs & {
+export type ElementGroup = {
+  /** The inputs of the group's elements, by index into the table. */
+  inputs: number;
   /** How many elements have these inputs. */
   count: number;
 };
 
-/** The elements of a `fold`, in one of the two forms of decision P31. */
+/**
+ * The elements of a `fold`, in one of the two forms of decision P31, each
+ * set of inputs named by its index in the table.
+ */
 export type FoldElements =
-  | { uniform: PlanInputs }
+  | { uniform: number }
   | { groups: ElementGroup[] };
 
 /**
  * What the template of a cone instance is instantiated with: the instance
- * of the pattern, the element keys, outermost first, and what each node of
- * the template that needs an input reaches.
+ * of the pattern, the element keys, outermost first, and the index, in the
+ * table of inputs, of what each node of the template that needs an input
+ * reaches.
  */
-export type NamedOutputInputs = PlanInputs & {
+export type NamedOutputInputs = {
+  /** The inputs, by index into the table (`InputsTable.inputs`). */
+  inputs: number;
   /** The identifier of the instance, which is that of its result document. */
   instance: string;
   /** The element key of each enclosing collection, outermost first. */
   keys: [number, string][];
+};
+
+/**
+ * The table of inputs of one transaction: each distinct slot binding and
+ * each distinct set of inputs, at the index the write records and the other
+ * entries name it by. Two entries with equal content have one index.
+ */
+export class InputsTable {
+  /** The sets of inputs, by index. */
+  readonly inputs: PlanInputs[] = [];
+  /** The slot bindings, by index. */
+  readonly bindings: SlotBinding[] = [];
+  readonly #inputIndex = new Map<string, number>();
+  readonly #bindingIndex = new Map<string, number>();
+
+  /** The index of a slot binding. */
+  binding(binding: SlotBinding): number {
+    const text = JSON.stringify(binding);
+    let index = this.#bindingIndex.get(text);
+    if (index === undefined) {
+      index = this.bindings.length;
+      this.bindings.push(binding);
+      this.#bindingIndex.set(text, index);
+    }
+    return index;
+  }
+
+  /** The index of a set of inputs. */
+  place(inputs: PlanInputs): number {
+    const text = JSON.stringify(inputs);
+    let index = this.#inputIndex.get(text);
+    if (index === undefined) {
+      index = this.inputs.length;
+      this.inputs.push(inputs);
+      this.#inputIndex.set(text, index);
+    }
+    return index;
+  }
+}
+
+/** The bindings of slots, each held by value. */
+export type NestedSlotBindings = Record<number, SlotBinding>;
+
+/** The inputs of one place, with everything they name held by value. */
+export type NestedPlanInputs = {
+  slots: NestedSlotBindings;
+  selections?: Record<number, number>;
+  picks?: Record<number, { slots: NestedSlotBindings } | null>;
+  elements?: Record<number, NestedFoldElements>;
+  dynamic?: Record<number, Address[]>;
+  outputs?: Record<number, NestedPlanInputs>;
+};
+
+/** The elements of a `fold`, each set of inputs held by value. */
+export type NestedFoldElements =
+  | { uniform: NestedPlanInputs }
+  | { groups: (NestedPlanInputs & { count: number })[] };
+
+/**
+ * The inputs at `index` of `table` with everything they name held by
+ * value. An entry that several entries name is one object in each of them.
+ */
+export const nestedInputs = (
+  table: InputsTable,
+  index: number,
+  /** The entries expanded so far, by index. */
+  expanded: Map<number, NestedPlanInputs> = new Map(),
+): NestedPlanInputs => {
+  const known = expanded.get(index);
+  if (known !== undefined) return known;
+  const inputs = table.inputs[index];
+  const slots = (bindings: SlotBindings): NestedSlotBindings =>
+    Object.fromEntries(
+      Object.entries(bindings).map(([slot, at]) => [slot, table.bindings[at]]),
+    );
+  const within = (at: number) => nestedInputs(table, at, expanded);
+  const nested: NestedPlanInputs = {
+    slots: slots(inputs.slots),
+    ...(inputs.selections === undefined
+      ? {}
+      : { selections: inputs.selections }),
+    ...(inputs.picks === undefined ? {} : {
+      picks: Object.fromEntries(
+        Object.entries(inputs.picks).map(([pick, chosen]) => [
+          pick,
+          chosen === null ? null : { slots: slots(chosen.slots) },
+        ]),
+      ),
+    }),
+    ...(inputs.dynamic === undefined ? {} : { dynamic: inputs.dynamic }),
+    ...(inputs.outputs === undefined ? {} : {
+      outputs: Object.fromEntries(
+        Object.entries(inputs.outputs).map(([output, at]) => [
+          output,
+          within(at),
+        ]),
+      ),
+    }),
+    ...(inputs.elements === undefined ? {} : {
+      elements: Object.fromEntries(
+        Object.entries(inputs.elements).map((
+          [collection, elements],
+        ): [string, NestedFoldElements] => [
+          collection,
+          "uniform" in elements ? { uniform: within(elements.uniform) } : {
+            groups: elements.groups.map(({ inputs: at, count }) => ({
+              ...within(at),
+              count,
+            })),
+          },
+        ]),
+      ),
+    }),
+  };
+  expanded.set(index, nested);
+  return nested;
 };
 
 /**
@@ -295,4 +432,17 @@ export const isUniformBody = (
     default:
       return false;
   }
+};
+
+/** A write record with its inputs held by value. */
+export type NestedPlanWrite = Omit<PlanWrite, "inputs"> & NestedPlanInputs;
+
+/** `write` with the inputs it names in `table` held by value. */
+export const nestedWrite = (
+  write: PlanWrite,
+  table: InputsTable,
+  expanded?: Map<number, NestedPlanInputs>,
+): NestedPlanWrite => {
+  const { inputs, ...rest } = write;
+  return { ...rest, ...nestedInputs(table, inputs, expanded) };
 };
