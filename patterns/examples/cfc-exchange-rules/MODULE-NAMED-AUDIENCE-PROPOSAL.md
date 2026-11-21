@@ -285,19 +285,20 @@ All **ran**, in `runtime/html/test/worker-display-fit-card-table.test.ts` (three
 principals, each in a client runtime of their own on one memory server) unless
 another file is named.
 
-| Case                                                                                        | Outcome                                                                                             |
-| ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| A player reads their own instance of the view                                               | Released, the hand and each card of it                                                              |
-| A watcher reads their own instance                                                          | Released, and it holds no hand                                                                      |
-| Any principal's ceiling against another principal's instance                                | Refused                                                                                             |
-| The table's owner, with no seat                                                             | Their own instance holds no hand; a player's instance is refused them                               |
-| A request to sit that names another principal                                               | Seats the sender                                                                                    |
-| The owner binds `move` from another module over the live state                              | Makes the owner's own moves; the witness holds; the owner is shown no hand                          |
-| The owner runs the module a second time over the live state                                 | Computes the owner's own view again, and shows none of it                                           |
-| Another module's handler writes the state                                                   | Refused at commit, "writeAuthorizedBy requires a trusted verified binding identity"                 |
-| A player leaves their seat                                                                  | Their instance holds no hand at its next computation                                                |
-| The state, and a function of it no rule names                                               | Refused to everyone                                                                                 |
-| The serving loop computes the view for two demanders (`executor-fan-out.test.ts`, case (q)) | Each instance holds its own principal's value, stamped with that principal and the writer's witness |
+| Case                                                                                        | Outcome                                                                                                                |
+| ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| A player reads their own instance of the view                                               | Released, the hand and each card of it                                                                                 |
+| A watcher reads their own instance                                                          | Released, and it holds no hand                                                                                         |
+| Any principal's ceiling against another principal's instance                                | Refused                                                                                                                |
+| The table's owner, with no seat                                                             | Their own instance holds no hand; a player's instance is refused them                                                  |
+| A request to sit that names another principal                                               | Seats the sender                                                                                                       |
+| The owner binds `move` from another module over the live state                              | Makes the owner's own moves; the witness holds; the owner is shown no hand                                             |
+| The owner runs the module a second time over the live state                                 | Computes the owner's own view again, and shows none of it                                                              |
+| Another module's handler writes the state                                                   | Refused at commit, "writeAuthorizedBy requires a trusted verified binding identity"                                    |
+| A player leaves their seat                                                                  | Their instance holds no hand at its next computation                                                                   |
+| The state, and a function of it no rule names                                               | Refused to everyone                                                                                                    |
+| The serving loop computes the view for two demanders (`executor-fan-out.test.ts`, case (q)) | Each instance holds its own principal's value, stamped with that principal and the writer's witness                    |
+| The same table with a serving runtime running its handlers and computations                 | The memory server stores each principal's instance stamped with them; each is shown their own, and refused the other's |
 
 | Ruling | Ruled by | Date | Notes |
 | ------ | -------- | ---- | ----- |
@@ -309,7 +310,11 @@ another file is named.
   each client computes its own instance from a replica of the sealed state, and
   the runtime that stamps the viewer is the viewer's own. A modified client is
   outside this, as it is outside every display-boundary check. The serving loop
-  supplies the viewer from the authenticated demand (**ran**, case (q)).
+  supplies the viewer from the authenticated demand (**ran**, case (q), and the
+  display test's serving case). In that serving case the display decision is
+  made in a client runtime over the labels its replica holds; that those are the
+  serving runtime's labels and not the client's own speculation is **inferred**
+  from the stored instance carrying the same stamp, and no browser ran.
 - **An instance outlives its relevance.** A principal's instance is computed on
   their demand. One who leaves a seat and stops looking keeps, in their own
   instance, the last view computed for them, which is a view they were shown.
