@@ -38,7 +38,8 @@ export const INVITE_ACCESS = ["READ", "WRITE", "OWNER"] as const;
  * principal that may read the space may read it while the ledger stays the
  * owners'. Expiry moves nothing, since every reader compares `expiresAt` with
  * the time itself. Only the service writes it: the store refuses it in any
- * commit but a system one, and a branch restore leaves it as it is.
+ * commit but a system one, the server's direct writes (`writeDocument`)
+ * refuse it, and a branch restore leaves it as it is.
  *
  * A memory server whose service writes it advertises `spaceInvitesRevision`
  * in its handshake (`MemoryProtocolFlags` in `v2.ts`), so a client asks the

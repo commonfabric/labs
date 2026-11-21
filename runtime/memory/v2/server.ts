@@ -5970,6 +5970,15 @@ export class Server {
           "direct writes may not delete a space",
         );
       }
+      // The invitation service moves its revision document in the
+      // transaction that changes its ledger, and a direct write would say the
+      // ledger moved when it had not, which the store refuses of any commit
+      // but a system one (`refuseInviteRevisionWritesOutsideTheService`).
+      if (id === SPACE_INVITES_REVISION_DOC_ID) {
+        throw new Engine.ProtocolError(
+          "direct writes may not move the invitation service's revision document",
+        );
+      }
       if (this.#aclMode() !== "off") {
         if (id === aclDocId(space)) {
           throw new Engine.ProtocolError(

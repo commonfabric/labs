@@ -251,15 +251,18 @@ space's default branch watches the document to learn of changes it did not make,
 such as another owner's invitation, and reads `list` and `receipts` again when
 it moves; a session on another branch sees the document as it stood when the
 branch was forked, and learns nothing from it. The memory server that ran the
-operation tells its own sessions on the space of the move, and no other process:
-a deployment that holds a space's sessions in one process routes that space's
-invitation requests, over HTTP as well as on a session, to the same process, as
-it routes Gmail ingest. The document says only that the ledger moved, so every
-principal that may read the space may read it, and its commit names no
-principal, so the space's history does not name whoever's operation moved it.
-Only the service writes it: the store refuses it in an authored or derived
-commit, and a branch restore leaves it as it is. A memory server whose service
-writes it advertises `spaceInvitesRevision` in its handshake
+operation tells its own sessions on the space of the move, and no other process,
+so the guarantee rests on the deployment, not on this build: one that holds a
+space's sessions in one process must route that space's invitation requests,
+over HTTP as well as on a session, to the same process, as it routes Gmail
+ingest. Until it does, a session hears only of the moves its own process made,
+though its server advertises the flag below. The document says only that the
+ledger moved, so every principal that may read the space may read it, and its
+commit names no principal, so the space's history does not name whoever's
+operation moved it. Only the service writes it: the store refuses it in an
+authored or derived commit, the server's direct write path (`writeDocument`)
+refuses it too, and a branch restore leaves it as it is. A memory server whose
+service writes it advertises `spaceInvitesRevision` in its handshake
 ([protocol](../../docs/specs/memory-v2/04-protocol.md#411-websocket)), so a
 client reads the flag on the connection its session is on, from the process that
 tells that session of the move (`ISpaceReplica.invitesRevisionWatchable()`,

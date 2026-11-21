@@ -289,8 +289,8 @@ const isRestored = (id: EntityId, space: string): boolean =>
  * `source` holds and deletes each one `source` lacks. The commit records
  * where it restored from, so the history of `target` keeps every state it
  * went through, the one the restore replaced included. Session-scoped
- * documents stay as they are, as do the space's access list and its serving
- * loop's records. Returns
+ * documents stay as they are, as do the space's access list, the invitation
+ * service's revision document, and its serving loop's records. Returns
  * `undefined`, writing nothing, when the two hold the same documents.
  *
  * A collaborative field of a document the commit sets ends there, and its

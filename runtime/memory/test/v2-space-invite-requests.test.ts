@@ -380,6 +380,30 @@ describe("space.invite", () => {
     });
   });
   describe("the ledger's revision document", () => {
+    it("refuses a direct write, and stays as the service left it", async () => {
+      // A direct write is a system commit, which the store's guard lets
+      // through, so the server's direct write path refuses the id itself.
+
+      const server = serverWith({ inviteHost: INVITE_HOST });
+      const { space, session } = await ownedSpace(server);
+      await session.administerInvites(creation(space).invite);
+
+      const failure = await failureOf(
+        server.writeDocument(space, SPACE_INVITES_REVISION_DOC_ID, {
+          revision: 9,
+        }),
+      );
+      const held = await server.readDocument(
+        space,
+        SPACE_INVITES_REVISION_DOC_ID,
+      );
+
+      expect(failure?.message).toContain(
+        "direct writes may not move the invitation service's revision document",
+      );
+      expect(held?.value).toEqual({ revision: 1 });
+    });
+
     it("stays on a branch as it stood when the branch was forked, while the ledger and the default branch's document move on", async () => {
       // The service moves the document on the default branch, and the ledger
       // belongs to no branch, so a session on a fork sees the document as the
