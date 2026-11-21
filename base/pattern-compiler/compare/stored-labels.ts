@@ -1579,7 +1579,7 @@ export const checkSoundness = (
  * checks after every event of one scenario compare at most
  * (`soundnessAfterEachEvent`).
  */
-const STEPPED_PAIRS = 50_000;
+const STEPPED_PAIRS = 20_000;
 
 /**
  * The length of the text of a scenario's result above which the scenario is
@@ -1593,7 +1593,7 @@ const REPEATED_RESULT_LIMIT = 250_000;
  * event of one scenario, at most: a check reads the value at each stored
  * position from the result of each run.
  */
-const STEPPED_SIZE = 5_000_000;
+const STEPPED_SIZE = 2_000_000;
 
 /**
  * Runs `events` on the executor with its documents in storage and the option

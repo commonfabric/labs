@@ -13,7 +13,10 @@
 import type {
   CfcAddress,
   CfcMetadata,
+  LabelMapEntry,
 } from "../../../runtime/runner/src/cfc/types.ts";
+import { ConsumedLabelIndex } from "../../../runtime/runner/src/cfc/consumed-label-index.ts";
+import { readConsumesEntry } from "../../../runtime/runner/src/cfc/observation-classes.ts";
 import {
   consumedEntriesForRead,
   labelForConsumedEntries,
@@ -202,6 +205,22 @@ export const deepLabelAlong = <A>(
   };
 };
 
+/** The entries a read in each class consumes, as an index selects them. */
+const selections = {
+  value: {
+    key: "compare-value",
+    keeps: (entry: LabelMapEntry) => readConsumesEntry("value", entry),
+  },
+  shape: {
+    key: "compare-shape",
+    keeps: (entry: LabelMapEntry) => readConsumesEntry("shape", entry),
+  },
+  followRef: {
+    key: "compare-followRef",
+    keeps: (entry: LabelMapEntry) => readConsumesEntry("followRef", entry),
+  },
+};
+
 /** The runtime's link of an address, in the scope the address names. */
 const linkOf = (address: CfcAddress): NormalizedFullLink =>
   ({
@@ -238,25 +257,51 @@ export const storedReader = (
     }
     return metadata.get(key);
   };
+  // The entries of one document that a read in a class consumes, indexed
+  // by path once, so that the label at a position is found from the
+  // entries at and above its path and not from every entry.
+  const indexes = new Map<CfcMetadata, Map<string, ConsumedLabelIndex>>();
+  const indexOf = (
+    stored: CfcMetadata,
+    shape: "value" | "shape" | "followRef",
+  ): ConsumedLabelIndex => {
+    let byShape = indexes.get(stored);
+    if (byShape === undefined) {
+      byShape = new Map();
+      indexes.set(stored, byShape);
+    }
+    let index = byShape.get(shape);
+    if (index === undefined) {
+      index = new ConsumedLabelIndex(stored.labelMap.entries, {
+        select: selections[shape],
+      });
+      byShape.set(shape, index);
+    }
+    return index;
+  };
   return {
     value: (address) => tx.readValueOrThrow(linkOf(address)),
     label: (address) => {
       const stored = metadataOf(address);
       const label = stored === undefined ? undefined : labelForConsumedEntries(
-        consumedEntriesForRead(stored, address.path, {
-          nonRecursive: true,
-          consumes,
-        }),
+        consumedEntriesForRead(
+          stored,
+          address.path,
+          { nonRecursive: true, consumes },
+          indexOf(stored, consumes),
+        ),
         address.path,
         true,
       );
       const pointer = stored === undefined || !pointers
         ? undefined
         : labelForConsumedEntries(
-          consumedEntriesForRead(stored, address.path, {
-            nonRecursive: true,
-            consumes: "followRef",
-          }),
+          consumedEntriesForRead(
+            stored,
+            address.path,
+            { nonRecursive: true, consumes: "followRef" },
+            indexOf(stored, "followRef"),
+          ),
           address.path,
           true,
         );
