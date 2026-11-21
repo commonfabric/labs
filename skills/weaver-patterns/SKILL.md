@@ -84,7 +84,9 @@ command names the service and the key itself: `<key>` is
    `identityDid` must equal `cf id did <key>`, or stop and say this Mac holds
    someone else's key. Then find their Making loom (**Which loom**, below) and
    run `loom.ensure-space` on it: it must answer a `space` and a `host`. If it
-   is refused, stop and say so; never guess a host or a space.
+   answers `unknown-command`, their service is older than this skill: say they
+   need to update it. If it is refused, stop and say so; never guess a host or a
+   space.
 5. **The person is in the index**, as the same member their service is. If
    `cf index whoami -i <key>` says this machine has not joined, hand the
    service's membership to this Mac, in one line, so the chain never reaches the
