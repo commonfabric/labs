@@ -499,21 +499,38 @@ describe("type-arguments", () => {
       });
     });
 
-    it("keeps undefined beside an optional generic cell reference", async () => {
+    it("reads an optional generic cell reference without the `undefined` its `?` adds", async () => {
       const root = await schemaOfRoot(`
         interface Imported<ProfileRef = unknown> { authorProfile?: ProfileRef; }
         type Root = Imported<Writable<{ name: string }>>;
       `);
       expect(root.properties?.authorProfile).toEqual({
-        anyOf: [
-          {
-            type: "object",
-            properties: { name: { type: "string" } },
-            required: ["name"],
-            asCell: ["cell"],
-          },
-          { type: "undefined" },
-        ],
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+        asCell: ["cell"],
+      });
+      expect(root.required).toBeUndefined();
+    });
+
+    it("keeps the `undefined` an argument to an optional generic member writes", async () => {
+      const root = await schemaOfRoot(`
+        interface Holder<T> { value?: T; }
+        type Root = Holder<string | undefined>;
+      `);
+      expect(root.properties?.value).toEqual({
+        type: ["string", "undefined"],
+      });
+      expect(root.required).toBeUndefined();
+    });
+
+    it("keeps the `undefined` an optional generic member's declaration writes", async () => {
+      const root = await schemaOfRoot(`
+        interface Holder<T> { value?: T | undefined; }
+        type Root = Holder<string>;
+      `);
+      expect(root.properties?.value).toEqual({
+        anyOf: [{ type: "string" }, { type: "undefined" }],
       });
       expect(root.required).toBeUndefined();
     });

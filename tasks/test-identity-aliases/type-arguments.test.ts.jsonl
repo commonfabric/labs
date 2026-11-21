@@ -1,0 +1,1 @@
+{"date":"2026-11-05","from":{"k":"unit","s":"schema-generator","n":"type-arguments > the declaration a property is read from > keeps undefined beside an optional generic cell reference"},"to":{"k":"unit","s":"schema-generator","n":"type-arguments > the declaration a property is read from > reads an optional generic cell reference without the `undefined` its `?` adds"}}

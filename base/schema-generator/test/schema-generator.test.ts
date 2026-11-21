@@ -2790,7 +2790,7 @@ type CalculatorRequest = {
         );
       const BOX = "export interface Box<T = number> { value: T }";
 
-      it("keeps undefined beside optional bound values without a checker instantiation", async () => {
+      it("reads optional bound values without the `undefined` their `?` adds, with no checker instantiation", async () => {
         const schema = await generate(
           {
             "/main.ts": `
@@ -2807,23 +2807,13 @@ type CalculatorRequest = {
         expect(schema).toEqual({
           type: "object",
           properties: {
-            value: { type: ["number", "undefined"] },
+            value: { type: "number" },
             box: {
-              anyOf: [
-                {
-                  type: "object",
-                  properties: { value: { type: "number" } },
-                  required: ["value"],
-                },
-                { type: "undefined" },
-              ],
+              type: "object",
+              properties: { value: { type: "number" } },
+              required: ["value"],
             },
-            cell: {
-              anyOf: [
-                { type: "number", asCell: ["cell"] },
-                { type: "undefined" },
-              ],
-            },
+            cell: { type: "number", asCell: ["cell"] },
           },
         });
       });
