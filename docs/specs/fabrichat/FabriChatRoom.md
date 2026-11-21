@@ -199,7 +199,9 @@ membership and lists or restores the conversation. Joining an already listed
 room without a `requestId` changes no membership and records nothing. A join
 from a message or a reaction, marked `messageAct`, leaves the title the
 manager's catalog lists the room under as it is, and any other join brings that
-title up to the room's (see
+title up to the room's. A message's join carries the message count and the
+message's `sentAt` as its `activity`, which the manager keeps as where the
+conversation stands (see
 [`joinRoom`](ChatManagerOutput.md#joinroomrequestid-string-room-cellchatroomoutput)).
 Room write handlers send their
 local `joined` stream after recording the write. Its `tellManagerJoined`

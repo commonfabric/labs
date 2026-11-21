@@ -1035,8 +1035,10 @@ it declares `fabrichat-room`, and its root is at the reserved address. Acting
 on it sends the space's root to the manager's `joinRoom`, with the notice's
 `from`, `id` and `sharedAt` as `notice`. For a room the person's chats list as
 saved, the manager brings the title the catalog lists the room under up to the
-room's own, where the two differ, and marks the notice acted on in the
-catalog's `notices`, under its sender and `id`, in the same transaction (see
+room's own, where the two differ, as it does the activity its membership holds
+([`ChatIndexEntry`](../specs/fabrichat/ChatIndexEntry.md)), and marks the
+notice acted on in the catalog's `notices`, under its sender and `id`, in the
+same transaction (see
 [`shared-space-catalog.md`](shared-space-catalog.md#notice-marks)). It does
 nothing for any other room, so a notice never restores an archived entry, nor
 records a membership.

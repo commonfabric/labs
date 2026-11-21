@@ -414,7 +414,10 @@ These rules hold for every stream:
   so a room the sender reached by its link, or forgot, becomes one of their
   chats. A message or a reaction marks its `joinRoom` `messageAct`, which
   leaves the title the manager's catalog lists the room under as it is; a
-  retitle's carries no mark. The manager checks membership in its own
+  retitle's carries no mark. A message's also carries its `activity`: the
+  length of the room's message list once the message is recorded, and the
+  message's `sentAt`, which the manager keeps as where the room's
+  conversation stands. The manager checks membership in its own
   Home-space event and leaves an already saved room unchanged. The room reads no private catalog and sends
   nothing for a sender with no manager. It sends `joinRoom` in an event of its
   own, once the write has landed, so the write reads nothing of the manager. A
