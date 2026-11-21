@@ -4509,13 +4509,11 @@ describe("a pattern called through `asInstance()` in an element body", () => {
 
     // A change of the element's value changes no key and writes no
     // argument: the instance reads through the reference.
-    const before = instance.store.log.length;
+    const log: { doc: string }[] = instance.store.log = [];
     instance.writeArgument(["pool", "a", "title"], "renamed");
     expect(result(instance).rows[0].title).toBe("renamed");
     expect(
-      instance.store.log.slice(before).some((write) =>
-        write.doc === argumentDocument(first.$link.doc)
-      ),
+      log.some((write) => write.doc === argumentDocument(first.$link.doc)),
     ).toBe(false);
     expect(instance.childInstances().length).toBe(7);
   });
@@ -4564,13 +4562,13 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     const documents = instance.documents();
 
     // The element leaves: nothing of the instance is written or removed.
-    const before = instance.store.log.length;
+    const log: { doc: string }[] = instance.store.log = [];
     instance.writeArgument(["items"], [link("a")]);
 
     expect(result(instance).rows.length).toBe(1);
     expect(instance.documents()).toEqual(documents);
     expect(
-      instance.store.log.slice(before).some((write) =>
+      log.some((write) =>
         instance.childInstances().find(({ instance: made }) =>
           made.id === second.$link.doc
         )?.instance.documentIds().includes(write.doc)

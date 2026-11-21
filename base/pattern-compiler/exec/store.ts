@@ -795,8 +795,12 @@ export class Store {
   readonly declared = new Map<string, { kind: string; default: unknown }>();
   /** Counts the writes and the evaluations whose value changed. */
   clock = 0;
-  /** Every write: where, and the clock after it. */
-  readonly log: { doc: string; path: readonly string[]; at: number }[] = [];
+  /**
+   * Where a caller sets it: every write since, with where it was made and
+   * the clock after it. Nothing is kept where no caller did, so the store
+   * holds nothing that grows with the number of writes made.
+   */
+  log: { doc: string; path: readonly string[]; at: number }[] | undefined;
   /**
    * The address each container a read gave was read from. A value read
    * from a stored address carries the address, invisibly to the code it
@@ -1062,7 +1066,7 @@ export class Store {
     reported: { covers?: readonly string[]; schema?: Schema } = {},
   ): void {
     this.clock += 1;
-    this.log.push({ doc, path, at: this.clock });
+    this.log?.push({ doc, path, at: this.clock });
     this.#noteChange(doc, path);
     if (this.appended !== undefined) {
       this.#noteAppended(this.appended, doc, path, old, splice);

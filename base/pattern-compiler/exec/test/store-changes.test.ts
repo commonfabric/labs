@@ -22,6 +22,22 @@ const changesOf = (store: Store, run: () => void) => {
 };
 
 describe("Store", () => {
+  describe("the log of its writes", () => {
+    it("holds each write where a caller set a log, and nothing is kept where none did", () => {
+      const store = new Store({ parts: false });
+      store.create("doc", "state", { a: 1 });
+      store.write(new Ref("doc", ["a"]), 2);
+      expect(store.log).toBeUndefined();
+
+      store.log = [];
+      store.write(new Ref("doc", ["a"]), 3);
+
+      expect(store.log.map(({ doc, path }) => ({ doc, path }))).toEqual([
+        { doc: "doc", path: ["a"] },
+      ]);
+    });
+  });
+
   describe("the changes it reports", () => {
     it("names the root as covered by a write below a root that held no container", () => {
       const store = new Store({ parts: false });
