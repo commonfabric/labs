@@ -326,8 +326,9 @@ By ruling, trust is attached to a pattern. A promoted `computed` mints no
 `TransformedBy` atom for the code of its callback, and every kept output of a
 pattern carries a `TransformedBy` atom that names the pattern, a value the
 pattern only passes on included. Where the value is passed on by reference,
-the atom is on the link, as the pattern's endorsement of the selection, and
-the target keeps its own label. A value the pattern body passes on then has
+the atom is joined onto the content at the output path, with no scope, so a
+read through the link takes it; the stored label of the target, at its own
+address, stays what it was. A value the pattern body passes on then has
 an atom where the runtime stores none today, which is tighter. By ruling,
 every commit of a compiled pattern is prepared when the experimental option
 is on, so the atom is stored even where a commit reads no labeled data; the

@@ -11,6 +11,16 @@ next.
 
 - **Branch:** `claude/fable-pattern-language-redesign-vvh48e` in
   `commonfabric/labs`, draft pull request #9788.
+- **The stack of pull requests.** Four draft pull requests, each based on the
+  one before it. #9788 holds the design documents, on the branch above. #9942
+  holds the prototype, on `claude/compiled-pattern-prototype`. #9992 holds the
+  integration, on `claude/compiled-pattern-integration-m1`: milestone 1,
+  milestone 4 through its ninth corpus run, and the catch-up merge with `main`;
+  the branch `claude/compiled-pattern-m4`, on which milestone 4 was built, is
+  retired. #10016 holds Topics on the executor, on
+  `claude/compiled-pattern-topics`, and does not hold milestone 4. A change to a
+  pattern goes to `main` in a pull request of its own and not into the stack:
+  #10036 and #10050 are open, and #10054 is closed without a merge.
 - **Documents**, all under `docs/specs/compiled-pattern-language/`:
 
   | Document | Owns |
@@ -5402,6 +5412,26 @@ on them in two ways.
    `deno task check-conflict-markers`. `docs/` is excluded from `deno fmt`,
    so prose is wrapped at 80 columns by hand. Read
    [`../README.md`](../README.md) first.
+8. **A plan with a stub is enough to go on.** The owner's working preference
+   (2026-11-20): "we're still validating a larger design choice here, and i
+   think it's totally fine to write down a plan but stub things for now so we
+   can make progress. patternTool is a good example here." A point that the
+   validation does not rest on is written down as a plan, stubbed in the build,
+   and listed under [Known limits](#known-limits-of-what-exists).
+9. **Where two alternatives cost the same and one is clearly more sound, the
+   coordinator decides.** The owner's working preference (2026-11-20), given
+   with the ruling on the catch-up merge: "if it's equal complexity and
+   obviously more sound, just decide". Such a decision is tracked as a
+   provisional decision, by the standing instruction of 2026-11-17.
+10. **A channel that the write gate would close is recorded and not closed, and
+    every stored label is still correct.** The owner's working preference
+    (2026-11-20), given with the ruling on the write gate: "assume the proposal
+    or something equivalent eventually lands and so don't worry about the
+    potential for leaks now, but still make sure things are sound in terms of
+    just correctly computing the labels under that relaxed condition". A finding
+    is therefore sorted first: a stored label that lacks a clause of what flowed
+    into the value is a defect to fix, and a label change that a write under a
+    secret causes is recorded under question 335.
 
 ## Decided
 
@@ -5657,8 +5687,10 @@ is relitigated.
   names the pattern, because trust is attached to the pattern. That
   holds for a value the pattern only passes on, through a `slot`, a
   `select`, or a `pick`, as for one it computes. Where the value is
-  passed on by reference, the atom is on the link, as the pattern's
-  endorsement of the selection, and the target keeps its own label.
+  passed on by reference, the atom is joined onto the content at the
+  output path, with no scope, by the ruling Z81 below, which replaces
+  the earlier rule that the atom is on the link as the pattern's
+  endorsement of the selection.
 - A child in the reactive tier does not write an argument given as a
   literal or a computed value. The runtime allows it today. A pattern
   that changes or owns one of its arguments is given a writable cell
@@ -5714,8 +5746,9 @@ is relitigated.
   compiled. The interim ends as it does for `ifElse`, `when`, `unless` and
   `str`. `language-subset.md` §4.4.3 has the accepted and the refused
   shapes. Of the 31 calls in the corpus 29 are accepted. Three points of
-  the build are the implementer's choices and not part of the ruling
-  (question 314). A rewritten call compiles to a pattern closure used as a
+  the build were the implementer's choices, and the ruling Z84 below has
+  them stand (question 314). A rewritten call compiles to a pattern closure
+  used as a
   value, which the prototype does not translate, so the tool is not sent
   (questions 307 to 310).
 
@@ -6351,9 +6384,12 @@ is relitigated.
   statically, so every write of the handler carries the label of the condition.
   It settles question 328 here for an addition. `plan-and-label-templates.md`
   §2.5 ("An addition through a handle") states it. Milestone 4 of the
-  integration at commit `429a62aba5` stores what the list held of its membership
-  on the position of an added member as well, which the ruling does not want;
-  that part is being removed.
+  integration builds it: the record of an added member holds the label of the
+  write and of what the method compared, and nothing of what the list stored of
+  its membership. The fixture `push-under-condition` of the prototype confirms
+  the conditional push: both additions of one handler, the first under a
+  condition on an input, store the input's clause. What the ruling leaves open
+  is a member appended after a removal (question 328).
 - A state cell whose schema declares a label has a document from the start
   (2026-11-20, Z69). The owner's words: "state cells getting documents is
   generally not problematic, it's all the intermediate values that we want to
@@ -6365,8 +6401,92 @@ is relitigated.
 - The budget of `SPEC-PENDING` markers is raised to 80 (2026-11-20, Z70). The
   owner's words: "increase the budget to 80". It settles question 319 here. The
   constant is `SPEC_PENDING_BUDGET` of `tasks/check-cfc-correspondence.ts`. It
-  is 80 on the branch of milestone 4, where the governed files hold 46 markers
-  at commit `429a62aba5`.
+  is 80 on the integration branch. The governed files held 46 markers at the
+  eighth corpus run of milestone 4; the count at the head of the integration
+  branch was not taken.
+- The three changes of representation for collections with many members are
+  built (2026-11-20, Z75). The owner's words: "Yes, build them". They are (a)
+  one table of inputs per transaction, which the write records name by index;
+  (b) one record with a `*` target for equal writes into one container; and (c)
+  groups with counts for any read that covers a whole container, kept with the
+  collection. Each leaves every stored label as it is. It settles the direction
+  of question 318 here. `plan-and-label-templates.md` §4.7 states them. They are
+  being built in milestone 4 of the integration, started after its ninth corpus
+  run, and no result exists. What the ruling leaves open: that the stored labels
+  are byte-equal is argued and not shown (question 338), and the form of the
+  stored entries where the members have several labels is not part of it
+  (question 342).
+- At the catch-up merge with `main`, the executor's record of a splice places
+  the stored label entries of an array that has one, and the alignment by value
+  of `main` covers every other array (2026-11-20, Z76). The owner's words: "(a)
+  (and this is clearly more sound. if it's equal complexity and obviously more
+  sound, just decide)". It settles question 327 here. It is built in the merge
+  that brought `main` into the integration branch (`elementEntryPlacement` and
+  `elementEntryPlacements` of `runtime/runner/src/cfc/prepare.ts`). What it
+  leaves open is what no test covers (question 346).
+- The design waits for the specification's ruling on the write gate and makes no
+  investment in per-member audience labels of the lists that a handler writes
+  (2026-11-20, Z77). The owner's words: "(c) -- and yes, assume the proposal or
+  something equivalent eventually lands and so don't worry about the potential
+  for leaks now, but still make sure things are sound in terms of just correctly
+  computing the labels under that relaxed condition". So the channels that the
+  write gate closes, a label change that a write under a secret causes (section
+  14.3.5, `14-open-problems-and-proposals.md`), are not milestone 4's to close,
+  and each stored label must still be at least what flowed. It answers question
+  335 here as far as what is built meanwhile. It leaves open the rule itself,
+  which the specification has not ruled, and what the plan has to give it.
+- A stored label never changes because a collection crossed a size (2026-11-20,
+  Z78). The owner adds one possible exception, in the owner's words "possibly
+  (c) once the ceiling proposal is ratified": the labels of the members of a
+  container up to the container's declared label. `plan-and-label-templates.md`
+  §4.7 states the rule and the counterexample that it rests on. What it leaves
+  open: whether that exception is adopted once the proposal is ratified, and how
+  a threshold would be measured (question 341).
+- A label of very many clauses gets a diagnostic, and the commit is refused
+  above a hard limit that is set well above the diagnostic's number (2026-11-20,
+  Z79). Nothing is built. The ruling does not say whether the limit counts
+  clauses or encoded bytes, and sets neither number (question 339).
+- A body with a declared maximum confidentiality stores an output at the ceiling
+  where the author marks the output (2026-11-20, Z80). Nothing is built. The
+  mark has no syntax, and which ceiling an output takes where the inputs declare
+  different ones is not said (question 340).
+- The pattern's atom of a kept output that passes a value on by reference is
+  joined onto the content, with no scope, so a read through the link takes it
+  (2026-11-20, Z81). The owner's words: "i think (c) is fine, i see it as
+  lacking coarseness in differentiating selected vs computed, but what integrity
+  means is really in a semantic space the pattern author owns / what this
+  integrity means is anyway up for interpretation and passing through a
+  selection just has low meaning". It settles question 313 here, and it replaces
+  the earlier rule that the atom is on the link as an endorsement of the
+  selection. `plan-and-label-templates.md` §3.2 ("Where the atom of a kept
+  output is stored") states it, and milestone 4 of the integration builds it:
+  the atom is in the `value` entry at the output's path, whether the document
+  that holds the link is written whole or the path alone. What it leaves open:
+  the envelope of the document the link names is not written, so a reader that
+  reaches the target another way does not take the atom; a write edge that
+  stores a reference is not named by the ruling; and whether the specification
+  needs a sentence for an atom with no scope at the path of a link
+  (`plan-and-label-templates.md` question 72).
+- The requirement on the link of an argument, the owner's design for the minimum
+  integrity that a pattern declares on an input, is scheduled after milestone 4
+  (2026-11-20, Z82). It answers the scheduling of question 302 here; the open
+  points of that question stay open.
+- A closure through `inSpace` given as a tool is refused (2026-11-20, Z83). When
+  the modifier is needed on a tool, the captures stay with the factory value, in
+  the owner's words "whenever we need it, (b)". It settles the second part of
+  question 310 here. The provisional decisions P33 to P36 were listed in the
+  same item put to the owner and are not named in the answer: they stay
+  provisional. Nothing is built, and the diagnostic has no identifier
+  (`language-subset.md` §4.4.2).
+- The three choices of the implementer of the interim acceptance of
+  `patternTool` stand (2026-11-20, Z84). It settles question 314 here.
+- Three points of the build are agreed (2026-11-20, Z85): the group table of a
+  read that covers a whole container is kept in memory with the collection; a
+  label stored for a write that leaves the value as it was replaces the stored
+  one; and that rule applies to every write that storage finds unchanged, a
+  derived write included. The second and the third settle what the ruling Z67
+  did not determine (question 315). What it leaves open is the cost of those
+  labels (question 324).
 
 ## Provisional decisions awaiting the owner's ratification
 
@@ -6386,70 +6506,69 @@ pointer to its entry.
 
 **To look at first,** in this order.
 
-1. **The open findings of milestone 4,** at its eighth corpus run. Labels from
+1. **The findings of milestone 4,** at its ninth corpus run. Labels from
    templates at commit are built (milestone 4 of the integration), with every
-   commit of a compiled pattern prepared, and run over the whole corpus with
-   `wish` simulated: of 271 modules 238 run; of 1,695 output rows 959 are
-   tighter than today's, 346 equal and 112 looser, and of 203 write rows 130 are
-   equal, 9 tighter and 61 looser. *Open and unsound, three findings.* A check
-   of the stored labels against the values with every event of a scenario sent
-   three times, new in this run, reports 27 values in 3 modules that depend on
-   an input and store no clause of it; the check on each scenario as given
-   reports none. First, 10 values of `examples/map-demo` and 1 of
-   `apps/base/person` are not triaged (question 334). Second, a read of a
-   position that holds no member consumes nothing of the list's membership after
-   additions alone, over an array of plain values in place and over an array of
-   references (question 329). Third, an array inside a value written whole has
-   no entry for its membership (question 330). The other 16 of the 27, at
-   positions of the result of another per-element construct in
-   `examples/todo-list`, are no soundness finding by the owner's ruling Z74: an
-   append puts the membership of the list on no position, and the check, which
-   takes a member appended at another index for a dependency, is being changed
-   (question 328). *Unsound and fixed:* the `push` defect of the seventh run was
-   wider than reported and is fixed in every case found, over an array of plain
-   values in place, over an array of references, for a list that `set` replaced,
-   for a write behind the last member, and for a change that finds nothing to
-   do; the rulings Z71 to Z73 on a removal are built with it. *Cost:* on
-   `dev/experimental/folksonomy-stress-test` the executor's time for an event
-   rises from under 0.5 s to as much as 14.8 s after a `loadActions` sent while
-   a result of about 1 MB is loaded, and a process ran out of memory at 4 GB; it
-   is in the executor and not in the labels, and the cause is not investigated
-   (question 332). After a label changed alone the records to give again are
-   found by position and not by class (question 333). The write records of one
-   transaction over a list of 10,000 references are linear in the elements in
-   three places (question 318). A label for a write that leaves the value as it
-   was costs 61 more commits over the corpus with the option on than with it
-   off, where the seventh run had 207 more (question 324). *For the owner:* the
-   specification sentence that Z71 needs is proposed (question 326), pull
-   request commonfabric/labs#10080, merged to `main`, moves label entries with
-   the members of an array at the same place of `prepare.ts`, so a catch-up
-   merge of the branch conflicts there (question 327), and the owner points to
-   the specification's proposal for a write gate, by which the confidentiality
-   ceiling of every path a handler can write is declared ahead (question 335).
-   The owner's concern about a label-only commit is answered: today's runtime
-   wakes a reader of the value and refuses an earlier reader for such a commit,
-   also when the changed label belongs to another value of the same document
-   (question 331). Open beside them: the check covers 91 of the 238 modules with
-   repeated events and is a lower bound; 44 commits in 24 modules are refused
-   with the option on and not off; the runtime took a bound 499 times (P37); and
-   the atom on a link is not taken by a read of the value through the link
-   (question 313)
+   commit of a compiled pattern prepared, and run over the corpus with `wish`
+   simulated: of 271 modules 238 run; of 1,695 output rows 1,041 are tighter
+   than today's, 287 equal and 88 looser, and of 203 write rows 130 are equal, 9
+   tighter and 61 looser. That run is on the source of `main` before the
+   catch-up merge. *Open and unsound.* The check of the stored labels against
+   the values reports 4 values in 2 modules with every event sent three times,
+   and 1 of them on the scenario as given: 3 outputs at position 0 of the result
+   of a `map` in `examples/todo-list`, which is the result of another
+   per-element construct, and 1 write of `showcase/card-piles`, at a position
+   that a `push` after a `remove` writes. Neither is examined (question 344). A
+   removal's `*` entry is replaced by a more specific entry of origin
+   `structure`, which needs the specification sentence first and is not fixed
+   (question 343). A handler that writes nothing under a condition on a labeled
+   input stores nothing; by the ruling Z77 it is a channel of the write gate,
+   recorded and not fixed, and `examples/map-demo` shows it at 16 values with
+   generated events (question 335). *Cost, a regression that is serious.*
+   Against the eighth run the preparation time with the option on rose from
+   2,176 ms to 9,250 ms, the bounds taken from 499 to 1,762, the records of
+   writes that left the value as it was from 756 to 2,297, the label entries
+   they changed from 3,625 to 22,625, the write records checked from 4,271 to
+   9,039, the refused commits from 44 to 55, and the run from 10 to 22 minutes.
+   The fixes of the round give more records and give records as bound; the
+   regression is not attributed by measurement (question 345). The memory of the
+   executor on a large result is not fixed (question 332). *Fixed.* The slow
+   events of `dev/experimental/folksonomy-stress-test` had one cause,
+   `Store.changedSince` of the executor, and take 414, 3 and 53 ms where they
+   took 4,119, 3,720 and 14,945 ms. Six defects that stored a label narrower
+   than what flowed are fixed, each with a test: the rows of a view, a kept
+   output with no template, `cell.get() ?? fallback` stored in place, an output
+   evaluated again to the value it holds, `key(i).set(undefined)`, and a
+   `flatMap` over an array of references; so are a read of a position that holds
+   no member (question 329) and an array inside a value written whole (question
+   330). The membership is no longer on the position of an added member, and the
+   check has a criterion for an appended member (ruling Z74; question 328). The
+   atom of a kept output that holds a link is on the content in every case
+   (ruling Z81). *The rest.* The three changes of representation for collections
+   with many members are adopted and being built (ruling Z75; question 318). The
+   catch-up merge with `main` is made, with the record winning over the
+   alignment by value (ruling Z76; question 346), and the corpus of current
+   `main` is 287 modules of which 244 run; no corpus run exists yet with the
+   ninth run's code on that source. The specification sentence that Z71 needs is
+   proposed (question 326). The check covers 99 of the 238 modules with repeated
+   events and is a lower bound
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
    "Milestone 4: labels from templates at commit").
-2. **A pattern closure used as a value is not translated,** and the
-   interim acceptance of `patternTool` rests on it: 29 calls of the corpus
-   are accepted and each compiles to a tool that is not sent. Four points
-   have to be decided first (questions 307 to 310), three with a
-   provisional decision (P33 to P36) and one, a closure through `inSpace`
-   as a tool, with alternatives and none.
-3. **Question 313,** for the owner: whether the atom of a kept output on a
-   link is a selection endorsement with a scope, which a read that
-   traverses the link takes.
-4. **Question 302,** the owner's design for the integrity of a value a
-   pattern passes on from an argument: the minimum integrity it declares on
-   an input becomes a requirement on the link written for the argument. It
-   is recorded as a sketch with its open points and needs a specification
-   change of its own; whether to pursue it is the owner's decision.
+2. **A pattern closure used as a value is not translated,** and the interim
+   acceptance of `patternTool` rests on it: 29 calls of the corpus are accepted
+   and each compiles to a tool that is not sent. Three of the four points that
+   have to be decided first have a provisional decision (P33 to P36; questions
+   307 to 310), which the owner's answer of 2026-11-20 does not name, so they
+   await ratification. The fourth is ruled: a closure through `inSpace` as a
+   tool is refused (Z83).
+3. **What the rulings Z79 and Z80 leave undecided,** for the owner: whether the
+   hard limit on a label counts clauses or encoded bytes, with its two numbers
+   (question 339), and how an author marks an output as stored at the declared
+   ceiling (question 340).
+4. **Question 302,** the owner's design for the integrity of a value a pattern
+   passes on from an argument: the minimum integrity it declares on an input
+   becomes a requirement on the link written for the argument. It is recorded as
+   a sketch with its open points and needs a specification change of its own. By
+   the ruling Z82 it is scheduled after milestone 4.
 5. **P31,** which milestone 4 builds: labels by identifier, and a `fold`
    instantiated once per group of element inputs, in the `uniform` form for
    an array of plain values in place and the `groups` form, with a count per
@@ -6467,7 +6586,8 @@ pointer to its entry.
    by a test: when an array of plain values in place is spliced, the
    per-element label entries stay at their positions, so a position can
    hold the label of the value that was there before. Pull request 9982
-   does not fix it (question 306).
+   does not fix it (question 306). Pull request commonfabric/labs#10080,
+   merged to `main`, moves the entries with the elements.
 8. **P9** is flagged. With it a batch of events and the same events handled one
    at a time can store different values, and today's runtime, which runs the
    writer again, stores the same value in both. The coordinator adopted it only
@@ -7442,7 +7562,8 @@ today.
   holder of the factory shares and whose identifier needs a cause.
   *How it is written:* `plan-and-label-templates.md` §3.15 (point 2) and
   `execution-and-storage.md` §4.6. *Not determined:* the names of the
-  members; the captures of a closure called through `inSpace`. *Tests:*
+  members. By the ruling Z83 the captures of a closure called through
+  `inSpace` stay with the factory value where that is built. *Tests:*
   none. *If decided otherwise:* those two passages.
 - **P35. Value code makes a factory value through a marker of the host
   object** (question 309, which is `plan-and-label-templates.md` question
@@ -7469,9 +7590,10 @@ today.
   selection; the tool rule applies to the selected factory value under
   the label of the `select`. *Alternative:* a conditional between
   closures is refused where it is given as a tool. *How it is written:*
-  `plan-and-label-templates.md` §3.15 (point 4). *Not decided, with no
-  provisional decision:* a closure through `inSpace` as a tool, the
-  second part of question 310. *Tests:* none. *If decided otherwise:*
+  `plan-and-label-templates.md` §3.15 (point 4). *Ruled, and no part of
+  this decision:* a closure through `inSpace` as a tool is refused (Z83),
+  the second part of question 310. P36 itself is not named in the owner's
+  answer and stays provisional. *Tests:* none. *If decided otherwise:*
   that passage.
 - **P37. A scan keeps the groups of its prefix with its memo entry**
   (question 311, which is `plan-and-label-templates.md` question 183).
@@ -7528,9 +7650,8 @@ today.
   `removeByValue`) replace it with the stored enumeration joined with what
   decided the change. An added element is recorded at its own position, with its
   own label. By the owner's ruling Z74 the position of an added element does not
-  carry the membership of the list; milestone 4 at commit `429a62aba5` joins
-  what the list stored of its membership into it, and that part is being
-  removed. *What it no longer decides:* for a removal, where what the decision
+  carry the membership of the list, and milestone 4 builds it so. *What it no
+  longer decides:* for a removal, where what the decision
   read is stored for the positions from the first removed one on. P39 took
   alternative 1 of question 320, an entry written per kept element; the owner's
   ruling Z71 replaces it with alternative 3, one `*` entry that a read of a
@@ -7539,7 +7660,7 @@ today.
   another per-element construct has no handle to add or remove through. *How it
   is written:* `plan-and-label-templates.md` §2.5 ("An addition through a
   handle") and `footprint-analysis.md` §6.1. *Built:* in milestone 4 of the
-  integration at commit `429a62aba5`, with the `enumerate` entry stored for a
+  integration, with the `enumerate` entry stored for a
   list of plain values in place, which today's runtime stamps on containers of
   links alone; that is a change of what CFC stores and carries the
   `SPEC-PENDING` marker for specs pull request 91. *Tests:*
@@ -7547,6 +7668,53 @@ today.
   `runtime/runner/test/cfc-plan-labels.test.ts` ("for changes of the members of
   a list in place"). *If decided otherwise:* those passages, and what is built
   from them.
+- **P40. An entry of `Body.reads` says where the body declares a handle**
+  (`ReadInput.handle`). The decision of the author of the Topics track, adopted
+  by the coordinator; it is no owner ruling. *The number:* the branch
+  `claude/compiled-pattern-topics` records this decision as P31 in its copy of
+  this plan and in `base/pattern-compiler/SPEC-NOTES.md` (note 541). This
+  document governs the numbering, P31 here is another decision, and the Topics
+  branch renumbers at its merge. *The case:* `execution-and-storage.md` §2.4 has
+  the runtime decide what an `identity` entry puts into the argument by the type
+  of the position, a handle at a position of handle type and a reference
+  stand-in at a position of data type, and takes that type from `Slot.schema`.
+  The crate's slot holds the type of the place, and one slot of root `argument`
+  serves every body that reads the place in the same way, so two bodies that
+  declare a handle and a value at one input share an `identity` slot. In Topics,
+  `migrateTopicState` declares a writable handle at `createdBy` and
+  `createdByOf` declares a value there; the executor handed `createdByOf` a
+  handle, and its read of a member of the value threw. *Decision:* an entry of
+  `Body.reads` at a position of handle type in the body's declaration has
+  `handle: true`, from the positions of handle type that footprint analysis
+  records, and the runtime gives a handle there, before every entry at or below
+  it. An `identity` entry without it, at a place where the body also has a
+  `value` entry, gives way to the value, which carries the address. An entry at
+  `*` with it puts a handle at each element of an array and at each member of a
+  record; the case there is an array of references and a record of references
+  that a body declares as handles. *Alternative:* the slot holds the declared
+  type, and two bodies that declare different types at one place have two slots,
+  which changes the indexes of slots in every plan. *How it is written:* on the
+  Topics branch alone; `plan-and-label-templates.md` §1.1 does not hold the
+  member. *Tests:* on that branch, `exec/test/executor.test.ts`. *If decided
+  otherwise:* the crate splits the slots by the declared type, and the executor
+  reads the type from `Slot.schema`.
+- **P41. `equalsKey` is accepted, and is what `equals` compares of its
+  operand.** The decision of the author of the Topics track, adopted by the
+  coordinator; it is no owner ruling. *The number:* the Topics branch records it
+  as P32 (note 541 there), and renumbers at its merge. *The case:* `base/api`
+  exports `equalsKey`, which returns a string that two values share exactly when
+  `equals` matches them, so that a `Set` or a `Map` finds distinct references in
+  one pass. Topics' board uses it, and `builtin-inventory.md` does not list it.
+  *Decision:* a built-in of tier F with the footprint of one operand of
+  `equals`, a resolution of the operand that is decided on its own, and the type
+  `string | undefined`. The key holds for one run and is not stored.
+  *Alternative:* refused, and the board written with `equals` in pairs, which is
+  quadratic in the number of topics. *How it is written:* on the Topics branch
+  alone; `builtin-inventory.md` gets the entry at that merge. *Tests:* on that
+  branch, `tests/footprint_calls.rs`
+  (`equals_key_resolves_its_operand_as_equals_does`) and
+  `exec/test/executor.test.ts`. *If decided otherwise:* the crate reports the
+  call, and the Topics source replaces the two helpers that use it.
 
 **The scope of the storage decisions** (the coordinator's recommendation to
 the owner, 2026-11-18; not an owner ruling). Read in source after round 5:
@@ -11945,8 +12113,10 @@ and the rulings leave open.
      minimum. Open: where the requirement is stored on the link, what a
      reader does when it fails, whether a child compiled into its caller,
      which has no stored argument, checks it at its slots, and its cost per
-     read. *Assumed meanwhile:* nothing is attached, and question 120
-     stands.
+     read. By ruling (2026-11-20, Z82; [Decided](#decided)) it is scheduled
+     after milestone 4 of the integration; the open points above stay open
+     until it is taken up. *Assumed meanwhile:* nothing is attached, and
+     question 120 stands.
 303. **Whether every commit of a compiled pattern is prepared** (PL
      question 177). Settled by ruling (2026-11-19; [Decided](#decided)):
      every commit of a compiled pattern is prepared when the option is on,
@@ -11981,7 +12151,12 @@ and the rulings leave open.
      and not affected. *Assumed:* a finding against the runtime, not filed;
      whether it is fixed, by writing every shifted position or by moving
      the entries with the values, is the owner's decision. Pull request
-     9982 does not fix it (question 306).
+     9982 does not fix it (question 306). Pull request
+     commonfabric/labs#10080, merged to `main`, moves the entries with the
+     elements, by an alignment of the old and the new elements by value
+     (`elementEntryPlacements` of `runtime/runner/src/cfc/prepare.ts`), and
+     its test file replaces the ignored test at the catch-up merge. Whether
+     it closes every case of this question was not checked here.
 305. **What a slot under `*` binds when the collection is empty** (PL
      question 178). A binding of the `uniform` form of P31 whose address
      holds `*` covers no position of an empty array, and the `*` entry may
@@ -12026,21 +12201,24 @@ and the rulings leave open.
      181; ES question 113). *Assumed,* provisional (P35): a member
      `closure` of the host object returns a marker, and the runtime
      writes the record in its place.
-310. **A conditional between closures, and a closure through `inSpace`,
-     as a tool** (PL question 182). *Assumed,* provisional (P36), for the
-     conditional: a `select` over the nodes of the two closures, with the
-     tool rule applied to the selected factory value. For a closure
-     through `inSpace` nothing is assumed, because the alternatives
-     differ in meaning. (a) Refuse the modifier on a tool: it costs the
-     direct spelling only, since a closure whose body calls
-     `P.inSpace(space)(...)` makes the instance in the other space as a
-     child of its own plan. (b) Allow it and leave the captures with the
-     factory value: the runtime that serves the other space has to read
-     the space the factory value is stored in for as long as the instance
-     lives. (c) Allow it and copy the captures into the target space when
-     the instance is made: a write of captured values into another space,
-     with the checks and the sequence of commits of an `inSpace` request
-     per copied path, and a rule for a later change of a capture.
+310. **A conditional between closures, and a closure through `inSpace`, as a
+     tool** (PL question 182). *Assumed,* provisional (P36), for the
+     conditional: a `select` over the nodes of the two closures, with the tool
+     rule applied to the selected factory value. P36 is not named in the owner's
+     answer of 2026-11-20 and stays provisional. For a closure through
+     `inSpace`, settled by ruling (2026-11-20, Z83; [Decided](#decided)): it is
+     refused where it is given as a tool, alternative (a) of the three that were
+     put. It costs the direct spelling only, since a closure whose body calls
+     `P.inSpace(space)(...)` makes the instance in the other space as a child of
+     its own plan. When the modifier is needed on a tool, alternative (b) is the
+     one to build, in the owner's words "whenever we need it, (b)": the modifier
+     is allowed and the captures stay with the factory value, so the runtime
+     that serves the other space has to read the space the factory value is
+     stored in for as long as the instance lives. Alternative (c), which copies
+     the captures into the target space when the instance is made, is not taken.
+     What the ruling leaves open: the identifier and the message of the
+     diagnostic, which `language-subset.md` §10 does not list; and nothing is
+     built, since the prototype translates no closure used as a value.
 311. **The groups of a scan's prefix** (PL question 183). P31 keeps no
      order among the groups of a collection. *Assumed,* provisional
      (P37): a scan keeps a count per group over its prefix with its memo
@@ -12051,23 +12229,26 @@ and the rulings leave open.
      repeated sequence that holds a key or in three `*`, and where a key
      is read again on such a value. Wider than W6 by type, never
      narrower.
-313. **Whether the atom of a kept output on a link is a selection
-     endorsement with a scope, taken when the link is traversed** (PL
-     question 72; for the owner). Milestone 4 stores the atom of a kept
-     output that passes a value on by reference on the link's entry. A
-     read of the value through the link takes the integrity of the target
-     alone, so it does not see the atom, and 5 rows of the corpus are
-     looser in integrity than today's for it. Joining the atom onto the
-     target's content was not built: section 3.7.2 of the specification's
-     core concepts chapter (`03-core-concepts.md`) scopes the endorsement
-     of a link to the selection, and an atom with no scope on the content
-     would claim that the pattern vouches for a value it only chose. The
-     question: is the atom on the link stored as an endorsement scoped to
-     the selection, and does a read that traverses the link take it in
-     that form, so that a rule can require "selected by this pattern"
-     without reading it as "computed by this pattern"? It needs a
-     specification change. *Assumed meanwhile:* the atom stays on the
-     link's entry, and a read through the link does not take it.
+313. **Whether the atom of a kept output on a link is a selection endorsement
+     with a scope, taken when the link is traversed** (PL question 72). Settled
+     by ruling (2026-11-20, Z81; [Decided](#decided)): no. The pattern's atom of
+     a kept output that passes a value on by reference is joined onto the
+     content, with no scope, so a read through the link takes it. The documents
+     assumed until the ruling that the atom stays on the link's entry and that a
+     read through the link does not take it, and the question put the
+     alternative of an endorsement scoped to the selection, under section 3.7.2
+     of the specification's core concepts chapter (`03-core-concepts.md`). The
+     owner chose neither, and accepts that a reader cannot tell "selected" from
+     "computed" by the atom, because what the atom means is the pattern author's
+     to define. Built in milestone 4 of the integration at its ninth corpus run:
+     the atom is in the `value` entry at the output's path in every case, and 74
+     output rows that were equal to today's are tighter, 52 of them in
+     `examples/cfc-spec-gallery/main.tsx`. What the ruling leaves open, each
+     *assumed* as built: the envelope of the document that the link names is not
+     written, so a reader that reaches the target another way does not take the
+     atom; a write edge that stores a reference keeps the atom of its body in
+     the label of the link; and whether the specification needs a sentence for
+     an atom with no scope at the path of a link.
 314. **Three choices of the implementer of the interim acceptance of
      `patternTool`** (LS §4.4.3; for the owner to confirm). The ruling
      accepts a direct call in a pattern body by a rewrite. Not part of
@@ -12078,14 +12259,15 @@ and the rulings leave open.
      are bound; and `pattern` is added to the `commonfabric` import where
      the name is not bound. The 2 calls of the corpus that are refused,
      both in `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`,
-     spread the result into a record. *Assumed:* the three stand.
+     spread the result into a record. Settled by ruling (2026-11-20, Z84;
+     [Decided](#decided)): the three stand.
 
 **From the sixth corpus run of milestone 4 of the integration.** The check of
 stored labels against the values and the measurement of the write records raise
 these
 ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
 "Milestone 4: labels from templates at commit"). Rulings of 2026-11-20 settle
-questions 315, 316, 317 and 319, and question 318 is open.
+questions 315, 316, 317 and 319, and the direction of question 318.
 
 315. **A handler run that leaves a value as it was stores no label of what it
      read.** Settled by ruling (2026-11-20; [Decided](#decided)): a handler run
@@ -12107,8 +12289,10 @@ questions 315, 316, 317 and 319, and question 318 is open.
      follow from the specification, which counts such a write among the
      attempted writes (section 8.10.1, `08-10-validation-at-boundaries.md`) and
      has the committing attempt's derivation replace the derived label (section
-     8.12.8, `08-12-store-label-monotonicity.md`). Neither is an owner ruling.
-     The cost is question 324.
+     8.12.8, `08-12-store-label-monotonicity.md`). By ruling (2026-11-20, Z85;
+     [Decided](#decided)) both are agreed: the label stored for an unchanged
+     value replaces the stored one, and the rule applies to every write that
+     storage finds unchanged. The cost is question 324.
 316. **A removal through a handle: in place, or a read of the list.** Settled by
      ruling (2026-11-20; [Decided](#decided)): a removal removes in place, as
      `footprint-analysis.md` §6.1 describes, the kept elements are not labeled
@@ -12132,43 +12316,40 @@ questions 315, 316, 317 and 319, and question 318 is open.
      ([Known limits](#known-limits-of-what-exists)). How many state cells of the
      corpus it gives a document is not measured.
 318. **How the write records of a transaction are bounded when a slot or a write
-     covers many elements** (PL question 186; for the owner). Measured in
-     milestone 4 on a list of 10,000 references: one transaction recorded 13
-     write records of 126.8 MB together, and 13.0 MB after chains with equal
-     label identifiers were reported once. Three costs stay linear in the
-     elements. (a) The executor walks every position that a read reached to find
-     its label identifier. (b) A slot of the class `identity` keeps every
-     position in its one chain, 20,001 positions and 1.4 MB per record in the
-     measured module. (c) A write of 10,000 elements gives 10,007 write records
-     of 11.9 MB together. The alternatives for each: keep it and accept a cost
-     per commit in the length of the list; or report by group. For (a), a slot
-     that reads a whole collection through its links reports the groups that P31
-     keeps with the collection's assembly, a set of label identifiers with
-     counts, and no chain per element. For (b), the chain names the container
-     once, with `*` at the element's position, as the `uniform` form does. For
-     (c), the elements of one collection written in one transaction with one
-     template are one write record per group, with `*` in the target. The
-     coordinator's recommendation, not a ruling: report by group in all three,
-     so that the size of the records of a transaction depends on the number of
-     distinct groups and not on the number of elements, as P31 has it for a
-     `fold`. *A second point, on soundness, is settled by a fix:* the report of
-     chains of equal labels compared the identifier of the label that a
-     recursive read of the value consumes at each position, and the runtime
-     observes a position of a chain that holds a link as a reference. Equal
-     labels of the first kind do not imply equal labels of the second: two links
-     written by transactions that read different labeled data have one
-     identifier for a read of their values. A chain was then left out whose
-     label differs, and the stored label was too narrow. At the seventh corpus
-     run of milestone 4 the identifier compared is that of the observations the
-     runtime makes at the position (`Instance.#labelKey` of
-     `base/pattern-compiler/exec/executor.ts`), for chains and for the groups of
-     a `fold`. *Assumed meanwhile:* the fix as built, with the three costs open.
-     The measurement is over an array of references; an array of plain values in
-     place and the result of another per-element construct were not measured.
+     covers many elements** (PL question 186). The direction is settled by
+     ruling (2026-11-20, Z75; [Decided](#decided)): the three changes of
+     representation of `plan-and-label-templates.md` §4.7 are built, each of
+     which leaves every stored label as it is. (a) One table of inputs per
+     transaction, named by index from the records. (b) One record with a `*`
+     target for equal writes into one container. (c) Groups with counts for any
+     read that covers a whole container, kept in memory with the collection
+     (Z85). They answer the three costs that were linear in the elements of an
+     array of references: the walk of every position for its label identifier,
+     the one chain of an `identity` slot (20,001 positions and 1.4 MB per record
+     in the measured module), and one write record per element of a write
+     (10,007 records of 11.9 MB). They also remove a growth that does not need
+     large data: a record copies the inputs of every output it names, once per
+     path, which the ruling on templates that name an output by reference had
+     removed from the plan; 14 of 276 corpus modules have a factor of 3 or more
+     for it. Measured by encoding the real records again, not by building: the
+     two large transactions of `dev/experimental/folksonomy-stress-test.tsx` go
+     from 11.9 MB and 13.0 MB to about 4 KB and 6.5 KB. Being built in milestone
+     4 of the integration; no result. *A second point, on soundness, is settled
+     by a fix:* equal labels for a read of the value at a position do not imply
+     equal labels for a link followed there, so chains and groups compare the
+     identifier of each observation the runtime makes at the position
+     (`Instance.#labelKey` of `base/pattern-compiler/exec/executor.ts`). Open
+     with it: what is not verified (question 338), the stored entries (question
+     342), and the collections whose members have labels of their own, where the
+     label of a whole read has as many clauses as members and no representation
+     removes it (questions 339 to 341). The measurement is over an array of
+     references; an array of plain values in place and the result of another
+     per-element construct were not measured.
 319. **The budget of `SPEC-PENDING` markers is used up.** Settled by ruling
-     (2026-11-20; [Decided](#decided)): the budget is raised to 80. At commit
-     `429a62aba5` of the branch of milestone 4 the budget is 80 and the governed
-     files hold 46 markers.
+     (2026-11-20; [Decided](#decided)): the budget is raised to 80. On the
+     integration branch the budget is 80. The governed files held 46 markers at
+     the eighth corpus run of milestone 4, and the count at the head of the
+     branch was not taken.
 
 **From the seventh and the eighth corpus run of milestone 4 of the
 integration.** The removal in place and the label for a write that leaves the
@@ -12239,22 +12420,24 @@ per-element construct.
      for a list of plain values in place, so it goes through the specification
      procedure. For the owner: to ratify P39, or to decide otherwise.
 324. **What a label stored for a write that leaves the value as it was may
-     cost** (for the owner to accept or bound). Built by the ruling Z67.
-     Measured over the corpus at the eighth run with the option on: 756 write
-     records of such writes in 67 modules, which changed 3,625 label entries;
-     2,760 commits against 2,699 with the option off, where the seventh run had
-     2,902 against 2,695. The 240 commits that five modules of
-     `examples/cfc-trusted-component-examples` added in the seventh run had a
-     cause that is fixed: a label formed again cleared the entries below its
-     path, the next evaluation stored them again, and a relabeling transaction
-     followed every event. After a label changed alone the executor gives again
+     cost** (for the owner to accept or bound). Built by the ruling Z67, and by
+     the ruling Z85 for every write that storage finds unchanged. Measured over
+     the corpus at the ninth run with the option on: 2,297 write records of such
+     writes, which changed 22,625 label entries, where the eighth run had 756
+     records and 3,625 entries; 2,720 commits against 2,699 with the option off,
+     and 1,427 preparations against 652. The rise in records is part of the cost
+     regression of the ninth run (question 345): an evaluation that gives the
+     value an output already holds is reported as such a write, so that its
+     label is formed again. After a label changed alone the executor gives again
      the records of the outputs whose inputs read it, and no others. What
      remains: the records are found by position and not by class (question 333).
      *Assumed:* the rule as built.
 325. **Findings of the seventh run, as they stand.** The 448 write records with
-     no label entry stored at their path are 80 in 31 modules at the eighth run;
-     68 are read as the records of a list's membership and number of members,
-     which the evaluator cannot form, and 12 are not examined. The crash of the
+     no label entry stored at their path were 80 in 31 modules at the eighth
+     run, of which 68 were read as the records of a list's membership and
+     number of members, which the evaluator cannot form. At the ninth run they
+     are 477 in 30 modules, among 9,039 records checked where the eighth run
+     checked 4,271; the 477 are not examined (question 345). The crash of the
      preparation in `dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx` is
      fixed, in the comparison adapter. Of the rows that became looser with the
      label of an unchanged write, 28 were run again with and without those
@@ -12262,8 +12445,8 @@ per-element construct.
      Over an array of references the comparison of a removal reads the
      references and no target. A `shape` entry at a position that a removal
      leaves without a member is dropped at the removal, and a later creation of
-     the position mints it again, which a test states. *Assumed:* the 12 records
-     are no defect of the design until examined.
+     the position mints it again, which a test states. *Assumed:* the records
+     with no entry are no defect of the design until examined.
 326. **The specification sentence for the ruling Z71** (PL question 191; for the
      owner, and for the specification pull request). Proposed for section 4.6.3
      of `04-label-representation.md`, in the paragraph "Wildcard per-class
@@ -12287,37 +12470,57 @@ per-element construct.
      pull request is reviewed. The site that moves the entries carries the
      `SPEC-PENDING` marker for specs pull request 91, and whether it needs a
      sentence is open.
-327. **How milestone 4 and `main` share the move of label entries** (for the
-     owner). Pull request commonfabric/labs#10080 is merged to `main`
-     (2026-11-20). It moves stored label entries with the members of an array
-     for today's runtime, with no option. The branch of milestone 4 does not
-     hold it. Both change the same loop of `prepareBoundaryCommitSteps` in
-     `runtime/runner/src/cfc/prepare.ts`, at the same point, with the same
-     result type and the same classes of entries, and both define a type named
-     `ElementEntryPlacement`, so a catch-up merge of the branch conflicts there.
-     They differ in where the alignment of old and new positions comes from:
-     `main` infers it from the values the transaction wrote, and milestone 4
-     takes it from the executor's record of the splice, which is exact where two
-     members are equal. They can share the type and the block that applies a
-     placement. For an array that has a membership record, the record's
-     placement has to win and the alignment by value has to skip that array;
-     otherwise an entry is moved twice or by the wrong pairing. *For the owner:*
-     whether the catch-up merge makes the two one function that takes a list of
-     alignments from either source, with the record winning. The coordinator
-     recommends that form; it is no owner ruling.
+327. **How milestone 4 and `main` share the move of label entries.** Settled by
+     ruling (2026-11-20, Z76; [Decided](#decided)): the executor's record of a
+     splice wins for an array that has one, and the alignment by value covers
+     the rest. Pull request commonfabric/labs#10080, merged to `main`, moves
+     stored label entries with the elements of an array for today's runtime,
+     with no option, by aligning the old and the new elements by value.
+     Milestone 4 takes the alignment from the executor's record of the splice,
+     which is exact where two members are equal. Both changed one loop of
+     `prepareBoundaryCommitSteps` in `runtime/runner/src/cfc/prepare.ts`. As
+     built at the catch-up merge there is one type and one block that applies a
+     placement, and `elementEntryPlacement` picks the source for each stored
+     entry: an entry beneath an array that a membership record names is placed
+     by the record alone (`memberEntryPlacement`), and every other entry by the
+     alignment (`elementEntryPlacements`). The alignment is given the recorded
+     arrays and aligns none of them, and no array beneath or above one. With
+     `compiledPatterns` off no array has a record, and the alignment places
+     every entry, as on `main`. A test of
+     `runtime/runner/test/cfc-plan-labels.test.ts` has a list of two equal
+     members whose first a record removes: the entries of the second move to the
+     first position, where an alignment by value keeps the first and drops them.
+     What is not tested is question 346.
 328. **What a position of the result of another per-element construct carries of
      the membership of its source** (PL question 192). Settled for an addition
      by ruling (2026-11-20, Z74; [Decided](#decided)): nothing. An append puts
      the membership of the list on no position, of the list or of a per-element
      result over it. The check of milestone 4 with every event sent three times
-     reports 16 values of `examples/todo-list/todo-list.tsx`, at the result of a
-     `map` over the array that a `computed` returns; they are an artifact of its
-     criterion, which takes a member appended at another index for a dependency
-     on the list, and the check is being changed. Not settled: what a position
-     of the derived collection carries of a removal from its source, where the
-     removal's decision does choose which element stands at the later positions.
-     *Assumed* for that: nothing is built; the collection's own entry holds the
-     decision through its membership template.
+     reported 16 values of `examples/todo-list/todo-list.tsx` at the eighth run,
+     at the result of a `map` over the array that a `computed` returns; they
+     were an artifact of its criterion, which took a member appended at another
+     index for a dependency on the list. At the ninth run the position of an
+     added member holds nothing of the list's membership, and the check has a
+     criterion for it (`appendedElsewhere` of
+     `base/pattern-compiler/compare/perturbation.ts`): a position whose stored
+     label lacks an input's clause is no failure where the member there stands
+     at another position of the same list in the run with the input changed, and
+     additions at the end alone placed it where it stands in both runs. The
+     executor's store records that per array from each change as it is made
+     (`Store.appended`), so a removal or a reorder is not taken for a missing
+     addition. Not settled: what a position of the derived collection carries of
+     a removal from its source, where the removal's decision does choose which
+     element stands at the later positions. *Assumed* for that, as built and not
+     ruled: where the members of a kept result of a per-element construct change
+     otherwise than by an addition at its end, the label of the collection's
+     membership is stored once for its positions, at the result's `*` path
+     (`PlanWrite.membersChanged`). *The residue of the criterion:* a member
+     appended after a removal is counted as no failure and reported apart
+     (`afterOtherChange`). The ninth run counts 17 such positions in 2 modules,
+     16 at the positions 1 to 4 of `mentionable` in `examples/todo-list` and 1
+     write of `showcase/card-piles`, and every one of the 17 is appended after
+     another change of the list. Whether each stores a clause of what decided
+     that change is not established, so the 17 are not shown to be sound.
 
 329. **Whether a read of a position that holds no member consumes the list's
      enumeration** (PL question 193; open finding 3). After additions alone,
@@ -12328,8 +12531,14 @@ per-element construct.
      consumes the enumeration entry of the container where the position holds no
      member, which needs it to know that; (2) an addition joins what decided it
      into the `*` entries as a removal does, which widens every read of a
-     member. No recommendation is made. *Assumed:* nothing is built; no test
-     states the case.
+     member. *Assumed,* as built at the ninth run of milestone 4 and not ruled:
+     alternative 1. For a content read at a path through a position that holds
+     no member, the resolver joins the `enumerate` entry at the list's path and
+     the entries above it, with `compiledPatterns` on
+     (`ObservationLabelResolver.#membershipOfAbsent` of
+     `runtime/runner/src/cfc/observation-label.ts`; a test of
+     `runtime/runner/test/cfc-plan-labels.test.ts`). With the option off the
+     resolver reads nothing more.
 330. **An array inside a value written whole** (PL question 194; open finding
      4). A write that replaces an array stores its label as the `enumerate`
      entry of the array. An array at a path below the written one, inside a
@@ -12337,8 +12546,11 @@ per-element construct.
      `enumerate` entry for every array inside the written value, linear in the
      arrays written; (2) a read of the members, the order or the number of
      members of an array with no entry of its own consumes the `value` entry of
-     the nearest written path above it. No recommendation is made. *Assumed:*
-     nothing is built.
+     the nearest written path above it. *Assumed,* as built at the ninth run of
+     milestone 4 and not ruled: alternative 1, behind `compiledPatterns`. The
+     entry is stored at the path of each array that a value written whole by a
+     compiled pattern holds, the target of a reference excepted, with the label
+     of the nearest path above it that stores a label in the commit.
 331. **The owner's concern about a label-only commit, answered.** The scheduler
      document said that a label-only commit wakes no reader today, and the
      owner's remark was that this "might be bad". Measured with the option off
@@ -12357,38 +12569,52 @@ per-element construct.
      the wake of a reader of another value of the same document is to be
      narrowed, in today's runtime or in the design. *Assumed:* the design's rule
      of §3.6, by slot.
-332. **The executor's time for an event and its memory on a large result** (not
-     for the owner until examined; open finding 5). On
-     `dev/experimental/folksonomy-stress-test.tsx`, an array of 10,000
-     references, events take 1.1 to 14.8 s after a `loadActions` sent while a
-     result of about 1 MB is loaded, where the same handlers took 21 to 373 ms,
-     and a process ran out of memory at 4 GB. It is the same at the commit
-     before the round, and it is in the executor and not in the labels.
-     *Assumed:* a defect of the prototype's executor, not of the design, until
-     the cause is found.
+332. **The executor's memory on a large result** (not for the owner until
+     examined). On `dev/experimental/folksonomy-stress-test.tsx`, an array of
+     10,000 references, a process that held the runs in memory beside the run in
+     storage ran out of memory at a heap of 4 GB. It is not fixed, and the cause
+     is not found. The time of an event, which was the other half of this
+     question, had one cause and is fixed at the ninth run: `Store.changedSince`
+     of `base/pattern-compiler/exec/store.ts` compared every entry of the log of
+     changes since an evaluation with every position the entry read. It reads
+     the time of the last change at each node along the path of a position, and
+     the events 14 to 16 of the run with generated events take 414, 3 and 53 ms
+     where they took 4,119, 3,720 and 14,945 ms. The log of changes still grows
+     by one entry per change for the life of an instance (`Store.log`), which
+     nothing but two tests reads. *Assumed:* a defect of the prototype's
+     executor, not of the design, until the cause is found.
 333. **After a label changed alone, which records are given again** (open
      finding 6). As built the executor finds them by the positions that the
      inputs of a record read, so an output that holds a link is given again when
      any label of the document the link names changes, though its slot reads the
      reference alone. `scheduler-and-serving-loop.md` §3.6 has the rule by the
-     slots that a template reaches, with the class of each slot. *Assumed:* the
-     rule of §3.6 as the design, and the build narrowed to it.
-334. **Findings of the eighth run that are not examined** (not for the owner
-     until they are). 10 values of `examples/map-demo/map-demo.tsx` and 1 of
-     `apps/base/person.tsx` depend on an input and store no clause of it. 44
-     commits in 24 modules are refused with the option on and not off, 6 more
-     than in the seventh run. The runtime took a bound 499 times where it took
-     one 342 times. The atom of an output that holds a link is stored on a
-     `value` entry or on the link's `followRef` entry by how the record is
-     given, and 67 rows that were tighter are equal for it. 19 rows are looser
-     that were not, 14 of them read as the rule of a change of a list's members.
-     The comparison adapter reads the stored label entries of every written
-     document. Not verified for a change of a list's members: members removed
-     and added at one position in one transaction, records in place with entries
-     below them, `key(i).set(undefined)`, and a write beyond the end of a list.
-     *Assumed:* the first is unsound until shown otherwise, or shown to be an
-     artifact of the check as the 16 values of question 328 are, and none of the
-     others is a defect of the design until examined.
+     slots that a template reaches, with the class of each slot. Not built at
+     the ninth run. The plan for it: the executor keys the readers of a record
+     by the class each slot observes beside the position, the adapter reports
+     the class of each changed entry, and a record is formed again only where a
+     changed entry's class is one its slot consumes. *Assumed:* the rule of §3.6
+     as the design, and the build narrowed to it.
+334. **Findings of the eighth run, as they stand at the ninth.** The 10 values
+     of `examples/map-demo/map-demo.tsx` and the 1 of `apps/base/person.tsx`
+     that stored no clause of an input they depend on had four causes, each
+     fixed with a test: the rows of a view, which are the result of a `map` held
+     in place under a kept output, took the label of the collection's membership
+     alone; a kept output that the plan has no template for took the label of
+     the kept output above it; the value of a cell stored in place as a branch
+     of a `select`, as `cell.get() ?? fallback` gives it, kept its slot in the
+     class `identity`; and an evaluation that gives the value an output already
+     holds stored no label. The atom of an output that holds a link is stored in
+     one place (ruling Z81). Of the points not verified for a change of a list's
+     members: a removal and an addition in one transaction at one position is
+     verified, with no change needed; `key(i).set(undefined)` stored no label
+     and is fixed; a write beyond the end of a list stopped the executor and is
+     fixed; and records in place with entries below them, under a `*` entry that
+     a more specific entry replaces, is question 343. The refused commits are 55
+     in 23 modules where they were 44 in 24, and the bounds taken 1,762 where
+     they were 499 (question 345). The comparison adapter reads the stored label
+     entries of a written document once less per transaction; the read after the
+     commit and the comparison of every entry remain. The 19 rows that were
+     looser at the eighth run and not before were not looked at again.
 335. **Whether the confidentiality ceiling of every path a handler can write is
      declared ahead** (PL question 195; for the owner; not a ruling). The
      owner's words (2026-11-20): "independently i think there is a soundness
@@ -12428,7 +12654,43 @@ per-element construct.
      authored one; what it does to the labels this design stores per written
      path, which would sit under a declared ceiling; and the proposal's own
      prior question, whether an absent declaration is an empty ceiling.
-     *Assumed:* nothing changes until the proposal is ruled in the
+     *Answered as far as what is built meanwhile, by ruling (2026-11-20, Z77;
+     [Decided](#decided)):* wait for the specification's ruling, and make no
+     investment in per-member audience labels of the lists a handler writes. The
+     owner's words: "assume the proposal or something equivalent eventually
+     lands and so don't worry about the potential for leaks now, but still make
+     sure things are sound in terms of just correctly computing the labels under
+     that relaxed condition". So the findings of milestone 4 divide. A stored
+     label that lacks a clause of what flowed into the value is a defect, fixed
+     where found. A label change that a write under a secret causes is a channel
+     of the write gate, recorded here and not fixed: a handler that makes no
+     write under a condition on a labeled input stores nothing, which
+     `initHandler` of `examples/map-demo/map-demo.tsx` shows at 16 values when
+     events are generated for it (the scenario of the corpus run sends it none,
+     so the run's tables do not hold them); a member appended at another index
+     (Z74); a hole that a write beyond the end of a list leaves before the
+     position it writes; and a removal that finds nothing, which leaves the
+     positions as they were. Not decided which of the two: 2 findings of
+     `examples/group-chat-room` with generated events, where a pushed message
+     depends on `users` and the member's `id` is drawn from the random source,
+     whose draws the runs make in different numbers. *What the plan lacks for
+     the proposal's rule,* read from the plans of the corpus (855 handler
+     bodies, 1,507 write targets, of which 1,464 are below a handle and 1,436 of
+     those below a handle the binding captured, so known at instantiation; 28
+     are below a handle that arrives in the event): an authored ceiling per
+     handler; the kind of a member change, since a write edge with `*` covers an
+     addition, a removal and a replacement alike and only the executor sees
+     which it is; and which targets exist before a call. *Which of the
+     proposal's refuted variants milestone 4 has,* by the coordinator's reading
+     and not checked against the proposal's proofs: it has no gate, so a
+     handler's write raises a derived label at the call and a created member is
+     labeled from the attempt; a write that leaves the value as it was restamps
+     its label (Z67), for a cone's output held in place as well since the ninth
+     run, and not for an output that holds a link, an output whose template
+     reads nothing, or a cone's side write; a label that changes alone forms the
+     labels of the records that read it again, and a record with no inputs is
+     not formed again; and a write edge that a body does not reach stores
+     nothing. *Assumed:* nothing changes until the proposal is ruled in the
      specification.
 336. **A result schema that carries a key no type states** (LS question 48;
      for the owner). By the owner's ruling of 2026-11-20 the forms of the API
@@ -12441,11 +12703,138 @@ per-element construct.
      runner's private key `__ctPreservePatternResultCell` on one property, and
      no type states the key, so both are refused with no rewrite. *For the
      owner:* a type of the API that states the key, or a runner that keeps
-     that link without one. Nothing is assumed.
+     that link without one. Nothing is assumed. The crate does not report the
+     refusal: the catalog entry `removed-form:schema-argument` has the status
+     "not implemented", and a schema passed to a form of the API that takes
+     one is accepted without a report (`base/pattern-compiler/src/catalog.rs`).
 337. **The `tables` option of `sqliteDatabase`** (LS question 49; for the
      owner). Whether the schemas built by `table(...)` stay beside the schemas
      given to a language model. *Assumed:* they stay, since no type of the
      program declares a table.
+
+**From the ninth corpus run of milestone 4 of the integration, the analysis of
+collections with many members, and the catch-up merge with `main`.** The owner's
+rulings of 2026-11-20 (Z75 to Z85) settle questions 313, 314 and 327, the
+direction of question 318 and the second part of question 310, and answer
+questions 302 and 335 as far as [Decided](#decided) says. The questions below
+are what they leave open and what the run found
+([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+"Milestone 4: labels from templates at commit"; `plan-and-label-templates.md`
+§4.7).
+
+338. **What is not verified of the three changes of representation** (PL
+     question 196). That (a), (b) and (c) of the ruling Z75 store byte-equal
+     labels is argued from the idempotence of join and meet and is not built.
+     The byte figures are an encoding of real records and no measurement of the
+     changes; for (c) a binding of more than 8 positions is counted as 300
+     bytes. What the 20,001 positions of the one `identity` chain are was not
+     read. Only an array of references was measured; an array of plain values in
+     place and the result of another per-element construct are reasoned. The
+     patterns that read a whole list of references that grows in use were named
+     by reading and not run at size: two lifts of `apps/topics/main.tsx`,
+     `system/summary-index`, `system/knowledge-graph`, `system/backlinks-index`
+     and `system/fabrichat/manager.tsx`. *Assumed:* the labels are equal, and
+     the corpus run with the changes is the check.
+339. **The diagnostic and the hard limit for a label of very many clauses** (PL
+     question 197; for the owner). The ruling Z79 has a diagnostic, and a
+     refusal above a hard limit set well above it. Not ruled: whether the limit
+     counts clauses or encoded bytes; the two numbers; and how the diagnostic is
+     reported, where the recommendation is once per collection and session with
+     a counter in the runtime's CFC statistics. *Assumed:* nothing is built and
+     no number is set.
+340. **How an author marks an output as stored at the declared ceiling** (PL
+     question 198; for the owner). The ruling Z80 has a body with a declared
+     maximum confidentiality store an output at the ceiling where the author
+     marks the output. Not ruled: the syntax of the mark; where it is written,
+     on the output, on the body or on the type of the result; and which ceiling
+     an output takes where the inputs of the body declare different ones. It
+     changes what CFC stores and goes through the specification procedure.
+     *Assumed:* nothing is built, and an output stores the exact join.
+341. **Whether the labels of members may be coarse once the write gate is
+     adopted, and how any threshold is measured** (PL question 199; for the
+     owner). The ruling Z78 leaves one exception possible, in the owner's words
+     "possibly (c) once the ceiling proposal is ratified". Not ruled: that
+     exception itself; the coordinator's condition for any threshold, that the
+     serving runtime measures it at preparation on committed state, in members
+     of the stored container and with no memory of earlier sizes; and a form
+     that marks a collection uniform with no declared label, which is
+     recommended against. *Assumed:* no threshold and no such form.
+342. **The stored entries where the members of a collection have several
+     labels** (PL question 200). Per-member entries by content address, and the
+     label of a `fold` stored once in place of three times inline, are not part
+     of the ruling Z75. Not verified: whether `CFC_LABEL_INLINE_LIMIT` applies
+     to the entries measured inline at 1.45 MB, and whether the normal form of a
+     label absorbs a clause that a declared clause implies, which a collection
+     with a declared label needs for its members to have one label identifier.
+     *Assumed:* the entries as built.
+343. **A removal's `*` entry that a more specific entry of origin `structure`
+     replaces** (PL question 201; for the specification pull request).
+     `resolvedEntryGroups` of `runtime/runner/src/cfc/consumed-label.ts`
+     resolves the classes `value` and `followRef` of origin `structure` by the
+     longest prefix, so a concrete entry of that origin at a slot below a list,
+     such as the stamp that a recorded link write mints, replaces the `*` entry
+     that holds what decided a removal (Z71), and a read of that slot does not
+     consume the decision. Unsound for that slot, not fixed, and no test
+     produces the pair, since the comparison adapter records no link write. The
+     fix resolves an entry that the runtime minted at a `*` path in a group of
+     its own, as the `shape` class is resolved. It changes the resolution with
+     the option off, so it needs the specification sentence of question 326
+     first. *Assumed:* not fixed until that sentence is reviewed.
+344. **The open soundness findings of the ninth run** (not for the owner until
+     examined). The check of the stored labels against the values reports 4
+     values in 2 modules with every event sent three times, and 1 of the 4 on
+     the scenario as given. In `examples/todo-list/todo-list.tsx`, 3 outputs at
+     position 0 of `mentionable`, which is the result of a `map` over the array
+     that a `computed` returns: `$NAME`, `summary` and a prop of the rendered
+     tree depend on the input `items` and store no confidentiality. In
+     `showcase/card-piles/main.tsx`, 1 write, at position 3 of the list that the
+     handler `moveToPile` adds to with a `push` after a `remove` from the other
+     list, an array of plain values in place: its value depends on the input
+     `pile2` and its label holds the clause of `pile1` alone. Neither is
+     examined. The commit that ends the round states that `examples/todo-list`
+     has no finding; the tables of the run have the 3. *Assumed:* unsound until
+     shown otherwise, or shown to be an artifact of the check.
+345. **The cost regression of the ninth run** (serious; not for the owner until
+     attributed). Against the eighth run, over the same 238 modules with the
+     option on: the preparation time 9,250 ms where it was 2,176 ms; the bounds
+     taken 1,762 in 70 modules where they were 499 in 53; the records of writes
+     that left the value as it was 2,297 where they were 756, and the label
+     entries they changed 22,625 where they were 3,625; the write records
+     checked against the evaluator 9,039 where they were 4,271, of which 477 in
+     30 modules have no entry stored at their path where 80 had none; the
+     commits refused with the option on and not off 55 in 23 modules where they
+     were 44 in 24; and the run 22 minutes where it took 10. Three modules
+     account for 6,744 ms of the preparation time:
+     `examples/cfc-trusted-component-examples/main.tsx` 3,453 ms where it took
+     189 ms, `send-publish-examples.tsx` of the same directory 1,464 ms, and
+     `dev/experimental/folksonomy-stress-test.tsx` 1,828 ms where it took 942
+     ms. The fixes of the round are the likely source, by reading and not by
+     measurement: each element entry of a per-element result held below a kept
+     output has a record of its own; a kept output with no template, an element
+     entry with a slot that has no stored position, and a member change under an
+     envelope are given as bound and take the transaction's join; and an
+     evaluation that gives the value an output already holds is reported as a
+     write that left the value as it was. The machine was under load (load
+     averages near 10), so the times are an upper bound. *Assumed:* a cost of
+     the build and not of the design, until attributed; the three changes of
+     representation (question 318) are expected to lower the first, and that is
+     not shown.
+346. **What the catch-up merge with `main` leaves untested.** The merge is made
+     on the integration branch, with the ruling Z76 built (question 327). Not
+     covered by a test: an array that has a membership record beneath an outer
+     array that has none, where the transaction also changes the members of the
+     outer array; by the rule as built the entries beneath the outer array's
+     elements then stay at their indices. And the commit dependency on a label
+     that a stored label rests on (`isLabelBasisRead`) lives in
+     `commitReadActivities()` of
+     `runtime/runner/src/storage/commit-read-activities.ts` since `main` moved
+     that function out of the replica; the same function tells the transaction's
+     patch encoder which reads pin an array before it sends a change of that
+     array as splices, and how the label dependency acts on that encoder is not
+     tested. The corpus on the source of current `main`, run with the code of
+     the eighth run, is 287 modules attempted and 244 run; no corpus run exists
+     with the code of the ninth run on that source. *Assumed:* the merge as
+     built.
 
 ## Open, and not needing the owner
 
@@ -12453,7 +12842,8 @@ per-element construct.
   under [Open, and needing the owner](#open-and-needing-the-owner): which
   path holds which entry of `Plan.closures`, the stored form of the
   factory value, what value code writes, and a conditional between
-  closures and a closure through `inSpace` as a tool.
+  closures. A closure through `inSpace` as a tool is refused by the ruling
+  Z83.
 - **The label of a model's output has no definition in the
   specification.** The rules for a tool closure and for a later send both
   rest on it, and specs pull request #91 refers to a contract rule for a
@@ -12692,62 +13082,68 @@ The open questions each document ends with stay where they are.
 ## Known limits of what exists
 
 - **Milestone 4 of the integration is built and its findings are open.** Labels
-  from templates at commit are built on branch `claude/compiled-pattern-m4`,
-  with every commit of a compiled pattern prepared, and measured over the whole
-  corpus with `wish` simulated
+  from templates at commit are built on the integration branch
+  (`claude/compiled-pattern-integration-m1`, pull request #9992), with every
+  commit of a compiled pattern prepared, and measured over the corpus with
+  `wish` simulated
   ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
-  "Milestone 4: labels from templates at commit"). Of 271 modules 238 run.
-  Beside today's, of 1,695 output rows 959 are tighter, 346 equal, 265 have an
-  atom that names the pattern, 112 are looser and 13 incomparable; of 203 write
-  rows 130 are equal, 61 looser, 9 tighter and 3 incomparable. Open, the unsound
-  ones first:
-  - 10 values of `examples/map-demo` and 1 of `apps/base/person` depend on an
-    input and store no clause of it, not triaged (question 334);
-  - a read of a position that holds no member consumes nothing of the list's
-    membership after additions alone, over an array of plain values in place and
-    over an array of references (question 329);
-  - an array inside a value written whole has no entry for its membership
-    (question 330);
-  - the position of an added member stores what the list held of its membership,
-    which the ruling Z74 does not want and which is being removed, and the check
-    of stored labels reports 16 values of `examples/todo-list` that are an
-    artifact of its criterion by that ruling (question 328);
-  - the executor's time for an event on
-    `dev/experimental/folksonomy-stress-test` rises to as much as 14.8 s after a
-    `loadActions` sent while a result of about 1 MB is loaded, and a process ran
-    out of memory at 4 GB; cause not investigated (question 332);
+  "Milestone 4: labels from templates at commit"). The ninth corpus run is on
+  the source of `main` before the catch-up merge: of 271 modules 238 run. Beside
+  today's, of 1,695 output rows 1,041 are tighter, 287 equal, 265 have an atom
+  that names the pattern, 88 are looser and 14 incomparable; of 203 write rows
+  130 are equal, 61 looser, 9 tighter and 3 incomparable. Open, the unsound ones
+  first:
+  - 3 outputs of `examples/todo-list`, at position 0 of the result of another
+    per-element construct, and 1 write of `showcase/card-piles`, at a position
+    of an array of plain values in place that a `push` after a `remove` writes,
+    depend on an input and store no clause of it; not examined (question 344);
+  - a removal's `*` entry is replaced by a more specific entry of origin
+    `structure`, so a read of that slot does not consume what decided the
+    removal; not fixed, and it needs the specification sentence first (question
+    343);
+  - a handler that writes nothing under a condition on a labeled input stores
+    nothing, a channel of the write gate that the ruling Z77 has recorded and
+    not fixed (question 335);
+  - a member appended after a removal is counted as no failure by the check, 17
+    positions in 2 modules, and is not shown to be sound (question 328);
+  - the cost of the labels regressed at the ninth run: the preparation time with
+    the option on is 9,250 ms where it was 2,176 ms, the bounds taken 1,762
+    where they were 499, and the run takes 22 minutes where it took 10; not
+    attributed (question 345);
+  - the executor's memory on `dev/experimental/folksonomy-stress-test` is not
+    fixed: a process ran out of memory at 4 GB (question 332);
+  - the three changes of representation that bound the write records of a
+    transaction are adopted and being built, with no result, and until they are
+    in the records grow with the data (question 318);
+  - the diagnostic and the hard limit for a label of very many clauses, and an
+    output stored at a declared ceiling, are ruled and not built (questions 339
+    and 340);
   - after a label changed alone the records to give again are found by position
     and not by class (question 333);
-  - the write records of a transaction grow with the data: 13 MB for one
-    transaction over a list of 10,000 references after one fix, with three costs
-    linear in the elements left (question 318);
   - the specification sentence that the ruling Z71 needs is proposed and pending
-    the specification pull request (question 326), and pull request
-    commonfabric/labs#10080, merged to `main`, changes the same place of
-    `prepare.ts`, so a catch-up merge of the branch conflicts there (question
-    327);
+    the specification pull request (question 326);
+  - the catch-up merge with `main` is made, and two of its interactions have no
+    test; no corpus run exists with the code of the ninth run on the source of
+    current `main`, whose corpus is 287 modules of which 244 run with the code
+    of the eighth (question 346);
   - the check of stored labels against the values is a lower bound: one change
     per input, confidentiality alone, 206 of 238 modules on the scenarios as
-    given and 91 with every event sent three times, and 58 and 43 findings in
+    given and 99 with every event sent three times, and 60 and 50 findings in
     modules with a refused commit that are not counted and not examined;
     "tighter" in the comparison remains no evidence of correctness;
-  - 80 write records in 31 modules have no label entry stored at their path, 68
-    of them read as the records of a list's membership and 12 not examined
-    (question 325);
-  - 44 commits in 24 modules are refused with the option on and not off, each
+  - 477 write records in 30 modules have no label entry stored at their path,
+    not examined (question 325);
+  - 55 commits in 23 modules are refused with the option on and not off, each
     with a stated reason, and a module with a refused commit holds the labels of
     an earlier commit;
-  - the runtime took a bound 499 times, because a selection, a choice or the
-    addresses of a dynamic read are not reported (`plan-and-label-templates.md`
-    §4.2; P37);
-
+  - the runtime took a bound 1,762 times, because a selection, a choice or the
+    addresses of a dynamic read are not reported, or because the executor gives
+    a record with no inputs as bound (`plan-and-label-templates.md` §4.2; P37);
   - at the seventh run today's label held no clause at 4 rows where the
     template's holds one, in `dev/scope-bug-ct1597-reduce/main.tsx`,
     `dev/test/non-idempotent/accumulator.tsx` and
     `showcase/battleship/multiplayer/room.tsx`, not reproduced outside the
     corpus run and not looked at again;
-  - the atom of a kept output on a link is not taken by a read of the value
-    through the link (question 313);
   - a schema whose declared integrity the crate emits as the text of its type,
     as in `examples/cfc-authorship-chat`, stores no declared label: the runtime
     refuses it as malformed integrity, and a state cell with such a schema gets
@@ -12756,7 +13152,6 @@ The open questions each document ends with stay where they are.
   The preparation times of the run were taken on a machine under load. Steps 11
   and 12 of the milestone's plan, instantiation keys and verified units in the
   prepared digest and a derived write dropped alone, are not built.
-
 - **A pattern closure used as a value is not translated by the
   prototype.** `Plan.closures` is empty, and a closure given to a
   language-model built-in as a tool is left out of the request. A
@@ -13512,24 +13907,27 @@ The open questions each document ends with stay where they are.
 
 8. **In the runtime, the milestones of the integration**
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)):
-   after milestones 1 and 4, the open findings of milestone 4 (the membership on
-   the position of an added member, which the ruling Z74 removes, and the
-   check's criterion for an appended member; the values of `examples/map-demo`
-   and `apps/base/person` that store no clause of an input they depend on; a
-   read of a position that holds no member; an array inside a value written
-   whole; the executor's time and memory on a large result; the records given
-   again after a label changed alone, by class; the specification sentence for
-   the ruling Z71 and the catch-up merge with `main`, which holds pull request
-   commonfabric/labs#10080; the question of a declared ceiling for the paths a
-   handler can write; the bound on the write records of a transaction; the
-   findings of the check in modules with a refused commit; the refused commits;
-   the reports that remove the bounds with the groups of a scan's prefix (P37);
-   the four rows where today's label holds no clause; and the atom on a link)
-   and its steps 11 and 12; the translation of a pattern closure used as a
-   value, once questions 307 to 310 are decided; then Topics at scale on the
-   runtime's storage, a compiled piece in the runner behind the experimental
-   option, value code in the sandbox, and server execution with the network.
-
+   after milestones 1 and 4, the open findings of milestone 4, in this order:
+   the open soundness findings of the ninth run (question 344) and the `*` entry
+   of a removal that a more specific entry replaces, with its specification
+   sentence (questions 343 and 326); the cost regression of the ninth run
+   (question 345); the three changes of representation, which are being built,
+   with the corpus run that checks that the stored labels are equal (questions
+   318 and 338); a corpus run of the head of the integration branch on the
+   source of current `main`, and the two untested interactions of the catch-up
+   merge (question 346); the executor's memory on a large result (question 332);
+   the records given again after a label changed alone, by class (question 333);
+   the diagnostic and the hard limit for a label of many clauses and the mark
+   for an output stored at a ceiling, once their open points are decided
+   (questions 339 and 340); the findings of the check in modules with a refused
+   commit; the refused commits; the reports that remove the bounds, with the
+   groups of a scan's prefix (P37); and the four rows where today's label holds
+   no clause. Then its steps 11 and 12; the requirement on the link of an
+   argument, which the ruling Z82 schedules after milestone 4 (question 302);
+   the translation of a pattern closure used as a value, once the provisional
+   decisions P33 to P36 are ratified; then Topics at scale on the runtime's
+   storage, a compiled piece in the runner behind the experimental option, value
+   code in the sandbox, and server execution with the network.
 ### Briefing an author
 
 A brief that produced a usable document in the first round had these parts:

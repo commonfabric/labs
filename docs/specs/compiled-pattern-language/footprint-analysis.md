@@ -3251,13 +3251,14 @@ The body does the following.
 1. `resolvedProfile(myProfile)` resolves the profile link and returns the
    resolved handle, or `undefined` when there is no handle or the profile
    holds no value. The body throws when the result is `undefined`.
-2. `messageInRoom(room, event?.message ?? message)` resolves whichever
-   message link is present, throws when there is none or when
-   `spaceOf(target)` differs from `spaceOf(room)`, and returns the resolved
-   handle, `target`.
-3. `current = target.get()`. The body throws when `isDeleted(current)`,
-   which tests whether `current` is `undefined` or `current.body` is not a
-   string.
+2. `messageInRoom(room, event?.message ?? message)` throws when neither
+   message link is present, resolves the one that is, and calls
+   `isInRoomOf(room, target)`, which compares `spaceOf(target)` with
+   `spaceOf(room)`. It throws when the two differ. It returns the resolved
+   handle, `target`, and `current`, which is what `get()` on the link
+   returns.
+3. The body throws when `current` is `undefined` or `isDeleted(current)`,
+   which tests whether `current.body` is not a string.
 4. `isActorAuthor(target)` compares `currentPrincipal()` with
    `principalOf(target, "authored-by")`. The body throws when they differ.
 5. `textOf(event)` returns `event.body`, or else `event.target.value`, when
@@ -3297,23 +3298,29 @@ request 14).
 no `undefined`, and the footprint has entries below it. `?? message`
 records `shape` at `event.message`. The argument is the alternatives
 `{event.message, state.message}`. The summary of `messageInRoom(room, link)`
-records `shape` at `link` and a resolution of it, and through the two calls
-of `spaceOf` a second resolution of `link` and one of `room`. It returns
-`link`, resolved. So `target` is the alternatives
+records `shape` at `link`, for the test against `undefined`, and a
+resolution of it. Through `isInRoomOf`, whose two calls of `spaceOf` each
+resolve their operand, it records a second resolution of `link` and one of
+`room`. It returns `link`, resolved, as `target`, and what `link.get()`
+returns as `current`. So `target` is the alternatives
 `{event.message, state.message}`, resolved.
 
-None of these resolutions is static. `link` is a set of alternatives, and
-both calls of `spaceOf` are in the right operand of `||`. Each records a
-plain `identity` entry, at `event.message`, `state.message`, and
-`state.room`, and the links followed below those references are journaled
-(§7.1).
+The resolutions of `link` are not static, because `link` is a set of
+alternatives. Each records a plain `identity` entry, at `event.message`
+and at `state.message`, and the links followed below those references are
+journaled (§7.1). The resolution of `room` is static. `room` is one
+anchored handle, and `messageInRoom` throws for an absent link and then
+calls `isInRoomOf` with no condition: a statement that can throw and
+cannot return leaves the statements after it unconditional. So the
+`identity` entry at `state.room` is a resolved one, and the links below
+that reference are no journaled read.
 
-**Step 3.** `target.get()` is unconditional, since the statements before it
-can throw and cannot return. It still fails condition 1 of §7.2: the handle
-is a set of alternatives. The read is dynamic through both handles.
-`isDeleted(current)` adds `(root) : shape` and `body : shape` to their read
-envelopes, because `typeof record.body` asks for the kind of `body` and not
-for its content.
+**Step 3.** The `link.get()` of `messageInRoom` is unconditional for the
+same reason. It still fails condition 1 of §7.2: the handle is a set of
+alternatives. The read is dynamic through both handles. The test of
+`current` against `undefined` and `isDeleted(current)` add
+`(root) : shape` and `body : shape` to their read envelopes, because
+`typeof record.body` asks for the kind of `body` and not for its content.
 
 **Step 4.** `currentPrincipal()` is the `cause` entry. `principalOf(target,
 …)` resolves the same alternatives and observes their label metadata, so
@@ -3376,7 +3383,7 @@ reads
   event   message                : shape, identity
   state   myProfile              : shape, identity (resolved)
   state   myProfile->            : shape
-  state   room                   : identity
+  state   room                   : identity (resolved)
   state   message                : shape, identity
   state   composer               : identity
   state   composer->editing      : shape, identity
@@ -3388,7 +3395,7 @@ handles, with their read envelopes
           ->attachments          : shape, enumeration
 
 other dynamic reads
-  links followed below event.message, state.message, state.room,
+  links followed below event.message, state.message,
     and state.composer->editing
   label metadata (authored-by) of the message
 
@@ -3419,6 +3426,15 @@ the cell behind it, and is a `shape` slot with `inPlace` (§7.2). The entry
 at `state.myProfile->` has the path of the entry at `state.myProfile` and
 no flag: it resolves through the link.
 
+Two `identity` entries are resolved ones, at `state.myProfile` and at
+`state.room`: every run that gets past the statements before them resolves
+the handle, so the links their resolutions follow are static reads and are
+not among the journaled ones. The crate gives this listing for the source
+(`pattern-compiler footprint` over the files of
+`patterns/system/fabrichat/`), and its test
+`commit_edit_has_the_footprint_of_section_12_3` in
+`base/pattern-compiler/tests/footprint_calls.rs` pins it.
+
 ### 12.4 Against what the transformer emits today
 
 The schemas below were read from the transformer's output for the module
@@ -3430,7 +3446,7 @@ The schemas below were read from the transformer's output for the module
 | `state.myProfile` | A read-only cell of the profile record, with `name` and `avatar` | The reference, and whether the profile holds a value |
 | `state.message`, `event.message` | A cell of the whole `MessageRecord`. `target.get()` reads `body`, `sentAt`, `editedAt`, `replyTo`, and the references at `authorProfile`, `attachments`, and `reactions`. `state.message` is emitted read-only, although the body writes through the handle `messageInRoom` returns for it | The kind of `body`, and the presence and length of `attachments`. Two write edges per handle |
 | `state.composer` | A cell of the whole `ComposerState`: the draft, the attachments being added and removed, and four message references | The reference at `editing`, and whether there is one |
-| `state.room` | A read-only cell of unknown content | The reference, and the links below it on the runs that reach `spaceOf` |
+| `state.room` | A read-only cell of unknown content | The reference, resolved: the links its resolution follows, as a static read |
 
 The labels differ accordingly. Today the handler's transaction reads the
 draft text in `composer`, although an edit never looks at it. A deployment
