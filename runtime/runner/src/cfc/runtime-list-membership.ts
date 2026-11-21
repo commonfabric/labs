@@ -56,7 +56,12 @@ const declaresWriterAt = (
   schema: Parameters<typeof ContextualFlowControl.getSchemaAtPath>[0],
   path: readonly string[],
 ): boolean => {
-  const atPath = ContextualFlowControl.getSchemaAtPath(schema, [...path]);
+  // SPIKE(seat-views): a named type's claims sit behind a `$ref`, as in
+  // `membersCaptureReadsFor`.
+  const referenced = ContextualFlowControl.getSchemaAtPath(schema, [...path]);
+  const atPath = isObjectOrArray(referenced)
+    ? ContextualFlowControl.resolveSchemaRefs(referenced)
+    : referenced;
   const ifc = isObjectOrArray(atPath) ? atPath.ifc : undefined;
   return ifc?.writeAuthorizedBy !== undefined;
 };

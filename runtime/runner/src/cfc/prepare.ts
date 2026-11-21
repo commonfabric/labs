@@ -7021,9 +7021,15 @@ const membersCaptureReadsFor = (
         const envelope = loadStoredCfcEnvelope(tx, document);
         if (envelope.status !== "loaded") return undefined;
         const owners = representedPrincipalsAt(envelope, path);
-        const schema = ContextualFlowControl.getSchemaAtPath(envelope.schema, [
+        // SPIKE(seat-views): the compiler hoists a named type into `$defs`,
+        // so a position's claims sit behind a `$ref`. The draft read `ifc`
+        // off the reference itself and found none.
+        const atPath = ContextualFlowControl.getSchemaAtPath(envelope.schema, [
           ...path,
         ]);
+        const schema = isObjectOrArray(atPath)
+          ? ContextualFlowControl.resolveSchemaRefs(atPath)
+          : atPath;
         const ifc = isObjectOrArray(schema) ? schema.ifc : undefined;
         return { owners, declaresWriter: ifc?.writeAuthorizedBy !== undefined };
       }),
