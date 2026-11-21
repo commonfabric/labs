@@ -3777,10 +3777,15 @@ export declare function parseDID(value: unknown): ParsedDID | undefined;
  * person asked for the action. A trusted gesture is what shows that. A value
  * labeled `AuthoredByCurrentUser` is authority too.
  *
- * Available only in a handler for now, and throws anywhere else. A pattern body
- * builds one graph for every viewer, and reading the viewer in a `computed()`
- * or a `lift()` needs every runtime to scope the value to that user, and a
- * label saying who may see the viewer's DID.
+ * Available only in a handler by default, and throws anywhere else. A pattern
+ * body builds one graph for every viewer, so the call always throws there.
+ *
+ * In a `computed()` or a `lift()`, a runtime with the `viewerBoundRelease`
+ * experimental option on returns the viewer instead: the principal the
+ * computation's value is being computed for, or `undefined` when there is
+ * none. Asking makes the computation's value a per-user one, and lets the
+ * flow label on what it writes name the viewer, which an exchange rule can
+ * release the value to.
  */
 export declare function currentPrincipal(): DID | undefined;
 
