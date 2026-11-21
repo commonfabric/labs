@@ -5031,6 +5031,46 @@ export class Instance {
   }
 
   /**
+   * Reports the record of the output at or above `at` of the result
+   * document as that of a write that left the value as it was
+   * (`TransactionHooks.unchanged`), its label alone to be formed again: an
+   * evaluation that gives the value the path holds read what its inputs
+   * hold now, which can be other positions than the ones the stored label
+   * was formed from. An output whose template reads nothing has one label
+   * whatever was read, and is not reported; nor is a record given earlier
+   * in the transaction.
+   */
+  #unchangedOutput(at: readonly string[]): void {
+    const { root } = this;
+    const hooks = root.options.transactions;
+    if (root.#tx === undefined || hooks?.unchanged === undefined) return;
+    let nearest: { output: number; path: readonly string[] } | undefined;
+    for (const entry of this.#recordedOutputs()) {
+      if (
+        entry.path.length <= at.length && matchesPath(entry.path, at) &&
+        (nearest === undefined || entry.path.length > nearest.path.length)
+      ) nearest = entry;
+    }
+    if (nearest === undefined) return;
+    const template = this.plan.outputs[nearest.output].template;
+    if (template === undefined) return;
+    const reached = reachedBy(template, this.plan.templates ?? []);
+    if (
+      reached.slots.size === 0 && reached.outputs.size === 0 &&
+      reached.folds.size === 0 && reached.dynamic.size === 0
+    ) return;
+    const path = at.slice(0, nearest.path.length);
+    const key = this.#recordKey(nearest.output, path);
+    if (root.#givenNow.has(key)) return;
+    const write = this.#outputRecord(this.id, nearest.output, [...path]);
+    root.#noteRecord(key, this.id, write);
+    hooks.unchanged(this.id, path, this.store, undefined, [{
+      ...write,
+      relabel: true,
+    }]);
+  }
+
+  /**
    * Stores a value at a place of the result document, and writes only
    * what differs from what the place holds: a member of a record and a
    * position of an array of the same length are compared by themselves.
@@ -5102,7 +5142,11 @@ export class Instance {
         }
       }
       const now = filled(form, held);
-      if (held === now || JSON.stringify(held) === JSON.stringify(now)) return;
+      if (held === now || JSON.stringify(held) === JSON.stringify(now)) {
+        // A reference that stays names the cell it named.
+        if (!isLink(now) && !isStream(now)) this.#unchangedOutput(at);
+        return;
+      }
       const [was, size] = [bytesOf(held), bytesOf(now)];
       store.put(doc, at, now);
       if (owner === undefined) {
@@ -9225,23 +9269,25 @@ export class Instance {
     path: readonly string[],
     splice: { start: number; inserted: number } | undefined,
   ): PlanWrite[] {
-    const { outputs } = this.plan;
+    const outputs = this.#recordedOutputs();
     const found: { output: number; at: string[] }[] = [];
     let nearest: number | undefined;
-    // An interim output is no path of the result document.
     outputs.forEach((output, index) => {
       if (
-        output.kept && output.path.length <= path.length &&
+        output.path.length <= path.length &&
         matchesPath(output.path, path) &&
         (nearest === undefined ||
           output.path.length > outputs[nearest].path.length)
       ) nearest = index;
     });
-    if (nearest !== undefined) found.push({ output: nearest, at: [...path] });
+    if (nearest !== undefined) {
+      found.push({ output: outputs[nearest].output, at: [...path] });
+    }
     const held = this.store.peek(doc, path);
-    outputs.forEach((output, index) => {
+    outputs.forEach((output) => {
+      const index = output.output;
       if (
-        !output.kept || output.path.length <= path.length ||
+        output.path.length <= path.length ||
         !matchesPath(output.path.slice(0, path.length), path)
       ) return;
       const expand = (
@@ -9276,20 +9322,124 @@ export class Instance {
       };
       expand([...path], output.path.slice(path.length), held, true);
     });
-    // An output the plan has no template for has no record: the path keeps
-    // the label the runtime gives a write it has no record of.
-    return found.filter(({ output }) => outputs[output].template !== undefined)
-      .map(({ output, at }) => {
-        const write = this.#outputRecord(doc, output, at);
-        this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
-        return write;
-      });
+    // An output the plan has no template for has a record with no inputs:
+    // the runtime gives its path the label of a write it has no record of,
+    // where it would otherwise take the label of a kept output above it.
+    return found.map(({ output, at }) => {
+      const write = this.#outputRecord(doc, output, at);
+      this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
+      return write;
+    });
   }
+
+  /**
+   * The outputs a change of the result document is recorded for, each with
+   * the path of the result document it is stored at: every kept output,
+   * and for a kept output that holds the result of a per-element construct
+   * of another output with no entry of its own for an element, each entry
+   * of that construct's elements, at its path below the kept output. The
+   * label of what an element holds is then that of the element's own
+   * entry, and not that of the collection's membership. A kept output
+   * that holds such a result as a branch of a `select` has no entry for
+   * an element: its records are `bound`, and the runtime gives their
+   * paths the label of a write it has no record of.
+   */
+  #recordedOutputs(): {
+    output: number;
+    path: readonly string[];
+    bound?: true;
+  }[] {
+    if (this.#recorded !== undefined) return this.#recorded;
+    const { outputs } = this.plan;
+    const templates = this.plan.templates ?? [];
+    const found: { output: number; path: readonly string[]; bound?: true }[] =
+      [];
+    const hasElementEntry = (path: readonly string[]) =>
+      outputs.some((output) =>
+        output.kept && output.path.length > path.length &&
+        output.path[path.length] === "*" &&
+        path.every((segment, index) => output.path[index] === segment)
+      );
+    // The output with a collection that a template gives the label of,
+    // and whether it does so through no `select`.
+    const collectionOf = (
+      template: Template | undefined,
+      direct: boolean,
+      depth: number,
+    ): { output: number; direct: boolean } | undefined => {
+      // A chain of outputs is as long as the plan is deep.
+      if (template === undefined || depth > 64) return undefined;
+      switch (template.op) {
+        case "shared":
+          return collectionOf(templates[template.template], direct, depth + 1);
+        case "output": {
+          const named = outputs[template.output];
+          return named?.collection !== undefined
+            ? { output: template.output, direct }
+            : collectionOf(named?.template, direct, depth + 1);
+        }
+        case "select":
+          for (const branch of template.branches) {
+            const through = collectionOf(branch, false, depth + 1);
+            if (through !== undefined) return through;
+          }
+          return undefined;
+        default:
+          return undefined;
+      }
+    };
+    const add = (output: number, path: readonly string[], depth: number) => {
+      const record = outputs[output];
+      const entry: (typeof found)[number] = { output, path };
+      found.push(entry);
+      if (record.collection !== undefined || depth > 64) return;
+      if (record.kept && hasElementEntry(record.path)) return;
+      const held = collectionOf(record.template, true, 0);
+      if (held === undefined) return;
+      if (!held.direct) {
+        entry.bound = true;
+        return;
+      }
+      const source = outputs[held.output];
+      outputs.forEach((element, index) => {
+        if (
+          index !== held.output && element.cone === source.cone &&
+          element.path.length > source.path.length &&
+          element.path[source.path.length] === "*" &&
+          source.path.every((segment, at) => element.path[at] === segment)
+        ) {
+          add(
+            index,
+            [...path, ...element.path.slice(source.path.length)],
+            depth + 1,
+          );
+        }
+      });
+    };
+    // An interim output is no path of the result document.
+    outputs.forEach((output, index) => {
+      if (output.kept) add(index, output.path, 0);
+    });
+    this.#recorded = found;
+    return found;
+  }
+
+  /** The result of `#recordedOutputs()`, made once. */
+  #recorded:
+    | { output: number; path: readonly string[]; bound?: true }[]
+    | undefined;
 
   /** The record of the output `output` of this instance at the path `at`. */
   #outputRecord(doc: string, output: number, at: string[]): PlanWrite {
     const record = this.plan.outputs[output];
-    const stars = record.path.flatMap((segment, index) =>
+    // The path the output is stored at, which for the entry of an element
+    // is below the kept output that holds the collection.
+    const stored =
+      this.#recordedOutputs().filter((entry) =>
+        entry.output === output && entry.path.length <= at.length &&
+        matchesPath(entry.path, at)
+      ).sort((a, b) => b.path.length - a.path.length)[0];
+    const stars = (stored?.path ?? record.path).flatMap((segment, index) =>
       segment === "*" ? [index] : []
     );
     const pairs = this.#keysAlong(at, stars);
@@ -9311,16 +9461,19 @@ export class Instance {
         ),
         { doc, path: at },
       ),
+      ...(stored?.bound ? { bound: true as const } : {}),
     };
   }
 
   /**
-   * The inputs of a write whose template is one slot of the class
-   * `identity`, directly or through the outputs it names, with that slot
-   * bound in the class `value` where the write stored a value at `target`
-   * and no reference: what a `reduce` computed, or a copy of an array that
-   * a spread child holds. The label of the stored value is then that of
-   * what the slot's positions hold, and not that of the reference alone.
+   * The inputs of a write whose template gives the label of one slot of
+   * the class `identity`, directly, through the outputs it names or as a
+   * branch of a `select`, with that slot bound in the class `value` where
+   * the write stored a value at `target` and no reference: what a `reduce`
+   * computed, a copy of an array that a spread child holds, or the value
+   * of a cell that `a.get() ?? b` gives. The label of the stored value is
+   * then that of what the slot's positions hold, and not that of the
+   * reference alone.
    */
   #storedInPlace<T extends PlanInputs>(
     template: Template | undefined,
@@ -9330,24 +9483,58 @@ export class Instance {
     const held = this.store.peek(target.doc, target.path);
     if (held === undefined || isLink(held) || isStream(held)) return inputs;
     const templates = this.plan.templates ?? [];
-    let place: PlanInputs | undefined = inputs;
-    let at = template;
-    // A chain of outputs is as long as the plan is deep.
-    for (let depth = 0; depth < 64 && place !== undefined; depth++) {
-      if (at?.op === "shared") at = templates[at.template];
-      else if (at?.op === "output") {
-        place = place.outputs?.[at.output];
-        at = this.plan.outputs[at.output]?.template;
-      } else break;
-    }
-    if (at?.op !== "slot" || place === undefined) return inputs;
-    const binding = place.slots[at.slot];
-    if (
-      binding !== undefined && "chain" in binding &&
-      binding.observes === "identity" && binding.chain.length > 0
-    ) {
-      place.slots[at.slot] = this.#chainsOf([...binding.chain], "value");
-    }
+    const visit = (
+      at: Template | undefined,
+      place: PlanInputs | undefined,
+      depth: number,
+    ): void => {
+      // A chain of outputs is as long as the plan is deep.
+      if (at === undefined || place === undefined || depth > 64) return;
+      switch (at.op) {
+        case "shared":
+          visit(templates[at.template], place, depth + 1);
+          return;
+        case "output":
+          visit(
+            this.plan.outputs[at.output]?.template,
+            place.outputs?.[at.output],
+            depth + 1,
+          );
+          return;
+        case "select":
+          for (const branch of at.branches) visit(branch, place, depth + 1);
+          return;
+        case "slot": {
+          const binding = place.slots[at.slot];
+          if (
+            binding !== undefined && "chain" in binding &&
+            binding.observes === "identity" && binding.chain.length > 0
+          ) {
+            // A read of the value goes through each link the value holds.
+            const last = binding.chain[binding.chain.length - 1];
+            const reads: Position[] = [];
+            this.#quietly(() =>
+              this.store.read(new Ref(last.doc, last.path), reads)
+            );
+            const seen = new Set<string>();
+            const addresses = [
+              ...binding.chain,
+              ...this.#addressesOf(reads),
+            ].filter(({ doc, path }) => {
+              const id = JSON.stringify([doc, path]);
+              if (seen.has(id)) return false;
+              seen.add(id);
+              return true;
+            });
+            place.slots[at.slot] = this.#chainsOf(addresses, "value");
+          }
+          return;
+        }
+        default:
+          return;
+      }
+    };
+    visit(template, inputs, 0);
     return inputs;
   }
 

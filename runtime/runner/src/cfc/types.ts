@@ -1035,6 +1035,13 @@ export type PlanWrite = PlanInputs & {
    * again, and the label entries below the target stay.
    */
   readonly relabel?: true;
+
+  /**
+   * The writer has no inputs that give the label of what the target holds:
+   * the target takes the transaction's join, as a written path with no
+   * record does.
+   */
+  readonly bound?: true;
 };
 
 /**

@@ -166,6 +166,12 @@ export type PlanWrite = NamedOutputInputs & {
    * is stored of the labels below the target stays.
    */
   relabel?: true;
+  /**
+   * The executor has no inputs that give the label of what the target
+   * holds: the label is that of a write with no record, the join of what
+   * the transaction read.
+   */
+  bound?: true;
 };
 
 /** What computed a `derive` (PL §1.1). */

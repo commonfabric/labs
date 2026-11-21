@@ -565,6 +565,50 @@ describe("stored-labels", () => {
     });
   });
 
+  // `fixtures/held-in-place.tsx`: values the result holds in place where
+  // the plan's template is of a reference or of a collection's membership.
+  describe("soundnessOfScenario() on values the result holds in place", () => {
+    const argument = {
+      stops: [
+        { title: "a", position: { lat: 3, lng: 3 } },
+        { title: "b", position: { lat: 5, lng: 5 } },
+      ],
+      area: { lat: 3, lng: 3 },
+      selected: 0,
+      center: null,
+    };
+    const check = async (events: { binding: number; event: unknown }[]) => {
+      const { soundness, refused } = await soundnessOfScenario(
+        "held-in-place",
+        await artifactOf("held-in-place"),
+        () => undefined,
+        argument,
+        events,
+      );
+      return { refused, found: lines("held-in-place", soundness) };
+    };
+
+    it("finds the clause of an input an element body reads in the label of the rows a view holds", async () => {
+      expect(await check([])).toEqual({ refused: [], found: [] });
+    });
+
+    it("finds the clause of what a cell's links lead to in the label of the cell's value, given as a branch of a `select`", async () => {
+      expect(await check([{ binding: 1, event: {} }])).toEqual({
+        refused: [],
+        found: [],
+      });
+    });
+
+    it("finds the clause of what the links lead to after a write that changes them and leaves the value the output holds as it was", async () => {
+      expect(
+        await check([
+          { binding: 1, event: {} },
+          { binding: 0, event: { index: 0 } },
+        ]),
+      ).toEqual({ refused: [], found: [] });
+    });
+  });
+
   // `fixtures/state-declared.tsx`: a state cell whose type declares the
   // clause `alice`, with a constant as its first value, returned by
   // reference.

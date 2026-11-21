@@ -29,7 +29,8 @@ export interface CompiledPlan {
    */
   readonly patterns?: readonly string[];
   readonly outputs: readonly {
-    readonly template: Template;
+    /** Absent where the plan has no template for the output. */
+    readonly template?: Template;
     readonly kept?: boolean;
   }[];
   readonly bodies: readonly {

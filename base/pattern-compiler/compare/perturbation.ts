@@ -25,6 +25,9 @@ import { hasWish, homeStubs, memoryHome } from "./wish-home.ts";
 /** The name `perturbedRuns` gives the profile of the seeded home. */
 export const PROFILE_SOURCE = "the seeded profile";
 
+/** The reason `Instance.send` gives for an event no element holds. */
+const NO_ELEMENT = "no element holds the stream";
+
 /** The document of the clock (`CLOCK` of `../exec/executor.ts`). */
 const CLOCK = "clock";
 
@@ -238,12 +241,35 @@ export const steppedRuns = (
       restoreRandom();
     }
   };
-  const send = (instance: Instance, { index, binding, event, at }: Sent) => {
+  /** Sends an event, and says whether an element held its stream. */
+  const send = (
+    instance: Instance,
+    { index, binding, event, at }: Sent,
+  ): boolean => {
     seedRandom(eventSeed(index));
     try {
-      drawing(() => instance.send(binding, structuredClone(event), at));
+      return drawing(() => instance.send(binding, structuredClone(event), at))
+        .error !== NO_ELEMENT;
     } finally {
       restoreRandom();
+    }
+  };
+  /**
+   * Sends an event to the run of a source, which has no determined
+   * dependencies from then on where the event found an element in that run
+   * and none in the run as given, or the reverse: the position an event of
+   * the scenario is sent at is that of an element of the run as given.
+   */
+  const sendTo = (source: Source, next: Sent, delivered: boolean) => {
+    if (source.instance === undefined) return;
+    try {
+      if (send(source.instance, next) !== delivered) {
+        source.instance = undefined;
+        source.failed = "an event went to an element this run does not hold";
+      }
+    } catch (error) {
+      source.instance = undefined;
+      source.failed = firstLine(error);
     }
   };
   const done = (result: Omit<PerturbedRuns, "runs" | "ms">) => ({
@@ -256,6 +282,8 @@ export const steppedRuns = (
   let skipped: string | undefined;
   // Whether the two runs as given handled every event at their start.
   let advanced = false;
+  // Whether each event found an element in the run as given, by its index.
+  const delivered = new Map<number, boolean>();
   const sources: Source[] = [];
   const current = (): PerturbedRuns => {
     if (skipped === undefined && baseline !== undefined) {
@@ -278,7 +306,9 @@ export const steppedRuns = (
         // dependency is determined. With `whole`, they are the two runs as
         // given, and `finish` sends the events to the other runs alone.
         const first = await start(argument);
-        for (const event of events) send(first, event);
+        for (const event of events) {
+          delivered.set(event.index, send(first, event));
+        }
         const second = await start(argument);
         for (const event of events) send(second, event);
         if (first.store.docs.has(CLOCK)) {
@@ -332,22 +362,15 @@ export const steppedRuns = (
       const next = events[sent];
       sent += 1;
       if (next === undefined || skipped !== undefined) return;
+      let delivered: boolean;
       try {
-        send(baseline!, next);
+        delivered = send(baseline!, next);
         send(again!, next);
       } catch (error) {
         skipped = `the run in memory fails: ${firstLine(error)}`;
         return;
       }
-      for (const source of sources) {
-        if (source.instance === undefined) continue;
-        try {
-          send(source.instance, next);
-        } catch (error) {
-          source.instance = undefined;
-          source.failed = firstLine(error);
-        }
-      }
+      for (const source of sources) sendTo(source, next, delivered);
     },
     finish: () => {
       const rest = events.slice(sent);
@@ -355,7 +378,9 @@ export const steppedRuns = (
       if (skipped !== undefined) return;
       try {
         if (!advanced) {
-          for (const event of rest) send(baseline!, event);
+          for (const event of rest) {
+            delivered.set(event.index, send(baseline!, event));
+          }
           for (const event of rest) send(again!, event);
         }
       } catch (error) {
@@ -363,12 +388,8 @@ export const steppedRuns = (
         return;
       }
       for (const source of sources) {
-        if (source.instance === undefined) continue;
-        try {
-          for (const event of rest) send(source.instance, event);
-        } catch (error) {
-          source.instance = undefined;
-          source.failed = firstLine(error);
+        for (const event of rest) {
+          sendTo(source, event, delivered.get(event.index) ?? true);
         }
       }
     },

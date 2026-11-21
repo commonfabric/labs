@@ -52,11 +52,11 @@ const space = signer.did();
  * to a staged label in the cases that use it), a selection between slots 0
  * and 1 on slot 2, a fold of slot 3 over the elements of collection 0, a
  * constant, and a fold of slot 3 over the elements of collection 1, a
- * `filter` over slot 0 whose membership template is that fold; and one
- * output, of slot 0.
+ * `filter` over slot 0 whose membership template is that fold; an output of
+ * slot 0; and a kept output with no template.
  */
 const plan: CompiledPlan = {
-  outputs: [{ template: { op: "slot", slot: 0 } }],
+  outputs: [{ template: { op: "slot", slot: 0 } }, { kept: true }],
   bodies: [{
     writes: [
       { template: { op: "slot", slot: 0 } },
@@ -711,6 +711,31 @@ describe("cfc-plan-labels", () => {
           runtimeWritePolicyAuthorization,
         );
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(confidentialityAt(labels, target, "a").sort()).toEqual([
+          "secret-a",
+          "secret-b",
+        ]);
+        expect(runtime.getCfcStats().planLabelBounds).toBe(before + 1);
+      });
+    });
+
+    it("returns the transaction's join for an output the plan has no template for, and counts it as a bound", async () => {
+      await withSources((runtime, tx, identity, target) => {
+        const before = runtime.getCfcStats().planLabelBounds;
+        tx.recordCfcWritePolicyInput(
+          {
+            kind: "plan-write",
+            target: { ...target, path: ["a"] },
+            compiledPattern: identity,
+            record: { output: 1 },
+            instance: target.id,
+            keys: [],
+            slots: {},
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
         expect(confidentialityAt(labels, target, "a").sort()).toEqual([
           "secret-a",
           "secret-b",
