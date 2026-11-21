@@ -501,9 +501,8 @@ CREATE INDEX IF NOT EXISTS idx_scheduler_basis_entity
 -- slice's mark (0 clean, 1 a piece that writes one of its inputs is marked,
 -- 2 one of its own rows is behind or it was not vouched for), whether it has
 -- been clean since its record was stored, the epoch of the build that
--- recorded it, and whether its record was stored not vouched for, which a
--- further run of the piece does not change. A recorded piece always has a
--- 'space' slice.
+-- recorded it, and whether its latest record was stored not vouched for. A
+-- recorded piece always has a 'space' slice.
 CREATE TABLE IF NOT EXISTS currency_slice (
   branch    TEXT    NOT NULL,
   slice     TEXT    NOT NULL,
