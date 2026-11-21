@@ -56,7 +56,8 @@ and `update()` reject with it. A subscriber hears each refusal through the
 refused, and its value callback never receives one. The next admitted value, or
 a value the host writes, ends the refusal.
 
-The worker builds its gate with no display ceiling, so it refuses no read.
+The worker builds its gate from the display ceiling it renders with, the one
+every mount starts from; a worker started with no ceiling refuses no read.
 
 Every request and notification the worker sends is classified in
 `REQUEST_DISPOSITIONS` and `NOTIFICATION_DISPOSITIONS`: decided by the gate,

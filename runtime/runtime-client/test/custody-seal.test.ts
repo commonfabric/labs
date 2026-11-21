@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { CellHandle } from "@/cell-handle.ts";
-import { type CellRef, RequestType } from "@/protocol/mod.ts";
+import { type CellRef, NotificationType, RequestType } from "@/protocol/mod.ts";
 import { RuntimeClient } from "@/runtime-client.ts";
 
 const ref = (id: string, space = "did:key:home"): CellRef => ({
@@ -67,20 +67,16 @@ describe("custody-seal", () => {
     ]);
   });
 
-  it("asks the worker to publish an answer and to read it back", async () => {
+  it("watches an answer, handing each update to its listener until the watch ends", async () => {
     const requests: unknown[] = [];
-    const answered: Record<string, unknown> = {
-      [RequestType.CustodyAnswerPublish]: {
-        instance: "instance",
-        answer: "sushi",
-      },
-      [RequestType.CustodyAnswerRead]: { answer: "sushi" },
-    };
+    const listeners = new Map<string, (data: unknown) => void>();
     const conn = {
-      on: () => {},
+      on: (event: string, listener: (data: unknown) => void) => {
+        listeners.set(event, listener);
+      },
       request: (request: { type: string }) => {
         requests.push(request);
-        return Promise.resolve(answered[request.type]);
+        return Promise.resolve(undefined);
       },
     } as unknown as never;
     const client = new (RuntimeClient as unknown as {
@@ -88,18 +84,28 @@ describe("custody-seal", () => {
     })(conn, undefined);
     const room = { terms: cells.terms, policy: cells.policy };
     const output = ref("choice", "did:key:room");
+    const states: unknown[] = [];
 
-    expect(await client.publishCustodyAnswer({ ...room, output })).toEqual({
-      instance: "instance",
-      answer: "sushi",
-    });
-    expect(await client.readCustodyAnswer(room)).toBe("sushi");
-    answered[RequestType.CustodyAnswerRead] = {};
-    expect(await client.readCustodyAnswer(room)).toBeUndefined();
+    const unwatch = await client.watchCustodyAnswer(
+      { ...room, output },
+      (state) => states.push(state),
+    );
+    const [{ watchId }] = requests as [{ watchId: string }];
+    const update = (id: string, state: unknown) =>
+      listeners.get("custodyanswerupdate")!({
+        type: NotificationType.CustodyAnswerUpdate,
+        watchId: id,
+        state,
+      });
+    update(watchId, { status: "pending" });
+    update("another-watch", { status: "pending", error: "not this one" });
+    unwatch();
+    update(watchId, { status: "pending", error: "after the watch ended" });
+
+    expect(states).toEqual([{ status: "pending" }]);
     expect(requests).toEqual([
-      { type: RequestType.CustodyAnswerPublish, ...room, output },
-      { type: RequestType.CustodyAnswerRead, ...room },
-      { type: RequestType.CustodyAnswerRead, ...room },
+      { type: RequestType.CustodyAnswerWatch, watchId, ...room, output },
+      { type: RequestType.CustodyAnswerUnwatch, watchId },
     ]);
   });
 });
