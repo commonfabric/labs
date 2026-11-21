@@ -280,6 +280,7 @@ describe("serving-port-plane", () => {
           blocked: [],
           blockedBy: [],
           behind: ["of:piece"],
+          unread: [],
         };
       });
       bridge.onRequest("server.judgeCurrencyRoots", (params) => {
@@ -298,6 +299,7 @@ describe("serving-port-plane", () => {
         blocked: [],
         blockedBy: [],
         behind: ["of:piece"],
+        unread: [],
       });
       expect(
         await plane.server.judgeCurrencyRoots(space, ["of:argument"], {

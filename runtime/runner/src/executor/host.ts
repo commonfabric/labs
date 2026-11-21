@@ -397,6 +397,12 @@ export class ExecutorHost {
         const existing = this.#spaces.get(space);
         if (existing?.active) existing.noteDemandChanged(reason);
       },
+      // A dormant space judges every root when it next activates, so only
+      // an active loop is told.
+      currencyChanged: (space) => {
+        const existing = this.#spaces.get(space);
+        if (existing?.active) existing.noteCurrencyChanged();
+      },
     });
     registerServingLoopStatsProvider(() => this.stats());
   }
