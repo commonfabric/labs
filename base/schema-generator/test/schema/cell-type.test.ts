@@ -159,6 +159,23 @@ describe("Schema: Cell types", () => {
     });
   });
 
+  it("passes over a base whose payload is built from the subtype's parameter", async () => {
+    // `SqliteDb<{ row: T }>` reached through the declaration of `Board<T>`
+    // names no payload either: the parameter is one level down.
+
+    const code = `
+      interface Named { name: string; }
+      interface Board<T> extends SqliteDb<{ row: T }> {}
+      interface X { db: Board<Named>; }
+    `;
+    const { type, checker } = await getTypeFromCode(code, "X");
+    const gen = new SchemaGenerator();
+    const result = asObjectSchema(gen.generateSchema(type, checker));
+    const db = result.properties?.db as Record<string, unknown>;
+    expect(db.asCell).toEqual(["sqlite"]);
+    expect(JSON.stringify(db)).not.toContain('"row"');
+  });
+
   it("leaves a type carrying some other brand structural", async () => {
     const code = `
       declare const OTHER_BRAND: unique symbol;

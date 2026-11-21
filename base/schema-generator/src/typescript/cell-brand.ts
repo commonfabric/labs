@@ -218,6 +218,37 @@ export function wrapperKindToBrand(wrapperKind: CellWrapperKind): CellBrand {
 }
 
 /**
+ * Whether `type` is a type parameter or is built from one: as a member of a
+ * union or an intersection, as a type argument, or as the type of a property
+ * of an object type written in place. Looked for a few levels down, which is
+ * as far as a wrapper's payload is written.
+ */
+function mentionsTypeParameter(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  depth = 4,
+): boolean {
+  if (type.flags & ts.TypeFlags.TypeParameter) return true;
+  if (depth === 0) return false;
+  const within = (inner: ts.Type) =>
+    mentionsTypeParameter(inner, checker, depth - 1);
+  if (type.isUnionOrIntersection()) return type.types.some(within);
+  if (type.aliasTypeArguments?.some(within)) return true;
+  if (!(type.flags & ts.TypeFlags.Object)) return false;
+  const objectType = type as ts.ObjectType;
+  if (objectType.objectFlags & ts.ObjectFlags.Reference) {
+    return checker.getTypeArguments(objectType as ts.TypeReference)
+      .some(within);
+  }
+  if (objectType.objectFlags & ts.ObjectFlags.Anonymous) {
+    return type.getProperties().some((property) =>
+      within(checker.getTypeOfSymbol(property))
+    );
+  }
+  return false;
+}
+
+/**
  * Returns the first reference with a type argument in the hierarchy of
  * `type`, which is the wrapper's own where the wrapper is what was written.
  * With `named`, only a reference to the type of that name counts.
@@ -248,9 +279,7 @@ function extractWrapperTypeReference(
               // `interface Board<T> extends SqliteDb<T>`. That names no
               // payload, and the search by name gives way to the plain one.
               (typeRef.target.symbol?.name === named &&
-                !typeArgs.some((arg) =>
-                  (arg.flags & ts.TypeFlags.TypeParameter) !== 0
-                )))
+                !typeArgs.some((arg) => mentionsTypeParameter(arg, checker))))
           ) {
             return typeRef;
           }
