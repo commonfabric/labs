@@ -1,0 +1,191 @@
+[
+  {
+    "module": "compare/fixtures/record-of-unread-handles.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/record-of-unread-handles.tsx",
+              "source": "const { \"Default\": Default, \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst table = lift(\n  (\n    { byName },\n  ) =>\n    Object.entries(byName).map(([name, member]) => ({ member, name })),\n);\nconst $default = (pattern(\"sha256:9000e3f0f2e356f3418507ac3d1cc7f716781abb809ee4d51901ada508f7cdb7\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((\n    { byName },\n  ) =>\n    Object.entries(byName).map(([name, member]) => ({ member, name })))($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ byName: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ rows: $h.output(0) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 23,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "table",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "byName"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "byName",
+                    "*"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/record-of-unread-handles.tsx",
+                "start": 747
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "rows",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows"
+              ],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:9000e3f0f2e356f3418507ac3d1cc7f716781abb809ee4d51901ada508f7cdb7"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "byName"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "byName",
+                "*"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "byName": {
+                  "additionalProperties": {
+                    "type": "unknown"
+                  },
+                  "properties": {},
+                  "type": "object"
+                }
+              },
+              "required": [
+                "byName"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "additionalProperties": {
+                "type": "unknown"
+              },
+              "properties": {},
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "type": "unknown"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

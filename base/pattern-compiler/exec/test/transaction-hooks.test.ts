@@ -1609,3 +1609,95 @@ describe("the chains of a read of a value that holds links", () => {
     expect(await chainsThroughLinks(8, byReference)).toBe(few + 4);
   });
 });
+
+describe("a read that stops at the links of a record of handles", () => {
+  /**
+   * The record of `rows` of `record-of-unread-handles.tsx` over three
+   * members, each a link to a document of its own. The label of a link as
+   * a reference is another for each member, and so is that of each
+   * document.
+   */
+  const record = async (
+    count = 3,
+    label = (doc: string, path: string[], observes: string) =>
+      `${doc}/${path.join("/")}/${observes}`,
+  ) => {
+    const recorder = new Recorder(label);
+    const documents = Array.from({ length: count }, (_, index) => ({
+      id: `item-${index}`,
+      kind: "input",
+      value: { note: `n${index}` },
+    }));
+    const instance = new Instance(
+      await artifactOf("record-of-unread-handles"),
+      {
+        byName: Object.fromEntries(
+          documents.map((
+            { id },
+            index,
+          ) => [`k${index}`, { $link: { doc: id, path: [] } }]),
+        ),
+      },
+      { transactions: recorder, documents },
+    );
+    const [write] = recorder.changed.flatMap(({ writes }) => writes ?? [])
+      .filter(({ target }) => target.path.join("/") === "rows");
+    // Each position the record names, with whether the runtime observes it
+    // as a reference: every position of an `identity` slot, and every
+    // position of a chain but its last.
+    const positions: { doc: string; path: string; reference: boolean }[] = [];
+    for (const binding of Object.values(write.slots)) {
+      if (!("chain" in binding)) continue;
+      for (const chain of [binding.chain, ...(binding.below ?? [])]) {
+        chain.forEach(({ doc, path }, at) =>
+          positions.push({
+            doc,
+            path: path.join("/"),
+            reference: binding.observes === "identity" ||
+              at < chain.length - 1,
+          })
+        );
+      }
+    }
+    return { instance, positions };
+  };
+
+  it("names no position of a document a member links to", async () => {
+    const { positions } = await record();
+
+    expect(positions.filter(({ doc }) => doc.startsWith("item-"))).toEqual([]);
+  });
+
+  it("observes the link of each member as a reference", async () => {
+    const { instance, positions } = await record();
+
+    const references = new Set(
+      positions.filter(({ doc, reference }) =>
+        reference && doc === instance.argument
+      ).map(({ path }) => path),
+    );
+    for (const key of ["k0", "k1", "k2"]) {
+      expect(references.has(`byName/${key}`)).toBe(true);
+    }
+  });
+
+  it("names as many positions for 30 members as for 3 where the links hold one label as references", async () => {
+    const one = (_doc: string, path: string[], observes: string) =>
+      `${path.length}/${observes}`;
+    const few = await record(3, one);
+
+    expect((await record(30, one)).positions.length).toBe(
+      few.positions.length,
+    );
+  });
+
+  it("names no position below the link of a member", async () => {
+    const { instance, positions } = await record();
+
+    expect(
+      positions.filter(({ doc, path }) =>
+        doc === instance.argument && path.split("/").length > 2
+      ),
+    ).toEqual([]);
+  });
+});

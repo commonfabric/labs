@@ -543,6 +543,13 @@ export const isStreamSchema = (schema: Schema | undefined): boolean =>
 export type Position = {
   doc: string;
   path: readonly string[];
+  /**
+   * The position holds a link at which the read stopped: the schema the
+   * read was made under does not read what the link leads to, as where it
+   * declares a handle, and the read gave a reference in its place. The read
+   * observed the link as a reference and nothing at its target.
+   */
+  stopped?: true;
   keyed?: {
     ref: Ref;
     seen: string;
@@ -2182,11 +2189,16 @@ export class Store {
       const { doc, path, schema } = value.$link;
       // The position of a link the value holds is one the read crossed,
       // where its path names the position and not an element by its key.
+      const stops = bounded && unread(shape);
       if (!at.path.some(isKeySegment)) {
-        reads?.push({ doc: at.doc, path: at.path });
+        reads?.push({
+          doc: at.doc,
+          path: at.path,
+          ...(stops ? { stopped: true as const } : {}),
+        });
       }
       const target = new Ref(doc, path, schema);
-      if (bounded && unread(shape)) {
+      if (stops) {
         const standIn = Object.freeze({});
         this.addresses.set(standIn, target);
         return standIn;

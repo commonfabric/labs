@@ -778,6 +778,12 @@ type Cover = {
 };
 
 /**
+ * The addresses of the positions that hold a link at which every read that
+ * went there stopped (`Position.stopped`), among those `#addressesOf` gave.
+ */
+const stoppedAt = new WeakSet<Address>();
+
+/**
  * The cover found for what an evaluation bound a slot to, with what it is
  * current against: the number of positions bound, the clock of the store,
  * and for each table the number of changes of its set of members.
@@ -8612,12 +8618,18 @@ export class Instance {
       if (canonical([root, path]) !== above) continue;
       const bound = boundOf(other);
       if (bound === undefined || !("at" in bound)) continue;
-      const last = bound.at[bound.at.length - 1];
+      // The collection is at the last position the read observed. A link
+      // of a member at which the read stopped is below it, and `*` covers
+      // it.
+      const reached = bound.at.filter((position) =>
+        position instanceof Ref || position.stopped !== true
+      );
+      const last = reached[reached.length - 1];
       if (last === undefined || last instanceof Ref) continue;
       return this.#derivedBound(bound, `elements ${slot}`, () => ({
         observes: record.observes,
         at: [
-          ...bound.at.slice(0, -1),
+          ...reached.slice(0, -1),
           { doc: last.doc, path: [...last.path, ...record.path.slice(star)] },
         ],
       }));
@@ -8744,7 +8756,19 @@ export class Instance {
     }
     const chains: Address[][] = [];
     let current: Address[] = [];
+    // The links at which the read stopped (`Position.stopped`), as where
+    // the schema declares a handle at each member of a record: the read
+    // observed each as a reference, and no chain goes on to where one
+    // leads (provisional decision P46).
+    const references: Address[] = [];
     for (const address of addresses) {
+      if (
+        stoppedAt.has(address) &&
+        isLink(this.store.peek(address.doc, address.path))
+      ) {
+        references.push(address);
+        continue;
+      }
       current.push(address);
       if (!isLink(this.store.peek(address.doc, address.path))) {
         chains.push(current);
@@ -8793,7 +8817,20 @@ export class Instance {
         chains.push(current);
       }
     }
-    const [chain = [], ...rest] = chains;
+    const [first = [], ...rest] = chains;
+    // The runtime observes every position of a chain but its last as a
+    // reference, so the links the read stopped at stand before the
+    // position the first chain ends at, one for each label they hold as
+    // references. A read that observed nothing but such links observed
+    // references alone.
+    const distinct = this.#distinctByLabel(
+      references.map((address) => [address]),
+      "identity",
+    ).map(([address]) => address);
+    if (first.length === 0 && distinct.length > 0) {
+      return { chain: distinct, observes: "identity", ...stated };
+    }
+    const chain = [...distinct, ...first];
     for (const { members } of reported) {
       for (const { links, ends } of members) {
         ends.forEach((end, index) =>
@@ -9401,12 +9438,19 @@ export class Instance {
     through = false,
   ): Address[] {
     const found: Address[] = [];
-    const seen = new Set<string>();
-    const add = (doc: string, path: readonly string[]) => {
+    const seen = new Map<string, Address>();
+    const add = (doc: string, path: readonly string[], stopped = false) => {
       const id = JSON.stringify([doc, path]);
-      if (seen.has(id)) return;
-      seen.add(id);
-      found.push({ doc, path: [...path] });
+      const held = seen.get(id);
+      if (held !== undefined) {
+        // A position one read stopped at and another crossed is crossed.
+        if (!stopped) stoppedAt.delete(held);
+        return;
+      }
+      const address = { doc, path: [...path] };
+      seen.set(id, address);
+      if (stopped) stoppedAt.add(address);
+      found.push(address);
     };
     this.#quietly(() => {
       for (const position of at) {
@@ -9427,7 +9471,7 @@ export class Instance {
           }
           add(located.ref.doc, located.ref.path);
         } else {
-          add(position.doc, position.path);
+          add(position.doc, position.path, position.stopped === true);
         }
       }
     });
