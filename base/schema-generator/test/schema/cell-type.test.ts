@@ -160,12 +160,12 @@ describe("Schema: Cell types", () => {
   });
 
   it("passes over a base whose payload is built from the subtype's parameter", async () => {
-    // `SqliteDb<{ row: T }>` reached through the declaration of `Board<T>`
-    // names no payload either: the parameter is one level down.
+    // Such a base, reached through the declaration of `Board<T>`, names no
+    // payload either, however far down the parameter is.
 
     const code = `
       interface Named { name: string; }
-      interface Board<T> extends SqliteDb<{ row: T }> {}
+      interface Board<T> extends SqliteDb<{ a: { b: { c: { d: { row: T } } } } }> {}
       interface X { db: Board<Named>; }
     `;
     const { type, checker } = await getTypeFromCode(code, "X");

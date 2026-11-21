@@ -220,18 +220,19 @@ export function wrapperKindToBrand(wrapperKind: CellWrapperKind): CellBrand {
 /**
  * Whether `type` is a type parameter or is built from one: as a member of a
  * union or an intersection, as a type argument, or as the type of a property
- * of an object type written in place. Looked for a few levels down, which is
- * as far as a wrapper's payload is written.
+ * of an object type written in place. `seen` holds the types already looked
+ * at, so a type that refers to itself is looked at once.
  */
 function mentionsTypeParameter(
   type: ts.Type,
   checker: ts.TypeChecker,
-  depth = 4,
+  seen = new Set<ts.Type>(),
 ): boolean {
   if (type.flags & ts.TypeFlags.TypeParameter) return true;
-  if (depth === 0) return false;
+  if (seen.has(type)) return false;
+  seen.add(type);
   const within = (inner: ts.Type) =>
-    mentionsTypeParameter(inner, checker, depth - 1);
+    mentionsTypeParameter(inner, checker, seen);
   if (type.isUnionOrIntersection()) return type.types.some(within);
   if (type.aliasTypeArguments?.some(within)) return true;
   if (!(type.flags & ts.TypeFlags.Object)) return false;
