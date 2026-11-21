@@ -7829,6 +7829,24 @@ today.
   `base/pattern-compiler/exec/test/transaction-hooks.test.ts` and
   `runtime/runner/test/cfc/plan-write-targets.test.ts`. *If decided otherwise:*
   one record per element, as before.
+- **P46. A read that stops at the links of members declared as cells names no
+  position of what a link leads to.** The coordinator's decision of 2026-11-21;
+  it is no owner ruling. *The case:* `namesTable` of
+  `patterns/product/collection-naming/naming.ts` is a `lift` over a record
+  whose members are declared as cells; it reads each member's link and follows
+  none. `#chainsOver` of `exec/executor.ts` resolved a run of link positions
+  through its last link, so the stored label held the clause of the last
+  member's target and of no other. *Decision:* a link the read stopped at,
+  because the schema of the read does not read the target, stands in the chain
+  as a reference, and the chain goes no further. A position that one read
+  stopped at and another crossed counts as crossed. With it, an `enumeration`
+  slot of one container is bound to the links crossed and the container
+  (`plan-and-label-templates.md` §2.5); the same for `shape` slots is not
+  built. *Alternative:* the target of every stopped link, which labels the
+  output with content it did not read. *Tests:* the fixture
+  `record-of-unread-handles.tsx` with
+  `base/pattern-compiler/exec/test/transaction-hooks.test.ts`. *If decided
+  otherwise:* the two fixes on the Topics branch.
 
 **The scope of the storage decisions** (the coordinator's recommendation to
 the owner, 2026-11-18; not an owner ruling). Read in source after round 5:
@@ -13086,6 +13104,28 @@ are theirs.
      figure is linear in the members and the record of a whole read is about 10%
      larger with the table of inputs (questions 339 to 342). *Assumed:* each is
      a cost of the build with a plan, and none changes a stored label.
+352. **Labels of large derived collections** (for the owner, to revisit after
+     the main track). The integration plan's section of that name holds the
+     ideas discussed on 2026-11-21: a label stored once for a collection, a
+     content identifier over a canonical tree of clauses, rows of a `map` over
+     references as documents with the boundary decided per construct, a
+     `sortBy` construct, a result per user under the user's clause, and a
+     shared sorted list filtered on read. *Assumed* until then: the benches
+     that decide milestone 2 give every topic one shared clause.
+353. **The label of a position joined into reads of a row held in place** (not
+     for the owner). A `map` over the result of a `lift` that is an array of
+     references stores rows whose entries lack what decided their position.
+     *Assumed:* one entry at `*` of the per-element result that the runtime's
+     resolution joins and does not replace; it changes what CFC stores and
+     carries the `SPEC-PENDING` marker.
+354. **The `identity` slots of a handler's binding state, and the rows a `lift`
+     writes with `Writable.for(...).set(...)`** (not for the owner). Both store
+     the label of more than was read. *Assumed:* an `identity` slot is bound
+     without the target's label, and each such row gets a write record of the
+     `lift` that wrote it.
+355. **A `lift` parameter member typed `unknown` that is handed the content of
+     a linked document** (not for the owner). Seen in one probe. *Assumed:*
+     a defect of the read bound until examined.
 
 ## Open, and not needing the owner
 

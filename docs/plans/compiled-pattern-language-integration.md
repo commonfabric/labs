@@ -2456,3 +2456,131 @@ the cost that still grows with the data, then the rest.
     plan: index the recorded outputs by path.
 Steps 11 and 12 of the milestone's plan, instantiation keys and verified units
 in the prepared digest and a derived write dropped alone, are not built.
+
+## Milestone 2: Topics at scale
+
+Measured on the Topics branch (`claude/compiled-pattern-topics`) with the
+harness `base/pattern-compiler/compare/topics/scale.ts`, three runs per arm.
+Counts are exact; times were taken on a loaded machine.
+
+| One edit | 100 topics | 1,000 topics | 2,000 topics |
+| --- | ---: | ---: | ---: |
+| Executor in memory | 18 to 33 ms | 151 to 279 ms | 346 to 484 ms |
+| Executor on runtime storage, template labels (median) | 249 ms | 2,557 ms | 6,984 ms |
+| Today's runtime, inputs unlabeled | 338 to 407 ms | 3,660 to 5,075 ms | 8,169 to 10,972 ms |
+| Today's runtime, the same labeled inputs | 870 to 1,620 ms | 11,987 to 16,850 ms | 30,843 to 37,314 ms |
+
+An edit at 1,000 topics is below today's runtime in every sample and grows
+with the board. The instantiation of templates is flat: 17 templates, 45
+nodes and 9 records per edit at every size. What grows:
+
+- The board's whole-list `lift`s (`cardRowsByActivity`, `mentionableIndex`,
+  `namesTable`, `crossrefTable`, `crossrefIndexOf`) run again on each edit.
+- A write record lists, one by one, each position a read reached in each
+  topic's own document, 0.68 KB to 1.45 KB a topic for each edit.
+- The result document holds 21 to 22 label entries a topic, and every edit
+  writes that document. More than half of an edit at 1,000 topics is the
+  memory server's handling of that commit.
+
+The benches that decide the milestone give every topic the clause of the
+input `topics`. A clause of its own on each topic
+(`SCALE_TOPIC_LABELS=distinct`) is a separate case, described next, whose
+cost today's runtime has as well and the compiler does not introduce.
+
+## Labels of large derived collections
+
+Where each of `N` members of a collection has a label of its own, a value
+that depends on all of them has a label of `N` clauses. On the Topics board
+with a clause per topic, each card's 22 label entries hold all `N` clauses,
+since the cards are the output of one `lift` over the whole array of
+references and a `lift` output has one label. An edit at 100 topics takes
+5.3 s and the entries of the changed documents are 33 MB; at 200, 21 s and
+130 MB. Three causes are separate, and each has its own answer.
+
+**Repetition.** The same label is stored at every entry of every row.
+
+- A label is stored once for the collection, at a `*` entry, and joined into
+  each read below it, as ruling Z71 does for the decision of a removal.
+  Adding a member then changes one entry.
+- A label of many clauses is named by a content identifier over a canonical
+  tree of its clause identifiers, hashed per node. The same set has one
+  identifier in any order of insertion, an added or removed clause changes a
+  number of nodes logarithmic in the set, and the check of one reader is
+  kept per node. A chain, the identifier of the label before joined with the
+  new clause, costs one step per addition but names one set differently by
+  order and is formed again whole on a removal.
+
+**Coarseness.** A `lift` over the whole list gives each row the join where
+its content depends on one member.
+
+- The cards are a `map` over the array of topic references, with the card's
+  text computed per topic. The boards
+  `patterns/apps/topics/board-filing-order.tsx` (no sort) and
+  `board-sorted-references.tsx` (a `lift` that reads the sort key of each
+  topic and returns the references in order, then the `map` over that
+  result) measure this: an edit at 100 topics with a clause per topic takes
+  0.3 s and 1.2 s, with 1.1 MB and 10 MB of entries.
+- The language has no construct that keeps a sorted order. A `sortBy(key)`
+  construct is the intended form: the compiler knows that the order of two
+  members depends on the keys of those two alone.
+- A row reached through its position depends on what decided the position.
+  For rows held in place, the label of the position is joined into every
+  read below it (one entry at `*` of the per-element result). The stored
+  labels of a `map` over the result of a `lift` that is an array of
+  references lack it today: the rows' own entries replace the entry of the
+  array in the runtime's resolution. This is an under-label and is fixed
+  before any other item of this section.
+- For rows that are records or view nodes of a `map` over an array of
+  references, or over the result of a construct that yields references, each
+  row is a document of its own, keyed by the element, and the output array
+  holds references. The position then carries the label of the order, the
+  row document carries its own, an edit writes one row document, and a
+  change of order writes the references. The boundary is decided per
+  construct by the compiler from the two templates, and never per row from
+  the values of labels at run time: a boundary that moved with the data
+  would change addresses and would itself be an effect of the labels (as in
+  ruling Z78). Rows that are scalars stay in place. To be measured: `N` more
+  documents at load and at first read.
+
+**The join itself.** Where a value does depend on every member, as the order
+of a sorted list does, two forms shorten it.
+
+- *Per user, with the user as ceiling.* The derivation runs per user over
+  the members that user may read, and its result is stored per user under
+  the one clause of that user. Every input admits the user, so the label
+  only restricts; no property of the computation is needed. It needs a read
+  of a list that yields the members the reader may read and does not reveal
+  that others exist. Cost: one result per user, formed again for each user
+  who may read a changed member. This is the form to build first.
+- *One shared sorted list, filtered on read.* Each reader gets the members
+  they may read, in order, under the join over those members alone. This is
+  sound where the relative order of any two members depends on those two
+  alone, which holds for a comparison sort by a per-element key, a `filter`
+  by a per-element predicate and a `map`, and not for a rank shown in a row,
+  a top-`k`, a running total or a deduplication that keeps the first. The
+  filtered list is indexed anew and does not expose the count of the whole.
+  The filter is a trusted step that replaces one join by a smaller one; it
+  needs the `sortBy` construct and a proposal to the specification (chapter
+  4 on membership, count and order of an enumeration; section 8.2).
+
+A board on which every topic has an audience of its own is one that no
+reader can read whole. Once the read of the members a reader may read
+exists, the bench for this case is several users with overlapping sets of
+readable topics, each with a result per user.
+
+**Found on the way, in the executor.**
+
+- A read that stops at the links of members declared as cells names no
+  position of what a link leads to (provisional decision P46), and an
+  `enumeration` slot of one container is bound to the container alone. Both
+  are fixed on the Topics branch.
+- The `identity` slots of a handler's binding state are bound to the whole
+  output, so a push takes the label of that output and the membership of the
+  `map` carries it to every row; after one `addTopic` every row holds every
+  clause. An `identity` slot does not reach the target
+  (`plan-and-label-templates.md` §2.2). Not fixed.
+- A row document that a `lift` writes with `Writable.for(...).set(...)` has
+  no write record and takes the join of the transaction. Not fixed.
+- A `lift` parameter member typed `unknown` was handed the content of the
+  linked document in one probe. Not examined.
+
