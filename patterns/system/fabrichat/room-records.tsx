@@ -91,6 +91,7 @@ import {
   type ChatContainer,
   type ChatDeletedBody,
   type ChatReaction,
+  type ChatRoomActivity,
   type ChatRoomKind,
   type ChatRoomLink,
   type ChatRoomPolicy,
@@ -926,6 +927,12 @@ export interface JoinRoomRequest {
    * `JoinedEvent` says.
    */
   messageAct?: boolean;
+
+  /**
+   * Where the conversation stands after the viewer's message, as
+   * `JoinedEvent` says; absent for any other join.
+   */
+  activity?: ChatRoomActivity;
 }
 
 /** What a room's write tells `tellManagerJoined` of how the viewer joined. */
@@ -937,6 +944,14 @@ export interface JoinedEvent {
    * title up to the room's.
    */
   messageAct?: boolean;
+
+  /**
+   * Where the conversation stands once the viewer's message is recorded: how
+   * many messages the room holds, and the message's own `sentAt`. Only a
+   * message sends it, so the viewer's manager can note the room's activity
+   * without reading the room.
+   */
+  activity?: ChatRoomActivity;
 }
 
 /**
@@ -1108,10 +1123,13 @@ export interface ManagerJoinState {
  * Tells the viewer's manager the viewer has joined the room. The manager's
  * own event checks its private catalog, so catalog reads stay in the
  * manager's event. For an already listed room it changes no membership, and
- * brings the title its catalog lists the room under up to the room's, except
- * for a join marked `messageAct`, which leaves the title as it is. A room's
- * acts send it an event once they have recorded what the viewer wrote, saying
- * whether that was a message or a reaction, which it passes on.
+ * brings the title its catalog lists the room under, and where the
+ * conversation stands, up to the room's, except for a join marked
+ * `messageAct`, which leaves the title as it is, and notes where a message
+ * leaves the conversation. A room's acts send it an event once they have
+ * recorded what the viewer wrote, saying whether that was a message or a
+ * reaction, and for a message where it leaves the conversation, which it
+ * passes on.
  *
  * The manager is read here, as a value, rather than by what the room stores:
  * a stream bound to a manager that isn't there still reads as present, so
@@ -1129,6 +1147,7 @@ export const tellManagerJoined = handler<JoinedEvent, ManagerJoinState>(
       room: self,
       ...(container !== undefined && { container }),
       ...(event?.messageAct === true ? { messageAct: true } : {}),
+      ...(event?.activity !== undefined && { activity: event.activity }),
     });
   },
 );
@@ -1428,11 +1447,12 @@ const sendInto = (
   // A message may link only a list that exists, so the list is made before
   // the message links it.
   const reactions = new Writable<ReactionsValue>([] as ReactionsValue);
+  const sentAt = now();
   messages.push({
     authorProfile: profile,
     body,
     ...(attachments.length === 0 ? {} : { attachments }),
-    sentAt: now(),
+    sentAt,
     ...(stored === undefined ? {} : { replyTo: stored }),
     reactions,
   } as SentMessage);
@@ -1440,7 +1460,10 @@ const sendInto = (
     titled.record.set(titled.value);
     threadInfo?.addUnique(titled.record);
   }
-  joined?.send({ messageAct: true });
+  joined?.send({
+    messageAct: true,
+    activity: { count: (messages.get() ?? []).length, newestAt: sentAt },
+  });
 };
 
 /**

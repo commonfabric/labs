@@ -76,11 +76,22 @@ declares it. Catalog restoration supersedes an older room tombstone; catalog
 archive or removal supersedes a saved room record. A record's optional
 `catalogRevision` remembers that authority across catalog removal. A
 container's conversation is listed by its membership, whose `container` links
-the root declaring it; forgetting it never archives its container. Rooms are
-compared by their links, which a membership holds as its handler resolved
-them, so a comparison resolves nothing; a standalone room is listed once for
-its space, which holds no other. Clients pass the revision back unchanged to
-`forget`.
+the root declaring it; forgetting it never archives its container. Archiving
+the container in the catalog does leave the conversation out: a conversation
+its container's membership governs, which no standalone catalog entry does,
+is not listed while the catalog's entry for its container's space, the space
+the `container` link names (`spaceOfLink()`), is `archived`, and is listed
+again once that entry is restored. The manager writes nothing either way, so
+the membership and its revision stand as they were, a conversation forgotten
+before stays forgotten, and joining the conversation while its container is
+archived, by a visit, a message or an explicit join, lists nothing. A catalog
+with no entry for the container leaves the conversation listed, since an entry
+removed and one never registered read alike. An archive that never reaches the
+catalog, such as one a client keeps in its own records, leaves the
+conversation listed too. Rooms are compared by their links, which a
+membership holds as its handler resolved them, so a comparison resolves
+nothing; a standalone room is listed once for its space, which holds no other.
+Clients pass the revision back unchanged to `forget`.
 
 Joining a record-backed standalone room registers its own space even when a
 container declares it, and records a membership of it, as creating or
@@ -96,20 +107,25 @@ but their entries, so it opens no room's space and no profile's (see the
 catalog entry holds its title too, as a display hint for readers of the
 catalog. Registration takes the room's title, whatever its kind. Whenever the
 manager handles `accept` or `joinRoom` for a room, it reads the room's `about`,
-and brings the title the room's membership holds, and the catalog entry's
-(`retitleSharedSpaceIn()`), up to the room's where they differ, moving neither
-its revision nor its membership. That is all a join of an already-listed room
-reads of the room, and it writes only on a mismatch. The one exception is a
-`joinRoom` marked `messageAct`, which a room sends with every message and
-reaction: none of those changes the title, so the manager reads nothing of the
-room's `about` for one. The member who retitles a room tells their manager at
-once; another member's entry follows on their manager's next event for that
-room other than a message or a reaction: their own retitle, an acceptance, a
-client's `joinRoom` when they open it, or the `joinRoom` their host sends for a
-notice in their share inbox that the room changed. A join naming such a
-`notice` marks it acted on in the catalog's `notices`, in the same
-transaction, and does nothing at all for a room the user's chats do not list as
-saved, so it never restores a forgotten room or records a membership.
+and its `messages.count` and `messages.newestAt`, and brings the title the
+room's membership holds, and the catalog entry's (`retitleSharedSpaceIn()`),
+and the membership's `activity`, up to the room's where they differ, moving
+neither its revision nor its membership. That is all a join of an
+already-listed room reads of the room, and it writes only on a mismatch. The
+one exception is a `joinRoom` marked `messageAct`, which a room sends with
+every message and reaction: none of those changes the title, so the manager
+reads nothing of the room for one. A message's carries its `activity`, which
+the membership takes where it differs, so the user's own messages keep their
+entry current while reading no room. The member who retitles a room tells
+their manager at once; another member's entry follows on their manager's next
+event for that room other than a message or a reaction: their own retitle, an
+acceptance, a client's `joinRoom` when they open it, or the `joinRoom` their
+host sends for a notice in their share inbox that the room changed. Another
+member's message reaches it the same way, or with the user's own next
+message. A join naming such a `notice` marks it acted on in the catalog's
+`notices`, in the same transaction, and does nothing at all for a room the
+user's chats do not list as saved, so it never restores a forgotten room or
+records a membership.
 
 ### Adopting the catalog's rooms
 

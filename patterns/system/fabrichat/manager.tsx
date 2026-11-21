@@ -13,7 +13,9 @@
  * its membership is recorded: by a visit to it, which sends `joinRoom`, or by
  * the host's adoption of the catalog's rooms (`adoptCatalogRoomsOf()` in
  * `@commonfabric/piece`). Forgetting a container conversation archives only
- * that conversation; accepting or joining it restores it.
+ * that conversation; accepting or joining it restores it. Archiving its
+ * container in the catalog leaves it out of the rooms listed until the
+ * container is restored.
  *
  * It creates each room with `inSpace()` as the root of a space of its own,
  * which declares itself a `fabrichat-room`. The space grants the room's
@@ -107,6 +109,7 @@ import {
   type ChatManagerProfile,
   type ChatProfile,
   type ChatRequestOutcome,
+  type ChatRoomActivity,
   type ChatRoomKind,
   type ChatRoomLink,
   epochNsecFromMsec,
@@ -187,6 +190,24 @@ const effectiveMemberships = (
       ...(catalogRevision !== undefined && { catalogRevision }),
     };
   });
+
+/**
+ * Whether the catalog archives the container of `membership`, as
+ * `effectiveMemberships()` returns it, where the container's membership is
+ * what governs the room: one declared by a container and governed by no
+ * standalone catalog entry. Such a room is left out of the rooms listed while
+ * its container is archived, and listed again once the container is
+ * restored, its membership unchanged. A container the catalog has no entry
+ * for leaves the room listed. The container's entry is the one for the space
+ * its link names (`spaceOfLink()`), so this reads no container.
+ */
+const containerArchived = (
+  entries: Record<string, RoomCatalogEntry>,
+  membership: RoomMembership,
+): boolean =>
+  membership.container !== undefined &&
+  membership.catalogRevision === undefined &&
+  entries[spaceOfLink(membership.container) ?? ""]?.state === "archived";
 
 /** Each request's outcome, by its `requestId`. */
 export type RequestsCell = Writable<
@@ -282,6 +303,13 @@ export interface ManagerStreamEvent {
    * under as it is.
    */
   messageAct?: boolean;
+
+  /**
+   * Where the conversation stands after a message the user sent in the room,
+   * which a `joinRoom` marked `messageAct` carries for a message, and not for
+   * a reaction.
+   */
+  activity?: ChatRoomActivity;
 
   /**
    * The notice that the room changed which a `joinRoom` is sent for, as the
@@ -492,6 +520,65 @@ const refreshListedTitle = (
     space,
     title: title.slice(0, OFFER_TITLE_MAX_LENGTH),
   });
+};
+
+/**
+ * Where the conversation in `room` stands, as the room offers it; `undefined`
+ * where the room offers none. It reads the room's root and the document
+ * holding its summary, and no message.
+ */
+const activityOf = (room: Cell<ChatRoomLink>): ChatRoomActivity | undefined => {
+  const messages = room.key("messages").get();
+  if (typeof messages?.count !== "number") return undefined;
+  return {
+    count: messages.count,
+    ...(messages.newestAt === undefined ? {} : { newestAt: messages.newestAt }),
+  };
+};
+
+/** Whether `a` and `b` say the same of where a conversation stands. */
+const sameActivity = (
+  a: ChatRoomActivity | undefined,
+  b: ChatRoomActivity | undefined,
+): boolean =>
+  a === undefined || b === undefined ? a === b : a.count === b.count && (
+    a.newestAt === undefined || b.newestAt === undefined
+      ? a.newestAt === b.newestAt
+      : nsecOf(a.newestAt) === nsecOf(b.newestAt)
+  );
+
+/**
+ * Notes, in the membership of `room` among `memberships`, the room's `title`
+ * and `activity` where each is given and differs from what the membership
+ * holds, and writes nothing where neither does. The membership's revision
+ * and state stay as they are.
+ */
+const noteHeard = (
+  roomMembership: RoomMembershipCell,
+  memberships: readonly RoomMembership[],
+  room: Cell<ChatRoomLink>,
+  { title, activity }: {
+    title?: string | undefined;
+    activity?: ChatRoomActivity | undefined;
+  },
+): void => {
+  const membership = memberships.find((known) => sameRoom(known.room, room));
+  if (membership === undefined) return;
+  const retitled = title !== undefined && title !== membership.title;
+  const active = activity !== undefined &&
+    !sameActivity(activity, membership.activity);
+  if (!retitled && !active) return;
+  roomMembership.set(
+    memberships.map((known) =>
+      sameRoom(known.room, room)
+        ? {
+          ...known,
+          ...(retitled && { title }),
+          ...(active && { activity }),
+        }
+        : known
+    ),
+  );
 };
 
 /**
@@ -1456,32 +1543,33 @@ const performManagerAct = (
         listsRoomIn(catalog.get(), joinedSpace)))
   ) {
     // Every message and reaction in the room sends one of these, and none of
-    // them changes the room's title, so those leave the room's `about`
-    // unread. Any other join reads only `about`, whose links it doesn't
-    // follow, and writes the catalog and the membership only where their
-    // titles differ from the room's, which a retitle makes them. A room
+    // them changes the room's title, so those leave the room unread: a
+    // message's carries where the conversation stands, which the membership
+    // notes. Any other join reads only `about`, whose links it doesn't
+    // follow, and the room's message count and newest time, and writes the
+    // catalog and the membership only where what they hold differs from the
+    // room's, which a retitle or another member's message makes them. A room
     // listed only through a container has no catalog entry, and gets no
     // write there. A room this user holds a notice of has its roster read
     // too, so that a notice whose recipient has joined since is dropped.
     // A notice that the room changed is marked acted on as the title is
     // brought up, so the user's host acts on it once.
     dropJoinedNotices(state, room);
+    const known = state.roomMembership.get() ?? [];
     if (isWellFormedDID(joinedSpace) && event?.messageAct !== true) {
       const title = room.key("about").get()?.title;
       refreshListedTitle(catalog, joinedSpace, title);
       if (isSharedSpaceNoticeMark(notice)) {
         markSharedSpaceNoticeIn(catalog, notice);
       }
-      if (
-        membership !== undefined && title !== undefined &&
-        title !== membership.title
-      ) {
-        state.roomMembership.set(
-          (state.roomMembership.get() ?? []).map((known) =>
-            sameRoom(known.room, room) ? { ...known, title } : known
-          ),
-        );
-      }
+      noteHeard(state.roomMembership, known, room, {
+        title,
+        activity: activityOf(room),
+      });
+    } else if (event?.messageAct === true) {
+      noteHeard(state.roomMembership, known, room, {
+        activity: event.activity,
+      });
     }
     return;
   }
@@ -1795,6 +1883,7 @@ const performManagerAct = (
   }
   const counterpart = ownDirect ? undefined : creator;
   const title = room.key("about").get()?.title;
+  const activity = activityOf(room);
   // A room the catalog lists already is listed from when the catalog
   // admitted it, so recording its membership leaves its place in the list
   // as it was.
@@ -1803,6 +1892,7 @@ const performManagerAct = (
     kind,
     ...(counterpart === undefined ? {} : { counterpart }),
     ...(title === undefined ? {} : { title }),
+    ...(activity === undefined ? {} : { activity }),
     since: epochNsecFromMsec(catalogEntries[space]?.since ?? Date.now()),
   };
   // Registers the room, or restores an archived entry at the revision just
@@ -1844,12 +1934,13 @@ const performManagerAct = (
           state: "saved",
         },
       ]);
-    } else if (title !== undefined && title !== membership.title) {
-      state.roomMembership.set(
-        memberships.map((known) =>
-          sameRoom(known.room, room) ? { ...known, title } : known
-        ),
-      );
+    } else {
+      // The stored records, not the catalog's view of them, so that only the
+      // title and the activity change.
+      noteHeard(state.roomMembership, state.roomMembership.get() ?? [], room, {
+        title,
+        activity,
+      });
     }
   }
   // A user whose profile hasn't resolved is listed without joining the
@@ -2239,6 +2330,9 @@ const listedEntries = (
       kind: membership.kind,
       ...(counterpart === undefined ? {} : { counterpart }),
       ...(title === undefined ? {} : { title }),
+      ...(membership.activity === undefined
+        ? {}
+        : { activity: membership.activity }),
       since: membership.since,
       revision: membership.revision,
     };
@@ -2429,17 +2523,19 @@ export const FabriChatManagerCore = pattern<
       );
     });
     // Each saved room, newest first: the memberships the catalog leaves
-    // saved, other than those whose space the catalog says is deleted. It
-    // reads the manager's records and the catalog alone, so listing the rooms
-    // reads nothing in any room's space. It is per user, as the people drawn
-    // from it are, and its binding's name is its cause, the identity of the
-    // document that stores it, so renaming it moves its data.
+    // saved, other than those whose space the catalog says is deleted, or
+    // whose container it archives. It reads the manager's records and the
+    // catalog alone, so listing the rooms reads nothing in any room's space,
+    // nor in any container's. It is per user, as the people drawn from it
+    // are, and its binding's name is its cause, the identity of the document
+    // that stores it, so renaming it moves its data.
     const roomsForUser = computed((): PerUser<ChatIndexEntry[]> =>
       listedEntries(
         effectiveMemberships(roomMembership.get() ?? [], catalogEntries)
           .filter((membership) =>
             membership.state === "saved" &&
-            !roomDeleted(catalogEntries, membership.room)
+            !roomDeleted(catalogEntries, membership.room) &&
+            !containerArchived(catalogEntries, membership)
           ),
         catalogEntries,
         direct.get() ?? {},
