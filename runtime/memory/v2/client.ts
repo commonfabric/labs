@@ -27,6 +27,7 @@ import {
   type BranchName,
   type BranchRestoreRequest,
   type BranchRestoreResult,
+  carriesMarkedSplice,
   type ClientCommit,
   type CommitSummary,
   compatibleMemoryProtocolFlags,
@@ -276,7 +277,10 @@ export type Transport = {
    * for replay on the next connection, so the transport must report the same
    * loss to its close receiver, which starts the reconnect that replays it;
    * `reset()` and `close()` are the exceptions, as the client calls them
-   * itself. A transport whose write of this very payload failed on an open
+   * itself. A transport that knows it wrote none of the payload, such as one
+   * whose socket was replaced while the payload waited its turn, rejects
+   * with `unsentConnectionError()`, so that the client knows no server holds
+   * it. A transport whose write of this very payload failed on an open
    * connection rejects with `writeFailedError()` instead, so that the client
    * stops replaying a commit whose own write keeps failing. Any other
    * rejection fails the request with that error. A response that arrived
@@ -635,6 +639,18 @@ type OutstandingCommit = {
    * `MAX_OWN_WRITE_FAILURES`.
    */
   writeFailures?: number;
+
+  /**
+   * Set as the commit's first send begins, and taken back where the
+   * transport reports it wrote none of that send
+   * ({@link isUnsentConnectionError}). Until then, a commit carrying a marked
+   * splice is refused where the connection it would go out on does not
+   * advertise `markedSplicesV1` ({@link isMarkedSpliceRefusal}). From then on
+   * every attempt sends it unchanged, whatever the connection advertises: the
+   * store may already hold it, and it tells a resend of a commit it took from
+   * a new one by the commit's bytes.
+   */
+  sent?: true;
 };
 
 /**
@@ -1345,6 +1361,11 @@ export class Client {
    * only after the server has handled the request, and so after the frames
    * the server sent while handling it. `options.onResponse` hears the
    * response as the client handles it, before any frame after it.
+   *
+   * `options.beforeSend` runs once the request is encoded for the connection
+   * it goes out on, with nothing left that could still stop it there, so that
+   * `serverFlags` are that connection's; throwing stops the request, unsent,
+   * with the error thrown.
    */
   async request<Result>(
     message: FabricPlainObject,
@@ -1353,6 +1374,7 @@ export class Client {
       epoch?: number;
       encoded?: string;
       onResponse?: (response: ResponseMessage<Result>) => void;
+      beforeSend?: () => void;
     } = {},
   ): Promise<Result> {
     if (options.whileConnected === true && !this.#connected) {
@@ -1385,6 +1407,7 @@ export class Client {
     const encoded = options.encoded !== undefined && options.epoch === epoch
       ? options.encoded
       : this.#encodeRequest(message);
+    options.beforeSend?.();
     const { onResponse } = options;
     // Set as the response arrives, which on some transports is before the
     // send settles.
@@ -5969,6 +5992,8 @@ export class SpaceSession {
         return;
       }
 
+      // Whether this attempt began the commit's first send.
+      let firstSend = false;
       try {
         const applied = await this.#client.request<AppliedCommit>({
           type: "transact",
@@ -5980,6 +6005,17 @@ export class SpaceSession {
           onResponse: (response) => {
             if (response.ok !== undefined) pendingCommit.applied = response.ok;
           },
+          beforeSend: () => {
+            if (pendingCommit.sent === true) return;
+            if (
+              carriesMarkedSplice(pendingCommit.commit) &&
+              this.#client.serverFlags?.markedSplicesV1 !== true
+            ) {
+              throw markedSpliceRefusal();
+            }
+            pendingCommit.sent = true;
+            firstSend = true;
+          },
         });
         this.#noteResult(applied.seq);
         if (this.#outstandingCommits.get(localSeq) === pendingCommit) {
@@ -5990,6 +6026,11 @@ export class SpaceSession {
           void this.ack(applied.seq).catch(() => undefined);
         }
       } catch (error) {
+        // A first send the transport wrote none of reached no server, so the
+        // next attempt is a first send again, checked on its own connection.
+        if (firstSend && isUnsentConnectionError(error)) {
+          delete pendingCommit.sent;
+        }
         if (isConnectionError(error) || isSessionRevokedError(error)) {
           // A commit whose own write fails on one new connection after
           // another is at fault itself, and replaying it again would only take
@@ -6482,6 +6523,29 @@ export const writeFailedError = (message: string, cause?: unknown): Error =>
   Object.assign(connectionError(message, cause), { ownWriteFailed: true });
 
 /**
+ * Like `connectionError()`, except that it marks a payload the transport is
+ * sure it wrote none of to any connection, such as one queued behind earlier
+ * writes whose socket was replaced before its turn: no server holds it
+ * ({@link isUnsentConnectionError}).
+ */
+export const unsentConnectionError = (
+  message: string,
+  cause?: unknown,
+): Error => markUnsent(connectionError(message, cause));
+
+/**
+ * Marks `error`, a `ConnectionError` such as a `writeFailedError()`, as one
+ * for a payload the transport wrote none of, as
+ * {@link unsentConnectionError} does, and returns it.
+ */
+export const markUnsent = (error: Error): Error =>
+  Object.assign(error, { unsent: true });
+
+/** Whether `error` is an {@link unsentConnectionError}. */
+export const isUnsentConnectionError = (error: unknown): boolean =>
+  isConnectionError(error) && (error as { unsent?: unknown }).unsent === true;
+
+/**
  * Like `connectionError()`, except that it marks a frame the transport
  * received and could not decode: a frame past the negotiated size or slot cap,
  * a compressed frame that does not inflate, or an invalid router credit. A
@@ -6574,6 +6638,32 @@ const protocolError = (message: string): Error => {
   error.name = "ProtocolError";
   return error;
 };
+
+/**
+ * The refusal of a commit carrying a marked splice (`PatchOp`'s `pinned`)
+ * whose first send would go out on a connection that does not advertise
+ * `markedSplicesV1`, as the server it reaches may then read the splice as
+ * overwriting nothing. Nothing was sent, so the commit's writer can diff the
+ * change again for the connection as it is. Named `ConflictError`, a refusal
+ * its writer can retry; it carries no seq to wait for, as the store's own
+ * conflicts do.
+ */
+const markedSpliceRefusal = (): Error =>
+  Object.assign(
+    new Error(
+      "memory v2 commit not sent: it marks a splice, and the connection " +
+        "does not advertise markedSplicesV1",
+    ),
+    { name: "ConflictError", markedSpliceRefusal: true },
+  );
+
+/**
+ * Whether `error` is a session's refusal of a commit, unsent, because it
+ * marks a splice and its connection does not advertise `markedSplicesV1`.
+ */
+export const isMarkedSpliceRefusal = (error: unknown): boolean =>
+  error instanceof Error &&
+  (error as { markedSpliceRefusal?: unknown }).markedSpliceRefusal === true;
 
 // A ProtocolError that no retry can heal (the peers disagree on a data-model
 // wire contract). Tagged so the reconnect loop gives up rather than retrying it.

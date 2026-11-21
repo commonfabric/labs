@@ -634,9 +634,25 @@ process:
   many documents. `session.watch.add` and `session.watch.refresh` entries also
   carry `upserts`, the snapshots the frame delivered: a wide traversal that
   yields few is repeated server work, and a wide frame is transport and
-  client-ingest work as well. A refresh carries only `watches` and `upserts`: it
-  re-evaluates by dirty document rather than by root, so it has no traversal to
-  attribute, and absent is the honest answer there. A `transact` entry also
+  client-ingest work as well. A refresh by dirty document carries only `watches`
+  and `upserts`: it re-evaluates by document rather than by root, so it has no
+  traversal to attribute, and absent is the honest answer there. A refresh that
+  evaluates a session whole is the exception, attributed as below. A watch set evaluated whole,
+  or moved to a view replacement's roots, records an entry per part of the
+  session's graphs it evaluated, and each such entry names the session
+  (`sessionId`, `principal`), the views it held (`views`, whose roots are among
+  the `watches`), the `part` (`demand`, `support`, or `selection` for a planner
+  selection checked before it is accepted), and the `cause`. A request is filed
+  under its own operation with cause `request`. A refresh pass that evaluates a
+  session whole is filed under `session.watch.refresh`, with the reason the
+  session owed that evaluation as the cause: `first-selection` (a view's first
+  planner selection, or the first for a new revision of one), `resume`,
+  `lost-frame`, `failed-pass`, `routed-restore`, `support-replaced` (a
+  selection that dropped a delivered root rebuilds the support part alone), or
+  `unscoped-flush` (a pass that names no dirty documents). A request sent while
+  the session owes a full evaluation is filed under that reason instead of
+  `request`. A planner selection's check is filed under `view.selection`. A
+  `transact` entry also
   carries the commit's operation and read counts, its outcome (`ok`, the error
   name, or `threw` — a slow rejected commit records like a slow applied one),
   and `lockWaitMs`: how long the commit waited for the space publication lock
@@ -757,6 +773,24 @@ process:
   cap. A count is exact to the second a commit landed in.
   [Alerting on a write storm](#alerting-on-a-write-storm) says what to do
   with it.
+- `currencyDelivery` — what passed between the currency indexes of the
+  spaces the memory server holds
+  ([`serving-loop.md` §3b](../../specs/server-side-execution/serving-loop.md)),
+  as `CurrencyDeliveryReport` in `runtime/memory/v2/server.ts` describes it.
+  `triggers`, `pulls`, `advancesQueued` and `holds` accumulate since the
+  server started: a trigger tells a space that a space it reads changed, a
+  pull is that space asking what changed, an advance is the work a commit
+  queues in a space another one is waiting to hear from, and a hold is a
+  space no other rests on for a while because the same change kept coming
+  back to it. `armed` is how many pairs of a space and a space it reads are
+  waiting to hear now. `spaces` lists the spaces a change came back to,
+  most often held first and fifty at most, each with `laps` since its last
+  hold, the `circle` of spaces the change last came round, `holds`, the
+  length of its last hold as `gapMs`, and `heldUntil` while it is held.
+  Triggers that climb with `holds` at zero are a pipeline doing its work. A
+  space listed with `holds` climbing is in a circle of spaces whose pieces
+  keep changing each other's inputs; `cf inspect currency-cycles` names the
+  pieces and documents on that circle from the stores.
 - `sessionReports` — the diagnostics clients reported about their own
   sessions over the memory protocol's `session.report`
   ([`04-protocol.md` §4.14](../../specs/memory-v2/04-protocol.md)), best-effort

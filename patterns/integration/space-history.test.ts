@@ -100,6 +100,55 @@ describe("space history", () => {
     return { page, first };
   }
 
+  it("lists a pattern change on its step, and restores that pattern version with the data kept", async () => {
+    // The two versions of the pattern word the counter differently, so the
+    // text says which one the piece runs and what count it holds.
+    const program = await resolveLocalProgram(
+      (resolver) => cc.runtime.harness.resolve(resolver),
+      {
+        main: join(
+          import.meta.dirname!,
+          "..",
+          "examples",
+          "counter",
+          "counter.tsx",
+        ),
+      },
+    );
+    // The piece is left for the shell to start: a pattern running here would
+    // compute ahead of the server, and a source change cannot commit on top
+    // of values this process only speculated.
+    const piece = await cc.create(program, { start: false });
+    await piece.setPattern({
+      ...program,
+      files: program.files.map((file) => ({
+        ...file,
+        contents: file.contents.replace("Counter is the", "Count is the"),
+      })),
+    });
+    await shell.goto({
+      frontendUrl: FRONTEND_URL,
+      view: { spaceDid: cc.getSpace(), pieceId: piece.id },
+      identity,
+    });
+    const page = shell.page();
+    await waitForSettledText(
+      page,
+      "#counter-result",
+      "Count is the 0th number",
+    );
+    await clickCfButton(page, "#counter-increment");
+    await waitForSettledText(
+      page,
+      "#counter-result",
+      "Count is the 1st number",
+    );
+
+    await page.evaluate("globalThis.app.setConfig('showHistoryView', true)");
+    await clickCfButton(page, ".pattern-restore");
+    await waitForCounter(page, "1st");
+  });
+
   it("shows the piece as an earlier step left it, and returns to now", async () => {
     const { page, first } = await openCountedToThree();
 

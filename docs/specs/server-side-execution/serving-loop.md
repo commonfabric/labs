@@ -372,6 +372,37 @@ notice at all, so a subscribed client saw them only on its next own
 sync. Beneficial (staleness removed), never load-bearing: no client in
 the ruled flows subscribes to setup docs before activation.
 
+**A root the store can serve.** *(AMENDED 2026-11-19; behind
+`SpaceServerPolicy.currencyIndex`, which a toolshed sets to `skip` unless
+SERVER_EXECUTION_CURRENCY_INDEX says otherwise.)* Where the policy keeps
+the currency index (§3b) in its `skip` mode, the demand pass asks the memory
+server, for each root awaiting its first structure load whose piece is not
+running, whether the store can serve it as it stands. A root that is no
+result document is judged as the piece its `result` back-links lead to,
+which is the piece a load of it would start. The store can serve a root
+when the piece's `space` slice is clean and of the current epoch, and every
+demand row of every session whose id the piece writes or owns, or a recorded
+piece beneath it does, is vouched for: each slice of the owner the row's
+instance is resolved under, the one at its scope key and each broader one,
+is clean and of the epoch, with a vouch row in the slice at that key for a
+written id, and a live document for an owned cell. The rows are those of the
+sessions demanding then, and a slice none of them is resolved under is not
+read: a marked slice of a viewer who is not present refuses nothing, and a
+present viewer whose own slice is marked has the root loaded, for every
+session. Such a root is neither
+loaded nor started, and neither the arrival seed nor the arrival re-arm runs
+for it. It stays among the roots awaiting a first load and is judged again
+when demand changes, when it is found running, and when a commit marks its
+piece or one beneath it. That last case re-arms the root at the marking
+seq, as a commit re-arms a parked root, so W stays below that input until
+the piece has started and derived. A warm request's root, a root narrower
+than the space, and a root with no record are loaded as before. In the
+`record` mode the same judgment is made and counted, and every root is
+loaded; a loop whose policy names `skip` and no epoch
+(`SpaceServerPolicy.currencyEpoch`) runs in it. Impl: `StoreCurrency` in `runtime/runner/src/executor/store-currency.ts`,
+`judgeCurrencyRoots()` in `runtime/memory/v2/currency-index.ts`; pinned in
+`runtime/runner/test/executor/space-server-currency.test.ts`.
+
 **A piece a handler starts.** A handler's result pattern runs on the serving
 runtime so that its setup stages into the wave, and each pattern it starts
 registers its nodes there. Nothing demands those nodes, so once the handler's
@@ -1137,6 +1168,118 @@ executing:
   persisted forms; commit REPLAY bears nothing — recovery never replays
   (§6). Client reload needs none of this: every derived value is
   committed, so client reload is read-and-render.
+- **The currency index** *(AMENDED 2026-11-19, and 2026-11-20 for slices;
+  kept only where `SpaceServerPolicy.currencyIndex` is set)* is a third
+  persisted form. A piece is recorded in slices, one per scope key its
+  computations ran at: `space` for a run every viewer shares, and a user's
+  or a session's key for a run made for that viewer (scopes.md §2's
+  instances). Per slice it holds the document instances its live
+  computations read, the instances its clean computations vouch for, and a
+  mark; per piece, the declared write surface of every computation
+  registered under it. It passes the test above, ids + seqs overwritten in
+  place, with the slice as the overwrite unit in place of the (action,
+  instance), and the slice leads every key, so reading one viewer's slices
+  reads no other viewer's rows. Three things set it apart from the basis
+  index:
+  - It records WRITE links. A piece's write rows are what carry a mark to
+    the slices that read what it writes, through documents no session
+    demands, and what say which absent document a piece would write.
+  - Its rows are written by the memory server on the serving loop's
+    request, in a transaction of their own after the wave's commit has
+    landed, never inside it and never at admission. A record lost between
+    the two leaves its slices marked by the wave's own commit.
+  - It has a reader. A commit to an instance marks `2` each slice with a
+    read row for that instance that is behind it, and the slice at the
+    instance's own key of each piece that vouches for it. Each clean slice
+    of another piece that reads an instance a marked slice writes, at that
+    slice's key or narrower beneath it, is marked `1`, so a walk stops at a
+    slice already marked. A slice an advance marks is reported at the
+    lowest seq of a commit that reaches it, directly or through a marked
+    slice it reads. The marks are brought up to the store's head by a
+    cursor the serving loop advances; storing a new record of a slice is
+    all that clears its mark, and it clears the slices marked `1`
+    downstream that are left with no stale input.
+
+  The loop records at the end of a cycle whose settle did not exhaust its
+  deadline, with the scheduler idle and no effect outstanding, for the
+  pieces a computation of which changed, once the wave has committed every
+  contribution. A record names the slices of the runs the serving runtime
+  holds, which are those of the viewers demanding the piece then, and
+  replaces them; a slice it does not name keeps its rows and its mark. A
+  slice is stored marked when a live computation that ran at its key is not
+  clean, or read a document in another space at an instance narrower than
+  the space or at a seq its replica cannot name, or one a clock writes (the
+  interval cell of a `#now/N` wish), which no commit marks when its interval
+  passes, or one whose writer names no piece and is not live, not clean, or
+  runs once for each viewer. A read of another space's shared instance is
+  registered with that space's index when the record is stored, where one
+  memory server holds both stores: that index keeps the spaces that read
+  each of its instances and what it last told them, the instance's head and
+  whether a piece there computes it and does not answer for it at present,
+  and the reading index keeps what it was last told. A slice is stored
+  marked `2` where its read is behind that head or the space cannot be
+  asked, and `1` where the instance is stale there. A judgment that may rest
+  on such a slice first pulls, from each space the slices its demand rows
+  are resolved under read, what changed since its last pull, and the space
+  pulled from first pulls from the spaces it reads itself. A pull arms the
+  reading space: the memory server tells it, once, of the next change to an
+  instance it registered, and until then a judgment asks that space
+  nothing. A commit admitted into a space with an armed reader queues an
+  advance of its cursor, which is what finds the change. A space that is
+  told passes the word to each space armed with it, pulling nothing, and
+  its loop judges again each root it left unstarted. Which spaces are armed
+  is held in the memory server's memory, so after a restart every space
+  pulls before it rests on another. A trigger carries the number of the
+  change it leads back to, one with no trigger behind it, and how many
+  triggers lead from that change. The same change reaching a space through
+  more triggers than before has come round a circle of spaces, and at
+  eight such laps the space is held: no space rests on it, so a slice that
+  read it is marked `2` and its piece starts. A hold ends by itself, the
+  first after a second and each further one after twice as long as the
+  last, up to five minutes, and at once when a change the space has not
+  been sent reaches it. A
+  slice that read what a live, clean writer
+  that names no piece wrote, such as a wish's shared hashtag resolver, takes
+  over that writer's reads as its own. Every slice of a record is stored marked when the piece's root is
+  narrower than the space, and when it records a source origin (§3e), since
+  a start is where that origin is followed. A clean computation vouches for
+  the instances its runs wrote: for a run at a fan-out instance, the
+  narrower of that instance and the write's declared scope as the run's
+  identity resolves it, and each broader slot up to the declared scope,
+  which holds the redirect. Each is filed under the slice at its own key.
+  The records of one quiescent point reach the memory server in requests of
+  bounded size, and the last names the pieces the earlier ones stored, so
+  pieces that read each other's writes are judged clean together. Each row
+  takes its instance's head seq where every commit to it above the settle's
+  visible input head, or above the watermark where that is higher, is the
+  loop's own, and that seq otherwise, which leaves the slice marked. The
+  serving runtime can hold a frame above that
+  head, so the loop takes such a piece's record again at its next settle
+  that covers more, and a stored record that leaves one owed wakes the loop
+  for it. A vouch row does not move up to a head a commit other than a
+  derivation put there: the piece's writer reads nothing it writes, so an
+  overwrite does not wake it, and the slice stays marked until it writes
+  the instance again. A vouch row a record no longer names is released and
+  kept, so the seq the piece last answered for the instance at survives a
+  record taken while its writer was not running. A record taken below a
+  commit to an instance answers for it at no seq: its vouch row keeps the
+  seq the piece last answered at, and is not written for a piece that never
+  did, so a client's first write of an instance is not read as an overwrite
+  once a later record covers it. An instance a recorded
+  piece computes is a current input only while some piece vouches for it: a
+  slice that read one the latest record of its writer's slice no longer
+  vouches for is marked `1`, a slice of the same piece included, until the
+  writer runs clean again. Nothing is recorded while an effect is outstanding,
+  because a start is what re-fires an effect whose result never landed (§6
+  step 3). The tables are `currency_slice`, `currency_under`,
+  `currency_read`, `currency_write`, `currency_vouch` and
+  `currency_cursor`, and for reads across spaces `currency_slice_source`,
+  `currency_import` and `currency_source` on the reading side and
+  `currency_reader` and `currency_export` on the side read;
+  `runtime/memory/v2/currency-index.ts` is their only writer and reader,
+  pinned in `runtime/memory/test/v2-currency-index.test.ts`, and what
+  passes between two spaces' indexes in
+  `runtime/memory/test/v2-server-currency-across-spaces.test.ts`.
 
 The index's DDL, authored (closes scopes.md §8 item 1). This is the
 engine-v3 migration Phase 1 stage C reduces the observation tables
@@ -1751,8 +1894,20 @@ as — after the entry's seq. A patch at or below a path one of those
 commits overwrote is DROPPED from the consequence, and so is a whole-doc
 `set` or `delete` that one of them rewrote whole. A commit overwrites a
 path with a `set` or `delete` (the root) or with a `replace`, `add` or
-`remove` patch; a write that merges into existing content (`append`,
-`splice`, `increment`, and the like) overwrites nothing. The rule holds
+`remove` patch. The marked splices a commit makes to an array (`pinned`)
+overwrite each index the array holds both before and after them whose value
+differs, from the first splice's index on: they stand for the per-index
+writes of the same change (memory-v2 08-conflict-granularity.md, "Array
+writes and the leaf-only matcher"), which replace exactly those indices, and
+the store admits them only where that reading is exact. An unmarked splice,
+such as the tail splice of the per-index form, overwrites nothing. An element
+a splice only appends past the old end, or only drops off the new end, is
+overwritten by nothing. A served handler's own array changes go index by
+index, as every served wave run's do (its wave batch carries no read set that
+could pin an array), so a patch this rule drops is never part of a splice that
+also carries a write it keeps. A write that
+merges into existing content (`append`, `increment`, and the like)
+overwrites nothing. The rule holds
 wherever the session's write fell: below the wave's basis, which is
 where a requeued or late-drained handler finds it — a run that read the
 doc before the write reached its replica is requeued on the stale read,
@@ -2360,10 +2515,12 @@ On activate after crash or deploy:
    here — those re-miss from memo keys in step 3, by design.
 
 There is NO replay log, NO persisted run observations, NO snapshot of
-scheduler state beyond W, `eventWatermark`, and the basis index's
-ids + seqs rows (§3b — payloads stay FORBIDDEN). If recovery seems to
-need more than these, the design is wrong somewhere else — stop and
-escalate.
+scheduler state beyond W, `eventWatermark`, the basis index's
+ids + seqs rows, and, where the policy keeps it, the currency index's
+(§3b — payloads stay FORBIDDEN). Recovery reads the currency index only
+to decide which demanded roots it need not load (§1); a store without it
+recovers as above. If recovery seems to need more than these, the design
+is wrong somewhere else — stop and escalate.
 
 ## 7. Counters (implement with the loop, not after)
 
@@ -2401,7 +2558,9 @@ aclChanges}, demand: {demandedRows,
 demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
 demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
-structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, settle:
+structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, currency:
+{recordsStored, unvouched, judged, servable, refused, servedFromStore,
+rearmed, falseClean}, settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
@@ -2579,6 +2738,18 @@ time, review MINOR-3);
 `demandKeysReconciled` the instance keys the passes reconciled, accumulated
 over the passes whose reconcile completed, so a pass that throws partway adds
 nothing.
+`currency` counts the currency index (§3b), and is all zero where the
+policy keeps none: `recordsStored` the piece records the loops sent to the
+store; `unvouched` how many of those were of a piece the loop could not
+vouch for, by reason (§3b); `judged` the roots put to a judgment; `servable`
+the roots a judgment found the store could serve (§1), and `refused` the
+ones it could not, by the first reason found;
+`servedFromStore` the roots the `skip` mode left unloaded on it, once each
+time a root is first left; `rearmed` the roots so left that were then
+loaded, because an input marked the piece or a session's demand reached an
+instance it does not vouch for; `falseClean` the pieces the index held
+clean that wrote an instance they vouched for again with no input of
+theirs changed, each one a judgment that would have served a stale value.
 `ownedDefaultSeeds` the (piece root, demanding pair) seedings the passes
 completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
 scope narrower than its result (scoped-cell-instances.md, "A pattern-owned
@@ -2739,7 +2910,9 @@ a leftover.
 
 The intentional exception: the basis index tables (§3b — a NEW reduced
 schema of ids + seqs only, overwritten in place; correctness-bearing for
-recovery but never payloads, so NOT the evidence log).
+recovery but never payloads, so NOT the evidence log), and the currency
+index tables (§3b — ids + seqs only, overwritten in place per slice of a
+piece).
 
 One tripwire is positive rather than lexical (labs #5569): scheduler
 liveness is maintained incrementally, and NO global rebuild runs on

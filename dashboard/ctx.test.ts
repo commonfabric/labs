@@ -106,7 +106,10 @@ async function withGithub(
     } else if (isPage(url)) {
       const size = Number(url.searchParams.get("per_page"));
       const start = (Number(url.searchParams.get("page")) - 1) * size;
-      answer = { workflow_runs: all.slice(start, start + size) };
+      answer = {
+        total_count: all.length,
+        workflow_runs: all.slice(start, start + size),
+      };
     } else {
       answer = { workflow_runs: github.filtered?.(url) ?? [] };
     }
@@ -284,7 +287,9 @@ Deno.test("runs(): a response without workflow_runs reads as no runs", async () 
   Deno.env.set("GH_TOKEN", "test-token");
   globalThis.fetch = (() =>
     Promise.resolve(
-      new Response("{}", { headers: { "content-type": "application/json" } }),
+      new Response('{"total_count":0}', {
+        headers: { "content-type": "application/json" },
+      }),
     )) as typeof fetch;
   try {
     assertEquals(await makeCtx().runs(), []);

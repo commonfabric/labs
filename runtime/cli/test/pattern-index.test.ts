@@ -198,6 +198,24 @@ describe("pattern-index", () => {
       expect((await store.membership())?.root).toBe(root.did());
     });
 
+    it("reads the chain from stdin for --chain -", async () => {
+      const root = await Identity.generate();
+      index.admit(root.did(), "p-piped");
+      const text = encodeDelegationChains([
+        await issueIndexChain({ issuer: root, to: signer.did(), held: [] }),
+      ]);
+
+      await joinIndex(options({ chain: "-" }), undefined, {
+        ...deps,
+        stdin: new Blob([text]).stream(),
+      });
+
+      expect(String(rendered[0].value)).toContain(
+        "Joined the pattern index as p-piped.",
+      );
+      expect((await store.membership())?.root).toBe(root.did());
+    });
+
     it("throws for a --chain file that does not hold exactly one chain", async () => {
       const root = await Identity.generate();
       const chain = await issueIndexChain({

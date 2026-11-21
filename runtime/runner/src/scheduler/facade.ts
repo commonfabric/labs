@@ -148,6 +148,11 @@ import { SpeculationLineage } from "./lineage.ts";
 import { SchedulerMaterializers } from "./materializers.ts";
 import { NodeRegistry, type SchedulerNode } from "./node-record.ts";
 import {
+  clockDocumentKey,
+  type PieceCurrencySnapshot,
+  snapshotPieceCurrency,
+} from "./piece-currency.ts";
+import {
   resolveRegistrationSurface,
   resubscribePullSchedulerAction,
   type SchedulerResubscribeOptions,
@@ -482,6 +487,10 @@ export class Scheduler {
     queueExecution: () => this.queueExecution(),
   });
   #writeIndex!: SchedulerWriteIndex;
+
+  /** The documents a clock writes, as `noteClockDocument()` was told of them. */
+  readonly #clockDocuments = new Set<string>();
+
   readonly #materializers = new SchedulerMaterializers(
     this.#nodes.effects,
     () => this.runtime.scopeKeyIdentity,
@@ -1646,6 +1655,67 @@ export class Scheduler {
     address: { space: MemorySpace; id: string; scope: CellScope },
   ): boolean {
     return this.#demandedEntityRefs.has(entityNameKey(address as never));
+  }
+
+  /**
+   * Starts recording the pieces whose nodes change, for a serving loop that
+   * keeps a currency index (serving-loop.md §3b).
+   */
+  trackChangedPieces(): void {
+    this.#nodes.trackChangedPieces();
+  }
+
+  /**
+   * The pieces a node of which joined, left, or had its status written since
+   * this was last called, each named by the raw id of its result document.
+   * Every piece a run touched is among them. Empty unless
+   * `trackChangedPieces()` was called.
+   */
+  takeChangedPieces(): string[] {
+    return this.#nodes.takeChangedPieces();
+  }
+
+  /**
+   * Whether any active node names `rootId`, the raw id of a result document,
+   * as a demand root: the piece rooted there, or one beneath it, is
+   * registered here.
+   */
+  hasNodesUnderDemandRoot(rootId: string): boolean {
+    return this.#nodes.hasNodesUnderDemandRoot(rootId);
+  }
+
+  /**
+   * Records that a clock writes the document at `address`: something other
+   * than a commit decides when its value is out of date, so the currency
+   * index vouches for no slice that read it.
+   */
+  noteClockDocument(address: Pick<IMemorySpaceAddress, "space" | "id">): void {
+    this.#clockDocuments.add(clockDocumentKey(address));
+  }
+
+  /**
+   * What the currency index records of the piece whose result document is
+   * `pieceRootId`, in `space`, as this scheduler holds it now, or `undefined`
+   * when no active node names it as its piece.
+   */
+  pieceCurrencySnapshot(
+    space: MemorySpace,
+    pieceRootId: string,
+  ): PieceCurrencySnapshot | undefined {
+    return snapshotPieceCurrency(
+      {
+        nodes: this.#nodes,
+        liveness: this.#dependencyGraphState,
+        dependencies: this.#dependencies,
+        writeIndex: this.#writeIndex,
+        clockDocuments: this.#clockDocuments,
+        sourceSeqOf: ({ space: source, id }) =>
+          this.runtime.storageManager.open(source).replica
+            .speculationRetirementView?.(id, "space").confirmedSeq,
+      },
+      space,
+      pieceRootId,
+    );
   }
 
   /** Whether a client session tracks an instance a node of the piece `id` writes. */

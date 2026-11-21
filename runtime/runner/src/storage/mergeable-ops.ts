@@ -204,7 +204,10 @@ const buildTailOp = (
   // suppression drops the whole-array candidate at this path outright plus every
   // element candidate at or past `start`. What survives to carry the prefix is
   // therefore only the diff's PER-INDEX candidates — so the op is honest only
-  // while the diff actually decomposes the prefix that way. `buildArrayPatchCandidates`
+  // while the diff actually decomposes the prefix that way. The diff of an
+  // array a suppression reaches is per index for that reason, never the
+  // splices of an edit script, which sit at the array's path and would be
+  // suppressed with the whole-array candidate. `buildArrayPatchCandidates`
   // gives up and emits a whole-array replacement instead in exactly three
   // situations, and each one must abandon the op rather than let that
   // replacement be suppressed:

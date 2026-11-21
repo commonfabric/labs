@@ -8,6 +8,7 @@ import {
   valueEqual,
   valueEqualByWalk,
 } from "@commonfabric/data-model";
+import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/logger";
@@ -162,6 +163,26 @@ import {
   SessionReportLog,
   type SessionReportsReport,
 } from "./session-reports.ts";
+import {
+  advanceCurrencyCursor,
+  applyCurrencyImports,
+  type CurrencyBatch,
+  type CurrencyInstance,
+  type CurrencyMarked,
+  type CurrencyRefusal,
+  type CurrencyStored,
+  dropUnreadCurrencyImports,
+  forgetCurrencySource,
+  judgeCurrencyRoots,
+  pullCurrencyExports,
+  registerCurrencyReads,
+  selectCurrencyPiece,
+  selectCurrencyReadersMoved,
+  selectCurrencySourcePosition,
+  selectCurrencySources,
+  storeCurrencyRecords,
+} from "./currency-index.ts";
+import { sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import * as Engine from "./engine.ts";
 import {
   executeInvite,
@@ -238,6 +259,7 @@ import {
   verifySessionOpenProofs,
 } from "./session-open-auth.ts";
 import {
+  type FullResyncCause,
   isServingSessionOf,
   type SessionLifecycleEvent,
   SessionRegistry,
@@ -376,6 +398,145 @@ const echoBreakerReportCount = operationMeter.createCounter(
 const timing = getLogger("memory", { enabled: false });
 
 const SUBSCRIPTION_REFRESH_DELAY_MS = 5;
+
+/**
+ * How many `result` back-links the currency judgment follows from a root to
+ * the piece it belongs to: as many as a start follows
+ * (`MAX_RESULT_LINK_DEPTH` in the runner's `ensure-piece-running.ts`).
+ */
+const CURRENCY_ROOT_HOPS_MAX = 10;
+
+/**
+ * How many times the change behind a trigger may come back to a space before
+ * no other space rests on that space for a while (serving-loop.md §3b).
+ * Spaces whose pieces read each other pass a trigger around for as long as
+ * their computations keep changing each other's inputs, and nothing in one
+ * space sees the whole circle. A space a change keeps coming back to is
+ * held: a slice that read it is marked instead of armed, so each piece that
+ * reads it starts, as it would with no index kept, and no trigger leaves it
+ * until the hold ends.
+ */
+const CURRENCY_TRIGGER_LAPS_MAX = 8;
+
+/** How long a space's first hold lasts, in milliseconds. */
+const CURRENCY_HOLD_BASE_MS = 1_000;
+
+/**
+ * The longest a hold lasts, in milliseconds. Each hold of a space that was
+ * not left alone for as long again as its last one lasts twice as long, up
+ * to this.
+ */
+const CURRENCY_HOLD_MAX_MS = 300_000;
+
+/**
+ * What a space holds of the change behind the latest trigger it was sent
+ * (serving-loop.md §3b).
+ */
+type CurrencyTrail = {
+  /**
+   * The change the trigger leads back to, one with no trigger behind it,
+   * by the number this server gave it.
+   */
+  origin: number;
+
+  /** How many triggers lead from that change to the space. */
+  hops: number;
+
+  /** How many times that change came back to the space since its last hold. */
+  laps: number;
+
+  /**
+   * The spaces the latest trigger passed on its way here, the one that sent
+   * it last. Where this space is among them, the spaces before its first
+   * appearance are left out, so the list is no longer than one circle.
+   */
+  path: string[];
+
+  /**
+   * The circle the change last came round, from this space back to the one
+   * that sent it here. Absent while the change has not come back.
+   */
+  circle?: string[];
+
+  /** How many times the space was held. */
+  holds: number;
+
+  /** How long the space's last hold lasted, in milliseconds, `0` for none. */
+  gapMs: number;
+
+  /** The time until which no other space rests on this one, `0` for none. */
+  heldUntil: number;
+};
+
+/** The part of a trail a trigger carries. */
+type CurrencyTrailStep = Pick<CurrencyTrail, "origin" | "hops" | "path">;
+
+/** How many spaces `Server.currencyDelivery()` lists. */
+const CURRENCY_DELIVERY_SPACES_MAX = 50;
+
+/**
+ * What passed between the currency indexes of the spaces a memory server
+ * holds (serving-loop.md §3b), for the health route.
+ */
+export type CurrencyDeliveryReport = {
+  /** Triggers sent to a space that read another. */
+  triggers: number;
+
+  /** Pulls a space made from one it reads. */
+  pulls: number;
+
+  /** Advances of a cursor queued behind a commit, for an armed reader. */
+  advancesQueued: number;
+
+  /** Times a space was held because a change kept coming back to it. */
+  holds: number;
+
+  /** Pairs of a space and a space it is armed with. */
+  armed: number;
+
+  /**
+   * The spaces a change came back to, most often held first, at most
+   * `CURRENCY_DELIVERY_SPACES_MAX` of them.
+   */
+  spaces: Array<{
+    space: string;
+
+    /** The number of the change behind the latest trigger it was sent. */
+    origin: number;
+
+    /** How many triggers lead from that change to the space. */
+    hops: number;
+
+    /** How many times that change came back since the space's last hold. */
+    laps: number;
+
+    /** The circle it last came round, from the space back to its sender. */
+    circle: string[];
+
+    /** How many times the space was held. */
+    holds: number;
+
+    /** How long its last hold lasted, in milliseconds, `0` for none. */
+    gapMs: number;
+
+    /** The time its hold ends, where it is held now. */
+    heldUntil?: number;
+  }>;
+};
+
+/**
+ * Live servers' currency-delivery providers in construction order; a server
+ * removes its own on close(), so the newest LIVE server is always the one
+ * reported.
+ */
+const currencyDeliveryProviders: (() => CurrencyDeliveryReport)[] = [];
+
+/**
+ * The co-hosted memory server's currency delivery for the health route — the
+ * most recently constructed server still open; undefined when none is.
+ */
+export const getCurrencyDelivery = (): CurrencyDeliveryReport | undefined =>
+  currencyDeliveryProviders.at(-1)?.();
 const MIN_REFRESH_QUEUE_DRAIN_WAIT_MS = 500;
 /**
  * The duration, in milliseconds, past which an operation is recorded for
@@ -458,9 +619,32 @@ export type SlowQuery = {
   roots?: number;
   watches?: number;
 
-  /** session.watch.refresh only: the refreshed session's principal, so a
-   * slow refresh names whose watch set cost it. */
+  /** Watch operations: the principal of the session whose watch set the
+   * entry evaluated or refreshed, so a slow entry names whose watches cost
+   * it. */
   principal?: string;
+
+  /** Watch evaluations: the session whose watch set was evaluated. */
+  sessionId?: string;
+
+  /** Watch evaluations: how many views the session held. A view's root is
+   * one of the watches `watches` counts. */
+  views?: number;
+
+  /** Watch evaluations: why the evaluation ran. `request` for a watch
+   * request the session sent, `selection` for checking a planner selection
+   * before it is accepted, `support-replaced` for a selection that dropped
+   * a delivered root, `unscoped-flush` for a refresh pass that names no
+   * dirty documents, and otherwise the {@link FullResyncCause} that marked
+   * the session for a full evaluation. */
+  cause?: WatchEvaluationCause;
+
+  /** Watch evaluations: which of the session's graphs the entry evaluated.
+   * `demand` is its ordinary watches and its views' roots, `support` the
+   * delivery its views' planner selections add, and `selection` a planner
+   * selection checked before it is accepted. One request or refresh pass
+   * records an entry per part it evaluated. */
+  part?: "demand" | "support" | "selection";
 
   /** transact only: milliseconds the commit waited for the space
    * publication lock before evaluation began. Flush passes hold the same
@@ -491,9 +675,11 @@ export type SlowQuery = {
    * so a slow entry reporting zero spent it somewhere else — assembling
    * the response, or attaching operation fields.
    *
-   * `session.watch.refresh` carries none of these fields. It re-evaluates
-   * by dirty document rather than by root, so it has no roots to
-   * attribute; absent is the honest answer there, not zero. */
+   * A `session.watch.refresh` entry for a refresh by dirty document carries
+   * none of these fields. It re-evaluates by document rather than by root,
+   * so it has no roots to attribute; absent is the honest answer there, not
+   * zero. A `session.watch.refresh` entry for a pass that evaluated a
+   * session whole carries them, as a request's entry does. */
   rootsVisited?: number;
 
   /** Query and watch operations: summed elapsed time of those root visits.
@@ -510,12 +696,14 @@ export type SlowQuery = {
    * the complete request rather than only its costliest root. */
   managerReads?: number;
 
-  /** watch.add and watch.refresh: changed entity snapshots delivered to the
-   * client. This is the delivered-width counterpart to `watches` and
-   * `managerReads`: a wide traversal that yields few upserts is repeated
-   * server work, while a wide frame is also transport and client-ingest
-   * work. A refresh that produced no upserts answers with an empty catch-up
-   * and is not recorded, so a refresh entry never reports zero here. */
+  /** watch.add, watch.remove, and a refresh by dirty document: changed
+   * entity snapshots delivered to the client. This is the delivered-width
+   * counterpart to `watches` and `managerReads`: a wide traversal that
+   * yields few upserts is repeated server work, while a wide frame is also
+   * transport and client-ingest work. A refresh with no upserts, removals,
+   * or new crossings answers with an empty catch-up and is not recorded; a
+   * refresh entry reporting zero here delivered removals or crossings
+   * alone. */
   upserts?: number;
 
   /** Query and watch operations: the costliest single root, which is what
@@ -607,6 +795,49 @@ const recordSlowQueryDuration = (
     ...details,
   });
 };
+
+/** Why a watch evaluation ran ({@link SlowQuery}'s `cause` defines each). */
+export type WatchEvaluationCause =
+  | "request"
+  | "selection"
+  | "support-replaced"
+  | "unscoped-flush"
+  | FullResyncCause;
+
+/**
+ * What a watch evaluation's slow-query entry records about why it ran:
+ * the operation it is filed under, the cause, the part of the session's
+ * graphs it evaluated, and how many views the session held
+ * ({@link SlowQuery} defines each).
+ */
+export type WatchEvaluationRecord = {
+  operation: string;
+  cause: WatchEvaluationCause;
+  part: "demand" | "support" | "selection";
+  views?: number;
+};
+
+/** The operation and cause a caller files a session's watch evaluations under. */
+type WatchEvaluationContext = Pick<
+  WatchEvaluationRecord,
+  "operation" | "cause"
+>;
+
+/** The session and cause fields of a watch evaluation's slow-query entry. */
+const watchEvaluationDetails = (
+  scopeContext: { principal?: string; sessionId?: string },
+  record: WatchEvaluationRecord,
+): Pick<SlowQuery, "principal" | "sessionId" | "views" | "cause" | "part"> => ({
+  ...(scopeContext.principal === undefined
+    ? {}
+    : { principal: scopeContext.principal }),
+  ...(scopeContext.sessionId === undefined
+    ? {}
+    : { sessionId: scopeContext.sessionId }),
+  views: record.views ?? 0,
+  cause: record.cause,
+  part: record.part,
+});
 
 /** Returns the last N slow query, watch, commit, and SQLite read operations —
  * those over `CF_SLOW_QUERY_THRESHOLD_MS`, 100 ms unless set. */
@@ -1293,6 +1524,14 @@ export type ServerExecutionObserver = {
     servingOwn?: true,
     notDemand?: true,
   ) => void;
+
+  /**
+   * `space`'s currency index changed from outside its serving loop
+   * (serving-loop.md §3b): a space it reads told it of a change, or a
+   * request the memory server made of the index for another space marked a
+   * slice here. A loop that holds a root unstarted judges it again.
+   */
+  currencyChanged?: (space: string) => void;
 
   /**
    * A session's VIEW SET was set: a `session.watch.set` carried views,
@@ -3617,6 +3856,56 @@ export class Server {
   #serverExecutionObserver: ServerExecutionObserver | undefined;
 
   /**
+   * The spaces each space has told nothing since they last pulled from it,
+   * each with the position that pull returned (serving-loop.md §3b): the
+   * readers it tells of the next change to an instance they registered. It
+   * is held in memory, so after a restart every reader pulls from a source
+   * before it rests on it.
+   */
+  readonly #currencyArmed = new Map<string, Map<string, number>>();
+
+  /**
+   * The position of each space through which its armed readers were told
+   * of what moved.
+   */
+  readonly #currencyToldThrough = new Map<string, number>();
+
+  /**
+   * What each space holds of the change behind the latest trigger it was
+   * sent. A space no trigger reached since a client's commit landed in it
+   * has no entry, and each change of its own is one with no trigger behind
+   * it.
+   */
+  readonly #currencyTrails = new Map<string, CurrencyTrail>();
+
+  /** How many changes with no trigger behind them this server numbered. */
+  #currencyOrigins = 0;
+
+  /**
+   * The spaces with an advance of the currency cursor queued behind a
+   * commit, which has not started.
+   */
+  readonly #currencyAdvancesQueued = new Set<string>();
+
+  /** The queued advances that have not finished. */
+  readonly #currencyAdvancing = new Set<Promise<void>>();
+
+  /**
+   * The slices of each space that an advance marked on a request other
+   * than its serving loop's, which that loop is handed with its next
+   * request.
+   */
+  readonly #currencyMarksOwed = new Map<string, Map<string, CurrencyMarked>>();
+
+  /** What passed between the currency indexes of the spaces held here. */
+  readonly #currencyDelivery = {
+    triggers: 0,
+    pulls: 0,
+    advancesQueued: 0,
+    holds: 0,
+  };
+
+  /**
    * What runs `pattern.lifecycle` requests: the deployment's serving side,
    * installed with `setPatternLifecycleHandler()`. `undefined` until one is
    * installed, and while it is the server refuses every such request.
@@ -3987,6 +4276,7 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     commitRatesProviders.push(this.#commitRatesProvider);
+    currencyDeliveryProviders.push(this.#currencyDeliveryProvider);
     sessionReportsProviders.push(this.#sessionReportsProvider);
     documentInterestsProviders.push(this.#documentInterestsProvider);
   }
@@ -4037,6 +4327,7 @@ export class Server {
   #pushPriorityStatsProvider = () => this.pushPriorityStats();
   #documentCachesDiagnosticsProvider = () => this.documentCachesDiagnostics();
   #commitRatesProvider = () => this.commitRates();
+  #currencyDeliveryProvider = () => this.currencyDelivery();
   #sessionReportsProvider = () => this.sessionReports();
   #documentInterestsProvider = (query: DocumentInterestQuery) =>
     this.#sessions.documentInterests(query);
@@ -5476,7 +5767,7 @@ export class Server {
   markSessionForFullResync(space: string, sessionId: string): void {
     const session = this.#sessions.get(space, sessionId);
     if (session !== null) {
-      session.forceFullResync = true;
+      session.forceFullResync = "failed-pass";
     }
   }
 
@@ -5500,6 +5791,7 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     withdrawProvider(commitRatesProviders, this.#commitRatesProvider);
+    withdrawProvider(currencyDeliveryProviders, this.#currencyDeliveryProvider);
     withdrawProvider(sessionReportsProviders, this.#sessionReportsProvider);
     withdrawProvider(
       documentInterestsProviders,
@@ -5511,6 +5803,7 @@ export class Server {
     }
     // A verb still running writes through the engines closed below.
     await Promise.all(this.#lifecycleRuns);
+    await this.#currencyAdvancesSettled();
     await this.#refreshing;
     await this.#drainSpacePublicationLocks();
     this.#closed = true;
@@ -5550,6 +5843,7 @@ export class Server {
       ),
     );
     await this.#drainSpacePublicationLocks();
+    await this.#currencyAdvancesSettled();
     // Dirty spaces with no timer armed are manual mode's held fan-out.
     // idle() is an explicit synchronization point exactly like
     // flushSessions(), so it drains them rather than returning with
@@ -7142,7 +7436,7 @@ export class Server {
           // The catch-up below evaluates only when something is dirty or
           // owed; a replaced diff base is neither, so the full evaluation
           // that diffs against it is forced explicitly.
-          resumed.forceFullResync = true;
+          resumed.forceFullResync = "resume";
         }
       }
       const session = opened;
@@ -8843,9 +9137,8 @@ export class Server {
           // A branch other than the default is computed by the client that
           // opened it, so its documents and their labels are that client's
           // word, which a restore would write onto the default branch. Only
-          // the default branch's own history is restored from until the
-          // specification rules on what a restore may admit.
-          // SPEC-PENDING https://github.com/commonfabric/specs/pull/105
+          // the default branch's own history is restored from; what a
+          // restore may admit is ruled in commonfabric/specs pull request 105.
           if (
             message.source !== undefined && message.source !== DEFAULT_BRANCH
           ) {
@@ -9067,6 +9360,12 @@ export class Server {
           })),
           engine,
           { principal: session!.principal, sessionId: session!.id },
+          {
+            operation: "view.selection",
+            cause: "selection",
+            part: "selection",
+            views: session!.views.length,
+          },
         );
         if (!current()) return false;
       }
@@ -9103,7 +9402,7 @@ export class Server {
         }
         session!.viewPlansPending = true;
       } else {
-        session!.forceFullResync = true;
+        session!.forceFullResync = "first-selection";
       }
       this.markSpaceDirty(space, []);
       return true;
@@ -9132,11 +9431,16 @@ export class Server {
     });
   }
 
-  /** Evaluates demand independently from delivery-only supporting roots. */
+  /**
+   * Evaluates demand independently from delivery-only supporting roots.
+   * `context` names the operation and cause each evaluation's slow-query
+   * entry records.
+   */
   async #evaluateViewWatchSet(
     session: SessionState,
     watches: readonly WatchSpec[],
     views: readonly ViewInterest[],
+    context: WatchEvaluationContext,
     engine?: Engine.Engine,
   ) {
     this.#assertRoutedAuthority(session);
@@ -9154,6 +9458,7 @@ export class Server {
       renderWatches,
       engine,
       identity,
+      { ...context, part: "demand", views: views.length },
     );
     const selected = this.#viewSupportWatches(session, views);
     const delivery = selected.length === 0
@@ -9163,6 +9468,7 @@ export class Server {
         selected,
         engine,
         identity,
+        { ...context, part: "support", views: views.length },
       );
     const graphs = new Map([...demand.graphs].map(([branch, graph]) => [
       views.length === 0 ? branch : `view-demand:${branch}`,
@@ -9211,6 +9517,12 @@ export class Server {
         selected,
         engine,
         identity,
+        {
+          operation: "session.watch.refresh",
+          cause: "support-replaced",
+          part: "support",
+          views: session.views.length,
+        },
       );
     const graphs = new Map([...demandGraphs].map(([branch, graph]) => [
       `view-demand:${branch}`,
@@ -9255,11 +9567,13 @@ export class Server {
    * the replacement's views (`#moveWatchGraphs()`). What it returns is what
    * `#evaluateViewWatchSet()` returns for the same request, and only the
    * roots the replacement adds and documents awaiting refresh are walked.
+   * `context` names the operation and cause its slow-query entries record.
    */
   async #replaceViewWatchSet(
     session: SessionState,
     watches: readonly WatchSpec[],
     views: readonly ViewInterest[],
+    context: WatchEvaluationContext,
     engine?: Engine.Engine,
   ) {
     this.#assertRoutedAuthority(session);
@@ -9267,7 +9581,13 @@ export class Server {
     this.#assertRoutedAuthority(session);
     const dirtyIds = this.#dirtyDocsBySpace.get(session.space);
     if (this.#dirtySpaces.has(session.space) && dirtyIds === undefined) {
-      return await this.#evaluateViewWatchSet(session, watches, views, engine);
+      return await this.#evaluateViewWatchSet(
+        session,
+        watches,
+        views,
+        context,
+        engine,
+      );
     }
     const startedAt = performance.now();
     const renderWatches = [...watches, ...viewWatches(views)];
@@ -9278,27 +9598,49 @@ export class Server {
         previousSupport.set(key.slice("view-support:".length), graph);
       }
     }
-    const attribution = createRootAttribution();
+    const identity = { principal: session.principal, sessionId: session.id };
+    const demandAttribution = createRootAttribution();
     const demandGraphs = this.#moveWatchGraphs(
       session,
       engine,
       renderWatches,
       session.viewDemandGraphs,
-      attribution,
+      demandAttribution,
       dirtyIds,
     );
+    recordSlowQueryDuration(context.operation, session.space, startedAt, {
+      watches: renderWatches.length,
+      ...watchEvaluationDetails(identity, {
+        ...context,
+        part: "demand",
+        views: views.length,
+      }),
+      ...demandAttribution,
+    });
+    const supportStartedAt = performance.now();
+    const supportAttribution = createRootAttribution();
     const supportGraphs = this.#moveWatchGraphs(
       session,
       engine,
       selected,
       previousSupport,
-      attribution,
+      supportAttribution,
       dirtyIds,
     );
-    recordSlowQueryDuration("session.watch.set", session.space, startedAt, {
-      watches: renderWatches.length + selected.length,
-      ...attribution,
-    });
+    recordSlowQueryDuration(
+      context.operation,
+      session.space,
+      supportStartedAt,
+      {
+        watches: selected.length,
+        ...watchEvaluationDetails(identity, {
+          ...context,
+          part: "support",
+          views: views.length,
+        }),
+        ...supportAttribution,
+      },
+    );
     const graphs = new Map<string, TrackedGraphState>();
     for (const [branch, graph] of demandGraphs) {
       graphs.set(`view-demand:${branch}`, graph);
@@ -9306,7 +9648,6 @@ export class Server {
     for (const [branch, graph] of supportGraphs) {
       graphs.set(`view-support:${branch}`, graph);
     }
-    const identity = { principal: session.principal, sessionId: session.id };
     return {
       serverSeq: Engine.serverSeq(engine),
       graphs,
@@ -9802,6 +10143,12 @@ export class Server {
       // replacement or a removal, and walks only the roots it adds.
       const moved = views.length > 0 && !incremental &&
         session.views.length > 0 && !session.forceFullResync;
+      // A request evaluated whole because the session owed a full
+      // evaluation is filed under that cause.
+      const context: WatchEvaluationContext = {
+        operation: `session.watch.${mode === "replace" ? "set" : mode}`,
+        cause: session.forceFullResync || "request",
+      };
       const evaluated: Awaited<ReturnType<Server["evaluateWatchSet"]>> & {
         demandGraphs?: typeof session.graphs;
         demandEntities?: typeof session.entities;
@@ -9814,6 +10161,7 @@ export class Server {
             principal: session.principal,
             sessionId: message.sessionId,
           },
+          { ...context, part: "demand", views: 0 },
         )
         : extended
         ? await this.#extendViewWatchSet(session, message.watches, aclEngine)
@@ -9822,12 +10170,14 @@ export class Server {
           session,
           message.watches,
           views,
+          context,
           aclEngine,
         )
         : await this.#evaluateViewWatchSet(
           session,
           message.watches,
           views,
+          context,
           aclEngine,
         );
       this.#assertRoutedAuthority(session);
@@ -10657,6 +11007,11 @@ export class Server {
     watches: readonly WatchSpec[],
     engine?: Engine.Engine,
     scopeContext: { principal?: string; sessionId?: string } = {},
+    record: WatchEvaluationRecord = {
+      operation: "session.watch.set",
+      cause: "request",
+      part: "demand",
+    },
   ): Promise<{
     serverSeq: number;
     graphs: Map<string, TrackedGraphState>;
@@ -10688,8 +11043,9 @@ export class Server {
       graphs.set(branch, result.state);
     }
 
-    recordSlowQueryDuration("session.watch.set", space, startedAt, {
+    recordSlowQueryDuration(record.operation, space, startedAt, {
       watches: watches.length,
+      ...watchEvaluationDetails(scopeContext, record),
       ...attribution,
     });
     return {
@@ -10850,7 +11206,7 @@ export class Server {
       return;
     }
     const sync = undelivered.effect;
-    if (sync.viewPlans !== undefined) session.forceFullResync = true;
+    if (sync.viewPlans !== undefined) session.forceFullResync = "lost-frame";
     // Both arms below rewrite the delivered entities and the tracked set.
     this.#touchDemand(session);
     const identity = this.#sessionScopeIdentity(session);
@@ -10910,7 +11266,7 @@ export class Server {
           },
         );
         session.trackedIds.add(toDirtyKey(entry.id, entry.scopeKey));
-        session.forceFullResync = true;
+        session.forceFullResync = "lost-frame";
         ids.push(toDirtyKey(entry.id, entry.scopeKey));
       }
       this.#rollbackCaughtUpMarker(session, sync);
@@ -10935,7 +11291,7 @@ export class Server {
         session.leaseHolderReads === true &&
         upsert.scope !== undefined && upsert.scope !== "space"
       ) {
-        session.forceFullResync = true;
+        session.forceFullResync = "lost-frame";
       }
     }
     for (const remove of sync.removes) {
@@ -10959,7 +11315,7 @@ export class Server {
         },
       );
       session.trackedIds.add(toDirtyKey(remove.id, scopeKey));
-      session.forceFullResync = true;
+      session.forceFullResync = "lost-frame";
       ids.push(toDirtyKey(remove.id, scopeKey));
     }
     this.#rollbackCaughtUpMarker(session, sync);
@@ -11697,6 +12053,10 @@ export class Server {
                 session,
                 session.watches,
                 session.views,
+                {
+                  operation: "session.watch.refresh",
+                  cause: preCallForceFullResync || "unscoped-flush",
+                },
               )
               : await this.#reevaluateViewSupport(
                 session,
@@ -12246,6 +12606,550 @@ export class Server {
     return demand;
   }
 
+  /**
+   * Brings the marks of `space`'s currency index up to its store's head
+   * (serving-loop.md §3b), and returns the slices marked since `space`'s
+   * serving loop last asked: the ones this advance marked, and the ones an
+   * advance made on another request did. Server-internal machinery and tests
+   * only, as `engineForSpace()` is.
+   */
+  async advanceCurrency(space: string): Promise<CurrencyMarked[]> {
+    const engine = await this.#openEngine(space);
+    const marked = advanceCurrencyCursor(engine, { space });
+    this.#tellCurrencyReaders(space, engine);
+    return this.#takeCurrencyMarks(space, marked);
+  }
+
+  /**
+   * What passed between the currency indexes of the spaces this server
+   * holds: the triggers sent, the pulls made, the advances a commit queued,
+   * how often a space was held because a change kept coming back to it, and
+   * the spaces one came back to, each with the circle it came round. The
+   * health route publishes it.
+   */
+  currencyDelivery(): CurrencyDeliveryReport {
+    const now = Date.now();
+    let armed = 0;
+    for (const readers of this.#currencyArmed.values()) armed += readers.size;
+    const spaces: CurrencyDeliveryReport["spaces"] = [];
+    for (const [space, trail] of this.#currencyTrails) {
+      if (trail.circle === undefined) continue;
+      spaces.push({
+        space,
+        origin: trail.origin,
+        hops: trail.hops,
+        laps: trail.laps,
+        circle: [...trail.circle],
+        holds: trail.holds,
+        gapMs: trail.gapMs,
+        ...(trail.heldUntil > now && { heldUntil: trail.heldUntil }),
+      });
+    }
+    spaces.sort((a, b) => b.holds - a.holds || b.laps - a.laps);
+    return {
+      ...this.#currencyDelivery,
+      armed,
+      spaces: spaces.slice(0, CURRENCY_DELIVERY_SPACES_MAX),
+    };
+  }
+
+  /**
+   * The spaces `source` tells of the next change to an instance they
+   * registered. Diagnostics and tests only.
+   */
+  currencyReadersArmedOn(source: string): string[] {
+    return [...this.#currencyArmed.get(source)?.keys() ?? []];
+  }
+
+  /**
+   * The engine of `source`, a space whose store a slice of another space
+   * read, or `undefined` where this server cannot ask it: another owner
+   * holds the space, it has no store, or it is deleted.
+   */
+  async #currencySourceEngine(
+    source: string,
+  ): Promise<Engine.Engine | undefined> {
+    if (
+      this.options.ownsSpace !== undefined && !this.options.ownsSpace(source)
+    ) return undefined;
+    // A record names the space, and opening a store that is not there
+    // would make one.
+    if (!(await this.#spaceStoreExists(source))) return undefined;
+    const engine = await this.#openEngine(source);
+    return this.#deletedRefusal(engine, source) === null ? engine : undefined;
+  }
+
+  /**
+   * Hands `space`'s serving loop `marked`, the slices its own request
+   * marked, with the slices an advance made on another request marked since
+   * the loop last asked.
+   */
+  #takeCurrencyMarks(
+    space: string,
+    marked: CurrencyMarked[],
+  ): CurrencyMarked[] {
+    const owed = this.#currencyMarksOwed.get(space);
+    if (owed === undefined) return marked;
+    this.#currencyMarksOwed.delete(space);
+    return [...owed.values(), ...marked];
+  }
+
+  /**
+   * Keeps `marked`, slices of `space` an advance marked on a request that
+   * was not its serving loop's, for that loop's next request, and tells the
+   * loop. The loop re-arms a root it holds unstarted from the seq a slice
+   * was marked at, which no later advance returns.
+   */
+  #oweCurrencyMarks(space: string, marked: readonly CurrencyMarked[]): void {
+    if (marked.length === 0) return;
+    let owed = this.#currencyMarksOwed.get(space);
+    if (owed === undefined) {
+      owed = new Map();
+      this.#currencyMarksOwed.set(space, owed);
+    }
+    for (const entry of marked) {
+      const key = `${entry.slice}\0${entry.piece}`;
+      const known = owed.get(key);
+      if (known === undefined || entry.seq < known.seq) owed.set(key, entry);
+    }
+    this.#notifyCurrencyChanged(space);
+  }
+
+  /**
+   * Tells each armed reader of `space` that registered an instance whose
+   * row moved since its pull, once, and disarms it. Called after each
+   * change to `space`'s currency index, whose rows are current by then.
+   */
+  #tellCurrencyReaders(space: string, engine: Engine.Engine): void {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined || armed.size === 0) return;
+    const moved = selectCurrencyReadersMoved(engine, {
+      space,
+      since: this.#currencyToldThrough.get(space) ?? 0,
+    });
+    this.#currencyToldThrough.set(space, moved.position);
+    let step: CurrencyTrailStep | undefined;
+    for (const { reader, position } of moved.readers) {
+      const pulledAt = armed.get(reader);
+      if (pulledAt === undefined || position <= pulledAt) continue;
+      armed.delete(reader);
+      step ??= this.#currencyTrailFrom(space);
+      this.#triggerCurrencyReader(reader, step);
+    }
+  }
+
+  /**
+   * The step a trigger from `space` carries: one hop further along the
+   * change behind the latest trigger `space` was sent, or the first hop of
+   * a change of its own where none reached it.
+   */
+  #currencyTrailFrom(space: string): CurrencyTrailStep {
+    const trail = this.#currencyTrails.get(space);
+    if (trail === undefined) {
+      this.#currencyOrigins += 1;
+      return { origin: this.#currencyOrigins, hops: 1, path: [space] };
+    }
+    return {
+      origin: trail.origin,
+      hops: trail.hops + 1,
+      path: [...trail.path, space],
+    };
+  }
+
+  /**
+   * Notes that a trigger carrying `step` reached `space`. A change `space`
+   * has not been sent before starts its trail over, and ends a hold. The
+   * same change arriving through more triggers than before has come back
+   * round a circle of spaces, which is a lap; arriving through no more, it
+   * is a further change of a space upstream, and changes nothing. At
+   * `CURRENCY_TRIGGER_LAPS_MAX` laps `space` is held, for twice as long as
+   * its last hold unless it was left alone for as long again as that one
+   * lasted.
+   */
+  #noteCurrencyTrail(space: string, step: CurrencyTrailStep): void {
+    const trail = this.#currencyTrails.get(space);
+    // The spaces before this one's first appearance are not on the circle.
+    const from = step.path.indexOf(space);
+    const path = from < 0 ? step.path : step.path.slice(from);
+    if (trail === undefined || trail.origin !== step.origin) {
+      this.#currencyTrails.set(space, {
+        origin: step.origin,
+        hops: step.hops,
+        laps: 0,
+        path,
+        // What is known of the space's earlier circles is kept, for the
+        // report.
+        ...(trail?.circle !== undefined && { circle: trail.circle }),
+        holds: trail?.holds ?? 0,
+        gapMs: 0,
+        heldUntil: 0,
+      });
+      return;
+    }
+    if (step.hops <= trail.hops) return;
+    trail.hops = step.hops;
+    trail.path = path;
+    trail.circle = path;
+    trail.laps += 1;
+    if (trail.laps < CURRENCY_TRIGGER_LAPS_MAX) return;
+    const now = Date.now();
+    const rested = now - trail.heldUntil > trail.gapMs;
+    trail.gapMs = trail.gapMs === 0 || rested
+      ? CURRENCY_HOLD_BASE_MS
+      : Math.min(trail.gapMs * 2, CURRENCY_HOLD_MAX_MS);
+    trail.heldUntil = now + trail.gapMs;
+    trail.laps = 0;
+    trail.holds += 1;
+    this.#currencyDelivery.holds += 1;
+    console.warn(
+      `memory v2: a change came back to the space ${space} ` +
+        `${CURRENCY_TRIGGER_LAPS_MAX} times, round ` +
+        `${[...path, space].join(" -> ")}; no space rests on its currency ` +
+        `index for ${trail.gapMs} ms`,
+    );
+  }
+
+  /** Whether `space` is held, so that no other space rests on it. */
+  #currencyHeld(space: string): boolean {
+    return (this.#currencyTrails.get(space)?.heldUntil ?? 0) > Date.now();
+  }
+
+  /**
+   * Tells every armed reader of `space` that it may have moved, and disarms
+   * them: `space` no longer hears of each change to a space it reads, so
+   * no reader may rest on hearing nothing from it. `step` is what the
+   * triggers carry, where a change is behind them.
+   */
+  #disarmCurrencyReaders(space: string, step?: CurrencyTrailStep): void {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined || armed.size === 0) return;
+    const readers = [...armed.keys()];
+    armed.clear();
+    for (const reader of readers) this.#triggerCurrencyReader(reader, step);
+  }
+
+  /**
+   * Delivers a trigger to `reader`, which a space it reads has just
+   * disarmed: something in that space may have moved. `step` says which
+   * change is behind the trigger and how far it has come, where one is. The
+   * reader's serving loop is told, and judges again where it holds a root
+   * unstarted. Nothing is pulled here. The reader's own armed readers are
+   * told in turn, since what the reader computes from that space may have
+   * moved with it. A reader is told at most once between two pulls, so one
+   * trigger ends at the first space already told.
+   */
+  #triggerCurrencyReader(reader: string, step?: CurrencyTrailStep): void {
+    this.#currencyDelivery.triggers += 1;
+    if (step !== undefined) this.#noteCurrencyTrail(reader, step);
+    this.#notifyCurrencyChanged(reader);
+    this.#disarmCurrencyReaders(
+      reader,
+      step === undefined ? undefined : this.#currencyTrailFrom(reader),
+    );
+  }
+
+  /**
+   * Queues an advance of `space`'s currency cursor behind a commit that was
+   * just admitted, where a reader is armed and none is queued: the advance
+   * is what finds whether an instance a reader registered changed. It runs
+   * in a transaction of its own once the commit has landed.
+   */
+  #queueCurrencyAdvance(space: string): void {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined || armed.size === 0) return;
+    if (this.#currencyAdvancesQueued.has(space)) return;
+    this.#currencyAdvancesQueued.add(space);
+    this.#currencyDelivery.advancesQueued += 1;
+    const advancing = Promise.resolve().then(async () => {
+      // A commit admitted from here on queues another.
+      this.#currencyAdvancesQueued.delete(space);
+      if (this.#closed) return;
+      const engine = await this.#openEngine(space);
+      this.#oweCurrencyMarks(space, advanceCurrencyCursor(engine, { space }));
+      this.#tellCurrencyReaders(space, engine);
+    }).catch((error) => {
+      console.warn(
+        `memory v2: the currency advance queued for ${space} failed`,
+        error,
+      );
+    }).finally(() => {
+      this.#currencyAdvancing.delete(advancing);
+    });
+    this.#currencyAdvancing.add(advancing);
+  }
+
+  /** Settles once no advance a commit queued is waiting or running. */
+  async #currencyAdvancesSettled(): Promise<void> {
+    while (this.#currencyAdvancing.size > 0) {
+      await Promise.all(this.#currencyAdvancing);
+    }
+  }
+
+  /**
+   * Brings what `space`'s currency index holds of each of `sources` up to
+   * what that space reports now. `visiting` holds the spaces a request is
+   * already bringing up to date, so that spaces that read each other are
+   * each followed once.
+   *
+   * @returns Whether a slice of `space` was marked.
+   */
+  async #followCurrencySources(
+    engine: Engine.Engine,
+    space: string,
+    sources: readonly string[],
+    visiting: Set<string>,
+  ): Promise<boolean> {
+    let marked = false;
+    for (const source of sources) {
+      if (await this.#followCurrencySource(engine, space, source, visiting)) {
+        marked = true;
+      }
+    }
+    return marked;
+  }
+
+  /**
+   * Helper for `#followCurrencySources()`, which follows one source. A
+   * source `space` is armed with has told it nothing since its last pull,
+   * and is not asked. One that cannot be asked, or is held, is forgotten,
+   * which marks each slice that read it. Any other is pulled from, and arms
+   * `space` in the same step. A source that is pulled from or held follows
+   * the spaces it reads itself first, so that it hears of a change upstream
+   * of it: that is what a reader armed with it rests on, and what ends a
+   * hold early.
+   */
+  async #followCurrencySource(
+    engine: Engine.Engine,
+    space: string,
+    source: string,
+    visiting: Set<string>,
+  ): Promise<boolean> {
+    let armed = this.#currencyArmed.get(source);
+    const sourceEngine = await this.#currencySourceEngine(source);
+    if (sourceEngine === undefined) {
+      armed?.delete(space);
+      return forgetCurrencySource(engine, { space, source }).length > 0;
+    }
+    if (armed?.has(space) === true && !this.#currencyHeld(source)) {
+      return false;
+    }
+    if (!visiting.has(source)) {
+      visiting.add(source);
+      const marked = await this.#followCurrencySources(
+        sourceEngine,
+        source,
+        selectCurrencySources(sourceEngine, { space: source }),
+        visiting,
+      );
+      // The source's own loop may hold a root unstarted on a slice this
+      // marked.
+      if (marked) this.#notifyCurrencyChanged(source);
+    }
+    if (this.#currencyHeld(source)) {
+      this.#currencyArmed.get(source)?.delete(space);
+      return forgetCurrencySource(engine, { space, source }).length > 0;
+    }
+    const pulled = pullCurrencyExports(sourceEngine, {
+      space: source,
+      reader: space,
+      since: selectCurrencySourcePosition(engine, { space, source }),
+      dropped: dropUnreadCurrencyImports(engine, { space, source }),
+    });
+    this.#currencyDelivery.pulls += 1;
+    this.#oweCurrencyMarks(source, pulled.marked);
+    armed = this.#currencyArmed.get(source);
+    if (armed === undefined) {
+      armed = new Map();
+      this.#currencyArmed.set(source, armed);
+    }
+    // With no reader armed, nothing below this position is owed to anyone.
+    if (armed.size === 0) {
+      this.#currencyToldThrough.set(source, pulled.position);
+    }
+    armed.set(space, pulled.position);
+    // The pull's advance may have moved a row another reader registered.
+    this.#tellCurrencyReaders(source, sourceEngine);
+    return applyCurrencyImports(engine, {
+      space,
+      source,
+      entries: pulled.entries,
+      position: pulled.position,
+    }).length > 0;
+  }
+
+  /**
+   * Stores the records a serving loop took of `space`'s pieces at a quiescent
+   * point in its currency index (serving-loop.md §3b). Each instance of
+   * another space that a record read is registered with that space's index
+   * first, where this server holds its store and the space is not held, so
+   * the record is stored against what that space reports of it.
+   * Server-internal machinery and tests only.
+   */
+  async storeCurrencyRecords(
+    space: string,
+    batch: Omit<CurrencyBatch, "space">,
+  ): Promise<CurrencyStored> {
+    const engine = await this.#openEngine(space);
+    const reads = new Map<string, Map<string, CurrencyInstance>>();
+    for (const record of batch.records) {
+      for (const slice of record.slices) {
+        for (const { space: source, id, scopeKey } of slice.reads) {
+          if (source === space) continue;
+          let instances = reads.get(source);
+          if (instances === undefined) {
+            instances = new Map();
+            reads.set(source, instances);
+          }
+          instances.set(`${scopeKey}\0${id}`, { id, scopeKey });
+        }
+      }
+    }
+    let unheard = false;
+    for (const [source, instances] of reads) {
+      const sourceEngine = await this.#currencySourceEngine(source);
+      // A read of a space that cannot be asked, or is held, is stored with
+      // nothing reported of it, which leaves its slice marked.
+      if (sourceEngine === undefined || this.#currencyHeld(source)) continue;
+      const registered = registerCurrencyReads(sourceEngine, {
+        space: source,
+        reader: space,
+        reads: [...instances.values()],
+      });
+      this.#oweCurrencyMarks(source, registered.marked);
+      this.#tellCurrencyReaders(source, sourceEngine);
+      applyCurrencyImports(engine, {
+        space,
+        source,
+        entries: registered.entries,
+      });
+      unheard ||= this.#currencyArmed.get(source)?.has(space) !== true;
+    }
+    const stored = storeCurrencyRecords(engine, { ...batch, space });
+    // A space no slice of the batch reads any longer may hold registrations
+    // nothing here reads behind, which a pull from it drops.
+    await this.#followCurrencySources(
+      engine,
+      space,
+      stored.unread,
+      new Set([space]),
+    );
+    this.#tellCurrencyReaders(space, engine);
+    // A record that read a space `space` is not armed with rests on what a
+    // registration returned, and a later change there reaches nobody here.
+    // So no reader goes on resting on hearing nothing from `space`.
+    if (unheard) this.#disarmCurrencyReaders(space);
+    return { ...stored, marked: this.#takeCurrencyMarks(space, stored.marked) };
+  }
+
+  /**
+   * Judges which of `roots`, ids of space-scoped documents awaiting a
+   * structure load, the store can serve with no piece started
+   * (serving-loop.md §1), against the demand rows of `space`'s client
+   * sessions as `demandForSpace()` reads them, after bringing the currency
+   * index's marks up to the store's head. A root that is no result document
+   * is judged as the piece its `result` back-links lead to, which is the
+   * piece a structure load of it starts.
+   *
+   * A root may rest on a slice that read another space. Each space read by
+   * a slice the demand rows are resolved under is followed first: one that
+   * `space` is armed with is not asked, and any other is pulled from.
+   *
+   * @returns The roots that pass, each with the piece it was judged as, how
+   * many roots each reason refused, and the slices marked since `space`'s
+   * serving loop last asked.
+   */
+  async judgeCurrencyRoots(
+    space: string,
+    roots: readonly string[],
+    options: { excludePrincipal?: string; epoch: string },
+  ): Promise<{
+    servable: Array<{ root: string; piece: string }>;
+    refused: Partial<Record<CurrencyRefusal, number>>;
+    marked: CurrencyMarked[];
+  }> {
+    const engine = await this.#openEngine(space);
+    const advanced = advanceCurrencyCursor(engine, { space });
+    this.#tellCurrencyReaders(space, engine);
+    const marked = this.#takeCurrencyMarks(space, advanced);
+    const refused: Partial<Record<CurrencyRefusal, number>> = {};
+    if (roots.length === 0) return { servable: [], refused, marked };
+
+    /** The recorded piece `root` leads to, if its back-links reach one. */
+    const pieceOf = (root: string): string | undefined => {
+      let id = root;
+      for (let hops = 0; hops <= CURRENCY_ROOT_HOPS_MAX; hops++) {
+        if (selectCurrencyPiece(engine, { piece: id }) !== undefined) {
+          return id;
+        }
+        const document = Engine.read(engine, {
+          id,
+          scopeKey: "space",
+        });
+        const link = document === null
+          ? undefined
+          : (document as Record<string, unknown>).result;
+        if (!isLinkRef(link)) return undefined;
+        const target = linkRefPayload(link).id;
+        if (typeof target !== "string") return undefined;
+        id = target;
+      }
+      return undefined;
+    };
+    const pieces = new Map<string, string>();
+    for (const root of roots) {
+      const piece = pieceOf(root);
+      if (piece !== undefined) pieces.set(root, piece);
+      else refused["no-record"] = (refused["no-record"] ?? 0) + 1;
+    }
+    if (pieces.size === 0) return { servable: [], refused, marked };
+    const demand = this.demandForSpace(
+      space,
+      options.excludePrincipal === undefined
+        ? {}
+        : { excludePrincipal: options.excludePrincipal },
+    );
+    const rows = function* (): Generator<CurrencyInstance> {
+      for (const share of demand) {
+        for (const row of share.rows.values()) {
+          yield { id: row.id, scopeKey: row.scopeKey };
+        }
+      }
+    };
+    const slices = new Set<string>([SPACE_SLICE]);
+    for (const { scopeKey } of rows()) {
+      if (slices.has(scopeKey)) continue;
+      for (const slice of sliceChain(scopeKey)) slices.add(slice);
+    }
+    await this.#followCurrencySources(
+      engine,
+      space,
+      selectCurrencySources(engine, { space, slices }),
+      new Set([space]),
+    );
+    // What a pull marked here may have moved a row another space reads.
+    this.#tellCurrencyReaders(space, engine);
+    const judgment = judgeCurrencyRoots(engine, {
+      space,
+      roots: [...new Set(pieces.values())],
+      rows: rows(),
+      epoch: options.epoch,
+    });
+    const passing = new Set(judgment.servable);
+    const reasons = new Map(
+      judgment.refused.map(({ root, reason }) => [root, reason]),
+    );
+    const servable: Array<{ root: string; piece: string }> = [];
+    for (const [root, piece] of pieces) {
+      if (passing.has(piece)) {
+        servable.push({ root, piece });
+        continue;
+      }
+      const reason = reasons.get(piece);
+      if (reason !== undefined) refused[reason] = (refused[reason] ?? 0) + 1;
+    }
+    return { servable, refused, marked };
+  }
+
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a
    * space's client sessions, plus the union size (design §2.6 — the
    * demand-set size and its drift are measured, not assumed). */
@@ -12363,6 +13267,10 @@ export class Server {
   }
 
   #notifyCommitAdmitted(notice: AdmittedCommitNotice): void {
+    // A change of the space after a commit a client authored there is one
+    // with no trigger behind it.
+    if (notice.class === "authored") this.#currencyTrails.delete(notice.space);
+    this.#queueCurrencyAdvance(notice.space);
     const observer = this.#serverExecutionObserver;
     if (observer?.commitAdmitted !== undefined) {
       try {
@@ -12409,6 +13317,19 @@ export class Server {
     } catch (error) {
       console.warn(
         "memory v2: server-execution observer threw on sessionOpened",
+        error,
+      );
+    }
+  }
+
+  #notifyCurrencyChanged(space: string): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.currencyChanged === undefined) return;
+    try {
+      observer.currencyChanged(space);
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on currencyChanged",
         error,
       );
     }
