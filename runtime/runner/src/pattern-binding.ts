@@ -38,6 +38,7 @@ import {
   internCellLinkSchema,
 } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
+import { runtimeWritePolicyAuthorization } from "./cfc/types.ts";
 import { diffAndUpdate } from "./data-updating.ts";
 import { readMaybeLink, resolveLink } from "./link-resolution.ts";
 import { toMemorySpaceAddress } from "./link-types.ts";
@@ -348,6 +349,45 @@ export function sendValueToBinding<T>(
   );
 }
 
+/**
+ * Helper for `sendValueToBindingInner()`, which writes the whole `value` an
+ * action returned to `target`, the cell `binding` resolved to.
+ *
+ * What `target` holds afterward is the value the action supplied, whatever
+ * the diff found already in place, so the write is recorded as a whole-value
+ * destination, as a `Cell.set()` is (`CfcTxState.assertedValueRoots`). The
+ * flow stage then stamps the destination with this run's label, the parts of
+ * it this run left unchanged included, where it would otherwise leave those
+ * with the stamp of whichever earlier run last changed them. Recorded only
+ * when the diff wrote: a run that changed nothing asserted nothing.
+ */
+function writeResultValue<T>(
+  tx: IExtendedStorageTransaction,
+  cell: AnyCell<T>,
+  target: NormalizedFullLink,
+  binding: unknown,
+  value: unknown,
+): void {
+  const changed = diffAndUpdate(
+    cellRuntime(cell),
+    tx,
+    target,
+    value,
+    { cell: cell.getAsNormalizedFullLink(), binding },
+    { meta: ignoreReadForScheduling, schemaRole: "output" },
+  );
+  if (!changed) return;
+  tx.recordCfcAssertedValueRoot(
+    {
+      space: target.space,
+      id: target.id,
+      scope: target.scope,
+      path: [...target.path],
+    },
+    runtimeWritePolicyAuthorization,
+  );
+}
+
 function sendValueToBindingInner<T>(
   tx: IExtendedStorageTransaction,
   cell: AnyCell<T>,
@@ -435,14 +475,7 @@ function sendValueToBindingInner<T>(
         valueLink === undefined ||
         !areNormalizedLinksSame(valueLink, storedRef)
       ) {
-        diffAndUpdate(
-          cellRuntime(cell),
-          tx,
-          storedRef,
-          value,
-          { cell: cell.getAsNormalizedFullLink(), binding },
-          { meta: ignoreReadForScheduling, schemaRole: "output" },
-        );
+        writeResultValue(tx, cell, storedRef, binding, value);
       }
       // A chain written one hop deep, space straight to session, gains the
       // via-user hop scopes.md §2 requires of every chain under server
@@ -475,14 +508,7 @@ function sendValueToBindingInner<T>(
         valueLink === undefined ||
         !areNormalizedLinksSame(valueLink, scopedRef)
       ) {
-        diffAndUpdate(
-          cellRuntime(cell),
-          tx,
-          scopedRef,
-          value,
-          { cell: cell.getAsNormalizedFullLink(), binding },
-          { meta: ignoreReadForScheduling, schemaRole: "output" },
-        );
+        writeResultValue(tx, cell, scopedRef, binding, value);
       }
       // The eager via-user hop (scopes.md §2's MUST, flag-gated so the
       // OFF arm keeps today's one-hop-per-event behavior): a
@@ -572,14 +598,7 @@ function sendValueToBindingInner<T>(
         return;
       }
     }
-    diffAndUpdate(
-      cellRuntime(cell),
-      tx,
-      ref,
-      value,
-      { cell: cell.getAsNormalizedFullLink(), binding },
-      { meta: ignoreReadForScheduling, schemaRole: "output" },
-    );
+    writeResultValue(tx, cell, ref, binding, value);
   } else if (Array.isArray(binding)) {
     if (Array.isArray(value)) {
       for (let i = 0; i < Math.min(binding.length, value.length); i++) {

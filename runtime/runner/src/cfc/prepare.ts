@@ -14295,6 +14295,74 @@ export function* prepareBoundaryCommitSteps(
     let rootCeilings:
       | { paths: (readonly string[])[]; index: PathIndex }
       | undefined;
+    // Whether an alternative names the readers of a space other than this
+    // document's own (see the writer-fit measurement below).
+    const namesAnotherSpace = (alternative: unknown): boolean => {
+      if (!isObjectOrArray(alternative)) return false;
+      const atom = alternative as {
+        type?: unknown;
+        id?: unknown;
+        owner?: unknown;
+      };
+      if (atom.type === CFC_ATOM_TYPE.Space) return atom.id !== space;
+      if (atom.type === CFC_ATOM_TYPE.PersonalSpace) {
+        return !commitmentAwareEquals(atom.owner as FabricValue, space);
+      }
+      return false;
+    };
+    // Whether the runtime-owned-store route admits a join that misfits the
+    // ceiling at `path` by `offending`. Runtime ownership can admit a misfit
+    // at a rung that would reject. Lifetime enrollment and authenticated piece
+    // setup keep the misfit solely in derived stamps.
+    // `cfc-enforcement-matrix.md` §4 states the admission boundary; the
+    // remaining conditions are the ones below.
+    //
+    // The route ACTS on the runtime's claim rather than measuring it, which
+    // is why the transaction answers only for markers that arrived carrying
+    // the runtime's authorization. `recordCfcWritePolicyInput` is on the
+    // public transaction interface, so an input's own fields say only what
+    // its recorder wrote. The two sibling markers in this file corroborate
+    // against transaction state instead, which suits a claim about a write
+    // that has already happened; this one is a claim about whose write it is.
+    //
+    // The writer-fit measurement asks this of each path the join lands at,
+    // and the whole-value destinations ask it of each ceiling they cover, so
+    // the wider stamp is admitted exactly where the diff's own stamps are.
+    let ownsStore: boolean | undefined;
+    const ownedStoreAdmits = (
+      path: readonly string[],
+      offending: readonly CfcConfClause[],
+    ): boolean => {
+      ownsStore ??= askRuntimeOwnership &&
+        tx.isRuntimeOwnedStore(space, id, runtimeWritePolicyAuthorization);
+      return ownsStore &&
+        // A schema that declares at this exact path owns the store's policy
+        // there; widening it from the join would make the walk's own re-mint
+        // non-monotone on the next write and brick the path under the
+        // declared-monotonicity gate. That store's route 2 is the author's,
+        // in the schema.
+        !remintedDeclaredPaths.has(pathKey(path)) &&
+        // The read-failed marker is ungrantable: a measurement the runtime
+        // could not take proves nothing about the audience, so it is outside
+        // every ceiling including one that names it. Declaring it would both
+        // admit a poisoned measurement and write a clause no reader can ever
+        // satisfy.
+        !offending.some(clauseBearsReadFailedMarker) &&
+        // A container clause is honored by a replica set, not by a reader
+        // check: §4.9.3 resolves it against that space's ACL, the document
+        // that also decides who holds the bytes. A store in THIS space cannot
+        // keep a promise made to another space's readers, which is why
+        // residency admits a clause naming another space only in its
+        // `PersonalSpace(owner)` spelling, and only into a scoped instance of
+        // that owner; another space's `Space` atom stays refused. Declaring a
+        // foreign one would put the bytes in front of this space's members
+        // under a promise made to somebody else's, so the route leaves that
+        // write to the refusal. A clause residency admits is not reachable
+        // here: residency covers it, so it is never offending.
+        !offending.some((clause) =>
+          clauseAlternatives(clause).some(namesAnotherSpace)
+        );
+    };
     // The stored value stamps, as the evidence an input witness reads, built
     // on the first destination that asks who wrote what it left in place.
     let storedEvidence: WitnessTrieNode | undefined;
@@ -14337,13 +14405,16 @@ export function* prepareBoundaryCommitSteps(
               measured.set(pathKey(path), path);
             }
           }
-          return [...measured.values()].every((path) =>
-            atomsOutsideCeiling(flowConfidentiality, [
+          // A misfit the runtime-owned-store route admits for the per-path
+          // stamps is one it admits for the whole value too.
+          return [...measured.values()].every((path) => {
+            const offending = atomsOutsideCeiling(flowConfidentiality, [
               ...(labelForEntriesAtPath(indexedEntriesAt(index, path), path)
                 ?.confidentiality ?? []) as readonly CfcConfClause[],
               ...residencyCeiling,
-            ]).length === 0
-          );
+            ]) as readonly CfcConfClause[];
+            return offending.length === 0 || ownedStoreAdmits(path, offending);
+          });
         },
         flowPreviousPresence,
         (path) => {
@@ -14873,43 +14944,10 @@ export function* prepareBoundaryCommitSteps(
       // whoever holds the bytes, so it needs no replica set to agree. An
       // owner that crossed a space boundary arrives as its `{digestOf}`
       // commitment, which answers this equality question the same way
-      // (§4.6.4.1).
-      const namesAnotherSpace = (alternative: unknown): boolean => {
-        if (!isObjectOrArray(alternative)) return false;
-        const atom = alternative as {
-          type?: unknown;
-          id?: unknown;
-          owner?: unknown;
-        };
-        if (atom.type === CFC_ATOM_TYPE.Space) return atom.id !== space;
-        if (atom.type === CFC_ATOM_TYPE.PersonalSpace) {
-          return !commitmentAwareEquals(atom.owner as FabricValue, space);
-        }
-        return false;
-      };
+      // (§4.6.4.1). `namesAnotherSpace` is that test.
       const declaredPolicyEntries = flowConfidentiality.length > 0
         ? persistedLabelEntries.filter(isDeclaredValuePolicyEntry)
         : [];
-      // Whether runtime ownership can admit a misfit at a rung that would
-      // reject. Lifetime enrollment and authenticated piece setup keep the
-      // misfit solely in derived stamps.
-      // `cfc-enforcement-matrix.md` §4 states the admission boundary; the
-      // remaining conditions are checked below.
-      //
-      // The route ACTS on the runtime's claim rather than measuring it, which
-      // is why the transaction answers only for markers that arrived carrying
-      // the runtime's authorization. `recordCfcWritePolicyInput` is on the
-      // public transaction interface, so an input's own fields say only what
-      // its recorder wrote. The two sibling markers in this file
-      // corroborate against transaction state instead, which suits a claim
-      // about a write that has already happened; this one is a claim about
-      // whose write it is.
-      const runtimeOwnedStore = askRuntimeOwnership &&
-        tx.isRuntimeOwnedStore(
-          target.space,
-          id,
-          runtimeWritePolicyAuthorization,
-        );
       // SC-4, freeze-at-creation form: a path's shape (existence) entry is
       // minted ONCE — at creation, or at the one-time migration of legacy
       // pre-class entries (whose accumulated confidentiality is absorbed
@@ -15113,37 +15151,8 @@ export function* prepareBoundaryCommitSteps(
             ],
           );
           if (
-            offending.length > 0 && runtimeOwnedStore &&
-            // A schema that declares at this exact path owns the store's
-            // policy there; widening it from the join would make the walk's
-            // own re-mint non-monotone on the next write and brick the path
-            // under the declared-monotonicity gate. That store's route 2 is
-            // the author's, in the schema.
-            !remintedDeclaredPaths.has(pathKey(path)) &&
-            // The read-failed marker is ungrantable: a measurement the
-            // runtime could not take proves nothing about the audience, so
-            // it is outside every ceiling including one that names it.
-            // Declaring it would both admit a poisoned measurement and
-            // write a clause no reader can ever satisfy.
-            !offending.some(clauseBearsReadFailedMarker) &&
-            // A container clause is honored by a replica set, not by a
-            // reader check: §4.9.3 resolves it against that space's ACL,
-            // the document that also decides who holds the bytes. A store
-            // in THIS space cannot keep a promise made to another space's
-            // readers, which is why residency admits a clause naming another
-            // space only in its `PersonalSpace(owner)` spelling, and only
-            // into a scoped instance of that owner; another space's `Space`
-            // atom stays refused. Declaring a foreign one would put the
-            // bytes in front of this space's members under a promise made to
-            // somebody else's, so the route leaves that write to the refusal
-            // below.
-            // A clause residency admits is not reachable here: residency
-            // covers it, so it is never offending.
-            !offending.some((clause) =>
-              clauseAlternatives(clause as CfcConfClause).some(
-                namesAnotherSpace,
-              )
-            )
+            offending.length > 0 &&
+            ownedStoreAdmits(path, offending as readonly CfcConfClause[])
           ) {
             const derivedOnly = tx.usesDerivedRuntimeOwnedStoreLabels(
               target.space,
