@@ -70,12 +70,13 @@ import {
   artifactsOf,
   type CorpusModule,
   corpusModules,
+  eventOrder,
   mainPattern,
   type ResultRow,
   runModule,
   wishStubs,
 } from "./corpus.ts";
-import { generateInputs } from "./generate.ts";
+import { generateEvent, generateInputs } from "./generate.ts";
 import { type LabeledInput, scenarioAudience } from "./harness.ts";
 import {
   type Figure,
@@ -1017,6 +1018,11 @@ export type ModuleLabels = {
     soundness?: Soundness;
     refused: string[];
     failedOn?: string;
+    /**
+     * The events are generated ones, one for each binding: the scenario of
+     * today's run committed none.
+     */
+    generated?: true;
   };
 };
 
@@ -1573,7 +1579,7 @@ export const checkSoundness = (
  * checks after every event of one scenario compare at most
  * (`soundnessAfterEachEvent`).
  */
-const STEPPED_PAIRS = 20_000;
+const STEPPED_PAIRS = 50_000;
 
 /**
  * The length of the text of a scenario's result above which the scenario is
@@ -1587,7 +1593,7 @@ const REPEATED_RESULT_LIMIT = 250_000;
  * event of one scenario, at most: a check reads the value at each stored
  * position from the result of each run.
  */
-const STEPPED_SIZE = 2_000_000;
+const STEPPED_SIZE = 5_000_000;
 
 /**
  * Runs `events` on the executor with its documents in storage and the option
@@ -1976,6 +1982,39 @@ export const compareModule = async (
       inputs,
       clauses,
     );
+  } else {
+    // A scenario with no committed event of today's run, of a pattern with
+    // handlers: one generated event for each binding, sent three times
+    // over, each at the last element that holds its stream.
+    const generated = eventOrder(
+      artifact.plan as Parameters<typeof eventOrder>[0],
+      "outside first",
+    ).map((binding) => ({
+      binding,
+      event: generateEvent(
+        artifact.plan as Parameters<typeof generateEvent>[0],
+        artifact.schemas as Parameters<typeof generateEvent>[1],
+        binding,
+      ),
+    }));
+    if (generated.length > 0) {
+      repeated = {
+        ...await soundnessAfterEachEvent(
+          artifact,
+          argument,
+          sentEvents(
+            artifact,
+            argument,
+            repeatedEvents(artifact.plan, artifact.schemas, generated),
+            options,
+          ),
+          options,
+          inputs,
+          clauses,
+        ),
+        generated: true,
+      };
+    }
   }
   const { rows, unmatched } = compareWithToday(
     plan,
@@ -2222,7 +2261,21 @@ const reportSoundness = (
       new Set(unstored.map(({ module }) => module)).size
     } modules`,
   );
-  return { failures, unstored };
+  const appended = ran.flatMap((result) =>
+    (result.soundness?.appended ?? []).map((each) => ({
+      module: result.module,
+      ...each,
+    }))
+  );
+  const afterOther = appended.filter((each) => each.afterOtherChange);
+  console.log(
+    `  no failure, a member that appends alone placed at another position in the run with the input changed (ruling Z74): ${appended.length} in ${
+      new Set(appended.map(({ module }) => module)).size
+    } modules, of them ${afterOther.length} in ${
+      new Set(afterOther.map(({ module }) => module)).size
+    } modules appended after another change of the list`,
+  );
+  return { failures, unstored, appended };
 };
 
 /**
@@ -2332,19 +2385,24 @@ const report = async (file: string, tables: string | undefined) => {
       } modules: ${reason}\n      e.g. ${group[0].module}`,
     );
   }
-  const { failures, unstored } = reportSoundness(
+  const once = reportSoundness(
     "stored labels checked against the values",
     ran.map((result) => ({
       module: result.module,
       soundness: result.soundness,
     })),
   );
+  const { failures, unstored } = once;
   const again = reportSoundness(
     "the same check with every event sent three times, each time with other values",
     ran.map((result) => ({
       module: result.module,
       soundness: result.repeated?.soundness,
     })),
+  );
+  const generatedAgain = ran.filter((result) => result.repeated?.generated);
+  console.log(
+    `  with one generated event for each binding, the scenario having committed none: ${generatedAgain.length} modules`,
   );
   const refusedAgain = ran.flatMap((result) =>
     [
@@ -2418,6 +2476,10 @@ const report = async (file: string, tables: string | undefined) => {
   await writeTable(`${tables}/soundness-unstored.tsv`, unstored);
   await writeTable(`${tables}/soundness-repeated-failures.tsv`, again.failures);
   await writeTable(`${tables}/soundness-repeated-unstored.tsv`, again.unstored);
+  await writeTable(`${tables}/soundness-appended.tsv`, [
+    ...once.appended.map((each) => ({ run: "as given", ...each })),
+    ...again.appended.map((each) => ({ run: "three times", ...each })),
+  ]);
   await writeTable(`${tables}/refused-repeated.tsv`, refusedAgain);
   await writeTable(`${tables}/refused-with-option-on.tsv`, refusedOnly);
   await writeTable(
