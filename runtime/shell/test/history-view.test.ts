@@ -1239,6 +1239,22 @@ describe("XHistoryView", () => {
     });
 
     describe("a reported seq", () => {
+      it("keeps a step's first commit as its identity when later commits extend it", async () => {
+        const { markup, follows, until } = await following([
+          { steps: [{ ...step(5), startSeq: 4 }] },
+          { steps: [{ ...step(7), startSeq: 4 }] },
+        ]);
+        expect(markup()).toContain('data-start-seq="4"');
+        expect(markup()).not.toContain('data-start-seq="5"');
+
+        const rendered = await until(
+          () => follows[0].onAdvance(7),
+          (markup) => markup.includes('data-seq="7"'),
+        );
+        expect(rendered).toContain('data-start-seq="4"');
+        expect(rendered).not.toContain('data-start-seq="7"');
+      });
+
       it("lists the newest stretch again, reusing the sources read, for a seq past the newest step listed", async () => {
         const { follows, listings, reuses, until } = await following([
           { steps: [step(4)] },
