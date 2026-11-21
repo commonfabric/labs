@@ -17,12 +17,13 @@ loads no rendering code.
 
 Adding a file is two steps, and the client does both:
 
-1. Store the bytes in the blob store of the store's space. The upload route is
-   `POST /<space>/blobs/<name>`, whose body is `{ type, body, name }` encoded
-   in the fabric JSON form, `type` the media type, `body` the bytes, and `name`
-   the file's name ([files](../../common/capabilities/files.md)). It returns the
-   blob's `id`, and a URL relative to the space's path. `cf-file-input` does
-   this step for a VDOM host.
+1. Store the bytes in the blob store of the store's space, with the runtime
+   client's `uploadBlob()`, giving the media type, the bytes and the file's
+   name ([files](../../common/capabilities/files.md)). The runtime writes the
+   blob's record in a commit on its own session in that space, so the upload
+   is admitted only for a principal the space's access list grants `WRITE`. It
+   returns the blob's `id` and the URL the space's host serves it at.
+   `cf-file-input` does this step for a VDOM host.
 2. Send the store's `add`, with the blob reference `{ space, id }`, and the
    name, the media type and the size the client stored.
 

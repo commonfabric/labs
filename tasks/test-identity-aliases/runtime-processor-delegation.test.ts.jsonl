@@ -1,0 +1,1 @@
+{"date":"2026-11-20","from":{"k":"unit","s":"runtime-client","n":"runtime-processor-delegation > blob requests > refuses an upload naming no space, or carrying no bytes, without fetching"},"to":{"k":"unit","s":"runtime-client","n":"runtime-processor-delegation > blob requests > refuses an upload naming no space, or carrying no bytes, without opening a transaction"}}
