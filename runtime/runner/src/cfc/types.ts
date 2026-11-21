@@ -887,6 +887,19 @@ export type SlotBinding =
      */
     readonly below?: readonly (readonly CfcAddress[])[];
     /**
+     * The containers whose members the read covered, each with the number
+     * of its members and of the groups of members whose positions hold
+     * equal labels. `chain` and `below` hold the positions of one member
+     * of each group and of no other member, so the label of the slot is the
+     * join over the groups, whatever the number of members. What the
+     * writer states here is not read to form the label.
+     */
+    readonly members?: readonly {
+      readonly container: CfcAddress;
+      readonly count: number;
+      readonly groups: number;
+    }[];
+    /**
      * The slot read the position at the end of `chain` after this
      * transaction wrote it: each position of the binding that the
      * transaction wrote takes the label staged there, and the others the

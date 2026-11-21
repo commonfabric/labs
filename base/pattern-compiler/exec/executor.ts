@@ -705,6 +705,81 @@ type Groups = {
 };
 
 /**
+ * One member of a container that `MemberGroups` groups: the links a read of
+ * the member crosses, the positions it ends at, each position as text, and
+ * the key of the labels the positions hold, absent where the store names no
+ * identifier for one of them.
+ */
+type Member = {
+  links: Address[];
+  ends: Address[];
+  texts: string[];
+  key: string | undefined;
+};
+
+/**
+ * The groups of the members of one stored array of references, for the
+ * reads of one observation class that reach, of what each member's link
+ * leads to, the positions at `fields` (provisional decision P31, extended
+ * from the elements of a `fold` to any read that covers the members of a
+ * container; ruling Z85). Two members are in one group where the labels the
+ * runtime observes at their positions are equal, so the label of a read
+ * that covers the container is the join over one member of each group. The
+ * table is formed by one walk of the members, and then brought up to date
+ * for the members whose positions or labels changed, and for no other.
+ */
+type MemberGroups = {
+  doc: string;
+  path: readonly string[];
+  observes: string;
+  /** The paths read below the position each member's link leads to. */
+  fields: readonly (readonly string[])[];
+  members: Map<string, Member>;
+  /** The members of each group, by the key of their labels. */
+  groups: Map<string, Set<string>>;
+  /** The members with no key: each is reported by itself. */
+  unknown: Set<string>;
+  /** The members whose positions or labels changed since they were placed. */
+  dirty: Set<string>;
+  /** The container changed otherwise than at a member: formed again whole. */
+  stale: boolean;
+  /** A member is no reference the table can place: the table covers none. */
+  declined: boolean;
+  /** The number of times the set of members changed. */
+  membership: number;
+  /** The members that have a position in each document other than `doc`. */
+  byDoc: Map<string, Set<string>>;
+  /** The records of outputs whose bindings name the container. */
+  records: Set<string>;
+};
+
+/**
+ * What a read that went through a list of positions covered of the
+ * containers among them (`Instance.#coveredMembers`): the positions that
+ * are of no covered member, and each container's table with the members
+ * the read did not go through every position of, whose positions stay
+ * among `rest`.
+ */
+type Cover = {
+  rest: Address[];
+  covers: { table: MemberGroups; uncovered: ReadonlySet<string> }[];
+  /** The position the read ended at. */
+  last: Address | undefined;
+};
+
+/**
+ * The cover found for what an evaluation bound a slot to, with what it is
+ * current against: the number of positions bound, the clock of the store,
+ * and for each table the number of changes of its set of members.
+ */
+type KeptCover = {
+  cover: Cover;
+  positions: number;
+  clock: number;
+  memberships: number[];
+};
+
+/**
  * The records of the plan that the writes being made belong to: each with
  * its template, and the document and path of its target where the record
  * names one. A record with no `doc` covers whatever is written.
@@ -737,6 +812,14 @@ type Writing = {
     start?: number;
   };
 };
+
+/** A position of a document, as text. */
+const positionText = (doc: string, path: readonly string[]): string =>
+  JSON.stringify([doc, path]);
+
+/** The name of the place of a container, by which its tables are found. */
+const memberGroupsPlace = (doc: string, path: readonly string[]): string =>
+  positionText(doc, path);
 
 /**
  * Whether a schema declares a label, at its root or below it, with every
@@ -2509,6 +2592,7 @@ export class Instance {
   ): void {
     const open = this.#tx;
     const hooks = this.options.transactions;
+    this.#memberDocumentChanged(change.doc, change.path, change.splice);
     if (hooks !== undefined && (open !== undefined || this.#outside)) {
       let path = change.covers ?? change.path;
       let { splice } = change;
@@ -7201,6 +7285,11 @@ export class Instance {
       seen.add(id);
       positions.push(address);
     };
+    for (const groups of this.#recordGroups.get(key) ?? []) {
+      groups.records.delete(key);
+    }
+    const reading = new Set<MemberGroups>();
+    this.#recordGroups.set(key, reading);
     const table = this.#inputsTable;
     const bindings = (slots: SlotBindings) => {
       for (const at of Object.values(slots)) {
@@ -7209,6 +7298,20 @@ export class Instance {
           read(binding.staged);
         }
         if (!("chain" in binding)) continue;
+        // A change of the label of a member no chain names changes the
+        // label of the record where it makes or empties a group, which the
+        // table of the container's groups finds.
+        for (const { container } of binding.members ?? []) {
+          for (
+            const groups of this.#memberGroupsAt.get(
+              memberGroupsPlace(container.doc, container.path),
+            ) ?? []
+          ) {
+            if (groups.observes !== binding.observes) continue;
+            groups.records.add(key);
+            reading.add(groups);
+          }
+        }
         for (const address of binding.chain) read(address);
         for (const chain of binding.below ?? []) {
           for (const address of chain) read(address);
@@ -8005,6 +8108,9 @@ export class Instance {
     for (const instance of new Set([this, ...this.#instances.values()])) {
       for (const key of instance.#regroupReaders(changes)) regrouped.add(key);
     }
+    // The records whose bindings name a container with a group that the
+    // change made or emptied.
+    for (const key of this.#memberLabelsChanged(changes)) regrouped.add(key);
     // Where the labels changed and no value did, nothing is evaluated
     // again, and the label of an output that read a changed label, or that
     // folds over a collection with an element that did, is formed again
@@ -8267,7 +8373,11 @@ export class Instance {
     for (const other of this.#slotsAtPosition(slot)) {
       const bound = boundOf(other);
       if (bound === undefined || !("at" in bound)) continue;
-      return { observes: record.observes, at: [...bound.at] };
+      return this.#derivedBound(
+        bound,
+        `same ${slot}`,
+        () => ({ observes: record.observes, at: [...bound.at] }),
+      );
     }
     return undefined;
   }
@@ -8299,13 +8409,13 @@ export class Instance {
       if (bound === undefined || !("at" in bound)) continue;
       const last = bound.at[bound.at.length - 1];
       if (last === undefined || last instanceof Ref) continue;
-      return {
+      return this.#derivedBound(bound, `elements ${slot}`, () => ({
         observes: record.observes,
         at: [
           ...bound.at.slice(0, -1),
           { doc: last.doc, path: [...last.path, ...record.path.slice(star)] },
         ],
-      };
+      }));
     }
     return undefined;
   }
@@ -8376,8 +8486,57 @@ export class Instance {
    * a read of a value that holds links makes. An `identity` slot observes
    * the reference at its last position and has one chain.
    */
-  #chainsOf(addresses: Address[], observes: string): SlotBinding {
-    if (observes === "identity") return { chain: addresses, observes };
+  #chainsOf(
+    given: Address[],
+    observes: string,
+    /** Containers whose members the read is known to have covered. */
+    presumed: readonly MemberGroups[] = [],
+  ): SlotBinding {
+    return this.#chainsOver(
+      this.#coveredMembers(given, observes, presumed),
+      observes,
+    );
+  }
+
+  /**
+   * The binding of a slot of the class `observes` to what a read covered
+   * (`#chainsOf`). The members of each container the read covered are named
+   * by one member of each group of the container's table, and by no other.
+   */
+  #chainsOver(cover: Cover, observes: string): SlotBinding {
+    const addresses = cover.rest;
+    const reported = cover.covers.map(({ table, uncovered }) => {
+      const members = this.#memberOfEachGroup(table, uncovered);
+      return {
+        members,
+        stated: {
+          container: { doc: table.doc, path: [...table.path] },
+          count: table.members.size - uncovered.size,
+          groups: members.length,
+        },
+      };
+    });
+    const stated = reported.length === 0
+      ? {}
+      : { members: reported.map((each) => each.stated) };
+    if (observes === "identity") {
+      if (reported.length === 0) return { chain: addresses, observes };
+      const chain = [...addresses];
+      for (const { members } of reported) {
+        for (const { links, ends } of members) {
+          for (const address of links) chain.push(address);
+          for (const address of ends) chain.push(address);
+        }
+      }
+      // The position the read ended at stays the last of the chain.
+      const { last } = cover;
+      const end = chain[chain.length - 1];
+      if (
+        last !== undefined &&
+        (end.doc !== last.doc || canonical(end.path) !== canonical(last.path))
+      ) chain.push(last);
+      return { chain, observes, ...stated };
+    }
     const chains: Address[][] = [];
     let current: Address[] = [];
     for (const address of addresses) {
@@ -8430,8 +8589,427 @@ export class Instance {
       }
     }
     const [chain = [], ...rest] = chains;
+    for (const { members } of reported) {
+      for (const { links, ends } of members) {
+        ends.forEach((end, index) =>
+          rest.push(index === 0 ? [...links, end] : [end])
+        );
+      }
+    }
     const below = this.#distinctByLabel(rest, observes);
-    return { chain, observes, ...(below.length === 0 ? {} : { below }) };
+    return {
+      chain,
+      observes,
+      ...(below.length === 0 ? {} : { below }),
+      ...stated,
+    };
+  }
+
+  /** On the root: the table of each container and class of read, by name. */
+  readonly #memberGroups = new Map<string, MemberGroups>();
+  /** On the root: the tables of each container, by its position. */
+  readonly #memberGroupsAt = new Map<string, Set<MemberGroups>>();
+  /**
+   * On the root: the tables with a position in each document, that of the
+   * container or one a member's link leads to.
+   */
+  readonly #memberGroupsOf = new Map<string, Set<MemberGroups>>();
+  /** On the root: the tables each record of an output reads. */
+  readonly #recordGroups = new Map<string, Set<MemberGroups>>();
+
+  /**
+   * What a read of the class `observes` that went through `addresses`
+   * covered: the containers among them whose members it went through, each
+   * by its table, and the addresses that are no position of a covered
+   * member. A container is a stored array of references through most of
+   * whose members the read went, to the same positions of what each link
+   * leads to; a member the read did not go through every position of is
+   * not covered, and its positions stay among the rest. The members of
+   * each of `presumed`, tables of another class of read of the same
+   * positions, are covered without being looked for. No container is
+   * covered where the store names no label identifiers.
+   */
+  #coveredMembers(
+    given: Address[],
+    observes: string,
+    presumed: readonly MemberGroups[] = [],
+  ): Cover {
+    const last = given[given.length - 1];
+    const covered = new Set<string>();
+    const covers: Cover["covers"] = [];
+    const taken = new Set<string>();
+    let addresses = given;
+    for (const other of presumed) {
+      const { doc, path, fields } = other;
+      const table = this.root.#memberGroupsFor(doc, path, observes, fields);
+      if (table === undefined) {
+        // No table of this class of read places the members: the read
+        // went through the positions of each of them.
+        addresses = [
+          ...addresses,
+          ...[...other.members.values()].flatMap(({ links, ends }) => [
+            ...links,
+            ...ends,
+          ]),
+        ];
+        continue;
+      }
+      taken.add(memberGroupsPlace(doc, path));
+      for (const member of table.members.values()) {
+        for (const text of member.texts) covered.add(text);
+      }
+      covers.push({ table, uncovered: new Set() });
+    }
+    const none: Cover = { rest: addresses, covers: [], last };
+    if (this.root.options.transactions?.labelOf === undefined) return none;
+    if (covers.length === 0 && addresses.length < 3) return none;
+    const texts = addresses.map(({ doc, path }) => positionText(doc, path));
+    const read = new Set(texts);
+    addresses.forEach(({ doc, path }, at) => {
+      if (covered.has(texts[at]) || addresses.length < 3) return;
+      const held = this.store.peek(doc, path);
+      if (!Array.isArray(held) || held.length === 0 || !isLink(held[0])) {
+        return;
+      }
+      if (taken.has(memberGroupsPlace(doc, path))) return;
+      const fields = this.#fieldsRead(doc, path, addresses);
+      if (fields === undefined) return;
+      const table = this.root.#memberGroupsFor(doc, path, observes, fields);
+      if (table === undefined) return;
+      const uncovered = new Set<string>();
+      for (const [name, member] of table.members) {
+        if (!member.texts.every((text) => read.has(text))) uncovered.add(name);
+      }
+      // A read that went through few of the members covers none.
+      if (uncovered.size * 2 > table.members.size) return;
+      for (const [name, member] of table.members) {
+        if (uncovered.has(name)) continue;
+        for (const text of member.texts) covered.add(text);
+      }
+      covers.push({ table, uncovered });
+    });
+    if (covers.length === 0) return none;
+    return {
+      rest: addresses.filter((_, at) => !covered.has(texts[at])),
+      covers,
+      last,
+    };
+  }
+
+  /**
+   * The paths, below the position the link of the first member of the
+   * array at `path` of `doc` leads to, of the positions among `addresses`
+   * in that document: what a read that went through `addresses` reached of
+   * the member. Nothing where the link leads into `doc` itself, or the read
+   * reached no position of the member.
+   */
+  #fieldsRead(
+    doc: string,
+    path: readonly string[],
+    addresses: readonly Address[],
+  ): string[][] | undefined {
+    const { ref } = this.#quietly(() =>
+      this.store.locate(new Ref(doc, [...path, "0"]), true)
+    );
+    if (ref.doc === doc) return undefined;
+    const fields: string[][] = [];
+    const seen = new Set<string>();
+    for (const address of addresses) {
+      if (
+        address.doc !== ref.doc || address.path.length < ref.path.length ||
+        !ref.path.every((segment, index) => segment === address.path[index])
+      ) continue;
+      const field = address.path.slice(ref.path.length);
+      const text = canonical(field);
+      if (seen.has(text)) continue;
+      seen.add(text);
+      fields.push(field);
+    }
+    return fields.length === 0 ? undefined : fields;
+  }
+
+  /**
+   * On the root: the table of the groups of the members of the array at
+   * `path` of `doc`, for the reads of the class `observes` that reach the
+   * positions at `fields` of each member, brought up to date. Nothing where
+   * a member is no reference the table can place.
+   */
+  #memberGroupsFor(
+    doc: string,
+    path: readonly string[],
+    observes: string,
+    fields: readonly (readonly string[])[],
+  ): MemberGroups | undefined {
+    const place = memberGroupsPlace(doc, path);
+    const name = `${observes}\n${place}\n${canonical(fields)}`;
+    let table = this.#memberGroups.get(name);
+    if (table === undefined) {
+      table = {
+        doc,
+        path: [...path],
+        observes,
+        fields,
+        members: new Map(),
+        groups: new Map(),
+        unknown: new Set(),
+        dirty: new Set(),
+        stale: true,
+        declined: false,
+        membership: 0,
+        byDoc: new Map(),
+        records: new Set(),
+      };
+      this.#memberGroups.set(name, table);
+      const held = this.#memberGroupsAt.get(place) ?? new Set();
+      held.add(table);
+      this.#memberGroupsAt.set(place, held);
+      this.#indexGroups(table, doc);
+    }
+    return this.#refreshGroups(table) ? table : undefined;
+  }
+
+  /** On the root: keeps `table` as one with a position in `doc`. */
+  #indexGroups(table: MemberGroups, doc: string): void {
+    const held = this.#memberGroupsOf.get(doc) ?? new Set();
+    held.add(table);
+    this.#memberGroupsOf.set(doc, held);
+  }
+
+  /**
+   * On the root: brings a table up to date: places again the members
+   * whose positions or labels changed and those with no key, and forms the
+   * table again whole where the container changed otherwise than at a
+   * member. Returns whether the table covers the container. The work is
+   * the number of members placed.
+   */
+  #refreshGroups(table: MemberGroups): boolean {
+    // A table that covers nothing stays so until something changes.
+    if (table.declined && !table.stale && table.dirty.size === 0) return false;
+    const array = this.store.peek(table.doc, table.path);
+    if (!Array.isArray(array)) {
+      this.#clearGroups(table);
+      table.declined = true;
+      return false;
+    }
+    let whole = table.stale || table.declined;
+    if (!whole) {
+      for (const member of [...table.dirty, ...table.unknown]) {
+        if (!/^(0|[1-9][0-9]*)$/.test(member)) continue;
+        if (Number(member) >= array.length) {
+          if (table.members.has(member)) {
+            this.#leaveGroups(table, member);
+            table.membership += 1;
+          }
+        } else if (!this.#placeMember(table, member)) {
+          whole = true;
+          break;
+        }
+      }
+      table.dirty.clear();
+      if (table.members.size !== array.length) whole = true;
+    }
+    if (!whole) return true;
+    this.#clearGroups(table);
+    for (let index = 0; index < array.length; index++) {
+      if (!this.#placeMember(table, `${index}`)) {
+        this.#clearGroups(table);
+        table.declined = true;
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** On the root: empties a table, as one that is formed again whole. */
+  #clearGroups(table: MemberGroups): void {
+    table.members.clear();
+    table.groups.clear();
+    table.unknown.clear();
+    table.dirty.clear();
+    table.byDoc.clear();
+    table.stale = false;
+    table.declined = false;
+    table.membership += 1;
+  }
+
+  /** On the root: takes a member out of its group and out of the table. */
+  #leaveGroups(table: MemberGroups, member: string): void {
+    const held = table.members.get(member);
+    if (held === undefined) return;
+    table.members.delete(member);
+    table.unknown.delete(member);
+    if (held.key === undefined) return;
+    const group = table.groups.get(held.key);
+    group?.delete(member);
+    if (group?.size === 0) table.groups.delete(held.key);
+  }
+
+  /**
+   * On the root: finds the positions a read of a member goes through and
+   * the key of their labels, and puts the member in the group of that key.
+   * Returns whether the member is a reference the table can place: one
+   * that holds a link, whose positions at the table's fields hold none.
+   */
+  #placeMember(table: MemberGroups, member: string): boolean {
+    const { doc, path, observes } = table;
+    if (!isLink(this.store.peek(doc, [...path, member]))) return false;
+    const crossed: Position[] = [];
+    const { ref } = this.#quietly(() =>
+      this.store.locate(new Ref(doc, [...path, member]), true, crossed)
+    );
+    const links: Address[] = [];
+    for (const { doc: at, path: below, keyed } of crossed) {
+      if (keyed !== undefined) continue;
+      if (at === ref.doc && canonical(below) === canonical(ref.path)) continue;
+      links.push({ doc: at, path: [...below] });
+    }
+    const ends = table.fields.map((field) => ({
+      doc: ref.doc,
+      path: [...ref.path, ...field],
+    }));
+    if (
+      links.length === 0 ||
+      ends.some((end) => isLink(this.store.peek(end.doc, end.path)))
+    ) return false;
+    const keys = [...links, ...ends].map((address) =>
+      this.#labelKey(address, observes)
+    );
+    const key = keys.includes(undefined) ? undefined : JSON.stringify(keys);
+    const added = !table.members.has(member);
+    this.#leaveGroups(table, member);
+    table.members.set(member, {
+      links,
+      ends,
+      texts: [...links, ...ends].map(({ doc: at, path: below }) =>
+        positionText(at, below)
+      ),
+      key,
+    });
+    if (added) table.membership += 1;
+    if (key === undefined) table.unknown.add(member);
+    else {
+      const group = table.groups.get(key) ?? new Set();
+      group.add(member);
+      table.groups.set(key, group);
+    }
+    for (const { doc: at } of [...links, ...ends]) {
+      if (at === doc) continue;
+      const held = table.byDoc.get(at) ?? new Set();
+      held.add(member);
+      table.byDoc.set(at, held);
+      this.#indexGroups(table, at);
+    }
+    return true;
+  }
+
+  /**
+   * One member of each group of a table, and each member with no key, of
+   * the members that are not in `uncovered`: the members whose positions a
+   * binding names for the container. The work is the number of groups and
+   * of uncovered members.
+   */
+  #memberOfEachGroup(
+    table: MemberGroups,
+    uncovered: ReadonlySet<string>,
+  ): Member[] {
+    const found: Member[] = [];
+    for (const group of table.groups.values()) {
+      for (const member of group) {
+        if (uncovered.has(member)) continue;
+        found.push(table.members.get(member)!);
+        break;
+      }
+    }
+    for (const member of table.unknown) {
+      if (!uncovered.has(member)) found.push(table.members.get(member)!);
+    }
+    return found;
+  }
+
+  /**
+   * On the root: a document changed at `path`. A table with a position of
+   * a member in the document places that member again, a table whose
+   * container the change is below places the member it is at or below, one
+   * whose container gained members at its end places those, and one whose
+   * container changed otherwise is formed again whole. The work is the
+   * number of tables with a position in the document.
+   */
+  #memberDocumentChanged(
+    doc: string,
+    path: readonly string[],
+    splice: { start: number; removed: number; inserted: number } | undefined,
+  ): void {
+    for (const table of this.#memberGroupsOf.get(doc) ?? []) {
+      for (const member of table.byDoc.get(doc) ?? []) table.dirty.add(member);
+      if (doc !== table.doc) continue;
+      const shared = Math.min(path.length, table.path.length);
+      if (
+        !table.path.slice(0, shared).every((segment, at) =>
+          segment === path[at]
+        )
+      ) continue;
+      if (path.length > table.path.length) {
+        table.dirty.add(path[table.path.length]);
+      } else if (
+        path.length === table.path.length && splice !== undefined &&
+        splice.removed === 0 && splice.start === table.members.size &&
+        !table.stale
+      ) {
+        for (let added = 0; added < splice.inserted; added++) {
+          table.dirty.add(`${splice.start + added}`);
+        }
+      } else table.stale = true;
+    }
+  }
+
+  /**
+   * On the root: the labels of documents changed. Places again the members
+   * of each table that have a position at, above or below a changed label
+   * entry, and returns the records that read a table where that made or
+   * emptied a group: the label of a read that covers the container is the
+   * join over its groups, which a member that moves between two groups
+   * that both stay leaves as it was. The work is the number of members
+   * placed.
+   */
+  #memberLabelsChanged(changes: readonly LabelChange[]): Set<string> {
+    const found = new Set<string>();
+    const touched = new Set<MemberGroups>();
+    for (const { doc, paths } of changes) {
+      for (const table of this.#memberGroupsOf.get(doc) ?? []) {
+        touched.add(table);
+        for (const member of table.byDoc.get(doc) ?? []) {
+          table.dirty.add(member);
+        }
+        if (doc !== table.doc) continue;
+        for (const path of paths) {
+          const shared = Math.min(path.length, table.path.length);
+          if (
+            !table.path.slice(0, shared).every((segment, at) =>
+              segment === path[at]
+            )
+          ) continue;
+          const member = path[table.path.length];
+          // An entry at the container, above it, or at `*` below it is
+          // one every member's link position can take its label from.
+          if (member === undefined || member === "*") {
+            for (const each of table.members.keys()) table.dirty.add(each);
+          } else table.dirty.add(member);
+        }
+      }
+    }
+    for (const table of touched) {
+      if (table.records.size === 0) continue;
+      const before = canonical([...table.groups.keys()].sort());
+      const unknown = table.unknown.size;
+      const covers = this.#refreshGroups(table);
+      if (
+        !covers || table.unknown.size !== unknown ||
+        canonical([...table.groups.keys()].sort()) !== before
+      ) {
+        for (const key of table.records) found.add(key);
+      }
+    }
+    return found;
   }
 
   /**
@@ -8712,6 +9290,22 @@ export class Instance {
       }
       return { chain: [], observes: this.plan.slots[slot].observes };
     }
+    const { root } = this.plan.slots[slot];
+    const wish = root.kind === "operation" &&
+      this.plan.operations[root.operation ?? -1]?.kind === "wish";
+    // What the read covered is found once for the bound positions, while
+    // the documents of the positions outside the covered containers and
+    // the sets of members of those containers stay as they are.
+    const kept = wish ? undefined : this.root.#covers.get(bound);
+    if (
+      kept !== undefined && kept.positions === bound.at.length &&
+      kept.cover.covers.every(({ table }, at) =>
+        this.root.#refreshGroups(table) &&
+        table.membership === kept.memberships[at]
+      ) && !this.store.changedSince(kept.clock, kept.cover.rest)
+    ) {
+      return this.#chainsOver(kept.cover, bound.observes);
+    }
     let chain = this.#addressesOf(bound.at);
     if (chain.length === 0) {
       const source = this.#sourceReadBinding(slot, keys) ??
@@ -8722,19 +9316,58 @@ export class Instance {
     // is: a read of the mark of a failure in its state document, which
     // holds nothing, is bound to the outcome, whose label is that of the
     // resolution (PL §3.19).
-    const { root } = this.plan.slots[slot];
-    if (
-      root.kind === "operation" &&
-      this.plan.operations[root.operation ?? -1]?.kind === "wish"
-    ) {
+    if (wish) {
       chain = chain.map(({ doc, path }) =>
         path.length === 1 && path[0] === FAILED &&
           this.store.peek(doc, path) === undefined
           ? { doc, path: [OUTCOME] }
           : { doc, path }
       );
+      return this.#chainsOf(chain, bound.observes);
     }
-    return this.#chainsOf(chain, bound.observes);
+    const cover = this.#coveredMembers(chain, bound.observes);
+    if (cover.covers.length > 0) {
+      this.root.#covers.set(bound, {
+        cover,
+        positions: bound.at.length,
+        clock: this.store.clock,
+        memberships: cover.covers.map(({ table }) => table.membership),
+      });
+    }
+    return this.#chainsOver(cover, bound.observes);
+  }
+
+  /**
+   * On the root: the cover found for what an evaluation bound a slot to,
+   * where the read covered a container, by the bound positions.
+   */
+  readonly #covers = new WeakMap<object, KeptCover>();
+
+  /**
+   * On the root: what `#elementsBound` and `#samePositionBound` made of
+   * what another slot was bound to, by that and by the slot, so that the
+   * cover of one bound is found once.
+   */
+  readonly #derived = new WeakMap<object, Map<string, Bound>>();
+
+  /**
+   * What `make` gives for `slot` from `source`, what another slot was
+   * bound to: made once while `source` holds the positions it held.
+   */
+  #derivedBound(
+    source: Extract<Bound, { at: unknown }>,
+    slot: string,
+    make: () => Bound,
+  ): Bound {
+    const held = this.root.#derived.get(source) ?? new Map<string, Bound>();
+    this.root.#derived.set(source, held);
+    const name = `${slot}\n${source.at.length}`;
+    let bound = held.get(name);
+    if (bound === undefined) {
+      bound = make();
+      held.set(name, bound);
+    }
+    return bound;
   }
 
   /**
@@ -9720,11 +10353,23 @@ export class Instance {
             seen.add(id);
             return true;
           });
+          // The members of a container the reference's read covered are
+          // covered by the read of the value: the positions are the same,
+          // and their labels as values are grouped by a table of their own.
+          const presumed = (binding.members ?? []).flatMap(({ container }) =>
+            [
+              ...this.root.#memberGroupsAt.get(
+                memberGroupsPlace(container.doc, container.path),
+              ) ?? [],
+            ].filter((groups) => groups.observes === "identity")
+          );
           return table.place({
             ...place,
             slots: {
               ...place.slots,
-              [at.slot]: table.binding(this.#chainsOf(addresses, "value")),
+              [at.slot]: table.binding(
+                this.#chainsOf(addresses, "value", presumed),
+              ),
             },
           });
         }

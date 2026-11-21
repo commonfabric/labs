@@ -712,6 +712,41 @@ describe("cfc-plan-labels", () => {
         });
       });
 
+      it("forms the label of a slot from the chains of its binding, with one chain for each group of the members the binding states it covers", async () => {
+        await withSources((_runtime, tx, identity, target) => {
+          // The binding stands for five members of a container in two
+          // groups: one chain of a member of each.
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, {
+              inputs: [{ slots: { 0: 0 } }],
+              bindings: [{
+                chain: [address("of:src-a")],
+                observes: "value",
+                below: [[address("of:src-b")]],
+                members: [{
+                  container: address("of:src-a", ["items"]),
+                  count: 5,
+                  groups: 2,
+                }],
+              }],
+            }),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "a", 0, 0),
+            runtimeWritePolicyAuthorization,
+          );
+
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+
+          expect(labels.reasons).toEqual([]);
+          expect(confidentialityAt(labels, target, "a").sort()).toEqual([
+            "secret-a",
+            "secret-b",
+          ]);
+        });
+      });
+
       it("ignores a part of the table recorded without the runtime's authorization", async () => {
         await withSources((_runtime, tx, identity, target) => {
           tx.recordCfcWritePolicyInput(

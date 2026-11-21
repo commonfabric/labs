@@ -46,6 +46,15 @@ export type SlotBinding =
      * link positions crossed on the way to it first and the position last.
      */
     below?: Address[][];
+    /**
+     * The containers whose members the read covered, each with the number
+     * of its members and of the groups of members whose positions hold
+     * equal labels (provisional decision P31, as for the elements of a
+     * `fold`). `chain` and `below` hold the positions of one member of each
+     * group, and of no other member: the label of the slot is the join
+     * over the groups.
+     */
+    members?: { container: Address; count: number; groups: number }[];
   }
   | { staged: Address }
   | { output: number }

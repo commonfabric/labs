@@ -979,6 +979,13 @@ export class RuntimeTransactions implements TransactionHooks {
           chain.map((address) => this.#cfcAddress(address))
         ),
       }),
+      ...(binding.members === undefined ? {} : {
+        members: binding.members.map(({ container, count, groups }) => ({
+          container: this.#cfcAddress(container),
+          count,
+          groups,
+        })),
+      }),
       ...(staged ? { staged: true as const } : {}),
     };
   }

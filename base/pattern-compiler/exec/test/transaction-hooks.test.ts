@@ -14,7 +14,7 @@ import {
   nestedWrite,
   type PlanWrite as IndexedWrite,
 } from "../plan-write.ts";
-import { argumentOf, type Store, type Undo } from "../store.ts";
+import { argumentOf, Ref, type Store, type Undo } from "../store.ts";
 
 const artifactOf = async (name: string): Promise<Artifact> => {
   const [{ patterns }] = JSON.parse(
@@ -985,6 +985,124 @@ describe("the positions a slot's read reached through links", () => {
 
     expect(few).toBeGreaterThanOrEqual(3);
     expect(await chainsBelow(30, (doc) => doc)).toBe(few * 10);
+  });
+});
+
+// `fixtures/whole-after-push.tsx`: `all` is a text of everything the list
+// `items` holds, given here as references to a document each: an array of
+// references. The read of the list goes through each link to its record.
+describe("a read that covers the members of an array of references", () => {
+  /**
+   * An instance over `count` records, each a document of its own, with the
+   * label each document is given by its name, `plain` where it has none.
+   */
+  const over = async (count: number, labels = new Map<string, string>()) => {
+    const asked: string[] = [];
+    const recorder = new Recorder((doc, path, observes) => {
+      asked.push(doc);
+      // A link of the list as a reference is labeled as its position is.
+      return doc.startsWith("item-")
+        ? labels.get(doc) ?? "plain"
+        : observes === "identity"
+        ? "link"
+        : `${path.length === 2 ? "member" : path.join("/")}`;
+    });
+    const documents = Array.from({ length: count }, (_, index) => ({
+      id: `item-${index}`,
+      kind: "input",
+      value: { note: `n${index}`, amount: index },
+    }));
+    const instance = new Instance(
+      await artifactOf("whole-after-push"),
+      { items: documents.map(({ id }) => ({ $link: { doc: id, path: [] } })) },
+      { transactions: recorder, documents },
+    );
+    /** The binding of the slot of the last record given for `all`. */
+    const binding = () => {
+      const given = [
+        ...recorder.changed.flatMap(({ writes }) => writes ?? []),
+        ...recorder.left.flatMap(({ writes }) => writes),
+      ].filter(({ target }) => target.path.join("/") === "all");
+      const [found] = Object.values(given[given.length - 1]?.slots ?? {});
+      if (found === undefined || !("chain" in found)) {
+        throw new Error("The record of `all` binds no slot to a chain.");
+      }
+      return found;
+    };
+    return { instance, recorder, asked, labels, binding };
+  };
+
+  it("binds the slot to one chain for each distinct label of the members, and names the container with its numbers of members and of groups", async () => {
+    const { instance, binding } = await over(
+      6,
+      new Map([["item-2", "secret"], ["item-4", "secret"]]),
+    );
+
+    const found = binding();
+
+    expect(found.below?.length).toBe(2);
+    expect(found.members).toEqual([{
+      container: { doc: instance.argument, path: ["items"] },
+      count: 6,
+      groups: 2,
+    }]);
+  });
+
+  it("asks, where one member changed, for as many labels among 1,000 members as among 10", async () => {
+    const asks = async (count: number) => {
+      const { instance, asked, binding } = await over(count);
+      asked.length = 0;
+      instance.store.write(new Ref("item-1", ["amount"]), 99);
+      instance.settle();
+      expect(binding().members?.[0].count).toBe(count);
+      return asked.length;
+    };
+
+    const small = await asks(10);
+
+    expect(small).toBeGreaterThan(0);
+    expect(await asks(1_000)).toBe(small);
+  });
+
+  it("moves a member whose label changed to the group of its label, and forms the label of the output that read the list again", async () => {
+    const { instance, recorder, labels, binding } = await over(8);
+    expect(binding().members?.[0].groups).toBe(1);
+
+    labels.set("item-5", "secret");
+    recorder.labelsChanged?.([{ doc: "item-5", paths: [[]] }], true);
+    instance.dispatch();
+
+    expect(
+      recorder.left.flatMap(({ writes }) =>
+        writes.map(({ target, relabel }) =>
+          `${relabel ? "label of " : ""}/${target.path.join("/")}`
+        )
+      ),
+    ).toEqual(["label of /all"]);
+    const found = binding();
+    expect(found.below?.length).toBe(2);
+    expect(found.members?.[0]).toMatchObject({ count: 8, groups: 2 });
+  });
+
+  it("gives no record again where the label of a member changed to one another member has", async () => {
+    const { instance, recorder, labels } = await over(
+      8,
+      new Map([["item-1", "secret"], ["item-2", "secret"]]),
+    );
+
+    labels.set("item-5", "secret");
+    recorder.labelsChanged?.([{ doc: "item-5", paths: [[]] }], true);
+    instance.dispatch();
+
+    expect(recorder.left).toEqual([]);
+  });
+
+  it("counts a member the list gains in the group of its label", async () => {
+    const { instance, binding } = await over(4);
+
+    instance.send(bindingOf(instance, "append"), {});
+
+    expect(binding().members?.[0].count).toBe(5);
   });
 });
 
