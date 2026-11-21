@@ -184,8 +184,7 @@
     },
     "required": [
       "catalog",
-      "view",
-      "shown"
+      "view"
     ],
     "type": "object"
   },

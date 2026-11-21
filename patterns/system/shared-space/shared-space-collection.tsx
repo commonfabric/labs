@@ -65,7 +65,7 @@ export interface SharedSpaceCollectionInput {
    * rows, so a host that keeps it in a panel it hides, as Home's tabs do, runs
    * nothing for each entry until the panel is shown.
    */
-  shown: Default<boolean, true>;
+  shown?: Default<boolean, true>;
 }
 
 /** The browser's UI and session-local controls. */
@@ -108,7 +108,7 @@ const SharedSpaceCollection = pattern<
       : []),
   ]);
   const rows = computed(() => {
-    if (!shown || view.status !== "ready") return [];
+    if (shown === false || view.status !== "ready") return [];
     const state = membership.get();
     const entries = state === "saved"
       ? view.saved
@@ -128,7 +128,7 @@ const SharedSpaceCollection = pattern<
     );
   });
   const empty = computed(() =>
-    shown && view.status === "ready" && rows.length === 0
+    shown !== false && view.status === "ready" && rows.length === 0
   );
   const conflictText = computed(() =>
     conflict.get() === "revision"
