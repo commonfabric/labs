@@ -26,9 +26,10 @@
  *
  * Each phase prints its wall time, how many pieces a serving runtime runs
  * in each space, what the serving loop counted, the derived commits of each
- * space, and the main-thread time of each request the memory server
- * answered, among them the carried demand it was handed, and how many
- * carried rows stood in the source's demand set at the most.
+ * space, the main-thread time of the memory server's currency requests the
+ * probe wraps (the advance, the store of records, the judgment and the
+ * carried demand it was handed), and how many carried rows stood in the
+ * source's demand set at the most.
  *
  *   deno run -A --config deno.jsonc \
  *     skills/perf-investigation/scripts/currency-carried-probe.ts <pieces> <viewers>
@@ -125,7 +126,7 @@ type Run = {
   /** The serving runtimes the host made, each with the space it serves. */
   servingRuntimes: Array<{ space: MemorySpace; runtime: Runtime }>;
 
-  /** Main-thread time, in ms, of each request the server answered. */
+  /** Main-thread time, in ms, of each currency request the probe wraps. */
   requestMs: Record<string, { calls: number; ms: number }>;
 
   /** What the carried demand the server was handed came to. */
