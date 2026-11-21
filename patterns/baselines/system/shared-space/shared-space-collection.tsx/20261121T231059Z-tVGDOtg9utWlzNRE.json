@@ -173,10 +173,9 @@
           "cell"
         ]
       },
-      "shown": {
-        "default": true,
-        "description": "Whether the list is on screen. While it is not, the browser derives no\nrows, so a host that keeps it in a panel it hides, as Home's tabs do, runs\nnothing for each entry until the panel is shown.",
-        "type": "boolean"
+      "selectedTab": {
+        "description": "The tab its host has selected, from a host that shows the browser in the\ntab {@link SOCIAL_SPACES_TAB} names. While another tab is selected the\nbrowser derives no rows, so the host's hidden panel runs nothing for each\nentry. Without it the list is shown.",
+        "type": "string"
       },
       "view": {
         "$ref": "#/$defs/SharedSpaceCollectionView"
