@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -589,6 +590,98 @@ describe("cfc-processed-claim", () => {
         .set("handled");
       return tx;
     };
+
+    /**
+     * The `symbol`s of the `TransformedBy` atoms `tx` stages on document `id`,
+     * on label entries at `path` or below it.
+     */
+    const stagedTransformedBy = (
+      tx: ReturnType<Runtime["edit"]>,
+      id: URI,
+      path: readonly string[],
+    ): string[] =>
+      ((tx.readOrThrow({ space, scope: "space", id, path: [] }) as
+        | { cfc?: StoredCfcMetadata }
+        | undefined)?.cfc?.labelMap.entries ?? [])
+        .filter((entry) => path.every((key, i) => entry.path[i] === key))
+        .flatMap((entry) =>
+          isCfcLabelReference(entry.label) ? [] : entry.label.integrity ?? []
+        )
+        .flatMap((atom) =>
+          typeof atom === "object" && atom !== null &&
+            "type" in atom && atom.type === CFC_ATOM_TYPE.TransformedBy &&
+            "identity" in atom &&
+            typeof (atom.identity as { symbol?: unknown })?.symbol === "string"
+            ? [(atom.identity as { symbol: string }).symbol]
+            : []
+        );
+
+    it("stamps the handler's TransformedBy on what it wrote and none on the claim", async () => {
+      // The summary and the join's stamp leave out the same write: were the
+      // claim counted out of the one and stamped by the other, the handler
+      // would be named on bytes the runtime wrote. The handler reads a value
+      // labeled with the stream's own space, and writes a document declared
+      // to hold that, so its output fits and the run prepares.
+      const LOCAL_ATOM = cfcAtom.space(space);
+      const localId = runtime.getCell(space, "local-source", undefined)
+        .getAsNormalizedFullLink().id;
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      seedStoredEnvelope(seed, {
+        space,
+        scope: "space",
+        id: localId,
+        path: [],
+      }, {
+        value: { secret: "local" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: ["secret"],
+              label: { confidentiality: [LOCAL_ATOM] },
+            }],
+          },
+        },
+      });
+      expect((await seed.commit().settled).error).toBeUndefined();
+
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "stamped-handler",
+        kind: "event-handler",
+      });
+      writeProcessedClaim(
+        runtime,
+        tx,
+        space,
+        { sidecarId: entriesId, index: 0 },
+        { clearDeferral: true },
+      );
+      setCfcImplementationIdentity(tx, HANDLER);
+      const read = runtime.getCellFromLink(
+        { space, scope: "space", id: localId, path: [] },
+        undefined,
+        tx,
+      ).getRaw() as { secret?: string };
+      expect(read.secret).toBe("local");
+      const out = runtime.getCell<string>(
+        space,
+        "stamped-handler-out",
+        { type: "string", ifc: { confidentiality: [LOCAL_ATOM] } } as const,
+        tx,
+      );
+      out.set("handled");
+      tx.prepareCfc();
+      expect(tx.getCfcState().prepare.status).toBe("prepared");
+      expect(
+        stagedTransformedBy(tx, out.getAsNormalizedFullLink().id, []),
+      ).toEqual(["advance"]);
+      expect(stagedTransformedBy(tx, entriesId, ["entries", "0"])).toEqual([]);
+      tx.abort();
+    });
 
     for (const clearDeferral of [false, true]) {
       it(

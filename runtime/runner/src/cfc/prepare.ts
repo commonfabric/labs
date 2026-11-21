@@ -6104,7 +6104,9 @@ const deriveFlowJoinImpl = (
   // and the input witnesses retained beside it (`input-witness.ts`). The
   // flow join is one per-tx label stamped on every written doc, so the
   // identity must hold for the whole tx: minted only when every
-  // non-privileged write was authored under the same defined identity,
+  // non-privileged write was authored under the same defined identity (a
+  // served event's processed claim, the runtime's write and outside the
+  // stamp, is not one of them),
   // captured at write time (see `CfcTxState.writeIdentity`) — not whichever
   // identity is current at prepare, which a later run in the same tx may
   // have changed and which an unattributed write must not borrow. Ambiguity

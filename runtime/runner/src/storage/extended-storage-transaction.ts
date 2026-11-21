@@ -2004,6 +2004,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         }));
       }
     }
+    // Sound only while the join's stamp leaves the same write out
+    // (`isProcessedClaimPath()` in `cfc/prepare.ts`): were the claim to take
+    // the join, this would put `TransformedBy` on bytes the runtime wrote.
+    // The two go together.
     if (
       !unmarked && current === undefined && written !== undefined &&
       this.#isProcessedClaimWrite(address, written.value)

@@ -550,7 +550,12 @@ The strict-only delta is:
   The serving loop names each such path as it writes it
   (`writeProcessedClaim()` in `runtime/runner/src/executor/processed-claim.ts`)
   under the runtime-authorized `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM`
-  marker, which the gate takes only on a stream's entries document. Every
+  marker, which the gate takes only on a stream's entries document. For the
+  same reason the claim is outside the transaction's authorship summary
+  (§8.9.3): a run whose own writes are all its handler's is attributed to the
+  handler, so they carry `TransformedBy`, while the claim, unstamped, carries
+  none. Only the claim's own value, written under no identity at a path the
+  runtime named, is left out, the write the stamp leaves out too. Every
   other write the transaction makes, an entry it appends or a field it writes
   beside the mark included, is measured and stamped as above, so a handler
   over another space's labeled value still cannot carry it into the stream's
