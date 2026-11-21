@@ -1528,7 +1528,9 @@ describe("the label of a position of the result of a `map`", () => {
       instance: Instance,
       ids: readonly string[],
       write: (doc: string, path: string[], value: unknown) => Promise<void>,
+      items: string,
     ) => Promise<void> | void,
+    initial: (ids: readonly string[]) => readonly string[] = (ids) => ids,
   ) => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     const space = signer.did();
@@ -1575,7 +1577,7 @@ describe("the label of a position of the result of a `map`", () => {
           }),
       );
       const link = (doc: string) => ({ $link: { doc, path: [] } });
-      const items = ids.map(link);
+      const items = initial(ids).map(link);
       const notes = Array.from(
         { length: size },
         (_, index) => ({ text: `n${index}` }),
@@ -1596,7 +1598,7 @@ describe("the label of a position of the result of a `map`", () => {
         instance.store.write(new Ref(doc, path), value);
         instance.settle();
         expect(await hooks.settled()).toEqual([]);
-      });
+      }, given.items.$link.doc);
       expect(await hooks.settled()).toEqual([]);
       const read = runtime.edit();
       try {
@@ -1658,6 +1660,47 @@ describe("the label of a position of the result of a `map`", () => {
     });
 
     holdsAll(sorted, ["item-0", "item-1", "item-2"]);
+    holdsAll(nested, ["item-0", "item-1", "item-2"]);
+  });
+
+  it("joins the label of an item a writer adds into every row, where the item is ranked last", async () => {
+    // Item 0 has the highest rank, so its row is added at the end of
+    // `sorted`: that it stands there, and that no row before it moved, was
+    // decided by its rank.
+    const { sorted, nested } = await rows(
+      3,
+      async (_, ids, write, items) => {
+        await write(
+          items,
+          [],
+          [ids[1], ids[2], ids[0]].map((doc) => ({ $link: { doc, path: [] } })),
+        );
+      },
+      (ids) => [ids[1], ids[2]],
+    );
+
+    expect(sorted.length).toBe(3);
+    holdsAll(sorted, ["item-0", "item-1", "item-2"]);
+    expect(nested.length).toBe(6);
+    holdsAll(nested, ["item-0", "item-1", "item-2"]);
+  });
+
+  it("joins the label of an item a writer adds into every row, where the item is ranked first", async () => {
+    const { sorted, nested } = await rows(
+      3,
+      async (_, ids, write, items) => {
+        await write(
+          items,
+          [],
+          ids.map((doc) => ({ $link: { doc, path: [] } })),
+        );
+      },
+      (ids) => [ids[0], ids[1]],
+    );
+
+    expect(sorted.length).toBe(3);
+    holdsAll(sorted, ["item-0", "item-1", "item-2"]);
+    expect(nested.length).toBe(6);
     holdsAll(nested, ["item-0", "item-1", "item-2"]);
   });
 
