@@ -92,7 +92,9 @@ handler's commit, unsent.
   either is refused before anything is sent, and the store's upload route
   answers one past 10 MiB with 413.
 - An upload made while its space's connection is down waits for the
-  connection, and is sent and settles once it is back, rather than failing.
+  connection, and is sent and settles once it is back. It fails instead when
+  its session closes or is replaced meanwhile, or when its own write fails on
+  one new connection after another.
 - A blob is addressed by the hash of its media type, its bytes, and the name
   it was stored with, if any, so the same file uploaded twice under the same
   name has the same id, and under two names has two. The URL is that id plus a

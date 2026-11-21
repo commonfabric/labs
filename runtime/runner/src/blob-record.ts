@@ -106,7 +106,9 @@ export function blobSuffix(fileName: string | undefined, type: string): string {
     ? fileName.split(".").pop()
     : undefined;
   if (extension && VALID_SUFFIX.test(extension)) return extension;
-  return DEFAULT_SUFFIX_BY_TYPE[type] ?? "bin";
+  return Object.hasOwn(DEFAULT_SUFFIX_BY_TYPE, type)
+    ? DEFAULT_SUFFIX_BY_TYPE[type]
+    : "bin";
 }
 
 /**

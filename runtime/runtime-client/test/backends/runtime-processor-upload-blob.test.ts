@@ -222,6 +222,19 @@ describe("runtime-processor", () => {
       expect(await storedRecord(hashOf(large).toString())).toBeUndefined();
     });
 
+    it("throws for a request whose media type is not a string", async () => {
+      const { processor } = processorFor(writer);
+
+      await expect(
+        processor.handleUploadBlob({
+          type: RequestType.UploadBlob,
+          space,
+          contentType: 7 as never,
+          body: photo.body,
+        }),
+      ).rejects.toThrow("uploadBlob requires a media type");
+    });
+
     it("throws for a request whose name is not one a blob may hold", async () => {
       const { processor } = processorFor(writer);
 
