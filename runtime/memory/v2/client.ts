@@ -5768,6 +5768,12 @@ export class SpaceSession {
 
   #noteResult(serverSeq: number): void {
     if (serverSeq <= this.#serverSeq) return;
+    // A session closing still hears its in-flight requests answered, and
+    // reports none of them.
+    if (this.#closed) {
+      this.#serverSeq = serverSeq;
+      return;
+    }
     this.#serverSeq = serverSeq;
     for (const observer of [...this.#serverSeqObservers]) {
       try {

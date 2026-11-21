@@ -283,7 +283,9 @@ export class XHistoryView extends BaseView {
     task: async ([before, refresh]) => {
       const { rt, space, pieceId, pieceScope } = this;
       const listing = ++this.#listing;
-      this.#coveredSeq = this.#reportedSeq;
+      // An older stretch does not list the newest steps, so it answers no
+      // report.
+      if (before === undefined) this.#coveredSeq = this.#reportedSeq;
       if (rt === undefined || space === undefined) {
         this._steps = [];
         this._next = undefined;
@@ -304,6 +306,9 @@ export class XHistoryView extends BaseView {
       if (before !== undefined) {
         this._steps = withOlderSteps(this._steps, page.steps);
         this._next = page.next;
+      } else if (refresh === true && this.open !== undefined) {
+        // A fork opened while the refresh was made keeps the list it was
+        // opened from; closing it lists again.
       } else if (refresh === true && page.steps.length === 0) {
         // A refresh that finds no step leaves the steps listed as they are.
       } else if (refresh === true) {
@@ -378,7 +383,7 @@ export class XHistoryView extends BaseView {
    * from, which closing it lists again.
    */
   #refresh(): void {
-    if (this.open !== undefined) return;
+    if (!this.isConnected || this.open !== undefined) return;
     if (this.#reportedSeq <= this.#coveredSeq) return;
     if (this.#reportedSeq <= (this._steps[0]?.seq ?? 0)) return;
     if (this.#list.status === TaskStatus.PENDING) return;

@@ -5833,7 +5833,9 @@ class Provider
    */
   isUnused(): boolean {
     return !this.#destroyed && this.#operationSubscriptions.size === 0 &&
-      this.#presenceMemberships.size === 0 && this.replica.isUnused();
+      this.#presenceMemberships.size === 0 &&
+      // Someone following the space's history is using it.
+      this.#serverSeqObservers.size === 0 && this.replica.isUnused();
   }
 
   ensureSession(): Promise<void> {
