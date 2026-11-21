@@ -847,6 +847,49 @@ describe("stored-labels", () => {
     });
   });
 
+  // `fixtures/instantiate.tsx`: a handler instantiates the pattern `Row`,
+  // whose plan is another than that of the pattern the executor starts
+  // with. The adapter registers one plan with the runtime.
+  describe("inStorage() over a pattern whose handler instantiates another pattern", () => {
+    it("gives the runtime no write record of an instance that runs the other pattern's plan", async () => {
+      const [scenario] = await fixtureScenarios("instantiate");
+      const space = (await Identity.fromPassphrase("pattern-compiler-compare"))
+        .did();
+      const options = instanceOptions(
+        "instantiate",
+        space,
+        scenario.artifacts,
+      );
+      const instances = new Set<string>();
+      const refused: string[] = [];
+      await inStorage(
+        scenario.artifact,
+        scenario.argument,
+        sentEvents(
+          scenario.artifact,
+          scenario.argument,
+          scenario.events,
+          options,
+        ),
+        options,
+        undefined,
+        true,
+        true,
+        {
+          committed: (_runtime, _hooks, writes) => {
+            for (const { instance } of writes) instances.add(instance);
+          },
+          refused: (reasons) => {
+            for (const reason of reasons) refused.push(reason);
+          },
+        },
+      );
+
+      expect(refused).toEqual([]);
+      expect(instances.size).toBe(1);
+    });
+  });
+
   // `fixtures/input-writes.tsx`: `add` pushes a record onto the input list
   // `items`.
   describe("inStorage()", () => {

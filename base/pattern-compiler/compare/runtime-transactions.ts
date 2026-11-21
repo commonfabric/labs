@@ -368,6 +368,17 @@ export class RuntimeTransactions implements TransactionHooks {
     }
   }
 
+  /**
+   * The instances the executor made that run the plan of another artifact
+   * than the one this adapter registered with the runtime.
+   */
+  readonly #otherPlans = new Set<string>();
+
+  /** @inheritDoc */
+  instantiated(instance: string): void {
+    this.#otherPlans.add(instance);
+  }
+
   /** @inheritDoc */
   watchLabels(
     changed: (changes: readonly LabelChange[], alone?: boolean) => void,
@@ -756,6 +767,13 @@ export class RuntimeTransactions implements TransactionHooks {
     const decidedOf = new Map<readonly Observed[], RuntimeObserved[]>();
     const recorded: RuntimePlanWrite[] = [];
     for (const write of writes) {
+      // TODO(seefeld): Register the plan of each pattern the executor
+      // instantiates and record each write under the plan its instance
+      // runs. Until then a record of an instance that runs another plan
+      // than the registered one is not given: under the registered plan it
+      // would name another record, and its path takes the label of a write
+      // with no record, the join of what the transaction read.
+      if (this.#otherPlans.has(write.instance)) continue;
       let decided = write.decided === undefined
         ? undefined
         : decidedOf.get(write.decided);

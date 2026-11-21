@@ -2033,6 +2033,14 @@ export type TransactionHooks = {
   ): string | undefined;
 
   /**
+   * The executor made an instance, with the identifier given, that runs the
+   * plan of another artifact than the instance it was started with: the
+   * write records of that instance name records of the other plan.
+   * `pattern` is the identity that plan begins with (`Plan.patterns`).
+   */
+  instantiated?(instance: string, pattern: string | undefined): void;
+
+  /**
    * Registers what the store calls when the labels of documents changed
    * while their values may not have: for each document, the paths of the
    * label entries that changed. The executor then updates the group of
@@ -2911,6 +2919,12 @@ export class Instance {
       }
     });
     this.#documents.add(this.argument).add(this.id);
+    if (this.root !== this && artifact !== this.root.artifact) {
+      this.root.options.transactions?.instantiated?.(
+        this.id,
+        artifact.plan.patterns?.[0],
+      );
+    }
     if (this.root === this) {
       this.store.onWrite = (doc, path) => this.#wrote(doc, path);
       this.store.onChange = (change) => this.#changed(change);
