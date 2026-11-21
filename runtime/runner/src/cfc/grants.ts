@@ -4,7 +4,7 @@ import {
   isFabricPlainObject,
 } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
-import type { CfcAtom } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
@@ -385,6 +385,10 @@ export const disallowedGrantAudienceEntryReason = (
   const type = (entry as { type?: unknown }).type;
   if (typeof type !== "string" || type.length === 0) {
     return "audience entries need a string type";
+  }
+  if (type === CFC_ATOM_TYPE.Members || type === CFC_ATOM_TYPE.ListedIn) {
+    return `audience entries of type ${type} are not permitted ` +
+      `(spec §8.7.5: a list is named only through ifc.members)`;
   }
   if (FORBIDDEN_OR_CLAUSE_ALTERNATIVE_TYPES.has(type)) {
     return `audience entries of type ${type} are not permitted ` +
