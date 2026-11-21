@@ -13326,7 +13326,7 @@ export class Server {
     },
   ): Promise<{
     servable: Array<{ root: string; piece: string }>;
-    held: Array<{ root: string; piece: string }>;
+    held: Array<{ root: string; piece: string; readers: string[] }>;
     upstream: CurrencyUpstreamRead[];
     refused: Partial<Record<CurrencyRefusal, number>>;
     marked: CurrencyMarked[];
@@ -13421,19 +13421,22 @@ export class Server {
       running,
     });
     const passing = new Set(judgment.servable);
-    const holding = new Set(judgment.held);
+    const holding = new Map(
+      judgment.held.map(({ root, readers }) => [root, readers]),
+    );
     const reasons = new Map(
       judgment.refused.map(({ root, reason }) => [root, reason]),
     );
     const servable: Array<{ root: string; piece: string }> = [];
-    const held: Array<{ root: string; piece: string }> = [];
+    const held: Array<{ root: string; piece: string; readers: string[] }> = [];
     for (const [root, piece] of pieces) {
       if (passing.has(piece)) {
         servable.push({ root, piece });
         continue;
       }
-      if (holding.has(piece)) {
-        held.push({ root, piece });
+      const readers = holding.get(piece);
+      if (readers !== undefined) {
+        held.push({ root, piece, readers });
         continue;
       }
       const reason = reasons.get(piece);

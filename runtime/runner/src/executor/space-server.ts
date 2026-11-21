@@ -7528,8 +7528,7 @@ export class SpaceServer implements TransactionSealDestination {
       if (
         [...producers].some((piece) => this.#producerProgresses(runtime, piece))
       ) continue;
-      for (const key of currency.heldKeysOf(reader)) released.add(key);
-      currency.abandonUpstream(reader);
+      for (const key of currency.abandonUpstream(reader)) released.add(key);
       logger.info?.("currency-upstream-abandoned", () => [
         `space ${this.#options.space}: gave up on what is upstream of ` +
         `${reader}: ${[...producers].join(", ")}`,

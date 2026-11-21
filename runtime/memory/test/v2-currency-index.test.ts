@@ -1605,7 +1605,7 @@ describe("currency-index", () => {
         expect(upstreamOf(["of:c"])).toEqual({
           servable: [],
           refused: [],
-          held: ["of:c"],
+          held: [{ root: "of:c", readers: ["of:c"] }],
           upstream: [{
             reader: "of:c",
             slice: "space",
@@ -1622,7 +1622,7 @@ describe("currency-index", () => {
         advance();
 
         expect(upstreamOf(["of:c"])).toMatchObject({
-          held: ["of:c"],
+          held: [{ root: "of:c", readers: ["of:c"] }],
           upstream: [{
             reader: "of:c",
             slice: "space",
@@ -1695,6 +1695,46 @@ describe("currency-index", () => {
           scopeKey: ALICE_USER,
           piece: "of:b",
         }]);
+      });
+
+      it("holds a root for a demanded output of a piece beneath it that read the first one's output, and names that piece as the one whose read holds it", () => {
+        // The root's own slice read nothing that changed, so only the
+        // piece beneath it is stale.
+
+        storeChain();
+        const asOf = write("of:outer", "computed:nested");
+        store(asOf, [
+          record("of:nested", {
+            under: ["of:outer"],
+            reads: [derived("computed:a")],
+            produces: ["computed:nested"],
+          }),
+          record("of:outer"),
+        ]);
+        write("of:in");
+        advance();
+
+        const { servable, refused, held, upstream } = judgeCurrencyRoots(
+          engine,
+          {
+            space: SPACE,
+            roots: ["of:outer"],
+            rows: [{ id: "computed:nested", scopeKey: "space" }],
+            epoch: EPOCH,
+          },
+        );
+        expect({ servable, refused, held, upstream }).toEqual({
+          servable: [],
+          refused: [],
+          held: [{ root: "of:outer", readers: ["of:nested"] }],
+          upstream: [{
+            reader: "of:nested",
+            slice: "space",
+            id: "computed:a",
+            scopeKey: "space",
+            piece: "of:a",
+          }],
+        });
       });
 
       it("refuses the last one when what it read is also a derived document no recorded piece writes", () => {

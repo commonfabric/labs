@@ -2250,9 +2250,10 @@ export type CurrencyJudgment = {
    * The roots that would pass but for slices that are stale only through
    * what is upstream of them: what the store holds of each is not current,
    * and starting its piece would not make it so. Starting the pieces
-   * `upstream` names may.
+   * `upstream` names may. `readers` are the pieces whose slices hold the
+   * root, its own piece or pieces beneath it, as `upstream` names them.
    */
-  held: string[];
+  held: Array<{ root: string; readers: string[] }>;
 
   /**
    * The reads that keep a slice of a root, or of one of the running pieces
@@ -2422,14 +2423,19 @@ export const judgeCurrencyRoots = (
   }
   // A root rests on its own piece and on the pieces beneath it, so one of
   // those that is stale upstream holds the root.
-  const holding = new Set(staleUpstream);
+  const holding = new Map<string, string[]>();
   for (const piece of staleUpstream) {
-    for (const root of underOf(context, piece)) holding.add(root);
+    for (const root of [piece, ...underOf(context, piece)]) {
+      const readers = holding.get(root);
+      if (readers === undefined) holding.set(root, [piece]);
+      else if (!readers.includes(piece)) readers.push(piece);
+    }
   }
   for (const root of candidates) {
     const reason = failingRoots.get(root);
+    const readers = holding.get(root);
     if (reason !== undefined) judgment.refused.push({ root, reason });
-    else if (holding.has(root)) judgment.held.push(root);
+    else if (readers !== undefined) judgment.held.push({ root, readers });
     else judgment.servable.push(root);
   }
   return judgment;

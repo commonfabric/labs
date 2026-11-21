@@ -261,7 +261,11 @@ describe("Server", () => {
           }),
         ).toMatchObject({
           servable: [],
-          held: [{ root: "computed:read", piece: "of:reader" }],
+          held: [{
+            root: "computed:read",
+            piece: "of:reader",
+            readers: ["of:reader"],
+          }],
           upstream: [{
             reader: "of:reader",
             slice: "space",

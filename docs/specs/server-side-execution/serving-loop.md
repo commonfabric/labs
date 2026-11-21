@@ -435,10 +435,12 @@ upstream when each read that keeps it stale is of an instance another recorded
 piece is to bring up to date: one a piece that is behind on its own rows
 decides, through any number of slices marked `1` between, or one a recorded
 piece writes and none vouches for, as a viewer's own instance is before that
-piece has run for the viewer. A root that passes but for such slices is held.
-Under `skip` it is neither loaded nor started, and stays among the roots
-awaiting a first load; under `record` it is loaded, and its piece is then one
-that runs and is stale upstream. The loop demands the instances those reads
+piece has run for the viewer. A root that passes but for such slices is held,
+whether they are slices of its own piece or of a piece beneath it that a
+demanded instance is resolved under, and the judgment names the pieces whose
+slices hold it. Under `skip` it is neither loaded nor started, and stays
+among the roots awaiting a first load; under `record` it is loaded, and each
+of those pieces is then one that runs and is stale upstream. The loop demands the instances those reads
 name, in its own space, for the pairs the reads were made for, as demand it
 carries into itself (§3b): each stands as a root, with a row for the piece
 that writes it, so the demand pass loads and starts that piece as it does any
@@ -455,8 +457,9 @@ that follows finds the root servable or finds its own piece behind and loads
 it. The loop gives up on what is upstream of a root or a running piece when
 none of the pieces named for it can change that: one whose load ended without
 a start, one that ran and was recorded with the reader stale still, and one
-that ran in a cycle that ended where no record could be taken. A root given up
-on is loaded as a refused one is. Impl: `judgeCurrencyRoots()` and
+that ran in a cycle that ended where no record could be taken. A root is
+loaded as a refused one is once the loop has given up on what is upstream of
+each piece whose slices hold it. Impl: `judgeCurrencyRoots()` and
 `upstreamReadsOf()` in `runtime/memory/v2/currency-index.ts`,
 `StoreCurrency.judge()` in `runtime/runner/src/executor/store-currency.ts`,
 `#releaseStuckUpstream()` in `runtime/runner/src/executor/space-server.ts`;

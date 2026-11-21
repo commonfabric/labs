@@ -122,10 +122,11 @@ export class StoreCurrency {
   /**
    * The demand keys left unloaded because what the store holds of them is
    * stale only through what is upstream, each with the piece it is the root
-   * of. Starting that piece would not make it current, so the pieces
+   * of and the pieces whose reads hold it: that piece, or pieces beneath
+   * it. Starting the root's piece would not make it current, so the pieces
    * upstream are started and the root is judged again.
    */
-  readonly #held = new Map<string, string>();
+  readonly #held = new Map<string, { piece: string; readers: string[] }>();
 
   /**
    * The pieces that run here and that the index holds stale only through
@@ -268,8 +269,8 @@ export class StoreCurrency {
   }
 
   /**
-   * The pieces the last judgment named as the ones to start, by the root's
-   * piece or the running piece each is upstream of.
+   * The pieces the last judgment named as the ones to start, by the piece
+   * each is upstream of: one whose read holds a root, or one that runs.
    */
   get upstreamProducers(): ReadonlyMap<string, ReadonlySet<string>> {
     const producers = new Map<string, Set<string>>();
@@ -299,29 +300,35 @@ export class StoreCurrency {
     };
   }
 
-  /** The demand keys held as roots of the piece `reader`. */
-  heldKeysOf(reader: string): string[] {
-    return [...this.#held].filter(([, piece]) => piece === reader)
-      .map(([key]) => key);
-  }
-
   /**
-   * Gives up on what is upstream of `reader`, a held root's piece or a
-   * stale running piece: none of the pieces named for it can be started,
-   * or each has run and been recorded and it is stale still. Its roots are
-   * no longer held, so the caller loads them as it loads a refused root.
+   * Gives up on what is upstream of `reader`, a piece whose reads hold a
+   * root or a stale running piece: none of the pieces named for it can be
+   * started, or each has run and been recorded and it is stale still. A
+   * root that no other piece's reads hold is no longer held, so the caller
+   * loads it as it loads a refused root.
+   *
+   * @returns The demand keys that are no longer held.
    */
-  abandonUpstream(reader: string): void {
+  abandonUpstream(reader: string): string[] {
     const producers = this.upstreamProducers.get(reader);
-    if (producers === undefined) return;
+    if (producers === undefined) return [];
     this.#abandoned.set(reader, new Set(producers));
     this.#upstream = this.#upstream.filter((read) => read.reader !== reader);
     this.#upstreamChanged = true;
     this.#staleRunning.delete(reader);
-    for (const [key, piece] of this.#held) {
-      if (piece === reader) this.#held.delete(key);
+    const released: string[] = [];
+    for (const [key, held] of this.#held) {
+      const readers = held.readers.filter((piece) => piece !== reader);
+      if (readers.length === held.readers.length) continue;
+      if (readers.length > 0) {
+        this.#held.set(key, { piece: held.piece, readers });
+      } else {
+        this.#held.delete(key);
+        released.push(key);
+      }
     }
     this.#stats.currency.upstreamAbandoned += 1;
+    return released;
   }
 
   /**
@@ -609,7 +616,7 @@ export class StoreCurrency {
     // way, as an event's auto-start does, and is loaded like any other.
     const candidates = new Map<string, string>();
     for (const [key, root] of eligibleRoots) {
-      const piece = this.#served.get(key) ?? this.#held.get(key);
+      const piece = this.#served.get(key) ?? this.#held.get(key)?.piece;
       if (
         piece !== undefined && runtime.scheduler.hasNodesUnderDemandRoot(piece)
       ) {
@@ -658,7 +665,7 @@ export class StoreCurrency {
       judged.servable.map(({ root, piece }) => [root, piece]),
     );
     const holding = new Map(
-      judged.held.map(({ root, piece }) => [root, piece]),
+      judged.held.map(({ root, piece, readers }) => [root, { piece, readers }]),
     );
     const servable: string[] = [];
     const held: string[] = [];
@@ -681,24 +688,26 @@ export class StoreCurrency {
         continue;
       }
       const stale = holding.get(root);
+      // The pieces whose reads hold the root, its own or ones beneath it,
+      // less those whose upstream the loop gave up on.
+      const readers = stale?.readers.filter((reader) => upstream.has(reader));
       // A root stale only upstream is held under `skip` while the pieces
-      // upstream are started. Under `record` it is loaded, and its piece
-      // is then one that runs here and is stale upstream.
-      if (stale !== undefined && upstream.has(stale)) {
+      // upstream are started. Under `record` it is loaded, and the pieces
+      // whose reads hold it are then ones that run here and are stale
+      // upstream.
+      if (stale !== undefined && readers !== undefined && readers.length > 0) {
         this.#served.delete(key);
         if (
           this.#mode === "skip" &&
-          !runtime.scheduler.hasNodesUnderDemandRoot(stale)
+          !runtime.scheduler.hasNodesUnderDemandRoot(stale.piece)
         ) {
           held.push(key);
-          if (!this.#held.has(key)) {
-            this.#held.set(key, stale);
-            this.#stats.currency.heldUpstream += 1;
-          }
+          if (!this.#held.has(key)) this.#stats.currency.heldUpstream += 1;
+          this.#held.set(key, { piece: stale.piece, readers });
           continue;
         }
         this.#held.delete(key);
-        this.#staleRunning.add(stale);
+        for (const reader of readers) this.#staleRunning.add(reader);
         continue;
       }
       this.#held.delete(key);

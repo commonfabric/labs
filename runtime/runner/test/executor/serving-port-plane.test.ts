@@ -287,7 +287,11 @@ describe("serving-port-plane", () => {
         asked.push(params);
         return {
           servable: [{ root: "of:argument", piece: "of:piece" }],
-          held: [{ root: "of:held", piece: "of:reader" }],
+          held: [{
+            root: "of:held",
+            piece: "of:reader",
+            readers: ["of:reader"],
+          }],
           upstream: [{
             reader: "of:reader",
             slice: "space",
@@ -317,7 +321,11 @@ describe("serving-port-plane", () => {
         }),
       ).toEqual({
         servable: [{ root: "of:argument", piece: "of:piece" }],
-        held: [{ root: "of:held", piece: "of:reader" }],
+        held: [{
+          root: "of:held",
+          piece: "of:reader",
+          readers: ["of:reader"],
+        }],
         upstream: [{
           reader: "of:reader",
           slice: "space",

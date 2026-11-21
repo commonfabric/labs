@@ -315,11 +315,20 @@ describe("StoreCurrency", () => {
         piece: "of:producer",
       };
 
+      /**
+       * The read that keeps `of:nested`, a piece beneath `of:reader`, stale,
+       * of the same output.
+       */
+      const NESTED = { ...UPSTREAM, reader: "of:nested" };
+
       /** The pieces that run on the runtime the judgments are made for. */
       let running: Set<string>;
 
-      /** What the memory server returns as held and as upstream of it. */
+      /** Whether the memory server returns the root as held. */
       let stale: boolean;
+
+      /** The reads the memory server returns as upstream of a held root. */
+      let reads: Array<typeof UPSTREAM>;
 
       /** A loop that keeps the index as `mode` says. */
       const loop = (mode: "skip" | "record") =>
@@ -332,9 +341,13 @@ describe("StoreCurrency", () => {
                   ? []
                   : roots.map((root) => ({ root, piece: root })),
                 held: stale
-                  ? roots.map((root) => ({ root, piece: "of:reader" }))
+                  ? roots.map((root) => ({
+                    root,
+                    piece: "of:reader",
+                    readers: reads.map(({ reader }) => reader),
+                  }))
                   : [],
-                upstream: stale ? [UPSTREAM] : [],
+                upstream: stale ? reads : [],
                 refused: {},
                 marked: [],
               }),
@@ -367,6 +380,7 @@ describe("StoreCurrency", () => {
       beforeEach(() => {
         running = new Set();
         stale = true;
+        reads = [UPSTREAM];
       });
 
       it("holds the root under `skip`, and returns the instance that keeps it stale as one to demand", async () => {
@@ -431,11 +445,50 @@ describe("StoreCurrency", () => {
         const currency = loop("skip");
         await judge(currency);
 
-        currency.abandonUpstream("of:reader");
+        expect(currency.abandonUpstream("of:reader")).toEqual(["key"]);
 
         expect(currency.staleUpstream).toBe(false);
         expect(currency.upstreamReads).toEqual([]);
         expect((await judge(currency)).held).toEqual([]);
+        expect(currency.staleUpstream).toBe(false);
+      });
+
+      it("holds the root under `skip` for a read of a piece beneath its own", async () => {
+        const currency = loop("skip");
+        reads = [NESTED];
+
+        expect(await judge(currency)).toEqual({
+          servable: [],
+          held: ["key"],
+          rearm: [],
+        });
+        expect(currency.staleUpstream).toBe(true);
+        expect([...currency.upstreamProducers]).toEqual([
+          ["of:nested", new Set(["of:producer"])],
+        ]);
+      });
+
+      it("keeps the piece beneath the root's own as one that is stale while the root's piece runs", async () => {
+        const currency = loop("record");
+        reads = [NESTED];
+        running.add("of:reader");
+
+        expect((await judge(currency)).held).toEqual([]);
+        expect(currency.staleUpstream).toBe(true);
+        stale = false;
+        await judge(currency);
+        expect(currency.staleUpstream).toBe(false);
+      });
+
+      it("holds the root until what is upstream of each piece whose read holds it was given up on", async () => {
+        const currency = loop("skip");
+        reads = [UPSTREAM, NESTED];
+        await judge(currency);
+
+        expect(currency.abandonUpstream("of:reader")).toEqual([]);
+        expect(currency.staleUpstream).toBe(true);
+        expect((await judge(currency)).held).toEqual(["key"]);
+        expect(currency.abandonUpstream("of:nested")).toEqual(["key"]);
         expect(currency.staleUpstream).toBe(false);
       });
     });
