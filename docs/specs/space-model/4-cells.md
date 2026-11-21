@@ -223,6 +223,13 @@ use. The API declares six cell variants with different capability subsets:
 | `OpaqueCell` | — | — | — | — | yes | — |
 | `Stream` | — | — | — | yes | — | — |
 
+Assignability between the variants follows each variant's brand as well as its
+methods. A `Cell<T>` (and so a `Writable<T>`) is assignable to a
+`ReadonlyCell<T>`, and that is the only pair of variants where one is
+assignable to another: a `ReadonlyCell<T>` is not a `Cell<T>`, and a `Cell<T>`
+is not a `WriteonlyCell<T>` or a `ComparableCell<T>`, whose brands name other
+kinds.
+
 Pattern code uses only `Cell`/`Writable` and `Stream`. The effective
 pattern-level API is:
 

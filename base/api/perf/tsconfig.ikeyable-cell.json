@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.base.json",
   "files": [
-    "./ikeyable_cell.ts"
+    "./fixtures/ikeyable_cell.ts"
   ]
 }

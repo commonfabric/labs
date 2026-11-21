@@ -1,3 +1,11 @@
+/**
+ * The editor for a single reading item (article, book, paper, or video), with
+ * fields for title, author, URL, type, status, rating, and notes, each bound
+ * to a cell with `$value`. Its output exposes a one-line summary and
+ * actions for setting status, rating, and notes, so a list can create and
+ * update items as pieces.
+ */
+
 import {
   action,
   computed,

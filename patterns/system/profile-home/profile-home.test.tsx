@@ -255,11 +255,8 @@ export default pattern(() => {
     profile.setAvatar.send({ avatar: "" });
   });
 
-  // CT-1748 note: the presentation-vs-edit *content* lives behind `ifElse`, and
-  // [UI] vnode traversal doesn't resolve through this test harness's `.get()`,
-  // so the toggle is asserted via the exported `isEditing` and the bound data
-  // below. The rendered presentation itself (real cf-profile-badge + card tiles,
-  // distinct from the edit form) is verified in the browser.
+  // The toggle is asserted via the exported `isEditing` and the bound data
+  // below. `profile-home.elements.test.tsx` walks the rendered presentation.
 
   // Visiting a profile starts in the read-only presentation, not the edit form.
   const assert_not_editing = assert(() => profile.isEditing === false);
@@ -269,7 +266,8 @@ export default pattern(() => {
   // The avatar the badge binds resolves (single context — owner-protected reads
   // are clean here; cross-stamp masking is the browser-only CT-1740 issue).
   const assert_avatar_set = assert(() => profile.avatar === "AL");
-  const assert_no_picture = assert(() => profile.picture === undefined);
+  // No picture is empty bytes.
+  const assert_no_picture = assert(() => bytesAre(profile.picture, []));
   const assert_picture_set = assert(() => bytesAre(profile.picture, PICTURE));
   const assert_picture_picked = assert(() =>
     bytesAre(profile.picture, PICKED_PICTURE)
@@ -278,10 +276,10 @@ export default pattern(() => {
     bytesAre(profile.picture, PICKED_PICTURE) && profile.avatar === "AL"
   );
   const assert_picture_cleared = assert(() =>
-    profile.picture === undefined && profile.avatar === "AL"
+    bytesAre(profile.picture, []) && profile.avatar === "AL"
   );
   const assert_avatar_cleared = assert(() =>
-    profile.picture === undefined && profile.avatar === ""
+    bytesAre(profile.picture, []) && profile.avatar === ""
   );
   // CT-1828: an empty send must not clear a previously-set avatar.
   const assert_avatar_unchanged_after_empty = assert(() =>

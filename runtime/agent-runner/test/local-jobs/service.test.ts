@@ -492,10 +492,116 @@ describe("startLocalJobs()", () => {
     });
   }
 
+  it("refuses a socket a listener still answers on, leaving the listener serving", async () => {
+    const listener = Deno.listen({
+      transport: "unix",
+      path: join(dir, "jobs.sock"),
+    });
+    try {
+      await expect(start().service).rejects.toThrow(
+        `A listener already owns the local jobs socket: ${
+          join(dir, "jobs.sock")
+        }`,
+      );
+      const client = await Deno.connect({
+        transport: "unix",
+        path: join(dir, "jobs.sock"),
+      });
+      client.close();
+      await expect(Deno.stat(join(dir, "jobs.sock.token"))).rejects.toThrow(
+        Deno.errors.NotFound,
+      );
+    } finally {
+      listener.close();
+    }
+  });
+
+  it("refuses a socket left behind that it may not connect to, leaving it in place", async () => {
+    // A socket path longer than a socket address holds can be renamed to but
+    // not connected to, whatever the caller's privileges. The refusal comes
+    // before the store is created.
+
+    const deep = join(dir, "d".repeat(120));
+    await Deno.mkdir(deep);
+    const socketPath = join(deep, "jobs.sock");
+    const listener = Deno.listen({
+      transport: "unix",
+      path: join(dir, "old.sock"),
+    });
+    await Deno.rename(join(dir, "old.sock"), socketPath);
+    listener.close();
+
+    await expect(startLocalJobs(
+      {
+        socketPath,
+        profilesPath: join(dir, "profiles.json"),
+        maxConcurrent: 1,
+        workRoot: join(dir, "runs"),
+      },
+      () => {},
+    )).rejects.toThrow();
+    expect((await Deno.lstat(socketPath)).isSocket).toBe(true);
+    await expect(Deno.stat(join(deep, "jobs.sqlite"))).rejects.toThrow(
+      Deno.errors.NotFound,
+    );
+  });
+
+  it("finishes stopping when a step fails, then throws every failure together", async () => {
+    // A non-empty directory where the token was cannot be removed.
+    const running = await start().service;
+    await Deno.remove(running.tokenPath);
+    await Deno.mkdir(join(running.tokenPath, "inside"), { recursive: true });
+
+    const error = await running.stop().then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error).toMatchObject({
+      message: "Local jobs cleanup failed",
+      errors: [expect.anything()],
+    });
+    await expect(Deno.stat(join(dir, "jobs.sock"))).rejects.toThrow(
+      Deno.errors.NotFound,
+    );
+    await Deno.remove(running.tokenPath, { recursive: true });
+    const next = await start().service;
+    await next.stop();
+  });
+
+  it("throws a startup failure rather than the failure of rolling it back", async () => {
+    const tokenPath = join(dir, "jobs.sock.token");
+    const startup = startLocalJobs(
+      {
+        socketPath: join(dir, "jobs.sock"),
+        profilesPath: join(dir, "profiles.json"),
+        maxConcurrent: 1,
+        workRoot: join(dir, "runs"),
+      },
+      () => {},
+      {
+        chmod: async () => {
+          await Deno.remove(tokenPath);
+          await Deno.mkdir(join(tokenPath, "inside"), { recursive: true });
+          throw new Error("chmod failed");
+        },
+      },
+    );
+
+    await expect(startup).rejects.toThrow("chmod failed");
+    await expect(Deno.stat(join(dir, "jobs.sock"))).rejects.toThrow(
+      Deno.errors.NotFound,
+    );
+    expect((await Deno.stat(tokenPath)).isDirectory).toBe(true);
+  });
+
   it("throws when something other than a socket file stands at the socket path", async () => {
     await Deno.mkdir(join(dir, "jobs.sock", "inside"), { recursive: true });
 
-    await expect(start().service).rejects.toThrow();
+    await expect(start().service).rejects.toThrow(
+      `The local jobs socket path is occupied: ${join(dir, "jobs.sock")}`,
+    );
   });
 
   it("throws when the profile file cannot be read", async () => {

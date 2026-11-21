@@ -75,6 +75,20 @@ describe("schema", () => {
       expect(parseRecordLine("{nope")).toBeUndefined();
     });
 
+    it("returns undefined for JSON that is not an object", () => {
+      expect(parseRecordLine('"record"')).toBeUndefined();
+    });
+
+    it("returns undefined for a test that is not an object", () => {
+      const line = JSON.stringify({ ...RECORD, test: "glaze" });
+      expect(parseRecordLine(line)).toBeUndefined();
+    });
+
+    it("returns undefined for a file that is not a string", () => {
+      const line = JSON.stringify({ ...RECORD, file: 7 });
+      expect(parseRecordLine(line)).toBeUndefined();
+    });
+
     it("returns undefined for an unknown outcome", () => {
       const line = JSON.stringify({ ...RECORD, outcome: "flaky" });
       expect(parseRecordLine(line)).toBeUndefined();
@@ -217,8 +231,15 @@ describe("schema", () => {
           job: "Test (3/8)",
           shard: "3/8",
           headCommit: "feedfacefeedfacefeedfacefeedfacefeedface",
+          event: "pull_request",
         },
       };
+      expect(parseContextLine(serializeContextLine(context).trim()))
+        .toEqual(context);
+    });
+
+    it("keeps the agent that ran a run", () => {
+      const context: RunContext = { ...CONTEXT, agent: "claude-code" };
       expect(parseContextLine(serializeContextLine(context).trim()))
         .toEqual(context);
     });

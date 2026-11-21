@@ -504,25 +504,26 @@ function counter(): (
   const counts = new Map<string, number>();
   const started = new Map<string, number>();
   return (method, args) => {
-    if (!COUNTING.has(method)) return [method, args];
+    // Only a count or a timer has a label, so only theirs is made a string.
     const [label = "default", ...data] = args;
-    const name = String(label);
     switch (method) {
       case "clear":
         return undefined;
       case "count": {
+        const name = String(label);
         const count = (counts.get(name) ?? 0) + 1;
         counts.set(name, count);
         return ["info", [`${name}: ${count}`]];
       }
       case "countReset":
-        counts.delete(name);
+        counts.delete(String(label));
         return undefined;
       case "time":
-        started.set(name, performance.now());
+        started.set(String(label), performance.now());
         return undefined;
       case "timeLog":
       case "timeEnd": {
+        const name = String(label);
         const at = started.get(name);
         if (method === "timeEnd") started.delete(name);
         return at === undefined
@@ -532,20 +533,11 @@ function counter(): (
             ...(method === "timeLog" ? data : []),
           ]];
       }
+      default:
+        return [method, args];
     }
-    return [method, args];
   };
 }
-
-/** The ways of saying something on the console that count or time. */
-const COUNTING: ReadonlySet<ConsoleMethod> = new Set([
-  "clear",
-  "count",
-  "countReset",
-  "time",
-  "timeLog",
-  "timeEnd",
-]);
 
 /** The ways of saying something on the console that warn or err. */
 const ERRING: ReadonlySet<ConsoleMethod> = new Set([

@@ -206,10 +206,10 @@ function narrowedKind(written: string, earned: CellKind): string {
  * as a definition of its own. Every other keyword is kept as generated.
  */
 export function narrowEventCapabilities(
-  schema: unknown,
+  schema: boolean | Schema,
   summary: CapabilityParamSummary,
-): unknown {
-  if (!isSchemaObject(schema)) {
+): boolean | Schema {
+  if (typeof schema === "boolean") {
     return comparedAny(schema, ContractUses.of(summary));
   }
   const definitions = isSchemaObject(schema.$defs) ? schema.$defs : {};
@@ -269,8 +269,10 @@ export function narrowEventCapabilities(
     return result;
   };
 
-  const narrow = (node: unknown, uses: ContractUses): unknown => {
-    if (!isSchemaObject(node)) return comparedAny(node, uses);
+  const narrow = (node: unknown, uses: ContractUses): unknown =>
+    isSchemaObject(node) ? narrowObject(node, uses) : comparedAny(node, uses);
+
+  const narrowObject = (node: Schema, uses: ContractUses): Schema => {
     if (Array.isArray(node.asCell) && node.asCell.length > 0) {
       return narrowCell(node, uses);
     }
@@ -328,10 +330,10 @@ export function narrowEventCapabilities(
     return result;
   };
 
-  const root = narrow(schema, ContractUses.of(summary));
+  const root = narrowObject(schema, ContractUses.of(summary));
   // A narrowing that changes a definition changes what refers to it, up to
   // the root, so an unchanged root is the schema as it was.
-  if (root === schema || !isSchemaObject(root)) return root;
+  if (root === schema) return root;
   const all = { ...definitions, ...added };
   // A specialization takes the name of the definition it narrows where
   // nothing refers to that definition any more.
@@ -385,7 +387,7 @@ type Specialization =
  * identity alone reads: `true`, which admits any value, becomes a comparable
  * cell; `false` admits nothing and stays as it is.
  */
-function comparedAny(node: unknown, uses: ContractUses): unknown {
+function comparedAny<T>(node: T, uses: ContractUses): T | Schema {
   return node === true && uses.onlyComparedHere
     ? { asCell: ["comparable"] }
     : node;

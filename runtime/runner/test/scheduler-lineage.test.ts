@@ -52,6 +52,13 @@ function createOriginTx(
       }
       return { status, journal: {} };
     },
+    settledOutcome() {
+      return status === "done"
+        ? "committed"
+        : status === "error"
+        ? "failed"
+        : undefined;
+    },
     addCommitCallback(callback: CommitCallback): void {
       callbacks.push(callback);
     },
@@ -67,6 +74,18 @@ function createOriginTx(
   };
 
   return origin as TestOriginTx;
+}
+
+/**
+ * An origin that has already settled with `outcome` through a seal
+ * destination, so that the storage transaction it wraps never committed and
+ * its status still reads `ready`.
+ */
+function createSealedOriginTx(
+  outcome: "committed" | "failed",
+): TestOriginTx {
+  const origin = createOriginTx("ready");
+  return Object.assign(origin, { settledOutcome: () => outcome });
 }
 
 let nextEnqueueSeq = 1;
@@ -197,6 +216,35 @@ describe("SpeculationLineage", () => {
   it("treats already-failed origins as failed without callbacks", () => {
     const origin = createOriginTx("error");
     const event = queuedEvent("evt:already-failed", origin);
+    const { lineage, removed, queueExecutions } = createLineageHooks();
+
+    lineage.recordEvent(origin, event);
+
+    expect(lineage.originStatus(origin)).toBe("failed");
+    expect(origin.callbackCount()).toBe(0);
+    expect(removed).toEqual([]);
+    expect(queueExecutions()).toBe(0);
+  });
+
+  it("treats an origin that committed through a seal destination as confirmed without callbacks", () => {
+    // A commit callback added after the origin settled would never run, and
+    // the event would wait on it for good.
+
+    const origin = createSealedOriginTx("committed");
+    const event = queuedEvent("evt:sealed-committed", origin);
+    const { lineage, removed, queueExecutions } = createLineageHooks();
+
+    lineage.recordEvent(origin, event);
+
+    expect(lineage.originStatus(origin)).toBe("confirmed");
+    expect(origin.callbackCount()).toBe(0);
+    expect(removed).toEqual([]);
+    expect(queueExecutions()).toBe(0);
+  });
+
+  it("treats an origin whose sealed commit failed as failed without callbacks", () => {
+    const origin = createSealedOriginTx("failed");
+    const event = queuedEvent("evt:sealed-failed", origin);
     const { lineage, removed, queueExecutions } = createLineageHooks();
 
     lineage.recordEvent(origin, event);

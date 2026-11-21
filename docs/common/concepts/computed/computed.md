@@ -93,7 +93,7 @@ Input props are reactive and can't be read at init time. Wrap derived names in
 
 ## Side Effects in computed()
 
-If your `computed()` has side effects (like setting another cell), they should be idempotent. Non-idempotent side effects cause the scheduler to re-run repeatedly until it hits the 101-iteration limit.
+If your `computed()` has side effects (like setting another cell), they should be idempotent. A computation can run more than once for the same inputs, and a non-idempotent side effect changes state again each time. Two computations whose writes trigger each other re-run until the scheduler hits its 101-iteration limit.
 
 ```typescript
 // Shown inside a pattern body.
@@ -123,7 +123,7 @@ allowed, coarsened to one-second resolution), or read the interval `#now/N`
 wish for a value that updates on its own (the bare `#now` wish is a durable
 one-shot — the piece's first-ever load time — and never updates).
 
-The scheduler re-runs computations when their dependencies change. If a computation modifies a cell it depends on, it triggers itself. With idempotent operations, the second run produces no change, so the system settles.
+The scheduler re-runs a computation when one of its dependencies changes, though not for a write the computation made itself. It can still run again with the same inputs, for example when another input changes or when `cf test` checks it for idempotency. With idempotent operations, such a run produces no change.
 
 Prefer using handlers for mutations instead of side effects in `computed()`.
 

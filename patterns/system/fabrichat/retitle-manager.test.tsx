@@ -4,8 +4,8 @@
  * read it, and the rendered list labels the room with it, for a group room and
  * for a direct room, which the list otherwise labels with whom it is with.
  * The entry and the catalog hold the new title once the manager next hears of
- * the room, as from a client's `joinRoom` when the person opens it, with the
- * entry's revision as it was.
+ * the room, as from a client's `joinRoom` when the person opens it, or from
+ * a join the person asks for, with the entry's revision as it was.
  */
 import {
   action,
@@ -146,6 +146,14 @@ export default pattern(() => {
     manager.joinRoom.send({ room: held.key("direct").resolveAsCell() });
   });
 
+  // A join the person asks for, which records its outcome.
+  const action_join_group = action(() =>
+    manager.joinRoom.send({
+      requestId: "j-group",
+      room: held.key("group").resolveAsCell(),
+    })
+  );
+
   return {
     [TESTS]: [
       {
@@ -212,6 +220,23 @@ export default pattern(() => {
             direct?.revision === revisions.get().direct &&
             group?.state === "saved" && direct?.state === "saved";
         }),
+      },
+      // A join the person asks for brings the entry's title up to the room's
+      // too, after another retitle.
+      {
+        action: setTitleOf(held.key("group").key("setTitle")),
+        event: { requestId: "t-group-again", title: "Saturday plans" },
+        trustedUi: retitleGesture,
+      },
+      { action: action_join_group },
+      {
+        assertion: assert(() =>
+          requests.get()["j-group"]?.status === "done" &&
+          listed(manager.rooms, held.key("group").get())?.title ===
+            "Saturday plans" &&
+          catalogEntryOf(catalog, held.key("group").get())?.title ===
+            "Saturday plans"
+        ),
       },
     ],
   };

@@ -62,7 +62,7 @@ const createEngine = async (): Promise<{ engine: Engine; path: string }> => {
 };
 
 const headSeqOf = (engine: Engine): number =>
-  (engine.statements.selectServerSeq.get() as { seq: number }).seq;
+  (engine.statement("selectServerSeq").get() as { seq: number }).seq;
 
 const withLiveLease = (engine: Engine): string => {
   const holder = executionLeaseHolder(SERVICE);
@@ -307,7 +307,6 @@ Deno.test("effects doc: the retirement scan (protocol §5's next-wave retirement
           retirable[0].remainingEntries.map((entry) => entry.nonce),
           [unacked],
         );
-        assertEquals(Object.keys(retirable[0].remainingAcks), []);
       },
     );
 
@@ -317,7 +316,7 @@ Deno.test("effects doc: the retirement scan (protocol §5's next-wave retirement
         const [instance] = selectRetirableEffectsInstances(engine);
         waveSetInstance(engine, holder, 5, ALICE_KEY, {
           entries: instance.remainingEntries,
-          acks: instance.remainingAcks,
+          acks: {},
         });
         assertEquals(selectRetirableEffectsInstances(engine).length, 0);
         const value = instanceValue(engine, ALICE_KEY);
@@ -337,10 +336,9 @@ Deno.test("effects doc: the retirement scan (protocol §5's next-wave retirement
           retirable[0].remainingEntries.map((entry) => entry.nonce),
           [unacked],
         );
-        assertEquals(Object.keys(retirable[0].remainingAcks), []);
         waveSetInstance(engine, holder, 6, ALICE_KEY, {
           entries: retirable[0].remainingEntries,
-          acks: retirable[0].remainingAcks,
+          acks: {},
         });
         assertEquals(selectRetirableEffectsInstances(engine).length, 0);
       },

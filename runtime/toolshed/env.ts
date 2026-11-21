@@ -9,9 +9,9 @@ import {
 } from "@commonfabric/runner/space-host";
 
 // Parse CLI args for --port (needed because deno --watch doesn't pass env vars)
-function parseCliArgs(): Record<string, string> {
+function parseCliArgs(args: readonly string[]): Record<string, string> {
   const overrides: Record<string, string> = {};
-  for (const arg of Deno.args) {
+  for (const arg of args) {
     if (arg.startsWith("--port=")) {
       overrides.PORT = arg.split("=")[1];
     }
@@ -114,9 +114,9 @@ export const EnvSchema = z.object({
   // traceidratio, parentbased_always_on, parentbased_always_off,
   // parentbased_traceidratio. OTEL_TRACES_SAMPLER_ARG is the ratio for the
   // *ratio variants. Defaults (always_on / 1.0) keep 100% sampling.
-  // Trace-based distinct counts depend on full sampling: the active identity
-  // count reads the user.did attribute on the memory spans, and a ratio sampler
-  // drops identities from that count instead of thinning it proportionally.
+  // Trace-based distinct counts depend on full sampling: the active user count
+  // reads the enduser.id attribute on the memory spans, and a ratio sampler
+  // drops people from that count instead of thinning it proportionally.
   // See docs/features/active-user-counting.md.
   OTEL_TRACES_SAMPLER: z.string().default("always_on"),
   OTEL_TRACES_SAMPLER_ARG: z.string().default("1.0"),
@@ -271,9 +271,8 @@ export const EnvSchema = z.object({
 
   PLAID_CLIENT_ID: z.string().default(""),
   PLAID_SECRET: z.string().default(""),
-  PLAID_ENV: z.enum(["sandbox", "development", "production"]).default(
-    "sandbox",
-  ),
+  // The environments the Plaid SDK has an address for.
+  PLAID_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
   PLAID_PRODUCTS: z.string().default("transactions"),
   PLAID_COUNTRY_CODES: z.string().default("US"),
   PLAID_REDIRECT_URI: z.string().optional(),
@@ -321,8 +320,10 @@ export const EnvSchema = z.object({
     return read.origin.origin;
   }),
 
-  // DEPRECATED: Identity signer passphrase for storage authentication
-  IDENTITY_PASSPHRASE: z.string().default("implicit trust"),
+  // DEPRECATED: Identity signer passphrase for storage authentication. Unset,
+  // a development server signs with a fixed development identity and any
+  // other server needs IDENTITY (lib/identity.ts).
+  IDENTITY_PASSPHRASE: z.string().default(""),
 
   // Path to an identity key.
   IDENTITY: z.string().default(""),
@@ -344,6 +345,22 @@ export const EnvSchema = z.object({
   // set to "false" or "0", and any other spelling refuses startup. See
   // docs/development/EXPERIMENTAL_OPTIONS.md, `syncCidReferencesV1`.
   MEMORY_SYNC_CID_REFERENCES: z.enum(["true", "1", "false", "0"]).default(
+    "true",
+  ).transform((v) => v === "true" || v === "1"),
+  // Whether this deployment's memory server respells, once per store as it
+  // opens, every stored confidentiality label naming a principal by bare DID
+  // as `User{subject}`: on unless set to "false" or "0", and any other
+  // spelling refuses startup. See docs/development/EXPERIMENTAL_OPTIONS.md,
+  // `MEMORY_RETIRE_BARE_DID_LABELS`.
+  MEMORY_RETIRE_BARE_DID_LABELS: z.enum(["true", "1", "false", "0"]).default(
+    "true",
+  ).transform((v) => v === "true" || v === "1"),
+  // Whether this deployment's memory server stores an admitted commit's reads
+  // as a digest where nothing reads them afterward
+  // (docs/specs/memory-v2/02-storage.md §3.3); on unless set to "false" or
+  // "0", and any other spelling refuses startup. Turn it off before rolling
+  // back to a version that predates digest-form rows.
+  MEMORY_STORE_READS_DIGEST: z.enum(["true", "1", "false", "0"]).default(
     "true",
   ).transform((v) => v === "true" || v === "1"),
   // Client retirement is disabled; reject settings that would enable it.
@@ -372,6 +389,18 @@ export const EnvSchema = z.object({
   MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES: z.coerce.number().int()
     .positive().optional(),
 
+  // The most slots one client message may stand for on the memory v2 server
+  // (runtime/memory/v2.ts, MAX_UNTRUSTED_MESSAGE_SLOTS, default 1,000,000):
+  // the places its values fill or leave absent, an array counting its length
+  // and a record its members. It bounds the work one message can cost the
+  // server. Raise it only for a bounded operation that needs more, such as
+  // moving the source of a holder with thousands of members, and unset it
+  // afterwards. It can only raise the default (env.test.ts holds the minimum
+  // to the constant): a direct client sizes its staged watch-set parts by the
+  // default, so a lower limit would refuse a set it sends in parts.
+  MEMORY_UNTRUSTED_MESSAGE_SLOTS: z.coerce.number().int().min(1_000_000)
+    .optional(),
+
   // Set ONLY when a trusted reverse proxy sits in front of this process and
   // overwrites X-Forwarded-For. Rate limiting keys on the real TCP peer by
   // default; behind a proxy every caller would otherwise collapse onto the
@@ -382,10 +411,18 @@ export const EnvSchema = z.object({
 
   // Whether `/api/health/collected-memory` answers: it runs a full garbage
   // collection on every thread it measures, pausing each, for whoever asks.
-  // Off, the route answers 404. Local development servers and test servers
+  // Off, the route answers 404. Every server exposes V8's collector at
+  // startup either way, for the serving-worker pool to collect a worker
+  // before it ends one for its heap. Local development servers and test servers
   // turn it on. On, ENV must be one of TEST_ENVIRONMENTS, so that a server
   // that declares itself staging or production refuses to start with it.
   EXPOSE_GC: boolFlag(),
+
+  // Whether the main thread samples its heap from startup, for the profiles
+  // SIGUSR2 writes (`lib/heap-profiles.ts`). Off by default: the sampler's
+  // inspector session makes Deno hold each worker the main thread starts
+  // about a second for a debugger. The serving workers sample either way.
+  HEAP_PROFILE_MAIN_THREAD: boolFlag(),
 
   // The space this deployment keeps its ingest registry in: channel
   // registrations, their indexes, and Gmail mailbox bindings. Empty means the
@@ -440,9 +477,9 @@ export const EnvSchema = z.object({
 
   // EXPERIMENTAL_* feature flags are no longer declared here: the runtime
   // construction site reads them through the canonical mapping
-  // (`experimentalOptionsFromEnv` / EXPERIMENTAL_ENV_VARS in
+  // (`experimentalOptionsWithFollowedPosture` / EXPERIMENTAL_ENV_VARS in
   // @commonfabric/runner runtime-presets), shared with the CLI so the wirings
-  // cannot drift (CT-1814).
+  // cannot drift (CT-1814), over EXPERIMENTAL_FOLLOWED_POSTURE when set.
 
   // Git SHA of the deployed commit. Set at deploy time; takes priority over
   // the build-baked SHA (see lib/build-info.ts).
@@ -508,17 +545,27 @@ export const EnvSchema = z.object({
 
 export type env = z.infer<typeof EnvSchema>;
 
-// CLI args override env vars (needed for --watch compatibility)
-const cliOverrides = parseCliArgs();
-const { data: env, error } = EnvSchema.safeParse({
-  ...Deno.env.toObject(),
-  ...cliOverrides,
-});
-
-if (error) {
-  console.error("❌ Invalid env:");
-  console.error(JSON.stringify(error.flatten().fieldErrors, null, 2));
-  Deno.exit(1);
+/**
+ * Parses the server's environment from `variables`, with a `--port=` among
+ * `args` overriding `PORT` (needed for `--watch`, which passes no
+ * environment). An invalid environment is reported through `error`, field by
+ * field, and ends the process through `exit` with status 1.
+ */
+export function loadEnv(
+  variables: Record<string, string>,
+  args: readonly string[],
+  exit: (code: number) => never,
+  error: (...data: unknown[]) => void = console.error,
+): env {
+  const parsed = EnvSchema.safeParse({ ...variables, ...parseCliArgs(args) });
+  if (!parsed.success) {
+    error("❌ Invalid env:");
+    error(JSON.stringify(parsed.error.flatten().fieldErrors, null, 2));
+    return exit(1);
+  }
+  return parsed.data;
 }
 
-export default env!;
+const env = loadEnv(Deno.env.toObject(), Deno.args, Deno.exit);
+
+export default env;

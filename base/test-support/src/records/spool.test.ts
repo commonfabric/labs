@@ -10,11 +10,16 @@ import {
   type HeldSpool,
   listSpools,
   listStagingSpools,
+  LOCK_FILE,
   readSpool,
   SPOOL_STAGING_PREFIX,
   tryAdoptSpool,
 } from "./spool.ts";
-import { FragmentWriter } from "./fragment.ts";
+import {
+  FRAGMENT_PREFIX,
+  FRAGMENT_SUFFIX,
+  FragmentWriter,
+} from "./fragment.ts";
 import type { RunContext, TestRecord } from "./schema.ts";
 
 const CONTEXT: RunContext = {
@@ -73,6 +78,29 @@ describe("spool", () => {
       await expect(createRunSpool(file, CONTEXT)).rejects.toThrow();
       expect(await listStagingSpools(root)).toEqual([]);
     });
+
+    it("throws and cleans its staging directory when its lock is held", async () => {
+      // Another holder of the staging lock file is a run that started under
+      // the same report id, which the new run must not take over.
+
+      const staging = join(root, `${SPOOL_STAGING_PREFIX}${CONTEXT.reportId}`);
+      await Deno.mkdir(staging);
+      const rival = await Deno.open(join(staging, LOCK_FILE), {
+        create: true,
+        write: true,
+      });
+      try {
+        expect(await rival.tryLock(true)).toBe(true);
+
+        await expect(createRunSpool(root, CONTEXT)).rejects.toThrow(
+          "another process holds the lock",
+        );
+        expect(await listStagingSpools(root)).toEqual([]);
+        expect(await listSpools(root)).toEqual([]);
+      } finally {
+        rival.close();
+      }
+    });
   });
 
   describe("tryAdoptSpool()", () => {
@@ -93,6 +121,21 @@ describe("spool", () => {
       const adopted = await tryAdoptSpool(dir);
       assert(adopted);
       adopted.close();
+    });
+
+    it("returns a spool whose second close does nothing", async () => {
+      held = await createRunSpool(root, CONTEXT);
+      const dir = held.dir;
+      held.close();
+      held.close();
+      held = undefined;
+
+      const adopted = await tryAdoptSpool(dir);
+      assert(adopted);
+      adopted.close();
+      adopted.close();
+      held = await tryAdoptSpool(dir);
+      expect(held?.dir).toBe(dir);
     });
 
     it("keeps a second adopter out while the first holds it", async () => {
@@ -183,6 +226,42 @@ describe("spool", () => {
       const contents = await readSpool(held.dir);
       expect(contents.records).toEqual([RECORD]);
       expect(contents.warnings.length).toBe(1);
+    });
+
+    it("skips a blank line without a warning", async () => {
+      held = await createRunSpool(root, CONTEXT);
+      const writer = FragmentWriter.open(held.dir);
+      assert(writer);
+      writer.append(RECORD);
+      writer.close();
+      await Deno.writeTextFile(writer.path, "\n", { append: true });
+
+      const contents = await readSpool(held.dir);
+
+      expect(contents.records).toEqual([RECORD]);
+      expect(contents.warnings).toEqual([]);
+    });
+
+    it("warns about a fragment it cannot read and keeps the others", async () => {
+      held = await createRunSpool(root, CONTEXT);
+      const writer = FragmentWriter.open(held.dir);
+      assert(writer);
+      writer.append(RECORD);
+      writer.close();
+      const unreadable = `${FRAGMENT_PREFIX}unreadable${FRAGMENT_SUFFIX}`;
+      await Deno.writeTextFile(
+        join(held.dir, unreadable),
+        `${JSON.stringify(RECORD)}\n`,
+        { mode: 0o000 },
+      );
+
+      const contents = await readSpool(held.dir);
+
+      expect(contents.records).toEqual([RECORD]);
+      expect(contents.warnings.length).toBe(1);
+      expect(contents.warnings[0]).toContain(
+        `unreadable fragment ${unreadable}`,
+      );
     });
 
     it("returns an undefined context for a spool with none", async () => {

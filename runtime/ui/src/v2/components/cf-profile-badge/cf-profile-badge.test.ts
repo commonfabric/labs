@@ -207,43 +207,46 @@ function navResolvedCell(
 }
 
 /**
- * A handle on the cell holding one field of a profile's face: it resolves to
- * itself, and its subscription delivers `value` with `label`. `id` tells two
- * fields apart, and `delivered` resolves once the subscription has delivered.
+ * A handle on one field of a profile's face, whose subscription delivers
+ * `value` with `writtenPrincipal`, the principal the worker read its own cell
+ * to represent, as read with the value only when `current`. `id` tells two
+ * fields apart, `subscriptions()` says how many subscriptions it has had, and
+ * `delivered` resolves once one has delivered.
  */
-function faceField(value: unknown, label?: unknown, id = "of:face") {
+function faceField(
+  value: unknown,
+  writtenPrincipal?: string,
+  id = "of:face",
+  current = true,
+) {
   const delivered = deferred<void>();
-  const cell = {
+  let subscriptions = 0;
+  return {
     ref: () => ({ space: "did:key:zSpace", id, path: [] }),
     space: () => "did:key:zSpace",
     id: () => id,
     runtime: runtimeWithOtherRoot,
-    resolveAsCellWithWriteTarget: () =>
-      Promise.resolve({ cell, writeTarget: cell }),
     subscribe: (
       cb: (
         val: unknown,
         label?: unknown,
-        delivery?: { cfcLabelCurrent: boolean },
+        delivery?: { cfcLabelCurrent: boolean; writtenPrincipal?: string },
       ) => void,
+      options: { includeWrittenPrincipal?: boolean },
     ) => {
-      cb(value, label, { cfcLabelCurrent: true });
+      subscriptions++;
+      cb(
+        value,
+        undefined,
+        current && options.includeWrittenPrincipal === true
+          ? { cfcLabelCurrent: true, writtenPrincipal }
+          : { cfcLabelCurrent: current },
+      );
       delivered.resolve();
       return () => {};
     },
+    subscriptions: () => subscriptions,
     delivered: delivered.promise,
-  };
-  return cell;
-}
-
-/** The label a write of a face field by `subject` stores on its cell. */
-function writtenBy(subject: string) {
-  return {
-    version: 1,
-    entries: [{
-      path: [],
-      label: { integrity: [{ kind: "represents-principal", subject }] },
-    }],
   };
 }
 
@@ -1267,26 +1270,43 @@ describe("CFProfileBadge", () => {
     const picture = new FabricBytes(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
 
     /**
-     * The face a badge draws for a profile whose label names `owner`, and
-     * whose picture and avatar cells hold what `fields` says, each as its
-     * value and the label of its cell. The profile's label is the one the
-     * worker read with its value only when `current`.
+     * A badge for a profile whose label names `owner`, whose picture and
+     * avatar fields hold what `fields` says, each as its value, the principal
+     * the worker read its own cell to represent, and whether it read that
+     * principal with the value. The profile's label is the one the worker
+     * read with its value only when `current`. Returns the face the badge
+     * draws, the face fields, and the schemas the badge read the profile
+     * through, with the one it subscribed with.
      */
     async function faceOf(
       owner: string | undefined,
-      fields: Record<"picture" | "avatar", [unknown, unknown]>,
+      fields: Record<
+        "picture" | "avatar",
+        [unknown, string | undefined] | [unknown, string | undefined, boolean]
+      >,
       current = true,
     ) {
       const cells = {
-        picture: faceField(...fields.picture, "of:picture"),
-        avatar: faceField(...fields.avatar, "of:avatar"),
+        picture: faceField(
+          fields.picture[0],
+          fields.picture[1],
+          "of:picture",
+          fields.picture[2],
+        ),
+        avatar: faceField(
+          fields.avatar[0],
+          fields.avatar[1],
+          "of:avatar",
+          fields.avatar[2],
+        ),
       };
+      let subscribedWith: { properties: Record<string, unknown> } | undefined;
       const badge = badgeOver({
         ref: () => ({ path: [] }),
         space: () => "did:key:zSpace",
         id: () => "fid1:piece",
         runtime: runtimeWithOtherRoot,
-        asSchema: () => ({
+        asSchema: (schema: { properties: Record<string, unknown> }) => ({
           key: (field: "picture" | "avatar") => cells[field],
           subscribe: (
             cb: (
@@ -1295,6 +1315,7 @@ describe("CFProfileBadge", () => {
               delivery?: { cfcLabelCurrent: boolean },
             ) => void,
           ) => {
+            subscribedWith = schema;
             cb(
               { name: "Ada" },
               owner === undefined ? undefined : representsPrincipalLabel(owner),
@@ -1306,55 +1327,79 @@ describe("CFProfileBadge", () => {
       });
       await badge.accessForTestingOnly.resolve();
       await Promise.all([cells.picture.delivered, cells.avatar.delivered]);
-      // The fakes answer through settled promises, so one zero-delay turn
-      // finishes every resolve the face observation started.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      return badge.accessForTestingOnly.face;
+      return {
+        face: badge.accessForTestingOnly.face,
+        cells,
+        subscribedWith,
+      };
     }
 
     it("draws the picture its owner set", async () => {
-      expect(
-        await faceOf(OWNER_DID, {
-          picture: [picture, writtenBy(OWNER_DID)],
-          avatar: ["🦊", writtenBy(OWNER_DID)],
-        }),
-      ).toEqual({ picture, avatar: undefined });
+      const { face } = await faceOf(OWNER_DID, {
+        picture: [picture, OWNER_DID],
+        avatar: ["🦊", OWNER_DID],
+      });
+
+      expect(face).toEqual({ picture, avatar: undefined });
     });
 
     it("draws the owner's avatar in place of a picture someone else set", async () => {
-      expect(
-        await faceOf(OWNER_DID, {
-          picture: [picture, writtenBy(VISITOR_DID)],
-          avatar: [" 🦊 ", writtenBy(OWNER_DID)],
-        }),
-      ).toEqual({ picture: undefined, avatar: "🦊" });
+      const { face } = await faceOf(OWNER_DID, {
+        picture: [picture, VISITOR_DID],
+        avatar: [" 🦊 ", OWNER_DID],
+      });
+
+      expect(face).toEqual({ picture: undefined, avatar: "🦊" });
     });
 
-    it("draws neither a picture stored without a label nor an avatar someone else set", async () => {
-      expect(
-        await faceOf(OWNER_DID, {
-          picture: [picture, undefined],
-          avatar: ["🦊", writtenBy(VISITOR_DID)],
-        }),
-      ).toEqual({ picture: undefined, avatar: undefined });
+    it("draws neither a field the worker reads no principal for, as for one stored without a label or held through a link, nor an avatar someone else set", async () => {
+      const { face } = await faceOf(OWNER_DID, {
+        picture: [picture, undefined],
+        avatar: ["🦊", VISITOR_DID],
+      });
+
+      expect(face).toEqual({ picture: undefined, avatar: undefined });
+    });
+
+    it("draws no face field whose principal the worker has not read with its value", async () => {
+      const { face } = await faceOf(OWNER_DID, {
+        picture: [picture, OWNER_DID, false],
+        avatar: ["🦊", OWNER_DID, false],
+      });
+
+      expect(face).toEqual({ picture: undefined, avatar: undefined });
     });
 
     it("draws no face while the profile's label is not the one the worker read with its value", async () => {
-      expect(
-        await faceOf(OWNER_DID, {
-          picture: [picture, writtenBy(OWNER_DID)],
-          avatar: ["🦊", writtenBy(OWNER_DID)],
-        }, false),
-      ).toEqual({ picture: undefined, avatar: undefined });
+      const { face } = await faceOf(OWNER_DID, {
+        picture: [picture, OWNER_DID],
+        avatar: ["🦊", OWNER_DID],
+      }, false);
+
+      expect(face).toEqual({ picture: undefined, avatar: undefined });
     });
 
     it("draws no face for a profile whose label names no one", async () => {
-      expect(
-        await faceOf(undefined, {
-          picture: [picture, writtenBy(OWNER_DID)],
-          avatar: ["🦊", writtenBy(OWNER_DID)],
-        }),
-      ).toEqual({ picture: undefined, avatar: undefined });
+      const { face } = await faceOf(undefined, {
+        picture: [picture, OWNER_DID],
+        avatar: ["🦊", OWNER_DID],
+      });
+
+      expect(face).toEqual({ picture: undefined, avatar: undefined });
+    });
+
+    it("subscribes to each face field once, and to the profile without its face fields", async () => {
+      const { cells, subscribedWith } = await faceOf(OWNER_DID, {
+        picture: [picture, OWNER_DID],
+        avatar: ["🦊", OWNER_DID],
+      });
+
+      expect([cells.picture, cells.avatar].map((cell) => cell.subscriptions()))
+        .toEqual([1, 1]);
+      const properties = Object.keys(subscribedWith?.properties ?? {});
+      expect(properties).toContain("name");
+      expect(properties).not.toContain("picture");
+      expect(properties).not.toContain("avatar");
     });
   });
 

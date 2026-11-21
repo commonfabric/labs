@@ -204,8 +204,8 @@ export function tagOfFabricValueElseNull<PlusType = never>(
  * prototype identity, which is a per-realm question: another realm's `Map`
  * is a different `Map`, and is not this one. Such a value comes back `null`,
  * unrecognized rather than misidentified. The global constructor bindings do
- * not enter into it: SES lockdown replaces the global `Date` and `RegExp` with
- * constructors of its own that keep the original prototypes, so an instance
+ * not enter into it: SES lockdown replaces the global `Date` with a
+ * constructor of its own that keeps the original prototype, so an instance
  * made before lockdown, after it, or inside a compartment is recognized alike.
  *
  * @throws If `value` is a counterfeit `FabricPrimitive`, per
@@ -290,10 +290,6 @@ export function tagOfConvertibleJsValueElseNull(
 
     case Uint8Array.prototype: {
       return VALUE_TAGS.JsUint8Array;
-    }
-
-    case RegExp.prototype: {
-      return VALUE_TAGS.JsRegExp;
     }
 
     default: {

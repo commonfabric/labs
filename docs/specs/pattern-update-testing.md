@@ -120,10 +120,12 @@ repository decides to ship is declared instead, in
   unconditionally are the ones that can least afford it. For those, fixing
   the pattern is the only move.
 
-An already-recorded contract is not re-validated. It was proved when recorded
-and has not changed since, and both the definition validator and the subset
-proof blow up combinatorially on some real schemas — so the steady state, where
-no contract changed, costs nothing beyond the compile.
+An already-recorded contract is not validated on its own. It was validated
+when recorded and has not changed since, and the definition validator blows up
+combinatorially on some real schemas. The subset proof against every other
+baseline still runs each time, and it validates both of the contracts it
+compares, so a pattern with many baselines costs a proof per baseline even when
+no contract changed.
 
 Compatibility is directional by role. Existing invocations must still satisfy
 the candidate argument schema, so a newly required argument needs a default or
@@ -142,7 +144,13 @@ below its stream marker (a newly required event field is rescued by a valid
 default the candidate carries, including a newly introduced one), and a
 durable-link proof whose target declares a default below a cell. The metadata
 itself must still compare equal across an update: a changed `asCell`, `scope`,
-`readOnly`, or `writeOnly` is refused on its own. Value constraints that
+`readOnly`, or `writeOnly` is refused on its own. The one exception is in an
+argument contract or a link proof: a node that declared no cell becoming a
+comparable one (`asCell: ["comparable"]`, with no scope). A comparable handle
+says how a reader receives the value, as a reference it can compare, not what
+is stored there or what the node accepts, and it writes nothing, so every value
+the node held reads under it. A result contract keeps the marker exact either
+way, since its proof reads from the candidate to the previous contract. Value constraints that
 default insertion can invalidate, such as `maxProperties`, continue to require
 equal defaults beneath them.
 
@@ -362,6 +370,14 @@ deno task pattern-vintage --update apps/topics/topics.test.tsx  # capture a firs
 deno task pattern-vintage --capture-changed                # capture a generation where due
 deno task pattern-vintage --pin apps/topics/topics.test.tsx     # promote the newest generation
 ```
+
+While it runs, the command prints a line on standard error as each step begins,
+numbered against the count of such steps: each fixture's replay
+(`fixture 2/9: …`), each recorded instantiation in that fixture that today's
+source can be applied to (`  target 3/14: …`), and each test run to capture a
+fixture (`capture 1/2: …`). A line is printed only once the step before it has
+ended, so the last line names the step most recently begun. Nothing is printed
+while one long step runs, such as one slow test run.
 
 `--update` and `--pin` name a **test** path, never a pattern path: a fixture is
 produced by running a test and covers whatever that test instantiates.

@@ -68,6 +68,11 @@ export function markPlaceCompileFailure<T extends object>(error: T): T {
   return error;
 }
 
+/** True only for throwables {@link markPlaceCompileFailure} marked. */
+export function isPlaceCompileFailure(error: unknown): boolean {
+  return isObjectOrArray(error) && placeCompileFailures.has(error);
+}
+
 /** Construct an Error already classified as a deterministic compile failure. */
 export function deterministicCompileError(message: string): Error {
   return markDeterministicCompileFailure(new Error(message));

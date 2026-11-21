@@ -216,16 +216,17 @@ Shows greeked text: `••••••••••••hJ9k` (last 4 character
 | `trailing-chars` | `number` | `4` | Visible characters at end when masked |
 
 ### Usage
-```html
+```tsx
+// Shown for illustration only.
 <cf-secret-viewer
   label="Webhook URL"
   value={config.url}
-  trailing-chars={4}
+  trailingChars={4}
 />
 <cf-secret-viewer
   label="Bearer Token"
   value={config.secret}
-  trailing-chars={4}
+  trailingChars={4}
 />
 ```
 

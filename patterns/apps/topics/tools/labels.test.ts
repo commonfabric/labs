@@ -183,5 +183,25 @@ describe("labels", () => {
       expect(atomText({ kind: "authored-by", subject: "did:key:zA" }))
         .toBe("authored-by(did:key:zA)");
     });
+
+    it("returns a principal by the last part of its type, with each field", () => {
+      expect(atomText({
+        type: "https://commonfabric.org/cfc/atom/User",
+        subject: "did:key:zA",
+        n: 2,
+      }))
+        .toBe("User(did:key:zA, 2)");
+      expect(atomText({ marker: true })).toBe("atom(true)");
+      expect(atomText({ kind: "public" })).toBe("public");
+    });
+
+    it("returns a string as itself, and any other value that is not an object as JSON", () => {
+      expect(atomText("did:key:zLongEnoughToBeCutShort1234567890")).toBe(
+        "did:key:zLongEnoughToBeCutShort1234567890",
+      );
+      expect(atomText(["a", 1])).toBe('["a",1]');
+      expect(atomText(7)).toBe("7");
+      expect(atomText(undefined)).toBe("undefined");
+    });
   });
 });

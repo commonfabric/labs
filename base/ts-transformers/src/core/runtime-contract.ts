@@ -60,10 +60,10 @@ export interface BuilderSourceSitesV1 {
 export function isBuilderSourceSitesV1(
   value: unknown,
 ): value is BuilderSourceSitesV1 {
-  if (!isRecord(value) || value.formatVersion !== 1) return false;
-  if (!isRecord(value.sites)) return false;
+  if (!isObjectNotArray(value) || value.formatVersion !== 1) return false;
+  if (!isObjectNotArray(value.sites)) return false;
   for (const [symbol, site] of Object.entries(value.sites)) {
-    if (symbol.length === 0 || !isRecord(site)) return false;
+    if (symbol.length === 0 || !isObjectNotArray(site)) return false;
     if (!isIntegerAtLeast(site.line, 1) || !isIntegerAtLeast(site.col, 0)) {
       return false;
     }
@@ -75,10 +75,6 @@ export function isBuilderSourceSitesV1(
     }
   }
   return true;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return isObjectNotArray(value);
 }
 
 function isIntegerAtLeast(value: unknown, minimum: number): value is number {

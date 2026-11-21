@@ -60,6 +60,48 @@ deno task cf piece new patterns/[name]/main.tsx --test patterns/[name]/main.test
 # Output: Created piece bafyreia... <- SAVE this piece ID
 ```
 
+**Versions are kept for you.** Once the person has joined a pattern index that
+keeps versions, each `piece new <file>` and `piece setsrc` of their own pattern
+whose source changed is kept as a private version, and the deploy prints one
+line saying which; a `setsrc --origin` deploy, or one of someone else's pattern
+unchanged, keeps none. Nobody runs a save command. To undo a bad step,
+`cf pattern history <entry>` lists the versions and
+`cf pattern rollback <entry> <version>` restores one over the files (then
+`setsrc` to update the piece). Rollback refuses over edits never deployed.
+Deploys never share by themselves. When the person's sharing setting covers what
+they build, the index shares a version anonymously once they have used it in a
+loom for a day with no newer version and it passes the privacy check, and the
+deploy line says so (`version.autoShare: "when_used"` under `--json`); that
+share is findable unless the pattern was last shared on beta. `cf pattern share`
+shares on beta, by link only, and later automatic shares of that pattern stay on
+beta too until `cf pattern stable`; run it when the person asks for a link to
+try, or to share with the setting off. In a tight edit loop, pass
+`--no-index-version` so deploys do not wait on the index.
+
+**Sharing** (on beta, reachable by its link; `cf pattern stable` then makes it
+findable) takes the same identity, API URL, space and packaging flags (`--test`,
+`--datafile`) it was deployed with, so the shared id is the deployed one:
+
+```bash
+deno task cf pattern share patterns/[name]/main.tsx --test patterns/[name]/main.test.tsx --json --identity cf.key --api-url $CF_API_URL --space <space>
+```
+
+Sharing is anonymous: others see a pseudonym of this pattern alone.
+`cf pattern publish` instead shows the person's name, which cannot be unseen:
+run it only when they ask, and pass `--as "<name>"` only after they agree to the
+name it prints. The person joins once by piping their invite link to
+`cf index join` (the link carries a secret; keep it off the command line). A
+second machine does not redeem another invite: the first runs
+`cf delegation issue --index --to <DID>` and the second
+`cf index join --chain <file>`. Sharing checks the pattern for personal details
+and may rewrite the files into a general version; when `localCheck.applied` is
+`true`, tell the person what changed (`git diff`, or the kept version that
+`cf pattern rollback` restores), and update the deployed piece with the
+rewritten files (`cf piece setsrc`, below) so it runs the source the index
+shared. `outcome: "blocked"` shared nothing, and `next` says what to do before
+running it again. The rest is in `runtime/cli/README.md`, "Keeping, sharing and
+publishing in the pattern index".
+
 **Update deployed pattern (all subsequent iterations):**
 
 ```bash
@@ -76,12 +118,15 @@ or the new revision will omit those test roots.
 A pattern reads a file that is not code — a fixture, a lookup table — with
 `dataFile(path)` from `commonfabric`, naming it relative to the module that
 reads it. That call is the declaration, so `new`, `setsrc`, `check` and `test`
-all attach the file without being told. Its bytes are stored verbatim and never
-parsed, compiled, or importable; it must be UTF-8 text inside the deployment
-root. Repeatable `--datafile <path>` remains for a file the source cannot name:
-one read by a computed path, or one that ships with a pattern that does not read
-it. The same complete-revision rule applies to those, so repeat every data-file
-flag on each update too.
+all attach the file without being told. It is never parsed, compiled, or
+importable, and `getsrc` returns it byte for byte. It must sit inside the
+deployment root, and be UTF-8 text, which `dataFile(path)` reads, or an image, a
+font, or a sound, which `dataFile.url(path)` reads as a `data:` URL
+(`dataFile.urls(directory)` reads a directory of them). Repeatable
+`--datafile <path>` remains for a file the source cannot name: one read by a
+computed path, or one that ships with a pattern that does not read it. The same
+complete-revision rule applies to those, so repeat every data-file flag on each
+update too.
 
 **Inspect piece state:**
 

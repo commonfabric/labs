@@ -30,6 +30,7 @@
 export * from "@/codec-interface/index.ts";
 
 export { codecOf } from "./codecOf.ts";
+export { hasOnlyKeys } from "./hasOnlyKeys.ts";
 export { isCodecTypeTag } from "./isCodecTypeTag.ts";
 export { isInterchangeTag } from "./isInterchangeTag.ts";
 export { CodecRegistry } from "./CodecRegistry.ts";

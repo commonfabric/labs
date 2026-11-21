@@ -1,7 +1,8 @@
 // The toolshed process's ONE resolution of the server-execution v2 flag
 // (docs/specs/server-side-execution/; docs/plans/server-execution-v2.md
 // Phase 7): the environment's explicit `EXPERIMENTAL_SERVER_EXECUTION`
-// value when set, else the first-party default. Both consumers in this
+// value when set, else the value of the deployment this toolshed follows
+// (`EXPERIMENTAL_FOLLOWED_POSTURE`), else the first-party default. Both consumers in this
 // process — the serving-host bootstrap (`server-execution.ts`) and the
 // memory server's service-principal grant (`routes/storage/memory.ts`) —
 // read THIS, so they can never disagree about the posture. Kept a leaf
@@ -10,15 +11,15 @@
 
 import {
   type EnvReader,
-  experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
 } from "@commonfabric/runner";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 
 /** Whether THIS toolshed process runs the server-execution v2 posture:
- * the explicit env value if present (`"true"` / `"false"`), else
- * `SERVER_EXECUTION_DEFAULT_ENABLED`. */
+ * the explicit env value if present (`"true"` / `"false"`), else the
+ * followed deployment's, else `SERVER_EXECUTION_DEFAULT_ENABLED`. */
 export function serverExecutionEnabledFromEnv(envGet: EnvReader): boolean {
-  return experimentalOptionsFromEnv(envGet).serverExecution ??
+  return experimentalOptionsWithFollowedPosture(envGet).serverExecution ??
     SERVER_EXECUTION_DEFAULT_ENABLED;
 }
 
@@ -51,6 +52,17 @@ export function serverExecutionEnabledFromEnv(envGet: EnvReader): boolean {
  *   sink), so binding its READS to the attributed user grants nothing
  *   the process does not structurally hold — it ATTRIBUTES what was
  *   ambient.
+ * - `isDelegatingPeer` — under the flag, the `listsPeer` the caller gave,
+ *   and otherwise absent. A deployment behind the memory router gives each
+ *   toolshed an identity of its own, and a crossing into a space another
+ *   toolshed owns reaches that owner as a session of the toolshed that
+ *   sent it (owner routing, serving-loop.md §2). The owner admits it when
+ *   the deployment's directory lists the sender as a toolshed: the
+ *   directory already decides which process owns each space, so the
+ *   processes it names are the co-hosted ones the LT5 footing covers. The
+ *   directory is read on each decision, so the class follows it. A process
+ *   with no directory has no peers to name, and its class is its own
+ *   identity alone, which covers a deployment whose processes share one.
  *
  * If the operator ALSO listed the process identity in
  * `MEMORY_SERVICE_DIDS`, verbatim wins — it is then an OWNER-class
@@ -62,12 +74,18 @@ export function memoryAclPrincipalsFor(options: {
   configured: readonly string[];
   processIdentityDid: string;
   serverExecution: boolean;
+  /** Whether the deployment's directory lists a DID as a toolshed's identity. */
+  listsPeer?: (did: string) => boolean;
 }): {
   serviceDids: readonly string[];
   delegatingDids: readonly string[];
+  isDelegatingPeer?: (did: string) => boolean;
 } {
   return {
     serviceDids: [...options.configured],
     delegatingDids: options.serverExecution ? [options.processIdentityDid] : [],
+    ...(options.serverExecution && options.listsPeer !== undefined
+      ? { isDelegatingPeer: options.listsPeer }
+      : {}),
   };
 }

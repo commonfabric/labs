@@ -44,6 +44,14 @@ describe("value-hash/impl", () => {
         "Cannot hash unique (uninterned) symbol",
       );
     });
+
+    it("throws for a function, which is no `FabricValue`", () => {
+      // Reachable only through an unsound cast, which this stands in for.
+      const fn = (() => 1) as unknown as FabricValue;
+
+      expect(() => hashOf(fn)).toThrow("Cannot hash value");
+      expect(() => hashOf(1)).not.toThrow();
+    });
   });
 
   describe("hashStringOf", () => {

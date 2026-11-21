@@ -349,13 +349,7 @@ export function followHistoryPage<P extends CollectionProgress>(
   };
   const loadRange = async (mode: "push" | "restore" | "refresh" | "pop") => {
     if (navigating) return;
-    if (rangeRequest) {
-      if (mode === "refresh") {
-        pendingRefresh = true;
-        return;
-      }
-      rangeRequest.abort();
-    }
+    rangeRequest?.abort();
     const requestedDays = days.value;
     const url = new URL(location.href);
     url.searchParams.set("days", requestedDays);

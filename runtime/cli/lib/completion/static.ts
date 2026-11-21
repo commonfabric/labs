@@ -44,6 +44,10 @@ const ENUMERATED_OPTION_VALUES: Readonly<Record<string, readonly string[]>> = {
   "cfc-flow-labels": ["off", "derive", "observe", "persist"],
   // `cf piece map --format`.
   "format": ["ascii", "dot"],
+  // `cf index sharing --self-built`.
+  "self-built": ["on", "off"],
+  // `cf piece new|setsrc --version-origin`: who wrote the source a version holds.
+  "version-origin": ["agent"],
   // `cf piece survey --side`: which document holds the collection.
   "side": ["input", "result"],
   // `cf inspect entities --kind`, the seven its help enumerates.
@@ -59,10 +63,8 @@ const ENUMERATED_OPTION_VALUES: Readonly<Record<string, readonly string[]>> = {
 };
 
 /** First sentence of a description, for the shell's annotation column. */
-function summarize(description: unknown): string | undefined {
-  if (typeof description !== "string") return undefined;
+function summarize(description: string): string | undefined {
   const text = description.trim().split("\n")[0];
-  if (!text) return undefined;
   const sentence = text.match(/^(.{1,72}?)(?:\.\s|\.$|$)/);
   return (sentence?.[1] ?? text).trim() || undefined;
 }

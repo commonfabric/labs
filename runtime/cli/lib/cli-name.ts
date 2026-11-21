@@ -1,32 +1,5 @@
-import { basename } from "@std/path/basename";
-
-function normalizeCliName(
-  name: string | undefined | null,
-): "cf" | undefined {
-  const normalized = name?.trim().toLowerCase();
-  if (normalized === "cf" || normalized === "cf.exe") {
-    return "cf";
-  }
-  return undefined;
-}
-
-export function cliName(
-  options: { envName?: string | undefined; execPath?: string | undefined } = {},
-): "cf" {
-  const envName = normalizeCliName(
-    options.envName ?? Deno.env.get("CF_CLI_NAME"),
-  );
-  if (envName) {
-    return envName;
-  }
-
-  const execName = normalizeCliName(
-    basename(options.execPath ?? Deno.execPath()),
-  );
-  if (execName) {
-    return execName;
-  }
-
+/** The name the CLI is invoked by, as its help and messages spell it. */
+export function cliName(): "cf" {
   return "cf";
 }
 

@@ -1,4 +1,5 @@
 import type {
+  BranchName,
   OpCursor,
   OperationWatchSpec,
   SessionDescriptor,
@@ -9,6 +10,7 @@ import type {
   ViewQuery,
   WatchSpec,
 } from "../v2.ts";
+import { DEFAULT_BRANCH } from "../v2.ts";
 import type { ClientInfo } from "./client-info.ts";
 import {
   type DocumentInterestQuery,
@@ -18,6 +20,26 @@ import {
 import type { TrackedGraphState } from "./query.ts";
 import type { SessionCacheEntry } from "./server-sync.ts";
 import { trackedIdsFromEntries } from "./server-sync.ts";
+
+/**
+ * Why a session owes a full watch evaluation:
+ * - `first-selection`: the planner sent the first selection for a view, or
+ *   the first for a new revision of one;
+ * - `resume`: the session was resumed over a new connection, which replaced
+ *   the delivery state its next sync diffs against;
+ * - `lost-frame`: a frame that never reached the client was rolled back,
+ *   leaving delivery state only a full evaluation re-diffs;
+ * - `failed-pass`: a refresh pass failed after it may have advanced the
+ *   session's tracking state;
+ * - `routed-restore`: a routed context's retained interests were cleared
+ *   ahead of a fresh-context restore.
+ */
+export type FullResyncCause =
+  | "first-selection"
+  | "resume"
+  | "lost-frame"
+  | "failed-pass"
+  | "routed-restore";
 
 export type SessionState = {
   id: string;
@@ -95,11 +117,10 @@ export type SessionState = {
   caughtUpLocalSeq: number;
   pendingCaughtUpLocalSeq: number;
 
-  /** Set when delivery-state rollback re-inserted tombstone cache entries
-   * for a lost frame's removes: the incremental refresh retracts only what
-   * its own re-walks retire, so the next sync must run a FULL watch
-   * evaluation to re-diff them out. Self-clearing. */
-  forceFullResync: boolean;
+  /** Why the session's next sync runs a FULL watch evaluation instead of
+   * an incremental refresh, or `false` when it owes none. Self-clearing.
+   * The cause is carried into the slow-query record of that evaluation. */
+  forceFullResync: FullResyncCause | false;
 
   /**
    * Set when a planner selection changed what the session's views may run
@@ -149,6 +170,32 @@ export type SessionState = {
    * per open, in every access-list mode. */
   servingBinding?: true;
 
+  /** Whether the session is a serving loop's own, not a client's: its
+   * latest open came over a connection from the process that holds this
+   * server, declared the serving binding (a serving runtime of another
+   * process), or declared that it is not demand
+   * (`SessionDescriptor.demand`). A client signed with the same key as the
+   * serving loop is still a client. Fresh per open, in every access-list
+   * mode. */
+  servingOwn?: true;
+
+  /**
+   * Whether the session is not client demand: its latest open declared so
+   * (`SessionDescriptor.demand`), or it is a session of a branch, which no
+   * serving loop runs. Such a session is not client demand on any server,
+   * whoever signed it, where a serving loop's own session of another kind
+   * is left out only by the server whose loop it belongs to
+   * (`isServingSessionOf()`). Fresh per open, in every access-list mode.
+   */
+  notDemand?: true;
+
+  /**
+   * The branch the session is of (`SessionDescriptor.branch`), which its
+   * commits, queries and watches read and write when they name none.
+   * Absent for a session of the default branch.
+   */
+  branch?: BranchName;
+
   /** Client report supplied by the latest admitted open. */
   client?: ClientInfo;
 
@@ -159,7 +206,8 @@ export type SessionState = {
   principal?: string;
 
   /** The delegated READ binding (OW31; `SessionDescriptor.actingAs`):
-   * the acting user — the space's ACL owner at open time — this
+   * the acting user — the space's ACL owner at open time, or the owner an
+   * access list first names after an open that found none — this
    * session's READ-class capability decisions resolve as. Never
    * consulted for WRITE/OWNER requirements, the lease-holder read row,
    * or scoped-read identity (those key on `principal`, the envelope).
@@ -174,6 +222,21 @@ export type SessionState = {
    * Fresh per open; a resume presenting no chain drops it.
    */
   capabilityPrincipal?: string;
+
+  /**
+   * The issuers of the proof chain this session's latest open presented,
+   * root first. Fresh per open, like `capabilityPrincipal`.
+   */
+  chainIssuers?: readonly string[];
+
+  /**
+   * Whether the space's own key is a person's identity on this session's
+   * space, which the person its spans record as `enduser.id` depends on.
+   * The server decides it when the session opens, and again when a commit
+   * changes the space's access list; `undefined` when neither the session's
+   * principal nor its chain names the space's key.
+   */
+  ownKeyIsPerson?: boolean;
 
   /**
    * Set when the opening connection's client advertised `elidedVerdicts`:
@@ -200,6 +263,10 @@ export type SessionLifecycleEvent =
     readonly sessionId: string;
     readonly principal?: string;
     readonly readCeiling?: SessionReadCeiling;
+    /** See `SessionState.servingOwn`. */
+    readonly servingOwn?: true;
+    /** See `SessionState.notDemand`. */
+    readonly notDemand?: true;
   }
   | {
     readonly kind: "detached";
@@ -214,6 +281,8 @@ export type SessionLifecycleEvent =
   };
 
 type OpenSessionState = {
+  /** The state the registry now holds for the session. */
+  state: SessionState;
   sessionId: string;
   sessionToken: SessionToken;
   serverSeq: number;
@@ -243,7 +312,29 @@ const openedEvent = (session: SessionState): SessionLifecycleEvent => ({
   ...(session.readCeiling === undefined
     ? {}
     : { readCeiling: session.readCeiling }),
+  ...(session.servingOwn === true ? { servingOwn: true } : {}),
+  ...(session.notDemand === true ? { notDemand: true } : {}),
 });
+
+/**
+ * Whether the serving loop of `principal` leaves `session` out of client
+ * demand: the session is one of that loop's own
+ * (`SessionState.servingOwn`, signed by `principal`), or it is not
+ * demand (`SessionState.notDemand`), whoever signed it. A session of
+ * that principal from a client that made no such declaration, and any
+ * session when `principal` is `undefined`, is not left out.
+ */
+export const isServingSessionOf = (
+  session: {
+    readonly principal?: string;
+    readonly servingOwn?: true;
+    readonly notDemand?: true;
+  },
+  principal: string | undefined,
+): boolean =>
+  principal !== undefined &&
+  (session.notDemand === true ||
+    (session.servingOwn === true && session.principal === principal));
 
 export class SessionRegistry {
   readonly #ttlMs: number;
@@ -314,6 +405,8 @@ export class SessionRegistry {
     routed = false,
     elidedVerdicts = false,
     capabilityPrincipal?: string,
+    inProcess = false,
+    chainIssuers?: readonly string[],
   ): OpenSessionState {
     this.#prune();
     const sessionId = session.sessionId ?? crypto.randomUUID();
@@ -340,6 +433,18 @@ export class SessionRegistry {
         `session ${sessionId} is already bound to ${existing.principal}`,
       );
     }
+    // A session's replica holds one branch's documents, which a resume on
+    // another branch would leave it holding as though they were that one's.
+    if (
+      existing !== undefined &&
+      (existing.branch ?? DEFAULT_BRANCH) !== (session.branch ?? DEFAULT_BRANCH)
+    ) {
+      throw authorizationError(
+        `session ${sessionId} is of another branch`,
+      );
+    }
+    const onBranch = session.branch !== undefined &&
+      session.branch !== DEFAULT_BRANCH;
     if (
       existing !== undefined &&
       session.sessionToken !== existing.sessionToken &&
@@ -369,7 +474,7 @@ export class SessionRegistry {
         existing.ownerConnectionId !== ownerConnectionId
       ? existing.ownerConnectionId
       : undefined;
-    this.#sessions.set(key, {
+    const state: SessionState = {
       id: sessionId,
       space,
       sessionToken,
@@ -440,12 +545,25 @@ export class SessionRegistry {
       ...(session.actingAs === "space-owner"
         ? { servingBinding: true as const }
         : {}),
+      ...(inProcess || session.actingAs === "space-owner" ||
+          session.demand === false
+        ? { servingOwn: true as const }
+        : {}),
+      // No serving loop runs a branch, so a session of one is demand on
+      // nothing.
+      ...(session.demand === false || onBranch
+        ? { notDemand: true as const }
+        : {}),
+      ...(onBranch ? { branch: session.branch } : {}),
       // Fresh per open, like the binding: the chain THIS open presented.
       ...(capabilityPrincipal !== undefined ? { capabilityPrincipal } : {}),
+      ...(chainIssuers !== undefined ? { chainIssuers } : {}),
       ...(elidedVerdicts ? { elidedVerdicts: true } : {}),
-    });
-    this.#observer?.(openedEvent(this.#sessions.get(key)!));
+    };
+    this.#sessions.set(key, state);
+    this.#observer?.(openedEvent(state));
     return {
+      state,
       sessionId,
       sessionToken,
       serverSeq,
@@ -466,22 +584,6 @@ export class SessionRegistry {
    */
   peek(space: string, sessionId: string): SessionState | undefined {
     return this.#sessions.get(sessionKey(space, sessionId));
-  }
-
-  hasOpenSessionForPrincipal(
-    space: string,
-    principal: string | undefined,
-  ): boolean {
-    this.#prune();
-    for (const session of this.#sessions.values()) {
-      if (
-        session.space === space &&
-        session.principal === principal
-      ) {
-        return true;
-      }
-    }
-    return false;
   }
 
   sessionsForSpace(space: string): SessionState[] {
@@ -552,7 +654,7 @@ export class SessionRegistry {
     session.viewSelections = new Map();
     session.viewDemandGraphs = new Map();
     session.viewDemandEntities = new Map();
-    session.forceFullResync = true;
+    session.forceFullResync = "routed-restore";
     session.viewPlansPending = false;
     session.viewSupportGrown = false;
     session.viewSupportReplaced = false;

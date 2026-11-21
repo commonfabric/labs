@@ -1,3 +1,10 @@
+/**
+ * A reading list that stores each item as its own piece, with tabs to filter by
+ * status, an add form, an Edit button that navigates to the item's detail
+ * piece, and a remove button. It demonstrates creating sub-pieces from an
+ * action, pushing them into an array, and calling `navigateTo` on one.
+ */
+
 import {
   action,
   computed,

@@ -569,6 +569,10 @@ export interface SchedulerActionRunState {
   readonly maybeAutoDebounce: (action: Action) => void;
   readonly markActionHasRun: (action: Action) => void;
   readonly markNodeHasRun: (action: Action) => void;
+
+  /** Notes that `action` finished a run that was not withdrawn
+   * (`Scheduler.watchProducedDocument()`). */
+  readonly noteProduced?: (action: Action) => void;
   readonly handleError: (error: Error, action: Action) => void;
   readonly resubscribe: (action: Action, log: ReactivityLog) => void;
   readonly markInvalid: (action: Action, options?: MarkInvalidOptions) => void;
@@ -937,7 +941,7 @@ export async function runSchedulerAction(
 /** B7: the causes a fanned-out instance run carries as its CFC trigger
  * reads — those that dirtied ITS instance (a keyed cause resolving on the
  * instance identity's own chain) plus every untargeted one. */
-function causesForInstance(
+export function causesForInstance(
   causes: readonly IMemorySpaceAddress[],
   instance: FanOutInstance,
 ): IMemorySpaceAddress[] {
@@ -1087,12 +1091,24 @@ function finalizeSchedulerAction(
   }
 
   try {
-    if (args.error) {
+    // A served run that read a scoped instance the serving loop has not
+    // produced yet is withdrawn at its commit, below, whatever it derived
+    // from that absence; a throw is one more thing it derived from it, so it
+    // is withdrawn with the run rather than reported. The run's read of the
+    // instance stays subscribed, and a throw once the instance is produced is
+    // reported as any other.
+    if (args.error && args.tx.tx.unproducedScopedInstance === undefined) {
       logger.error("schedule-error", () => [
         `[RUN] Action failed: ${args.actionId}`,
         `Error: ${args.error}`,
       ]);
       state.handleError(normalizeThrownError(args.error), args.action);
+    } else if (args.error) {
+      logger.debug("schedule-withdrawn-error", () => [
+        `[RUN] Action threw after reading a scoped instance not yet ` +
+        `produced, withdrawn: ${args.actionId}`,
+        `Error: ${args.error}`,
+      ]);
     }
   } finally {
     finalizeReactiveActionCommit(state, args, elapsed);
@@ -1473,6 +1489,20 @@ function finalizeReactiveActionCommit(
         fanOutRun.instance.key,
     );
   const owner = fanOutRun === undefined ? node : instanceRecord;
+  // Whether the run finished without being withdrawn. For a JavaScript
+  // derivation, which writes its whole result in its run, that means it has
+  // produced its output, whatever it wrote: a served reader of an instance it
+  // left absent reads that absence as the instance's state
+  // (`Scheduler.owesScopedInstance()`, which ignores the flag on a builtin,
+  // whose output can land after its run returns). A withdrawn run read
+  // something it could not take as state, so what it left is not its output.
+  // A run that was not withdrawn also wakes whoever watches the documents it
+  // writes (`Scheduler.watchProducedDocument()`): one that left its instance
+  // absent commits no write there to wake them otherwise.
+  if (refused === undefined && unproduced === undefined) {
+    if (owner !== undefined) owner.produced = true;
+    state.noteProduced?.(args.action);
+  }
   const registrationToken = args.registrationToken;
   // Sealing is not durable acceptance. A withdrawn contribution can have read
   // an unchanged field through another contribution's pending document; rolling
@@ -1614,10 +1644,6 @@ export function schedulerImplementationFingerprint(
     telemetry?.moduleName,
   ].filter((part): part is string => !!part).join(":") || `action:${actionId}`;
   return `action:${telemetryId}:${actionId}`;
-}
-
-export function schedulerRuntimeFingerprint(): string {
-  return "runner:scheduler:v3";
 }
 
 function recordOptionalActionRunDiagnostics(

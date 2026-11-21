@@ -4,9 +4,9 @@
  * (bad input / missing auth) that reject *before* any runtime/storage access,
  * so they need no runtime fixture. End-to-end delivery is covered separately.
  *
- * Driven through the real `app` (not a freshly-mounted router) because the
- * webhook handlers import the `runtime` singleton from `@/index.ts`, which
- * imports `@/app.ts` — re-mounting the router standalone hits that import cycle.
+ * Driven through the real `app`, to show the router `webhooks.index.ts` builds
+ * is mounted. The handlers against a real runtime are tested in
+ * webhooks.handlers.test.ts.
  */
 
 import { describe, it } from "@std/testing/bdd";

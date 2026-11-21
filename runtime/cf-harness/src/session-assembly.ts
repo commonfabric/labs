@@ -83,6 +83,7 @@ import {
   COMMAND_ENFORCEMENT_GUIDANCE,
   LOOM_COMMANDS_TOOL_GUIDANCE,
   LOOM_RETRIEVAL_TOOL_GUIDANCE,
+  PIECE_SOURCE_TOOL_GUIDANCE,
   PIECES_TOOL_GUIDANCE,
   RESEARCH_TOOL_GUIDANCE,
   RESOLVE_PIECE_TOOL_GUIDANCE,
@@ -441,10 +442,16 @@ export const harnessSessionEngineOptions = (
 export interface EstablishHarnessSessionContextOptions {
   engine: CfHarnessEngine;
 
-  config: Pick<
-    HarnessSessionConfig,
-    "skillsRoot" | "skillsRootSandboxPath" | "skillNames" | "allowedToolIds"
-  >;
+  /**
+   * The session's configuration. A session that names no subagent profiles is
+   * told of none: its guidance leaves out whatever only a named profile does.
+   */
+  config:
+    & Pick<
+      HarnessSessionConfig,
+      "skillsRoot" | "skillsRootSandboxPath" | "skillNames" | "allowedToolIds"
+    >
+    & Partial<Pick<HarnessSessionConfig, "allowedSubagentProfiles">>;
 
   /**
    * Where a session that could not connect its fabric is reported. The run
@@ -562,6 +569,7 @@ const establishContextMessages = async (
     loomCommandsAvailable: engine.config.loomCommands !== undefined,
     loomRetrievalAvailable: engine.config.loomRetrieval !== undefined,
     allowedToolIds: config.allowedToolIds,
+    subagentProfiles: config.allowedSubagentProfiles,
     cfcEnforcementMode: engine.config.cfcEnforcementMode,
   });
   for (const message of toolGuidance) {
@@ -577,6 +585,7 @@ const CONTEXT_MESSAGE_SECTIONS: ReadonlyMap<string, PromptSection> = new Map([
   [AUTHOR_TOOL_GUIDANCE, "author-tools"],
   [RESEARCH_TOOL_GUIDANCE, "research-tools"],
   [PIECES_TOOL_GUIDANCE, "pieces-tools"],
+  [PIECE_SOURCE_TOOL_GUIDANCE, "piece-source-tools"],
   [RESOLVE_PIECE_TOOL_GUIDANCE, "resolve-piece-tools"],
   [LOOM_COMMANDS_TOOL_GUIDANCE, "loom-commands-tools"],
   [COMMAND_ENFORCEMENT_GUIDANCE, "loom-commands-tools"],

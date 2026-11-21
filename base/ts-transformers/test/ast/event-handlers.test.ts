@@ -1,8 +1,11 @@
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 import { assertEquals } from "@std/assert";
 import ts from "typescript";
 import {
   isEventHandlerJsxAttribute,
   isEventHandlerType,
+  isSafeEventHandlerCall,
 } from "../../src/ast/event-handlers.ts";
 
 /**
@@ -336,4 +339,74 @@ Deno.test("isEventHandlerJsxAttribute - label (string prop) NOT detected as hand
     false,
     "label (string prop) should NOT be detected as handler",
   );
+});
+
+describe("event-handlers", () => {
+  describe("isSafeEventHandlerCall()", () => {
+    function callOf(source: string): ts.CallExpression {
+      const sourceFile = ts.createSourceFile(
+        "/call.ts",
+        source,
+        ts.ScriptTarget.ESNext,
+        true,
+      );
+      const [statement] = sourceFile.statements;
+      if (
+        !statement || !ts.isExpressionStatement(statement) ||
+        !ts.isCallExpression(statement.expression)
+      ) {
+        throw new Error(`Not a call statement: ${source}`);
+      }
+      return statement.expression;
+    }
+
+    it("returns whether a method callee's name starts with `on`", () => {
+      expect(isSafeEventHandlerCall(callOf("props.onClick();"))).toBe(true);
+      expect(isSafeEventHandlerCall(callOf("items.map(f);"))).toBe(false);
+    });
+
+    it("returns whether an identifier callee starts with `on`", () => {
+      expect(isSafeEventHandlerCall(callOf("onSubmit(event);"))).toBe(true);
+      expect(isSafeEventHandlerCall(callOf("submit(event);"))).toBe(false);
+    });
+
+    it("returns `false` for a callee that is neither a name nor a property access", () => {
+      expect(isSafeEventHandlerCall(callOf("handlers['onClick']();"))).toBe(
+        false,
+      );
+      expect(isSafeEventHandlerCall(callOf("(onClick)();"))).toBe(false);
+    });
+  });
+
+  describe("isEventHandlerJsxAttribute()", () => {
+    it("returns `true` for the name node of an `on*` attribute", () => {
+      const { sourceFile } = createJsxTestProgram(
+        `<button onClick={() => {}}>Click</button>`,
+      );
+      const attribute = findJsxAttribute(sourceFile, "onClick");
+      if (!attribute) throw new Error("onClick attribute not found");
+
+      expect(isEventHandlerJsxAttribute(attribute.name)).toBe(true);
+    });
+
+    it("returns `false` for a node that is not an attribute or its child", () => {
+      const { sourceFile } = createJsxTestProgram(
+        `<button onClick={() => {}}>Click</button>`,
+      );
+      const attribute = findJsxAttribute(sourceFile, "onClick");
+      if (!attribute?.initializer) {
+        throw new Error("onClick attribute not found");
+      }
+      if (!ts.isJsxExpression(attribute.initializer)) {
+        throw new Error("onClick initializer is not an expression");
+      }
+      const callback = attribute.initializer.expression;
+      if (!callback) throw new Error("onClick has no callback");
+
+      // The callback sits two levels below the attribute, inside its
+      // `JsxExpression`, so it is neither the attribute nor its child.
+      expect(isEventHandlerJsxAttribute(callback)).toBe(false);
+      expect(isEventHandlerJsxAttribute(sourceFile)).toBe(false);
+    });
+  });
 });

@@ -239,22 +239,40 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
 - **A reference is a cell, and identity is the only thing compared.** The board
   derives the whole graph once, in `crossrefTable`, from the same topics array
   read under two minimal declared views: one for identity, one for what each
-  topic points at. Matching is a scan of `equals`, because nothing in the
-  pattern API turns a topic reference into a resolved key carrying space, scope,
-  and path. The comparisons come from two passes. Finding the distinct topics,
-  in `distinctByIdentity`, compares each of the board's `n` entries with the
-  distinct entries kept before it, at most `n(n - 1) / 2` comparisons, which
-  grows with the square of the topic count even on a board with no mentions.
-  Each distinct topic's row then checks every source's mentions for that topic,
-  which grows as the number of topics times the number of mentions.
+  topic points at. Identity is what `equals` decides, and two passes ask it.
+  Finding the distinct topics, in `distinctByIdentity`, keys each of the board's
+  `n` entries by `equalsKey`, which two entries share exactly when `equals`
+  matches them, and keeps an entry whose key a set does not hold yet: `n` keys
+  and `n` lookups. The join, in `mentionedByEach`, keys each mention the same
+  way and files each source under the key of every topic it mentions, so a run
+  is written to grow with the number of topics plus the number of mentions.
+  `mentionedBy` states the same join for one topic pair by pair, and the
+  pattern's tests hold `mentionedByEach` to it.
 
-  Each topic then does a lookup rather than the join: `backlinksOf` scans the
-  pivot for the row whose topic is itself, and takes that row's `mentionedBy`.
-  The scan compares a field nested inside a row, and what lets it is that row's
+  Each topic then does a lookup rather than the join: `backlinksOf` finds the
+  pivot row whose topic is itself, and takes that row's `mentionedBy`. Each row
+  carries its topic's number as `name`, and the board groups the pivot's
+  positions by it in `crossrefIndexOf` (`crossref-index.ts`), which it hands
+  each topic as `boardCrossrefIndex` beside the pivot. A numbered topic whose
+  index is an index of the very pivot it is wired to reads the positions filed
+  under its own number and keeps the row whose topic `equals` itself, so it
+  reads one row however large the board. When that fails — no index, an index of
+  another pivot, no number or a malformed one, or no row of its own among those
+  positions — it scans the pivot. The pivot holds one row per topic, so both
+  find the same row, or none: the number only decides how much is read. An index
+  element is a position of the pivot rather than a copy of a row, so an index
+  the board has stopped updating still reads the pivot as it is now, and a
+  position past the end of a pivot that has shrunk reads as nothing. The
+  comparison is of a field nested inside a row, and what lets it is that row's
   declaration — the field is declared a `ComparableCell`, the annotation that
   makes it arrive as something `equals` can follow rather than a value to look
-  at. The published row declares both sides `unknown` instead, so a consumer
-  that only carries the graph onward expands neither.
+  at. A topic declares the rows it is handed the same way, `topic` a cell and
+  `mentionedBy` a list of cells, and that reader's declaration is what keeps a
+  read of its input from expanding the topics behind them: a query walks through
+  a link it reaches under `unknown`, which put every Topic's piece document in
+  each Topic's input sync while the topic declared the rows that way. The pivot
+  the board publishes still reads `unknown` at both fields, because a result's
+  schema keeps cell markers only for streams.
 
   The pivot works over the board's distinct topics, with distinctness decided by
   the same `equals`: a topic the board lists at two entries, whether as the same

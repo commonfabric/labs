@@ -53,7 +53,6 @@ import {
   FabricHash,
   FabricKeyPair,
   type FabricPrimitiveClassesByName,
-  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 import {
@@ -92,6 +91,7 @@ import {
   type HashOutcome,
   hashOutcomeOf,
 } from "./hash-conformance.ts";
+import { forgetDeepFrozenCacheForTestingOnly } from "./deep-freeze.ts";
 import { getFrozenObjectHashCacheHits } from "./value-hash/caching.ts";
 import { float64BytesOf } from "./value-hash/float64BytesOf.ts";
 import { getContainersHashed } from "./value-hash/ValueHasher.ts";
@@ -186,13 +186,6 @@ export const FABRIC_PRIMITIVE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
           new Uint8Array([5, 6]),
           new Uint8Array([7, 8]),
         ),
-    ] as const,
-  ),
-
-  FabricRegExp: Object.freeze(
-    [
-      () => new FabricRegExp(/a+/g),
-      () => new FabricRegExp("es2025", "^x$", ""),
     ] as const,
   ),
 
@@ -323,13 +316,11 @@ export const SIZE_GUARANTEES_FOR_TESTING_ONLY: {
 
 /**
  * `requirementsOf()` from `conformance-fixtures.ts`, which returns what a
- * reader must support to read the fixture entry for a text and mods: the
- * flavors a case marks, and by each measure the size of the value the text
- * writes, past the floors.
+ * reader must support to read the fixture entry for a text and mods: by each
+ * measure the size of the value the text writes, past the floors.
  */
 export const requirementsOfForTestingOnly: (
   stated: TextWithMods,
-  flavors?: readonly string[],
 ) => FixtureRequirements | undefined = requirementsOf;
 
 /**
@@ -461,6 +452,16 @@ export const hashOutcomeOfForTestingOnly: (value: FabricValue) => HashOutcome =
  */
 export const float64BytesOfForTestingOnly: (value: number) => Uint8Array =
   float64BytesOf;
+
+/**
+ * Makes the deep-frozen cache in `deep-freeze.ts` forget every object it holds.
+ *
+ * It is here because the cache forgets an object only once its generation is
+ * dropped, after millions of later additions, and a test cannot make that
+ * many. A test of what `isDeepFrozen()` and `deepFreeze()` do for a value the
+ * cache has forgotten forgets it this way instead.
+ */
+export { forgetDeepFrozenCacheForTestingOnly };
 
 /**
  * `getFrozenObjectHashCacheHits()` from `value-hash/caching.ts`, which counts

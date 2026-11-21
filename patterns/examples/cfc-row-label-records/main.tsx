@@ -1,4 +1,12 @@
 /// <cts-enable />
+/**
+ * A patient records table where each row is confidential to its patient and
+ * the clinic owner, and the ssn column additionally carries a static `pii`
+ * label. A diagnosis query fits its declared ceiling and shows rows, while an
+ * ssn query over the same rows is refused.
+ * Demonstrates how per-row and per-column labels combine in `cfSqlite`, with
+ * `maxConfidentiality` and `onExceed: "fail"`.
+ */
 // CFC Phase 3 demo: per-row rules COMPOSE with per-column (Phase 2) labels.
 //
 // A patient-records table mixes both label sources on one row entity:
@@ -74,8 +82,14 @@ export default pattern<Record<string, never>, RecordsOutput>(() => {
   const db = sqliteDatabase({ tables: { records } });
 
   const ceiling = [
-    "did:mailto:ada@a.example",
-    "did:mailto:grace@g.example",
+    {
+      type: "https://commonfabric.org/cfc/atom/User",
+      subject: "did:mailto:ada@a.example",
+    },
+    {
+      type: "https://commonfabric.org/cfc/atom/User",
+      subject: "did:mailto:grace@g.example",
+    },
     { __ctDbOwner: true },
   ];
 

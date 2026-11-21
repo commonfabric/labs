@@ -1,0 +1,1 @@
+{"date": "2026-11-12", "from": {"k": "unit", "s": "toolshed", "n": "otelTracing tags spans with the low-cardinality route template"}, "to": {"k": "unit", "s": "toolshed", "n": "opentelemetry > otelTracing() > tags spans with the low-cardinality route template"}}

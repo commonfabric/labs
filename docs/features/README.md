@@ -24,6 +24,9 @@ a line for each new document to the index below.
   unique-key lookup, membership ownership, and work limits
 - [`collection-aggregates.md`](collection-aggregates.md) — named incremental
   aggregates, their numeric contracts, public type surface, and update costs
+- [`indexed-collections.md`](indexed-collections.md) — collections whose
+  membership and chosen fields live in a SQLite database the runtime keeps
+  current, their derived tables, quiet query re-runs, and limits
 - [`read-accounting.md`](read-accounting.md) — opt-in reactive action read
   counters, execution boundaries, and per-step pattern-test reports
 - [`view-scoped-client-replication.md`](view-scoped-client-replication.md) —
@@ -31,7 +34,9 @@ a line for each new document to the index below.
   previews
 - [`document-release.md`](document-release.md) — when a runtime stops watching
   a document nothing reads, what it drops, and how a later read loads it again
-
+- [`space-history.md`](space-history.md) — listing a space's history as
+  steps, opening a step in a fork a second runtime runs, and restoring the
+  space from it
 - [`collaborative-fields.md`](collaborative-fields.md) — operation-based fields,
   CodeMirror's opt-in editor path, retained cursors and reset behavior, and
   offline inspection

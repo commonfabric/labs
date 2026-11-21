@@ -1,4 +1,5 @@
 import { z } from "zod";
+import env from "@/env.ts";
 import { resolveGitSha } from "@/lib/build-info.ts";
 import type { AppRouteHandler } from "@/lib/types.ts";
 import type {
@@ -12,6 +13,7 @@ import type {
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   getCommitRates,
+  getCurrencyDelivery,
   getDocumentCachesDiagnostics,
   getDocumentInterests,
   getPushPriorityStats,
@@ -22,7 +24,6 @@ import { getServingLoopStats } from "@commonfabric/runner/executor/stats";
 import type { CollectedWorkerMemory } from "@commonfabric/runner/executor/serving-worker-host";
 import {
   collectedMemory as collectThisThread,
-  garbageCollectorExposed,
 } from "@commonfabric/runner/collected-memory";
 import { serverExecutionHost } from "@/lib/server-execution.ts";
 import {
@@ -40,23 +41,28 @@ export const HealthResponseSchema = z.object({
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 
-const GIT_SHA = resolveGitSha();
-
 /** Header carrying the same commit as the body's `gitSha`. Clients that only
  * need liveness + version (the cf CLI) read this instead of the body, so
  * their health probe completes at headers-arrival — a stalled or truncated
  * body cannot delay them. */
 export const GIT_SHA_HEADER = "x-cf-git-sha";
 
-export const index: AppRouteHandler<IndexRoute> = (c) => {
-  const response: HealthResponse = {
-    status: "OK",
-    timestamp: Date.now(),
-    gitSha: GIT_SHA,
+/** The `/_health` handler of a server running the commit `gitSha`. */
+export function healthIndex(
+  gitSha: string | null,
+): AppRouteHandler<IndexRoute> {
+  return (c) => {
+    const response: HealthResponse = {
+      status: "OK",
+      timestamp: Date.now(),
+      gitSha,
+    };
+    if (gitSha !== null) c.header(GIT_SHA_HEADER, gitSha);
+    return c.json(response, HttpStatusCodes.OK);
   };
-  if (GIT_SHA !== null) c.header(GIT_SHA_HEADER, GIT_SHA);
-  return c.json(response, HttpStatusCodes.OK);
-};
+}
+
+export const index = healthIndex(resolveGitSha());
 
 const serverStartTimestamp = Date.now();
 
@@ -83,6 +89,11 @@ export const stats: AppRouteHandler<StatsRoute> = (c) => {
   // which spaces are being written to, by which sessions, and whether one
   // is in a write storm. Present whenever a memory server is co-hosted.
   const commitRates = getCommitRates();
+  // What passed between the currency indexes of the spaces the memory
+  // server holds: the triggers and pulls between a space and the spaces it
+  // reads, and the spaces a change kept coming back to, each with the
+  // circle it came round. Present whenever a memory server is co-hosted.
+  const currencyDelivery = getCurrencyDelivery();
   // The diagnostics clients reported about their sessions: the remote-echo
   // breaker's trips and clears, beside the commit rates of the same
   // sessions. Present whenever a memory server is co-hosted.
@@ -96,6 +107,7 @@ export const stats: AppRouteHandler<StatsRoute> = (c) => {
     processMemory: Deno.memoryUsage(),
     ...(documentCaches === undefined ? {} : { documentCaches }),
     ...(commitRates === undefined ? {} : { commitRates }),
+    ...(currencyDelivery === undefined ? {} : { currencyDelivery }),
     ...(sessionReports === undefined ? {} : { sessionReports }),
     ...(servingLoop === undefined ? {} : {
       servingLoop: { ...servingLoop, ...(push === undefined ? {} : { push }) },
@@ -149,7 +161,7 @@ export const collectedMemory: AppRouteHandler<CollectedMemoryRoute> = async (
   c,
 ) => {
   c.header("Cache-Control", "no-store");
-  if (!garbageCollectorExposed()) {
+  if (!env.EXPOSE_GC) {
     return c.json(
       { error: "This server was started without EXPOSE_GC=true" },
       HttpStatusCodes.NOT_FOUND,

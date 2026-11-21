@@ -1393,6 +1393,10 @@ function acquireIntervalNowTimer(
   let timer = timers.get(key);
   if (!timer) {
     const cell = intervalNowCell(runtime, space, intervalMs, tx);
+    // The cell is out of date once the interval passes, whether or not a
+    // runtime is there to write the tick, so a record of what read it is no
+    // proof that a stored output derived from it is current.
+    runtime.scheduler.noteClockDocument(cell.getAsNormalizedFullLink());
     timer = {
       cell,
       intervalMs,
@@ -2095,6 +2099,29 @@ export async function sidecarRunFailureDisposition(
 export function sidecarValueIsWinner(raw: unknown): boolean {
   if (raw === undefined) return false;
   return !(isObjectOrArray(raw) && "sidecarError" in raw);
+}
+
+/** A rejected wave settlement is the wave's own failure account. */
+const ignoreSettlementRejection = (): void => {};
+
+/**
+ * Warns under `sidecar-run-withdrawn` when `settlement`, the wave settlement
+ * of the committed run of the sidecar whose result cell is `sourceURI`,
+ * reports that the wave withdrew the run, since nothing re-issues a
+ * withdrawn sidecar instantiation. An accepted run and a rejected settlement
+ * log nothing. The returned promise resolves once the settlement has.
+ */
+export function warnWhenSidecarRunWithdrawn(
+  settlement: Promise<{ error?: { message: string } }>,
+  sourceURI: string,
+): Promise<void> {
+  return settlement.then(({ error }) => {
+    if (error === undefined) return;
+    wishFlowLogger.warn("sidecar-run-withdrawn", () => [
+      `sidecar run for ${sourceURI} committed but the wave withdrew it; ` +
+      `nothing re-issues this instantiation: ${error.message}`,
+    ]);
+  }, ignoreSettlementRejection);
 }
 
 // Test seam (this package has no logger-capture idiom — the OW45 register's
@@ -2920,12 +2947,14 @@ export function wish(
           actionId: `wish/sidecar-run/${resultCell.sourceURI}`,
           kind: "bookkeeping",
         });
+        // The transaction is the continuation's own, holding none of the
+        // reads that chose the pattern.
         runtime.runner.run(
           runTx,
           pattern,
           inputForTx(runTx),
           resultCell.withTx(runTx),
-          sidecarRunOptions(surface),
+          { ...sidecarRunOptions(surface), runtimeStarted: true },
         );
         runtime.prepareTxForCommit(runTx);
         const { error } = await runTx.commit().settled;
@@ -2961,18 +2990,7 @@ export function wish(
         // the register).
         const settlement = waveSettlementOf(runTx);
         if (settlement !== undefined) {
-          void settlement.then((settled) => {
-            if (settled.error !== undefined) {
-              wishFlowLogger.warn("sidecar-run-withdrawn", () => [
-                `sidecar run for ${resultCell.sourceURI} committed but ` +
-                `the wave withdrew it; nothing re-issues this ` +
-                `instantiation: ${settled.error.message}`,
-              ]);
-            }
-          }, () => {
-            // A settlement rejection is the wave's own failure account;
-            // nothing to add here.
-          });
+          void warnWhenSidecarRunWithdrawn(settlement, resultCell.sourceURI);
         }
         return;
       } catch (error) {

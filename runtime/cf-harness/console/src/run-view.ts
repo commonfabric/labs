@@ -99,13 +99,10 @@ export class ConsoleRunView extends LitElement {
    * after the selection moved on is no longer what is showing.
    */
   async #showRaw(
+    detail: ConsoleRunDetail,
     kind: "artifacts" | "tool-outputs",
     name: string,
   ): Promise<void> {
-    const detail = this.detail;
-    if (detail === undefined) {
-      return;
-    }
     const runId = detail.summary.runId;
     const pane = this.pane;
     this.rawName = name;
@@ -218,6 +215,7 @@ export class ConsoleRunView extends LitElement {
   }
 
   #files(
+    detail: ConsoleRunDetail,
     kind: "artifacts" | "tool-outputs",
     names: readonly string[],
   ): TemplateResult {
@@ -231,7 +229,7 @@ export class ConsoleRunView extends LitElement {
             <button
               class="file ${this.rawName === name ? "open" : ""}"
               type="button"
-              @click=${() => this.#showRaw(kind, name)}
+              @click=${() => this.#showRaw(detail, kind, name)}
             >
               ${name}
             </button>
@@ -312,8 +310,8 @@ export class ConsoleRunView extends LitElement {
           : this.pane === "patterns"
           ? this.#patterns(detail)
           : this.pane === "tool-outputs"
-          ? this.#files("tool-outputs", detail.toolOutputNames)
-          : this.#files("artifacts", detail.artifactNames)}
+          ? this.#files(detail, "tool-outputs", detail.toolOutputNames)
+          : this.#files(detail, "artifacts", detail.artifactNames)}
       </div>
     `;
   }

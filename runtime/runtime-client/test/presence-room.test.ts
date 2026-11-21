@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import type { PresenceEvent } from "@commonfabric/memory/v2/client";
 import type { PresenceRecord } from "@commonfabric/memory/v2";
 
@@ -38,7 +39,11 @@ type Recorded = {
  * so a test chooses the order replies arrive in.
  */
 const buildClient = (
-  options: { joinFails?: boolean; holdJoins?: boolean } = {},
+  options: {
+    joinFails?: boolean;
+    holdJoins?: boolean;
+    publishFails?: boolean;
+  } = {},
 ) => {
   const handlers = new Map<string, (data: unknown) => void>();
   const requests: Recorded[] = [];
@@ -68,6 +73,10 @@ const buildClient = (
           return promise;
         }
         case RequestType.PresencePublish:
+          if (options.publishFails) {
+            return Promise.reject(new Error("publish refused"));
+          }
+          return Promise.resolve({ value: true });
         case RequestType.PresenceLeave:
           return Promise.resolve({ value: true });
         default:
@@ -498,6 +507,156 @@ describe("RuntimeClient presence rooms", () => {
         type: RequestType.PresenceLeave,
         subscriptionId: requests[0].subscriptionId,
       });
+    });
+  });
+
+  describe("a handle that has left", () => {
+    it("publishes nothing for changes made through it, and registers no listener", async () => {
+      const { client, cell, requests, notify } = buildClient();
+      const stays = await client.joinPresenceRoom(cell);
+      const leaves = await client.joinPresenceRoom(cell);
+      stays.setName("Ada");
+      await leaves.leave();
+      await settle();
+      const afterLeave = publishes(requests).length;
+
+      leaves.setName("Grace");
+      leaves.setFacet("caret", {});
+      leaves.clearFacet("caret");
+      leaves.setFocused(true);
+      const events: PresenceEvent[] = [];
+      leaves.subscribe((event) => events.push(event));
+      await settle();
+      notify({ kind: "upsert", participant: { ...peer, revision: 2 } });
+
+      expect(afterLeave).toBe(1);
+      expect(publishes(requests)).toHaveLength(afterLeave);
+      expect(events).toEqual([]);
+    });
+  });
+
+  describe("unchanged state", () => {
+    it("publishes nothing for the name it already has, focus it already has, or a facet it never set", async () => {
+      const { client, cell, requests } = buildClient();
+      const handle = await client.joinPresenceRoom(cell);
+      handle.setName("Ada");
+      await settle();
+      const published = publishes(requests).length;
+      handle.setName("Ada");
+      handle.setFocused(false);
+      handle.clearFacet("never-set");
+      await settle();
+      expect(published).toBe(1);
+      expect(publishes(requests)).toHaveLength(published);
+    });
+  });
+
+  describe("a refused publish", () => {
+    it("ends the room and delivers the refusal as a failure", async () => {
+      const { client, cell, requests } = buildClient({ publishFails: true });
+      const handle = await client.joinPresenceRoom(cell);
+      const events: PresenceEvent[] = [];
+      handle.subscribe((event) => events.push(event));
+      handle.setName("Ada");
+      await settle();
+      expect(events).toEqual([{
+        kind: "failure",
+        error: new Error("publish refused"),
+      }]);
+      handle.setFacet("caret", {});
+      await settle();
+      expect(publishes(requests)).toHaveLength(1);
+    });
+  });
+
+  describe("a listener that throws", () => {
+    it("is logged, and the other listeners still hear the event", async () => {
+      const { client, cell, notify } = buildClient();
+      const handle = await client.joinPresenceRoom(cell);
+      const heard: string[] = [];
+      handle.subscribe(() => {
+        throw new Error("listener broke");
+      });
+      handle.subscribe((event) => heard.push(event.kind));
+      using errors = stub(console, "error");
+      notify({ kind: "upsert", participant: { ...peer, revision: 2 } });
+      expect(heard).toEqual(["upsert"]);
+      expect(errors.calls.map((call) => call.args)).toEqual([[
+        "presence listener threw:",
+        new Error("listener broke"),
+      ]]);
+    });
+  });
+
+  describe("unsubscribing", () => {
+    it("stops delivery to that listener only", async () => {
+      const { client, cell, notify } = buildClient();
+      const handle = await client.joinPresenceRoom(cell);
+      const heard: string[] = [];
+      const unsubscribe = handle.subscribe(() => heard.push("first"));
+      handle.subscribe(() => heard.push("second"));
+      unsubscribe();
+      notify({ kind: "upsert", participant: { ...peer, revision: 2 } });
+      expect(heard).toEqual(["second"]);
+    });
+  });
+
+  describe("animation frames", () => {
+    /**
+     * Installs `requestAnimationFrame` and `cancelAnimationFrame` for the life
+     * of the returned object, holding each scheduled callback until `run()`.
+     */
+    function animationFrames() {
+      const scheduled = new Map<number, () => void>();
+      const cancelled: number[] = [];
+      let next = 1;
+      Reflect.set(globalThis, "requestAnimationFrame", (cb: () => void) => {
+        scheduled.set(next, cb);
+        return next++;
+      });
+      Reflect.set(globalThis, "cancelAnimationFrame", (id: number) => {
+        cancelled.push(id);
+        scheduled.delete(id);
+      });
+      return {
+        cancelled,
+        pending: () => scheduled.size,
+        run: () => {
+          const callbacks = [...scheduled.values()];
+          scheduled.clear();
+          for (const callback of callbacks) callback();
+        },
+        [Symbol.dispose]: () => {
+          Reflect.deleteProperty(globalThis, "requestAnimationFrame");
+          Reflect.deleteProperty(globalThis, "cancelAnimationFrame");
+        },
+      };
+    }
+
+    it("publishes on the next animation frame, not before", async () => {
+      using frames = animationFrames();
+      const { client, cell, requests } = buildClient();
+      const handle = await client.joinPresenceRoom(cell);
+      handle.setName("Ada");
+      await settle();
+      expect(publishes(requests)).toEqual([]);
+      expect(frames.pending()).toBe(1);
+      frames.run();
+      expect(publishes(requests)).toHaveLength(1);
+    });
+
+    it("cancels the frame a room scheduled when a failure ends it", async () => {
+      using frames = animationFrames();
+      const { client, cell, requests, notify } = buildClient();
+      const handle = await client.joinPresenceRoom(cell);
+      handle.setName("Ada");
+      notify({
+        kind: "failure",
+        error: { name: "SessionRevokedError", message: "taken over" },
+      });
+      expect(frames.cancelled).toEqual([1]);
+      frames.run();
+      expect(publishes(requests)).toEqual([]);
     });
   });
 

@@ -1,12 +1,13 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
   ensureTypeNodeRegistered,
   getTypeFromTypeNodeWithFallback,
-  getTypeReferenceArgument,
-  hasArrayTypeArgument,
   inferArrayElementType,
+  isAnyType,
   isCellLikeType,
   typeToTypeNode,
   unwrapCellLikeType,
@@ -152,10 +153,8 @@ declare const cellArray: Cell<string[]>;
 declare const defaultArray: Default<string[]>;
 declare const cellDefaultArray: Cell<Default<string[]>>;
 declare const cellDefaultOrUndefined: Cell<Default<string[]> | undefined>;
-declare const cellScalar: Cell<number>;
 declare const duplicateElementArrays: string[] | ReadonlyArray<string>;
 declare const boxedDefaultArray: Box<Default<string[]>>;
-declare const plainObject: { a: number };
 declare const scalar: string;
 litUnion;
 cellString;
@@ -166,8 +165,6 @@ cellArray;
 defaultArray;
 cellDefaultArray;
 cellDefaultOrUndefined;
-cellScalar;
-plainObject;
 duplicateElementArrays;
 boxedDefaultArray;
 scalar;
@@ -197,11 +194,6 @@ Deno.test("isCellLikeType: a branded Cell<T> is cell-like", () => {
   );
 });
 
-Deno.test("getTypeReferenceArgument: a scalar type has no reference argument", () => {
-  const { checker } = createProgram(SOURCE);
-  assertEquals(getTypeReferenceArgument(checker.getStringType()), undefined);
-});
-
 Deno.test("unwrapCellLikeType: a branded Cell<string> unwraps to its inner string", () => {
   const { sourceFile, checker } = createProgram(SOURCE);
   const unwrapped = unwrapCellLikeType(
@@ -222,7 +214,7 @@ Deno.test("unwrapCellLikeType: a branded Cell<{ a: number }> unwraps to the obje
 
 Deno.test("unwrapOpaqueLikeType: an intersection with no branded cell member is rebuilt structurally", () => {
   // `{ a: number } & { b: string }` has no OpaqueCell part, so the walker
-  // recurses each member and reconstructs the intersection via getIntersectionType.
+  // returns the intersection as it is.
   const { sourceFile, checker } = createProgram(SOURCE);
   const unwrapped = unwrapOpaqueLikeType(
     typeOf(sourceFile, checker, "plainIntersection"),
@@ -245,58 +237,6 @@ Deno.test("typeToTypeNode: an invalid location argument is caught and yields und
   // that no exception escapes. Assert the call completes and returns a TypeNode
   // or undefined.
   assert(node === undefined || ts.isTypeNode(node));
-});
-
-Deno.test("hasArrayTypeArgument: a branded Cell<string[]> has an array type argument", () => {
-  const { sourceFile, checker } = createProgram(SOURCE);
-  assertEquals(
-    hasArrayTypeArgument(typeOf(sourceFile, checker, "cellArray"), checker),
-    true,
-  );
-});
-
-Deno.test("hasArrayTypeArgument: a branded Cell<number> does not have an array type argument", () => {
-  const { sourceFile, checker } = createProgram(SOURCE);
-  assertEquals(
-    hasArrayTypeArgument(typeOf(sourceFile, checker, "cellScalar"), checker),
-    false,
-  );
-});
-
-Deno.test("hasArrayTypeArgument: a plain object type has no array type argument", () => {
-  // A non-reference object type falls through every reference/union/intersection
-  // check to the final `return false`.
-  const { sourceFile, checker } = createProgram(SOURCE);
-  assertEquals(
-    hasArrayTypeArgument(typeOf(sourceFile, checker, "plainObject"), checker),
-    false,
-  );
-});
-
-Deno.test("hasArrayTypeArgument: a Cell<Default<string[]>> is detected via the Default alias unwrap", () => {
-  // Drives the `isDefaultAliasSymbol` branch: the inner type keeps its Default
-  // alias and its first alias argument is an array.
-  const { sourceFile, checker } = createProgram(SOURCE);
-  assertEquals(
-    hasArrayTypeArgument(
-      typeOf(sourceFile, checker, "cellDefaultArray"),
-      checker,
-    ),
-    true,
-  );
-});
-
-Deno.test("hasArrayTypeArgument: a Cell<Default<string[]> | undefined> is detected via the union-of-array-members check", () => {
-  // Drives the `T[] | undefined` / `Default<T[]> | undefined` union branch:
-  // after stripping undefined, every remaining member is array-like.
-  const { sourceFile, checker } = createProgram(SOURCE);
-  assertEquals(
-    hasArrayTypeArgument(
-      typeOf(sourceFile, checker, "cellDefaultOrUndefined"),
-      checker,
-    ),
-    true,
-  );
 });
 
 function elementTypeText(name: string): string {
@@ -334,8 +274,8 @@ Deno.test("inferArrayElementType: a plain Default<string[]> reference yields the
 
 Deno.test("unwrapCellLikeType: a branded cell with no type argument returns itself", () => {
   // The cell is branded (so isCellLikeType is true) but has no type argument, so
-  // unwrapOpaqueLikeType returns it unchanged and getTypeReferenceArgument yields
-  // nothing — the final `?? type` fallthrough returns the cell type itself.
+  // unwrapOpaqueLikeType returns it unchanged and it has no payload to read —
+  // the final `?? type` fallthrough returns the cell type itself.
   const { sourceFile, checker } = createProgram(SOURCE);
   const unwrapped = unwrapCellLikeType(
     typeOf(sourceFile, checker, "bareCell"),
@@ -461,4 +401,72 @@ Deno.test("ensureTypeNodeRegistered: without a registry it returns the direct ch
   visit(sourceFile);
   const type = ensureTypeNodeRegistered(annotation!, checker);
   assertEquals(checker.typeToString(type!), "string");
+});
+
+describe("type-inference", () => {
+  describe("widenLiteralType()", () => {
+    it("returns the checker's `boolean` for a `true` or `false` literal", () => {
+      const { checker } = createProgram(SOURCE);
+
+      expect(widenLiteralType(checker.getTrueType(), checker)).toBe(
+        checker.getBooleanType(),
+      );
+      expect(widenLiteralType(checker.getFalseType(), checker)).toBe(
+        checker.getBooleanType(),
+      );
+    });
+  });
+
+  describe("ensureTypeNodeRegistered()", () => {
+    // A node parsed without parent pointers throws in the checker, which looks
+    // up through a node's parents for the flow context of its type.
+
+    /** The type node of `type A = <text>`, parsed with or without parents. */
+    function aliasedTypeNode(text: string, setParentNodes: boolean) {
+      const declarationFile = ts.createSourceFile(
+        "/other.ts",
+        `type A = ${text};`,
+        ts.ScriptTarget.ESNext,
+        setParentNodes,
+      );
+      const [alias] = declarationFile.statements;
+      if (!alias || !ts.isTypeAliasDeclaration(alias)) {
+        throw new Error("type alias not found");
+      }
+      return alias.type;
+    }
+
+    it("returns `undefined`, and registers nothing, for a node the checker throws on", () => {
+      const { checker } = programForSynthetics();
+      const registry = new WeakMap<ts.Node, ts.Type>();
+      const unparented = aliasedTypeNode("string[]", false);
+
+      expect(ensureTypeNodeRegistered(unparented, checker)).toBeUndefined();
+      expect(ensureTypeNodeRegistered(unparented, checker, registry))
+        .toBeUndefined();
+      expect(registry.has(unparented)).toBe(false);
+
+      const parented = aliasedTypeNode("string[]", true);
+      expect(
+        checker.typeToString(ensureTypeNodeRegistered(parented, checker)!),
+      ).toBe("string[]");
+    });
+
+    it("returns the checker's type, and registers nothing, for a synthetic parenthesized node around a node the checker throws on", () => {
+      // The checker reads any node it did not parse as its error type, which
+      // is `any`, and the node it encloses holds no type to stand in for it.
+
+      const { checker } = programForSynthetics();
+      const registry = new WeakMap<ts.Node, ts.Type>();
+      const unparented = aliasedTypeNode("string[]", false);
+      const parenthesized = ts.factory.createParenthesizedType(unparented);
+
+      const type = ensureTypeNodeRegistered(parenthesized, checker, registry);
+
+      expect(type).toBe(checker.getTypeFromTypeNode(parenthesized));
+      expect(isAnyType(type)).toBe(true);
+      expect(registry.has(parenthesized)).toBe(false);
+      expect(registry.has(unparented)).toBe(false);
+    });
+  });
 });

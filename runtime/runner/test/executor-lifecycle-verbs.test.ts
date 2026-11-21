@@ -7,12 +7,16 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
+import { defer } from "@commonfabric/async/defer";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
-import type { MemorySpace } from "../src/storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  MemorySpace,
+} from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import {
   LIFECYCLE_VERB_SPACE_PARKED,
@@ -25,6 +29,7 @@ import {
 import { waveSettlementOf } from "../src/executor/wave.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { waitUntil } from "./support/wait-until.ts";
+import { awaitReplica } from "./support/serving-waits.ts";
 
 const spaceSigner = await Identity.fromPassphrase("lifecycle verbs space");
 const space = spaceSigner.did() as MemorySpace;
@@ -187,6 +192,185 @@ describe("ExecutorHost.runLifecycleVerb", () => {
       await cell.sync();
       return cell.key("total").get() === 42;
     }, "the verb-staged piece's first derivation");
+  });
+
+  it("holds a verb to its own writes, not to a served piece's derivation that seals while it runs and that the wave commit drops", async () => {
+    // A space with a served piece: a client demands it, so its derivations
+    // run on the serving runtime whenever their inputs move, including
+    // while a verb of the cycle is running. The wave commit drops such a
+    // derivation's write when a client's commit supersedes it, and the
+    // derivation runs again; the verb's own write commits.
+    host = newHost();
+    const PATTERN = [
+      "import { computed, pattern } from 'commonfabric';",
+      "export default pattern<{ n: number }, { total: number }>(",
+      "  ({ n }) => ({ total: computed(() => n * 7) }),",
+      ");",
+    ].join("\n");
+    const staged = await host.runLifecycleVerb(space, {
+      name: "instantiate",
+      run: async (runtime) => {
+        const pattern = await runtime.patternManager.compilePattern({
+          main: "/main.tsx",
+          files: [{ name: "/main.tsx", contents: PATTERN }],
+        }, { space });
+        const input = runtime.getCell<number>(space, "served-input", undefined);
+        const piece = runtime.getCell<{ total: number }>(
+          space,
+          "served-piece",
+          pattern.resultSchema,
+        );
+        const outcome = await runtime.editWithRetry((tx) => {
+          runtime.stampServerRun(tx, {
+            actionId: "test-verb/instantiate-served",
+            kind: "bookkeeping",
+          });
+          input.withTx(tx).set(6);
+          void runtime.setup(tx, pattern, { n: input }, piece, {
+            initializePieceSourceHistory: true,
+          });
+        });
+        expect(outcome.error).toBeUndefined();
+        return {
+          rootId: piece.getAsNormalizedFullLink().id,
+          resultSchema: pattern.resultSchema,
+        };
+      },
+      demandRoots: (receipt) => [receipt.rootId],
+    });
+
+    const client = clientRuntime();
+    const piece = client.getCell<{ total: number }>(
+      space,
+      "served-piece",
+      staged.resultSchema,
+    );
+    await awaitReplica(client.storageManager, async () => {
+      await piece.sync();
+      return piece.key("total").get() === 42;
+    });
+    const input = client.getCell<number>(space, "served-input", undefined);
+    await input.sync();
+    const derived = piece.key("total").resolveAsCell();
+    const clientWrite = async (
+      write: (tx: IExtendedStorageTransaction) => void,
+    ) => {
+      const tx = client.edit();
+      write(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    };
+
+    const receipt = await host.runLifecycleVerb(space, {
+      name: "mark-beside-a-derivation",
+      run: async (runtime) => {
+        // The client moves the piece's input; the serving runtime derives
+        // the piece again, and that derivation seals into this cycle's
+        // wave while the verb is still running.
+        await clientWrite((tx) => input.withTx(tx).set(2));
+        const served = runtime.getCell<{ total: number }>(
+          space,
+          "served-piece",
+          staged.resultSchema,
+        );
+        // The derivation's seal commits to the serving replica.
+        await awaitReplica(
+          runtime.storageManager,
+          () => served.key("total").get() === 14,
+        );
+        // The client then writes the derived document itself, after the
+        // wave's basis: the wave commit drops the derivation's write.
+        await clientWrite((tx) => derived.withTx(tx).set(99));
+        await writeMarker(runtime, "beside-a-derivation");
+        return "marked";
+      },
+    });
+    expect(receipt).toBe("marked");
+    expect(host.stats().lifecycleVerbs).toEqual({ runs: 2, failures: 0 });
+
+    const marker = client.getCell<{ marker: string }>(
+      space,
+      MARKER_CAUSE,
+      undefined,
+    );
+    await marker.sync();
+    expect(marker.get()).toEqual({ marker: "beside-a-derivation" });
+  });
+
+  it("holds a verb to the writes of its own run, not to the loop's bookkeeping that started before it and seals while it runs", async () => {
+    // Work of the loop that outlives the step that started it, as a root
+    // ensure its deadline cut does, can seal a bookkeeping write while a
+    // later verb runs. The wave commit drops that write here, superseded by
+    // a client's commit; the verb's own write commits.
+    host = newHost();
+    let serving: Runtime | undefined;
+    await host.runLifecycleVerb(space, {
+      name: "first",
+      run: async (runtime) => {
+        serving = runtime;
+        await writeMarker(runtime, "first");
+        return "first";
+      },
+    });
+    const client = clientRuntime();
+    const other = client.getCell<{ by: string }>(
+      space,
+      "outside-bookkeeping",
+      undefined,
+    );
+    await other.sync();
+
+    const go = defer<void>();
+    const outside = (async () => {
+      await go.promise;
+      const runtime = serving!;
+      return await runtime.editWithRetry((tx) => {
+        runtime.stampServerRun(tx, {
+          actionId: "test-loop/outside-bookkeeping",
+          kind: "bookkeeping",
+        });
+        runtime.getCell<{ by: string }>(space, "outside-bookkeeping", undefined)
+          .withTx(tx).set({ by: "the loop" });
+      });
+    })();
+
+    const receipt = await host.runLifecycleVerb(space, {
+      name: "mark-beside-outside-work",
+      run: async (runtime) => {
+        go.resolve();
+        expect((await outside).error).toBeUndefined();
+        const tx = client.edit();
+        other.withTx(tx).set({ by: "the client" });
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await writeMarker(runtime, "beside-outside-work");
+        return "marked";
+      },
+    });
+    expect(receipt).toBe("marked");
+    expect(host.stats().lifecycleVerbs).toEqual({ runs: 2, failures: 0 });
+  });
+
+  it("rejects a verb whose own write the wave commit drops, superseded by a client's commit while it ran", async () => {
+    host = newHost();
+    const client = clientRuntime();
+    const marker = client.getCell<{ marker: string }>(
+      space,
+      MARKER_CAUSE,
+      undefined,
+    );
+    await marker.sync();
+    await expect(host.runLifecycleVerb(space, {
+      name: "mark-overwritten",
+      run: async (runtime) => {
+        await writeMarker(runtime, "the verb's");
+        // The client sets the same document after the wave's basis; the
+        // verb's whole-document set cannot rebase over it.
+        const tx = client.edit();
+        marker.withTx(tx).set({ marker: "the client's" });
+        expect((await tx.commit().settled).error).toBeUndefined();
+        return "marked";
+      },
+    })).rejects.toThrow("a contribution of its was dropped at the wave commit");
+    expect(host.stats().lifecycleVerbs).toEqual({ runs: 1, failures: 1 });
   });
 
   it("rejects with the verb's own error and counts the failure", async () => {

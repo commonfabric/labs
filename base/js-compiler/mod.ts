@@ -24,6 +24,7 @@ export {
 } from "./typescript/mod.ts";
 export {
   collectDataFileNames,
+  collectDataReads,
   collectImportSpecifiers,
   type ModuleDeclarations,
   resolveImportSpecifier,

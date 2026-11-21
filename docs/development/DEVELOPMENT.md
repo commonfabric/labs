@@ -682,11 +682,11 @@ which predicate it needs is the next section.
 ### Walking or comparing a value
 
 A value the runtime holds may be a `FabricSpecialObject` — a byte sequence, a
-temporal value, a content hash, a regular expression, an error, a link, a map,
-a set. Each of those keeps its state in private fields and has no own
-properties at all, so a walk that decides "may I read this by property name?"
-with `isObjectOrArray()`, `isReadonlyObjectOrArray()`, `isObjectNotArray()`, or
-a bare `typeof value === "object"` gets the wrong result: it sees an empty
+temporal value, a content hash, an error, a link, a map, a set. Each of those
+keeps its state in private fields and has no own properties at all, so a walk
+that decides "may I read this by property name?" with `isObjectOrArray()`,
+`isReadonlyObjectOrArray()`, `isObjectNotArray()`, or a bare
+`typeof value === "object"` gets the wrong result: it sees an empty
 record and then merges the value to `{}`, rebuilds it as `{}`, descends into it
 and finds nothing, or writes a property onto it. Two sites already carry a
 `TODO(danfuzz)` naming that defect against `isReadonlyObjectOrArray()` —
@@ -1128,14 +1128,15 @@ suite will break.
    `"workspace"` array in the root `deno.jsonc`.
 
 2. **Include a test task.** The package's `deno.jsonc` **must** have a `"tasks"`
-   object with a `"test"` entry. The root test runner (`tasks/test.ts`) iterates
-   all workspace members and runs `deno task test` in each package directory. If
-   a package lacks a test task, Deno resolves the task name against the root
-   workspace instead, which would re-run the entire test suite recursively,
-   spawning processes exponentially. The runner reads every member's manifest
-   before it runs any of their test tasks, and refuses to start when one has no
-   `"test"` entry, naming the member; that check is what keeps a missing entry
-   to a message rather than a CI timeout.
+   object with a `"test"` entry. The root test runner
+   (`tasks/workspace-tests.ts`) iterates all workspace members and runs
+   `deno task test` in each package directory. If a package lacks a test task,
+   Deno resolves the task name against the root workspace instead, which would
+   re-run the entire test suite recursively, spawning processes exponentially.
+   The runner reads every member's manifest before it runs any of their test
+   tasks, and refuses to start when one has no `"test"` entry, naming the
+   member; that check is what keeps a missing entry to a message rather than a
+   CI timeout.
 
    For a package with tests, `"test"` runs `tasks/run-member-tests.ts`, naming
    the package's `"deno-test"` task, which runs the tests themselves — a

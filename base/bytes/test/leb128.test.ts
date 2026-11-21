@@ -191,6 +191,12 @@ describe("leb128", () => {
       );
     });
 
+    it("throws on a non-integer value", () => {
+      for (const value of [1.5, Number.NaN, Infinity]) {
+        expect(() => encodeSLEB128(value)).toThrow("expected integer");
+      }
+    });
+
     it("throws on a value exceeding the signed 32-bit max", () => {
       expect(() => encodeSLEB128(0x80000000)).toThrow(
         "exceeds signed 32-bit range",
@@ -244,6 +250,12 @@ describe("leb128", () => {
       expect(() => decodeSLEB128(new Uint8Array([0x80]))).toThrow(
         "unexpected end",
       );
+    });
+
+    it("throws when continuation runs past the signed 32-bit range", () => {
+      expect(() =>
+        decodeSLEB128(new Uint8Array([0x80, 0x80, 0x80, 0x80, 0x80, 0x00]))
+      ).toThrow("exceeds signed 32-bit range");
     });
 
     describe("round-tripping", () => {

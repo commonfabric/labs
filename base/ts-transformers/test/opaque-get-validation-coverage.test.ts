@@ -1,4 +1,6 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import { validateSource } from "./utils.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
@@ -249,3 +251,25 @@ Deno.test(
     assertEquals(errors.length, 0);
   },
 );
+
+describe("opaque-get-validation", () => {
+  it("reports nothing for `.get()` on a parameter of a function no call holds", async () => {
+    // The same read inside a pattern callback is reported; a module-scope
+    // function's parameter is whatever its caller passes.
+
+    const { diagnostics } = await validateSource(
+      `import { pattern } from "commonfabric";
+interface State { title: { get(): string } }
+export function read(value: { get(): string }) {
+  return value.get();
+}
+export default pattern<State>((state) => ({ t: state.title.get() }));
+`,
+      { types: COMMONFABRIC_TYPES },
+    );
+    expect(getOpaqueGetErrors(diagnostics).map((error) => error.message))
+      .toEqual([
+        expect.stringContaining("Calling .get() on 'state.title'"),
+      ]);
+  });
+});

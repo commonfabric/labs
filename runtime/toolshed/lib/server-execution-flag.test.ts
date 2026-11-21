@@ -37,6 +37,25 @@ describe("serverExecutionEnabledFromEnv", () => {
     ).toBe(true);
   });
 
+  it("follows the posture another host publishes, unless the flag is set explicitly", () => {
+    for (const followed of [true, false]) {
+      const posture = JSON.stringify({ serverExecution: followed });
+      expect(
+        serverExecutionEnabledFromEnv(
+          envOf({ EXPERIMENTAL_FOLLOWED_POSTURE: posture }),
+        ),
+      ).toBe(followed);
+      expect(
+        serverExecutionEnabledFromEnv(
+          envOf({
+            EXPERIMENTAL_FOLLOWED_POSTURE: posture,
+            EXPERIMENTAL_SERVER_EXECUTION: String(!followed),
+          }),
+        ),
+      ).toBe(!followed);
+    }
+  });
+
   it("garbage reads as unset (the canonical mapping's warn-and-ignore), so it resolves to the default", () => {
     const originalWarn = console.warn;
     console.warn = () => {};
@@ -96,6 +115,31 @@ describe("memoryAclPrincipalsFor", () => {
         serverExecution: true,
       }).serviceDids,
     ).not.toContain(me);
+  });
+
+  it("returns the caller's `listsPeer` as `isDelegatingPeer` under the flag, and none off it", () => {
+    const listsPeer = (did: string) => did === "did:key:z6MkPeerToolshed";
+
+    expect(
+      memoryAclPrincipalsFor({
+        configured: [],
+        processIdentityDid: me,
+        serverExecution: true,
+        listsPeer,
+      }),
+    ).toEqual({
+      serviceDids: [],
+      delegatingDids: [me],
+      isDelegatingPeer: listsPeer,
+    });
+    expect(
+      memoryAclPrincipalsFor({
+        configured: [],
+        processIdentityDid: me,
+        serverExecution: false,
+        listsPeer,
+      }),
+    ).toEqual({ serviceDids: [], delegatingDids: [] });
   });
 
   it("operator-configured OWNER-class listing of the process identity is kept VERBATIM (scope report flag F1: explicit configuration wins; the route logs the combination)", () => {

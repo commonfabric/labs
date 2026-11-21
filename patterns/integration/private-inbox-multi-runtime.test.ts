@@ -59,13 +59,22 @@ const ROOT_PATH = join(import.meta.dirname!, "..");
 /** Whether this run's harness serves handlers from a serving loop. */
 const SERVER_EXECUTION = resolveServerExecution();
 
+/**
+ * The count of messages the CFC logger keyed `key`, out of one runtime's
+ * logger counts.
+ */
+const cfcCount = (
+  counts: Record<string, Record<string, { total: number }> | number>,
+  key: string,
+): number => {
+  const cfc = counts.cfc;
+  return typeof cfc === "object" ? cfc[key]?.total ?? 0 : 0;
+};
+
 /** The CFC write gate's refusals, out of one runtime's logger counts. */
 const writeRefusals = (
   counts: Record<string, Record<string, { total: number }> | number>,
-): number => {
-  const cfc = counts.cfc;
-  return typeof cfc === "object" ? cfc["write-policy-gate"]?.total ?? 0 : 0;
-};
+): number => cfcCount(counts, "write-policy-gate");
 
 /**
  * The trusted surface and action of the button on Home's refusal notice, as
@@ -1148,12 +1157,13 @@ describe("private inbox across runtimes", () => {
     expect(ownerAgainReads.id).toBe(loom.id);
   });
 
-  it("creates no inbox while a profile whose pointer it cannot read advertises one", async () => {
+  it("takes no inbox while a profile whose pointer it cannot read advertises one", async () => {
     // The profile keeps its pointer per user in a space of its own. With
     // server execution on, the Home's serving runtime refuses to read that
     // pointer, so the ensure would see a profile advertising nothing; it
     // fails instead, and Home holds no inbox. With it off, the owner's
-    // runtime reads the pointer, and Home creates nothing either.
+    // runtime reads the pointer, and Home takes none either: it creates its
+    // own, as it does whenever it holds none, and keeps it for later.
     await owner.send("createUnreadableProfile");
     await harness.settle();
     await owner.send("pointUnreadableProfileAtLoom", { index: 0 });
@@ -1342,21 +1352,27 @@ describe("private inbox across runtimes", () => {
     expect(await rows(sender)).toEqual(await rows(owner));
   });
 
-  it("refuses a stranger's served copy of the offers", {
+  it("lands a stranger's served copy of the offers", {
     ignore: !SERVER_EXECUTION,
   }, async () => {
+    // A served run is measured as any run is, so the copy commits, carrying
+    // the owner's clause. `owner-private-inbox-multi-runtime.test.ts` reads
+    // the copy's label, and says what then delivers it to the stranger
+    // (Topics top/3173).
+
     await offer("private");
 
-    const refusedBefore = writeRefusals(
-      (await harness.servingDiagnostics()).loggerCounts,
-    );
+    const before = (await harness.servingDiagnostics()).loggerCounts;
     await stranger.send("copyOffers");
-    await harness.settle();
-    expect(writeRefusals((await harness.servingDiagnostics()).loggerCounts))
-      .toBeGreaterThan(
-        refusedBefore,
-      );
-    expect(await stranger.read(["copiedOffers"])).toEqual([]);
+    await harness.settleUntil(async () =>
+      ((await owner.read(["copiedOffers"])) as unknown[]).length > 0 ||
+      writeRefusals((await harness.servingDiagnostics()).loggerCounts) >
+        writeRefusals(before)
+    );
+    const after = (await harness.servingDiagnostics()).loggerCounts;
+    expect(writeRefusals(after)).toBe(writeRefusals(before));
+    expect(((await owner.read(["copiedOffers"])) as unknown[]).length)
+      .toBeGreaterThan(0);
   });
 
   it("replaces an inbox in Home's own private-inbox space with another piece in that space, leaving the refused one's offers in it", async () => {
@@ -1367,6 +1383,14 @@ describe("private inbox across runtimes", () => {
     await owner.send("pointOwnSpaceProfileAtPrivateInbox", { index: 0 });
     await harness.settleUntil(async () =>
       await pointed(["ownSpaceHome", "profiles", 0])
+    );
+    // The ensure that precedes a refusal notice, which here has Home create
+    // its own inbox, since Home holds none, and leaves the advertised one to
+    // the refusal recorded next.
+    await owner.send("ensureOwnSpace", {});
+    await harness.settleUntil(async () =>
+      (await owner.read(["ownSpaceHome", "ownPrivateInbox", "piece"])) !==
+        undefined
     );
     await owner.send("refuseOwnSpaceInbox");
     const refusalPath = ["ownSpaceHome", "privateInboxRefusal", "refusal"];
@@ -1473,4 +1497,44 @@ describe("private inbox across runtimes", () => {
     );
     expect(await owner.read(refusal)).toBeUndefined();
   });
+
+  // The two cases below copy the offers in a derivation, which keeps running
+  // once started, so they come last. What a session reads afterwards is no
+  // evidence here: this fixture's inbox space grants every principal `WRITE`,
+  // so each session's own runtime can run the same derivation itself. That
+  // the serving loop refuses no write of the served run is what each case
+  // checks.
+
+  it("refuses no write of a stranger's served derivation of the offers", {
+    ignore: !SERVER_EXECUTION,
+  }, async () => {
+    await offer("private");
+
+    const before = (await harness.servingDiagnostics()).loggerCounts;
+    await stranger.send("setDerivedCopy", { on: true });
+    await harness.settle();
+    const after = (await harness.servingDiagnostics()).loggerCounts;
+    expect(writeRefusals(after)).toBe(writeRefusals(before));
+    await stranger.send("setDerivedCopy", { on: false });
+    await harness.settle();
+  });
+
+  it(
+    "refuses no write of the served derivation of a piece a stranger's handler starts over a link to the offers",
+    {
+      ignore: !SERVER_EXECUTION,
+    },
+    async () => {
+      // The handler writes only a link, which writer-fit does not measure; the
+      // started piece's derivation reads through it.
+
+      await offer("private");
+
+      const before = (await harness.servingDiagnostics()).loggerCounts;
+      await stranger.send("startLinkedCopier");
+      await harness.settle();
+      const after = (await harness.servingDiagnostics()).loggerCounts;
+      expect(writeRefusals(after)).toBe(writeRefusals(before));
+    },
+  );
 });

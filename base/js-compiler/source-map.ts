@@ -385,13 +385,12 @@ const MAX_SOURCE_MAP_CACHE_SIZE = 1024;
 // - [as identifier]: \[as \w+\] matches any identifier, not just "factory"
 const stackTracePattern =
   /at (?:async )?(.+?) (?:\[as [^\]]+\] )?\((.+?)(?:, <anonymous>)?(?:\):|\:)(\d+):(\d+)\)/;
-// V8 eval frames without a function name show the filename directly after "at".
-// When there is a nested position in parens, it is the more precise location:
-//   at recipe-abc.js, <anonymous>:14:15 (recipe-abc.js, <anonymous>:20:10)
+// V8 eval frames without a function name show the filename directly after "at":
 //   at recipe-abc.js, <anonymous>:14:15
-// The nested pattern matches the inner (more precise) position first.
-const evalFrameNestedPattern =
-  /at .+?, <anonymous>:\d+:\d+ \((.+?), <anonymous>:(\d+):(\d+)\)/;
+// One that carries a nested position in parens is matched by
+// `stackTracePattern`, which maps the inner position and keeps the outer one
+// as the function name:
+//   at recipe-abc.js, <anonymous>:14:15 (recipe-abc.js, <anonymous>:20:10)
 const evalFramePattern = /at (.+?), <anonymous>:(\d+):(\d+)/;
 const CF_INTERNAL = `    at <CF_INTERNAL>`;
 const UNMAPPED = `    at <UNMAPPED>`;
@@ -471,18 +470,6 @@ export class SourceMapParser {
       }
 
       // V8 eval frames without a function name.
-      // Try the nested pattern first (inner position is more precise).
-      const nestedMatch = line.match(evalFrameNestedPattern);
-      if (nestedMatch) {
-        return this.#mapFrame(
-          "",
-          nestedMatch[1],
-          nestedMatch[2],
-          nestedMatch[3],
-          line,
-        );
-      }
-
       const evalMatch = line.match(evalFramePattern);
       if (evalMatch) {
         return this.#mapFrame(

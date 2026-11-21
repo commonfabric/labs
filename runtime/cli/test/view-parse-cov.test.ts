@@ -100,14 +100,36 @@ Deno.test("createHighlighter: update with identical text returns the same lines"
   const hl = createHighlighter(src, "m.ts");
   const before = hl.lines;
   const after = hl.update(src);
-  // diffRange returns null for identical text, so update short-circuits and
-  // hands back the exact same array reference.
+  // Identical text short-circuits update, which hands back the exact same
+  // array reference.
   assertEquals(after, before);
 });
 
 Deno.test("highlightLineEditLocally: unchanged text returns the original line", () => {
   const before = createHighlighter('const value = "same";', "m.ts").lines[0];
   assert(highlightLineEditLocally(before, before.text) === before);
+});
+
+Deno.test("highlightDocument: text in two overlapping recovered statements is drawn once", () => {
+  // The parser recovers from the decorator after `await` with a declaration
+  // list that ends after the expression statement holding `e` begins.
+  const text = "import{}const i=await@dec e";
+  const edited = createHighlighter("import{}const i=await e", "m.ts")
+    .update(text);
+  for (const lines of [highlightDocument(text, "m.ts"), edited]) {
+    assertEquals(lines.map((line) => line.text), [text]);
+    assertEquals(
+      lines[0].spans.slice(-2).map(({ col, text, cls }) => ({
+        col,
+        text,
+        cls,
+      })),
+      [
+        { col: 25, text: " ", cls: "whitespace" },
+        { col: 26, text: "e", cls: "binding" },
+      ],
+    );
+  }
 });
 
 Deno.test("highlightLineEditLocally: editing a called member key refreshes its definition name", () => {

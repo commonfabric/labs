@@ -1,0 +1,294 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "PIICategory": {
+        "enum": [
+          "name",
+          "email",
+          "phone",
+          "ssn",
+          "address",
+          "custom"
+        ]
+      },
+      "PIIEntry": {
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/PIICategory"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PublicText": {
+        "ifc": {
+          "maxConfidentiality": []
+        },
+        "type": "string"
+      },
+      "SecretEntry": {
+        "$ref": "#/$defs/PIIEntry",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "YooQZHI052poLn38gSHN5aOO9fuvcx55AsPibeLZhF4",
+              "policyDigest": "933lJCexcsH8SqAG7BbZrUPSsnw5tZyCwrbzTMMJzMc",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "redactionRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        }
+      }
+    },
+    "properties": {
+      "draft": {
+        "asCell": [
+          "cell"
+        ],
+        "description": "No `Default` on purpose. A confidential scalar with a schema default makes\nthe piece-start commit read it, and the runtime then refuses to install\n`modelPrompt`'s own \"\" default beside it (a ceiling gate that goes\ntransaction-wide at setup). Unset, it reads as undefined until typed in.\nRemove this workaround when the runtime topic on it is resolved.",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "YooQZHI052poLn38gSHN5aOO9fuvcx55AsPibeLZhF4",
+              "policyDigest": "933lJCexcsH8SqAG7BbZrUPSsnw5tZyCwrbzTMMJzMc",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "redactionRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        },
+        "type": "string"
+      },
+      "modelPrompt": {
+        "$ref": "#/$defs/PublicText",
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "description": "What the model is asked. Admits only public values."
+      },
+      "pastedReply": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "description": "A reply from a model you asked yourself, pasted in.",
+        "type": "string"
+      },
+      "vaultEntries": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SecretEntry"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "draft"
+    ],
+    "type": "object"
+  },
+  "pattern": "apps/redactor/redactor.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Detection": {
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/PIICategory"
+          },
+          "source": {
+            "description": "\"vault\" for an entry the user stored; otherwise the detector's name.",
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "category",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PIICategory": {
+        "enum": [
+          "name",
+          "email",
+          "phone",
+          "ssn",
+          "address",
+          "custom"
+        ]
+      },
+      "PIIEntry": {
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/PIICategory"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PublicText": {
+        "ifc": {
+          "maxConfidentiality": []
+        },
+        "type": "string"
+      },
+      "SecretEntry": {
+        "$ref": "#/$defs/PIIEntry",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "YooQZHI052poLn38gSHN5aOO9fuvcx55AsPibeLZhF4",
+              "policyDigest": "933lJCexcsH8SqAG7BbZrUPSsnw5tZyCwrbzTMMJzMc",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "redactionRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        }
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "found": {
+        "description": "What was found in the draft (secret).",
+        "items": {
+          "$ref": "#/$defs/Detection"
+        },
+        "type": "array"
+      },
+      "leaks": {
+        "description": "Vault values still present in the redacted draft (should be empty).",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "modelPrompt": {
+        "$ref": "#/$defs/PublicText"
+      },
+      "redacted": {
+        "description": "The released, redacted draft: the only thing that may reach the model.",
+        "type": "string"
+      },
+      "reply": {
+        "description": "The reply, with stand-ins (from the model or pasted).",
+        "type": "string"
+      },
+      "restored": {
+        "description": "The reply with your originals restored (secret).",
+        "type": "string"
+      },
+      "send": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Send the redacted draft to the model."
+      },
+      "sendRawDraft": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Try to send the unredacted draft; the runtime refuses the write."
+      },
+      "typeDraft": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Replace the draft (the textarea binds it directly).",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "vault": {
+        "properties": {
+          "addEntry": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "category": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "category",
+              "value"
+            ],
+            "type": "object"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/$defs/SecretEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries",
+          "addEntry"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "redacted",
+      "found",
+      "leaks",
+      "modelPrompt",
+      "reply",
+      "restored",
+      "send",
+      "sendRawDraft",
+      "typeDraft",
+      "vault",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

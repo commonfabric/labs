@@ -126,6 +126,18 @@ store is meant to be reachable and managed directly, through its own view
 removed like any other; the composer's removal keeps the common case tidy, and
 an entry it leaves is not lost.
 
+A room that is its space's root shows its space's files itself, as a root
+offering file storage does ([`FileStoreView`](../fabrifile/FileStoreView.md)).
+Beside the attach control, such a room offers a **Files** control once it names
+a store (`fileStore`). A room that names none offers none, and so does a room
+that isn't its space's root, whose files are its root's to show. Pressing it
+opens the files for that session alone, which it keeps in a `PerSession` value
+of its own, and the room then instantiates `FileStoreView` on the store, under
+the composer. Pressing it again, as **Hide files**, closes them. The view is mapped from a list of the
+session's own that holds the store only while its files are open, so a session
+that hasn't opened them holds no view, and nothing reads the store's entries
+for it. What the view offers each viewer is the view's own decision.
+
 ## Writers
 
 Every write goes through one handler per stream:
@@ -279,8 +291,8 @@ changes nothing; a refusal writes nothing else. A thread's title is stored the
 same way, labeled with the member who last set it, by `commitSetThreadTitle`,
 which records its outcomes in `threadTitleRequests`, and by `commitSend` and
 `commitThreadSend` for a send that titles the thread it starts. Its record's
-policy names those three, and a later schema can neither add a writer to a
-stored policy nor drop one.
+policy names those three. A stored policy keeps every writer it names, whether
+or not a later schema lists it, and gains one only where a release admits it.
 `canSend` is computed for each session from the reader's access and whether
 their profile resolves.
 
@@ -300,13 +312,14 @@ each setting at an initial value:
 | How far before the clock a proposed time is accepted | `proposedTimeMaxAgeNsec` | 10 minutes |
 | How far after the clock a proposed time is accepted | `proposedTimeMaxLeadNsec` | 10 seconds |
 | How long an entry stays in `recentActivity` | `recentActivityWindowNsec` | 10 minutes |
-| How many of the newest messages `messages.latest` holds | `maxWindowCount` | 100 |
+| How many of the newest messages `messages.latest`, and a window, hold | `maxWindowCount` | 100 |
 | The most message windows a session can have open | `maxOpenWindows` | 50 |
 | The most attachments a message may have | `maxAttachments` | 10 |
 
 These are the first build's values. Once the configuration exists, rooms can
 differ from them. The room reads `ownersMayObliterate`,
-`deletionIsObliteration`, `maxWindowCount`, and `maxAttachments`; the other
+`deletionIsObliteration`, `maxWindowCount`, `maxOpenWindows`, and
+`maxAttachments`; the other
 keys are stated for
 the policy's shape, which a user's Home carries, and read by nothing. `ownersMayObliterate` is there for a group room with many
 OWNERs; a direct room is set up without it, and its two people each obliterate

@@ -209,6 +209,114 @@ describe("read-value", () => {
       });
     });
 
+    it("returns an error when the run has no fabric session", async () => {
+      fabric = await createFabric("observe");
+      const { ref } = await seedDocument(fabric.runtime, fabric.session);
+      const { table, token } = await held(ref);
+
+      const output = await readValueTool.invoke(
+        { ...contextWith(fabric.session, table), getFabricSession: undefined },
+        { token },
+      );
+
+      expect(output).toMatchObject({
+        status: "error",
+        message:
+          "read_value requires a fabric session; a run without one holds no pieces",
+      });
+    });
+
+    it("refuses a held handle whose recorded ref names no address", async () => {
+      // A table adopted from persisted state is checked for shape, not for
+      // whether each ref still parses, so one that does not is refused as a
+      // handle the run cannot read rather than followed.
+      fabric = await createFabric("observe");
+      const { ref } = await seedDocument(fabric.runtime, fabric.session);
+      const { table, token } = await held(ref);
+      const corrupt: HarnessHandleTable = {
+        ...table,
+        entries: table.entries.map((entry) => ({
+          ...entry,
+          ref: "not an address",
+        })),
+      };
+
+      const { session } = fabric;
+      const read = (handles: HarnessHandleTable) =>
+        readValueTool.invoke(contextWith(session, handles), {
+          token,
+          select: "count",
+        });
+
+      expect(await read(table)).toMatchObject({ status: "ok", value: 3 });
+      expect(await read(corrupt)).toMatchObject({
+        status: "error",
+        message: "read_value can only read a handle this run holds",
+      });
+    });
+
+    it("returns the session's denial when it may not read the handle's space", async () => {
+      fabric = await createFabric("observe");
+      const { ref } = await seedDocument(fabric.runtime, fabric.session);
+      const { table, token } = await held(ref);
+      const space = fabric.session.pieces.getSpace();
+      Object.assign(fabric.storage, {
+        authorizationError: (denied: string) =>
+          denied === space
+            ? new Error(`Principal lacks READ on space ${denied}`)
+            : undefined,
+      });
+
+      const output = await readValueTool.invoke(
+        contextWith(fabric.session, table),
+        { token, select: "count" },
+      );
+
+      expect(output.status).toBe("error");
+      expect((output as { message: string }).message).toContain("lacks READ");
+      expect(JSON.stringify(output)).not.toContain('"value"');
+    });
+
+    it("returns the failure when the piece behind an underived value cannot be loaded", async () => {
+      // A derived value nobody has derived yet is read by loading the piece
+      // that derives it, and a load that fails is said, with its cause.
+      fabric = await createFabric("observe");
+      const space = fabric.session.pieces.getSpace();
+      const seed = fabric.runtime.edit();
+      const holder = fabric.runtime.getCell(
+        space,
+        "read-value-underived-holder",
+        undefined,
+        seed,
+      );
+      holder.set({
+        derived: {
+          "/": {
+            "link@1": { id: "computed:fid1:read-value-underived", path: [] },
+          },
+        },
+      } as never);
+      expect((await seed.commit().settled).ok).toBeDefined();
+      const { table, token } = await held(
+        createLLMFriendlyLink(holder.getAsNormalizedFullLink(), space),
+      );
+      Object.assign(fabric.storage, {
+        syncCell: () =>
+          Promise.reject(new Error("the replica dropped the connection")),
+      });
+
+      const output = await readValueTool.invoke(
+        contextWith(fabric.session, table, true),
+        { token, select: "derived" },
+      );
+
+      expect(output).toMatchObject({
+        status: "error",
+        message:
+          `read_value could not read ${token}: the replica dropped the connection`,
+      });
+    });
+
     it("refuses a handle whose own space the session was not admitted to", async () => {
       fabric = await createFabric("observe");
       const elsewhere = (await Identity.generate()).did();

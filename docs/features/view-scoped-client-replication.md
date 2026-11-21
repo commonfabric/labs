@@ -163,23 +163,33 @@ the current execution snapshot.
 Memory retains demand and supporting delivery as separate tracked graphs. Dirty
 documents refresh those graphs incrementally; support updates do not become
 execution demand. Ordinary watch additions extend the demand graph and deliver
-differences against the session's current delivery state. A selection that
-adds delivery roots to a view and takes none away extends the view's support
-graph by the added roots within the next incremental refresh, over the demand
-graph that refresh keeps current. A selection that drops a delivered root
-rebuilds the view's support graphs from the current selections over the demand
-graphs, which the same pass first refreshes by its dirty documents, and diffs
-the session's delivery against the result, so the departed documents are
-removed without the demand being walked again. A full view replacement or
-recovery rebuilds every graph. A selection that changes only what
-the view may run or adopt leaves the graphs standing: its plans ride the
-session's next frame, a frame of plans alone when nothing dirtied it. A frame carries the plans when they are owed, by
-such a selection or by a rebuilt graph; an incremental frame that owes none
-carries documents alone, and the client keeps the plans it holds. Unrelated commits without catch-up
-markers or operation changes produce no view frame. View replacements declare
-the replica's current holdings when the server supports that protocol, allowing
-unchanged documents to be omitted while still delivering missing documents and
-removals. A frame carries complete manifests whenever it carries plans.
+differences against the session's current delivery state. A selection that adds
+delivery roots to a view and takes none away extends the view's support graph by
+the added roots within the next incremental refresh, over the demand graph that
+refresh keeps current. A selection that drops a delivered root rebuilds the
+view's support graphs from the current selections over the demand graphs, which
+the same pass first refreshes by its dirty documents, and diffs the session's
+delivery against the result, so the departed documents are removed without the
+demand being walked again. A view replacement, or a watch removal, on a session
+that already holds view graphs moves those graphs: the demand graphs to the
+request's ordinary and rendered roots, and the support graphs to the selections
+the request's views keep. Each releases the roots the request drops, refreshes
+the remaining coverage by pending dirty documents, and walks the roots it adds.
+The replacement therefore delivers current documents even before the batched
+subscription flush. The batch remains pending for other sessions. A view whose
+revision changes loses its support until the planner selects for the new
+revision. A session's first views, a replacement on a session marked for a full
+resync, a replacement whose dirty batch does not identify changed documents, and
+recovery evaluate every graph whole. A selection that changes only what the view
+may run or adopt leaves the graphs standing: its plans ride the session's next
+frame, a frame of plans alone when nothing dirtied it. A frame carries the plans
+when they are owed, by such a selection or by a rebuilt graph; an incremental
+frame that owes none carries documents alone, and the client keeps the plans it
+holds. Unrelated commits without catch-up markers or operation changes produce
+no view frame. View replacements declare the replica's current holdings when the
+server supports that protocol, allowing unchanged documents to be omitted while
+still delivering missing documents and removals. A frame carries complete
+manifests whenever it carries plans.
 
 ## Guarded local execution
 

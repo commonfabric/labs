@@ -452,16 +452,10 @@ export const prepareTrustedMessageSend = (
   trimmedBody: string | null;
   message: TrustedSentChatMessage | null;
 } => {
-  const profileValue = currentProfileSnapshot(myProfile);
-  const trimmedBody = rawBody.trim();
-  if (!profileValue || !trimmedBody) {
-    return {
-      trimmedBody: null,
-      message: null,
-    };
-  }
   const profileCell = currentProfileCell(myProfile);
-  if (!profileCell) {
+  const profileValue = profileCell?.get();
+  const trimmedBody = rawBody.trim();
+  if (!profileCell || !profileValue || !trimmedBody) {
     return {
       trimmedBody: null,
       message: null,
@@ -475,35 +469,6 @@ export const prepareTrustedMessageSend = (
       profileValue,
       trimmedBody,
     ) as TrustedSentChatMessage,
-  };
-};
-
-export const applyTrustedMessageSend = (
-  messages: readonly SharedChatMessage[],
-  myProfile: MyProfileCell,
-  rawBody: string,
-): {
-  trimmedBody: string | null;
-  nextMessages: SharedChatMessage[];
-} => {
-  const messageList = Array.from(messages);
-  const { trimmedBody, message } = prepareTrustedMessageSend(
-    myProfile,
-    rawBody,
-  );
-  if (!trimmedBody || !message) {
-    return {
-      trimmedBody: null,
-      nextMessages: messageList,
-    };
-  }
-
-  return {
-    trimmedBody,
-    nextMessages: [
-      ...messageList,
-      message,
-    ],
   };
 };
 
@@ -587,7 +552,6 @@ export const prepareTrustedAdminToggle = (
   currentAdminRole: ChatAdminRole | undefined,
   adminRegistry: ChatAdminRegistryCell,
   participant: AdminParticipantRow | undefined,
-  myProfile?: MyProfileCell,
   nextEveryoneIsAdmin?: boolean,
 ): TrustedAdminPolicyChange | null => {
   if (currentAdminRole === undefined) {
@@ -602,47 +566,19 @@ export const prepareTrustedAdminToggle = (
       };
     }
 
-    const currentProfile = myProfile === undefined
-      ? undefined
-      : currentProfileCell(myProfile);
-    const currentName = myProfile === undefined
-      ? undefined
-      : currentProfileSnapshot(myProfile)?.name;
-    const bootstrapAdmin =
-      adminRoles.length === 0 && currentProfile !== undefined &&
-        currentName
-        ? {
-          subject: currentProfile,
-          displayName: currentName,
-        } as ChatAdminRole
-        : undefined;
-    if (adminRoles.length === 0 && bootstrapAdmin === undefined) {
-      return null;
-    }
-    return {
-      ...(adminRoles.length > 0 ? { admins: adminRoles } : {}),
-      ...(bootstrapAdmin !== undefined ? { bootstrapAdmin } : {}),
-      everyoneIsAdmin: false,
-    };
+    // With no explicit admins, the current user stays on as the one admin.
+    return adminRoles.length > 0
+      ? { admins: adminRoles, everyoneIsAdmin: false }
+      : { bootstrapAdmin: currentAdminRole, everyoneIsAdmin: false };
   }
 
   if (chatAdminEveryoneIsAdmin(adminRegistry)) {
     return null;
   }
 
-  const targetProfile = participant?.profile ?? (
-    myProfile === undefined ? undefined : currentProfileCell(myProfile)
-  );
-  const targetName = participant?.name ??
-    (myProfile === undefined ? undefined : currentProfileSnapshot(myProfile)
-      ?.name);
-  if (
-    targetProfile === undefined ||
-    !targetName
-  ) {
-    return null;
-  }
-
+  // With no participant named, the toggle applies to the current user.
+  const targetProfile = participant?.profile ?? currentAdminRole.subject;
+  const targetName = participant?.name ?? currentAdminRole.displayName;
   const withoutParticipant = adminRoles.filter((role) =>
     !equals(role.subject, targetProfile)
   );
@@ -701,7 +637,6 @@ export const commitTrustedAdminToggle = handler<
     currentUserAdminRole(myProfile, adminRegistry),
     adminRegistry,
     participant ?? eventParticipant,
-    myProfile,
     nextEveryoneIsAdmin,
   );
   if (nextPolicy === null) {
@@ -782,7 +717,7 @@ const TrustedParticipantsPanel = pattern<
 >((
   { profiles, myProfile, messages, id }: TrustedParticipantsPanelInput,
 ): { [NAME]: string; [UI]: any } => ({
-  [NAME]: computed(() => `${id} participants panel`),
+  [NAME]: "participants panel",
   [UI]: (
     <cf-hstack id={id} gap="2" wrap>
       <cf-chip

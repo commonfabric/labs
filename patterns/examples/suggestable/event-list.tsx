@@ -1,3 +1,10 @@
+/**
+ * Lists the events found with `wish` for the `#event` tag in the current space
+ * and the viewer's home space, each shown as a card with title, date, time,
+ * and notes. The list view is exported separately so it can be shown with
+ * any set of events.
+ */
+
 import { computed, NAME, pattern, UI, type VNode, wish } from "commonfabric";
 
 // ===== Types =====
@@ -19,19 +26,23 @@ export type EventListOutput = {
 
 // ===== Pattern =====
 
-const EventList = pattern<EventListInput, EventListOutput>(() => {
-  const events = wish<Event>({ query: "#event", scope: [".", "~"] });
+export interface EventListViewInput {
+  /** The events to list. */
+  events: Event[];
+}
 
+/** Lists `events`, and counts them in its name. */
+export const EventListView = pattern<EventListViewInput, EventListOutput>((
+  { events },
+) => {
   return {
     [NAME]: computed(() =>
-      events.candidates?.length
-        ? `Events: ${events.candidates?.length}`
-        : "Events"
+      events.length ? `Events: ${events.length}` : "Events"
     ),
     [UI]: (
       <cf-vstack gap="2" style="padding: 1.5rem;">
         <div>
-          {events.candidates.map((event) => (
+          {events.map((event) => (
             <cf-vstack
               gap="1"
               style="border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem; margin-bottom: 1rem;"
@@ -53,8 +64,14 @@ const EventList = pattern<EventListInput, EventListOutput>(() => {
         </div>
       </cf-vstack>
     ),
-    events: events.candidates,
+    events,
   };
+});
+
+/** Lists the events the space and the viewer's home space mention. */
+const EventList = pattern<EventListInput, EventListOutput>(() => {
+  const events = wish<Event>({ query: "#event", scope: [".", "~"] });
+  return EventListView({ events: events.candidates });
 });
 
 export default EventList;

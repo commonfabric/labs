@@ -54,6 +54,7 @@ import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import {
   experimentalOptionsFromEnv,
   getPatternEnvironment,
+  PATTERN_COVERAGE_MULTI_RUNTIME_TEST_NAME,
   type PatternCoverageData,
   type PatternEnvironment,
   setPatternEnvironment,
@@ -438,7 +439,7 @@ class WorkerClient {
       if (data) collector.ingest(data as unknown as PatternCoverageData);
       await writePatternCoverageLcov(collector, join(directory, coverageFile), {
         root: PATTERNS_ROOT,
-        testName: "multi-runtime integration",
+        testName: PATTERN_COVERAGE_MULTI_RUNTIME_TEST_NAME,
       });
     }
     await this.call("dispose");

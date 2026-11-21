@@ -1,0 +1,14 @@
+{
+  "description": "fixture file",
+  "responses": [
+    {
+      "type": "sendRequest",
+      "expectRequest": { "lastMessageContains": "hello" },
+      "response": {
+        "role": "assistant",
+        "content": "from file",
+        "id": "file-1"
+      }
+    }
+  ]
+}

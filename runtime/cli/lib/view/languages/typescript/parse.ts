@@ -437,9 +437,8 @@ function createTypeScriptHighlighter(
       return lines;
     },
     update(next: string): readonly Line[] {
+      // `createHighlighter` handles an unchanged text before reaching here.
       const change = diffRange(text, next);
-      if (!change) return lines;
-
       sf = ts.updateSourceFile(sf, next, change.range);
       const oldLines = lines;
       const oldEnter = enter;
@@ -538,13 +537,12 @@ function createTypeScriptHighlighter(
   };
 }
 
-/** The common-prefix/suffix change between two texts as a TextChangeRange, or
- * null when they are identical. */
+/** The common-prefix/suffix change between two different texts as a
+ * TextChangeRange. */
 function diffRange(
   old: string,
   next: string,
-): { start: number; newLength: number; range: ts.TextChangeRange } | null {
-  if (old === next) return null;
+): { start: number; newLength: number; range: ts.TextChangeRange } {
   const minLen = Math.min(old.length, next.length);
   let p = 0;
   while (p < minLen && old.charCodeAt(p) === next.charCodeAt(p)) p++;
@@ -893,7 +891,9 @@ function buildGlobalSpans(
   const spans: GlobalSpan[] = [];
   let prevEnd = from;
   for (const token of tokens) {
-    if (token.start < prevEnd) continue; // defensive against overlap
+    // Error recovery can leave sibling nodes overlapping, so a token can repeat
+    // text an earlier one already covers.
+    if (token.start < prevEnd) continue;
     if (token.start > prevEnd) {
       classifyTrivia(text, prevEnd, token.start, spans);
     }

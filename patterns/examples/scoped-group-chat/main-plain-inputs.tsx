@@ -1,3 +1,11 @@
+/**
+ * A group chat with rooms in which the messages are shared by everyone in the
+ * space, each person's name and draft message belong to that user, and the
+ * selected room is private to each browser session. It demonstrates the
+ * `PerSpace`, `PerUser`, and `PerSession` scopes, written with plain
+ * (non-`Writable`) input types.
+ */
+
 import {
   Default,
   handler,
@@ -213,6 +221,8 @@ export default pattern<ScopedGroupChatInput, ScopedGroupChatOutput>(
     const messagesInSelectedRoom = selectedRoomValue.messages;
     const messageCount = messagesInSelectedRoom.length;
     const displayedRoomLabel = selectedRoomValue.name || "No room";
+    // The per-user name resolves here, outside the `.map()` below.
+    const myName = senderName(name);
     const send = sendMessage({
       name,
       selectedRoom,
@@ -292,7 +302,7 @@ export default pattern<ScopedGroupChatInput, ScopedGroupChatOutput>(
                         <cf-vstack gap="2">
                           {messagesInSelectedRoom.map((message) => {
                             const author = message.author;
-                            const isMine = author === senderName(name);
+                            const isMine = author === myName;
                             return (
                               <div
                                 style={{

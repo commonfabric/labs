@@ -1,4 +1,6 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import { createHarnessCfcPolicySnapshot } from "../src/contracts/cfc-policy-snapshot.ts";
 
 const base = {
@@ -77,5 +79,22 @@ Deno.test("createHarnessCfcPolicySnapshot records that the operator allows none"
   assertEquals(snapshot.skillScripts, {
     allowSkillScripts: false,
     allowedScripts: [{ skill: "agent-browser", path: "scripts/run.ts" }],
+  });
+});
+
+describe("cfc-policy-snapshot", () => {
+  describe("createHarnessCfcPolicySnapshot()", () => {
+    it("records the sandbox under the substrate without a protected-xattr entry when none was given", () => {
+      const sandbox = {
+        kind: "runsc-cfc" as const,
+        defaultWorkingDirectory: "/workspace",
+      };
+      expect(createHarnessCfcPolicySnapshot({ ...base, sandbox }).substrate)
+        .toEqual({ sandbox });
+    });
+
+    it("records no substrate when given neither a sandbox nor protected xattrs", () => {
+      expect("substrate" in createHarnessCfcPolicySnapshot(base)).toBe(false);
+    });
   });
 });

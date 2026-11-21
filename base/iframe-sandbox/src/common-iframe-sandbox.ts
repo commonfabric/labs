@@ -3,8 +3,14 @@ import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { createRef, Ref, ref } from "lit/directives/ref.js";
 
-import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { isObjectNotArray, isPlainObject } from "@commonfabric/js-values/types";
 
+import {
+  type AssetRecord,
+  missingAssets,
+  sameAssets,
+  toAssetRecord,
+} from "./assets.ts";
 import { type FabricBridge, FabricBridgeHost } from "./bridge.ts";
 import { guestDocument } from "./guest-document.ts";
 import { GuestSessions } from "./guest-sessions.ts";
@@ -18,18 +24,24 @@ type CommonIframeLoadState = "" | "loading" | "loaded";
 // @tag common-iframe-sandbox
 // @prop {string} src - String representation of HTML content to load within an iframe.
 // @prop {string} script - Module source the guest document runs once parsed.
+// @prop {object} assets - Static assets the guest document refers to by name.
 // @prop bridge - Explicit resources made available to the guest.
 // @event {CustomEvent} common-iframe-error - An error from the iframe.
 // @event {CustomEvent} load - The iframe was successfully loaded.
 export class CommonIframeSandboxElement extends LitElement {
-  get src() {
+  /**
+   * Guest document, or the empty string while no source is available.
+   * Assigning `null` or `undefined`, or removing the `src` attribute, clears
+   * the guest and releases its capability sessions.
+   */
+  get src(): string {
     return this.#src;
   }
 
   @property()
-  set src(value: string) {
+  set src(value: string | null | undefined) {
     const previousValue = this.#src;
-    this.#src = value;
+    this.#src = value ?? "";
     this.requestUpdate("src", previousValue);
   }
 
@@ -47,6 +59,38 @@ export class CommonIframeSandboxElement extends LitElement {
     const previousValue = this.#script;
     this.#script = value;
     this.requestUpdate("script", previousValue);
+  }
+
+  /**
+   * The guest's static assets, a record from a name to a base64 `data:` URL.
+   * The guest's document refers to one as `cf-asset:<name>`, which loading
+   * replaces with the URL, and its script reads one with `fabric.asset()`;
+   * see `guestDocument()`. A reference to a name the record lacks is reported
+   * as a `common-iframe-error`, and the guest loads all the same.
+   *
+   * The element holds a frozen copy. Assigning a record that holds the same
+   * names and URLs as the one it has changes nothing, so a host may assign
+   * the same assets on each render without reloading the guest.
+   *
+   * @throws TypeError when the record is not one from a name matching
+   *   `[A-Za-z0-9_-]+` to a base64 `data:` URL, keeping the one it had.
+   */
+  get assets(): AssetRecord {
+    return this.#assets;
+  }
+
+  // The decorator asks `hasChanged` about the record assigned rather than the
+  // copy the element holds, so the two are compared by what they hold.
+  @property({
+    attribute: false,
+    hasChanged: (value: AssetRecord, previous: AssetRecord) =>
+      !sameAssets(previous, value),
+  })
+  set assets(value: AssetRecord) {
+    if (isPlainObject(value) && sameAssets(this.#assets, value)) return;
+    const previousValue = this.#assets;
+    this.#assets = toAssetRecord(value);
+    this.requestUpdate("assets", previousValue);
   }
 
   get bridge(): FabricBridge | undefined {
@@ -136,6 +180,7 @@ export class CommonIframeSandboxElement extends LitElement {
 
   #src = "";
   #script = "";
+  #assets: AssetRecord = Object.freeze({});
   #presentation: IframePresentation | null = null;
   #bridge: FabricBridge | undefined;
 
@@ -306,8 +351,9 @@ export class CommonIframeSandboxElement extends LitElement {
   };
 
   /**
-   * Dispatches `common-iframe-error` for an error the guest raised, by either
-   * of the routes one can arrive on.
+   * Dispatches `common-iframe-error` for an error in the guest: one the guest
+   * raised, by either of the routes one can arrive on, or one this element
+   * found in the guest's document as it loaded it.
    */
   #dispatchGuestError(
     { description, source, lineno, colno, stacktrace }: IPC.GuestError,
@@ -341,20 +387,43 @@ export class CommonIframeSandboxElement extends LitElement {
   }
 
   /**
-   * Asks the outer frame to load `src`, with `script`, letting go of the
-   * guest being replaced before asking rather than once the replacement
-   * arrives. What that guest sends over the interval between the two reaches
-   * a closed port, which is the whole of what this end can promise about a
-   * document still running in a frame it has asked to be rid of.
+   * Asks the outer frame to load `src`, with `script` and `assets`, letting go
+   * of the guest being replaced before asking rather than once the
+   * replacement arrives. What that guest sends over the interval between the
+   * two reaches a closed port, which is the whole of what this end can promise
+   * about a document still running in a frame it has asked to be rid of.
+   *
+   * A `cf-asset:` reference in `src` to a name `assets` lacks is reported as
+   * a guest error naming each such reference and the names `assets` holds.
+   * The document loads with the reference left in it.
    */
   #loadInnerDoc() {
     this.loadState = "loading";
     this.#releaseGuest();
     this.#toOuterFrame({
       type: IPC.IPCHostMessageType.LoadDocument,
-      data: guestDocument(this.src, this.script),
+      data: guestDocument(this.src, this.script, this.assets),
       presentation: this.presentation,
     });
+    const missing = missingAssets(this.src, this.assets);
+    if (missing.length > 0) {
+      const references = missing.map((name) => `\`cf-asset:${name}\``);
+      const names = Object.keys(this.assets).map((name) => `\`${name}\``);
+      const description =
+        `The guest's document refers to assets it was not given: ${
+          references.join(", ")
+        }. ` +
+        (names.length === 0
+          ? "It was given none."
+          : `It was given ${names.join(", ")}.`);
+      this.#dispatchGuestError({
+        description,
+        source: "guest document",
+        lineno: 0,
+        colno: 0,
+        stacktrace: description,
+      });
+    }
   }
 
   /** Sends `message` to the outer frame. */
@@ -381,9 +450,9 @@ export class CommonIframeSandboxElement extends LitElement {
   }
 
   /**
-   * Reloads on a change to `src`, `script` or `bridge`, once the frame is
-   * ready; until then `#onOuterReady` does the first load. Reacting here
-   * rather than in the setters folds a batch of changes into one load:
+   * Reloads on a change to `src`, `script`, `assets` or `bridge`, once the
+   * frame is ready; until then `#onOuterReady` does the first load. Reacting
+   * here rather than in the setters folds a batch of changes into one load:
    * assigning several of them asks for one document, carrying every new
    * value, rather than reloading the old document under the new bridge on
    * the way. Presentation updates travel separately and keep the current
@@ -404,7 +473,8 @@ export class CommonIframeSandboxElement extends LitElement {
     if (!this.#readyWindow) return;
     if (
       changed.has("src") ||
-      ((changed.has("script") || changed.has("bridge")) && this.src)
+      ((changed.has("script") || changed.has("assets") ||
+        changed.has("bridge")) && this.src)
     ) {
       this.#loadInnerDoc();
     } else if (changed.has("presentation")) {

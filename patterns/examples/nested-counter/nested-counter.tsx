@@ -1,3 +1,9 @@
+/**
+ * Two views of one shared counter, each with its own decrement and
+ * increment buttons, so a change in either updates both. It demonstrates
+ * passing a cell to a sub-pattern and invoking a pattern either as a function
+ * call or as a JSX element.
+ */
 import {
   computed,
   Default,
@@ -51,7 +57,7 @@ export const Counter = pattern<CounterInput>((state) => {
   const nextValue = computed(() => state.value.get() + 1);
 
   return {
-    [NAME]: computed(() => `Simple counter: ${state.value}`),
+    [NAME]: computed(() => `Simple counter: ${state.value.get()}`),
     [UI]: (
       <div>
         <cf-button onClick={() => boundDecrement.send()}>
@@ -81,7 +87,7 @@ export default pattern<CounterInput>((state) => {
   const counter = Counter({ value: state.value });
 
   return {
-    [NAME]: computed(() => `Double counter: ${state.value}`),
+    [NAME]: computed(() => `Double counter: ${state.value.get()}`),
     [UI]: (
       <div>
         {/* Patterns can also be 'invoked' via JSX */}
