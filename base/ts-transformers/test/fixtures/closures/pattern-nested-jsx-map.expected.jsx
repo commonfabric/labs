@@ -35,19 +35,50 @@ interface PatternInput {
     ]>>;
 }
 const __cfLift_1 = __cfHelpers.lift<{
-    items: __cfHelpers.ReadonlyCell<unknown[]>;
+    items: __cfHelpers.ReadonlyCell<Default<Item[], [
+    ]>>;
 }, boolean>(({ items }) => items.get().length > 0, {
     type: "object",
     properties: {
         items: {
             type: "array",
             items: {
-                type: "unknown"
+                $ref: "#/$defs/Item"
             },
+            "default": [],
             asCell: ["readonly"]
         }
     },
-    required: ["items"]
+    required: ["items"],
+    $defs: {
+        Item: {
+            type: "object",
+            properties: {
+                label: {
+                    type: "string"
+                },
+                tags: {
+                    type: "array",
+                    items: {
+                        $ref: "#/$defs/Tag"
+                    }
+                },
+                selectedIndex: {
+                    type: "number"
+                }
+            },
+            required: ["label", "tags", "selectedIndex"]
+        },
+        Tag: {
+            type: "object",
+            properties: {
+                name: {
+                    type: "string"
+                }
+            },
+            required: ["name"]
+        }
+    }
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
