@@ -590,6 +590,128 @@ describe("cfc-plan-labels", () => {
         });
       });
 
+      it("gives each member a record lists the label of the record's template, instantiated once", async () => {
+        await withSources((runtime, tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, {
+              inputs: [{ slots: { 0: 0 } }],
+              bindings: [{ chain: [address("of:src-a")], observes: "value" }],
+            }),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            {
+              ...writeAt(identity, target, "*", 0, 0),
+              members: ["a", "b"],
+            } as WritePolicyInput,
+            runtimeWritePolicyAuthorization,
+          );
+          const before = runtime.getCfcStats();
+
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+
+          const after = runtime.getCfcStats();
+          expect(labels.reasons).toEqual([]);
+          expect(confidentialityAt(labels, target, "a")).toEqual(["secret-a"]);
+          expect(confidentialityAt(labels, target, "b")).toEqual(["secret-a"]);
+          expect(confidentialityAt(labels, target, "*")).toEqual([]);
+          expect(
+            after.planTemplatesInstantiated - before.planTemplatesInstantiated,
+          ).toBe(1);
+        });
+      });
+
+      it("gives the path of a record the label of its template in each document the record lists", async () => {
+        await withSources((runtime, tx, identity, target) => {
+          const other = runtime.getCell(space, "plan-target-2", undefined, tx);
+          other.set({ a: "z" });
+          const second: CfcAddress = {
+            ...target,
+            id: other.getAsNormalizedFullLink().id,
+          };
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, {
+              inputs: [{ slots: { 0: 0 } }],
+              bindings: [{ chain: [address("of:src-a")], observes: "value" }],
+            }),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            {
+              ...writeAt(identity, target, "a", 0, 0),
+              documents: [second.id],
+            } as WritePolicyInput,
+            runtimeWritePolicyAuthorization,
+          );
+
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+
+          expect(labels.reasons).toEqual([]);
+          expect(confidentialityAt(labels, target, "a")).toEqual(["secret-a"]);
+          expect(confidentialityAt(labels, second, "a")).toEqual(["secret-a"]);
+        });
+      });
+
+      it("instantiates the template of a record that lists members for each member where a slot takes a label the transaction staged", async () => {
+        await withSources((runtime, tx, identity, target) => {
+          // Slot 2 of the listed members takes the label staged at `c`,
+          // which another record of the transaction covers.
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, {
+              inputs: [{ slots: { 0: 0 } }, { slots: { 2: 1 } }],
+              bindings: [
+                { chain: [address("of:src-a")], observes: "value" },
+                { staged: { ...target, path: ["c"] } },
+              ],
+            }),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "c", 0, 0),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            {
+              ...writeAt(identity, target, "*", 2, 1),
+              members: ["a", "b"],
+            } as WritePolicyInput,
+            runtimeWritePolicyAuthorization,
+          );
+          const before = runtime.getCfcStats();
+
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+
+          const after = runtime.getCfcStats();
+          expect(labels.reasons).toEqual([]);
+          expect(confidentialityAt(labels, target, "a")).toEqual(["secret-a"]);
+          expect(confidentialityAt(labels, target, "b")).toEqual(["secret-a"]);
+          expect(
+            after.planTemplatesInstantiated - before.planTemplatesInstantiated,
+          ).toBe(3);
+        });
+      });
+
+      it("refuses a record that lists members and names their place by no `*`", async () => {
+        await withSources((_runtime, tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, { inputs: [{ slots: {} }] }),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            {
+              ...writeAt(identity, target, "a", 5, 0),
+              members: ["b"],
+            } as WritePolicyInput,
+            runtimeWritePolicyAuthorization,
+          );
+
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+
+          expect(labels.reasons).toHaveLength(1);
+          expect(labels.reasons[0]).toContain("lists members");
+        });
+      });
+
       it("ignores a part of the table recorded without the runtime's authorization", async () => {
         await withSources((_runtime, tx, identity, target) => {
           tx.recordCfcWritePolicyInput(

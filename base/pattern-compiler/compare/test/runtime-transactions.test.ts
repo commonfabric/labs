@@ -1180,6 +1180,109 @@ describe("a change that leaves the stored value as it was", () => {
   });
 });
 
+describe("the write records of one transaction", () => {
+  /**
+   * Writes `count` documents in one transaction, each with a write record of
+   * output 0 of `coalesce` at its path `shout` that names one set of
+   * inputs, and returns what the adapter counted and the labels stored at
+   * that path of each document.
+   */
+  const writeDocuments = async (count: number) => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const docs = Array.from(
+      { length: count },
+      (_, index) => identifierOf({ test: "merged-records", count, index }),
+    );
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: docs[0],
+      artifact: await artifactOf("coalesce"),
+      countRecordBytes: true,
+    });
+    try {
+      const store = new Store();
+      const table = new InputsTable();
+      const constant = table.binding({ constant: true });
+      const inputs = table.place({
+        slots: { 0: constant, 1: constant },
+        selections: { 0: 0 },
+      });
+      hooks.begin("send");
+      for (const doc of docs) {
+        store.docs.set(doc, { kind: "result", value: { shout: "A" } });
+        hooks.change(
+          doc,
+          [],
+          store,
+          undefined,
+          [{
+            target: { doc, path: ["shout"] },
+            record: { output: 0 },
+            instance: docs[0],
+            keys: [],
+            inputs,
+          }],
+          undefined,
+          table,
+        );
+      }
+      hooks.end({ committed: true });
+      const refused = await hooks.settled();
+      const reader = runtime.edit();
+      try {
+        const labeled = docs.filter((doc) =>
+          (readStoredCfcMetadata(reader, {
+            space,
+            id: hooks.entityOf(doc),
+            scope: "space",
+          })?.labelMap.entries ?? []).some((entry) =>
+            entry.observes === "value" && entry.path.join("/") === "shout" &&
+            entry.label.integrity?.length === 1
+          )
+        );
+        return { refused, counts: hooks.counts, labeled: labeled.length };
+      } finally {
+        reader.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  it("records one write record for the records of one plan record with one set of inputs at one path of several documents", async () => {
+    const { refused, counts, labeled } = await writeDocuments(6);
+
+    expect(refused).toEqual([]);
+    expect(counts.recordsGiven).toBe(6);
+    expect(counts.recordsRecorded).toBe(1);
+    expect(labeled).toBe(6);
+  });
+
+  it("records for 200 documents the one record it records for 20, larger by the list of the documents alone", async () => {
+    const small = await writeDocuments(20);
+    const large = await writeDocuments(200);
+
+    expect(large.refused).toEqual([]);
+    expect(large.labeled).toBe(200);
+    expect(large.counts.recordsRecorded).toBe(small.counts.recordsRecorded);
+    // Each further document adds its identifier to the list, and nothing
+    // of the record's inputs.
+    const perDocument = (large.counts.recordBytes - small.counts.recordBytes) /
+      180;
+    expect(perDocument).toBeLessThan(80);
+  });
+});
+
 describe("the cost of labels from templates for a `filter`", () => {
   it("commits a change of one element over plain values in place, over references, and over the result of a `map`, one that leaves the filtered list and one that stays in it, with the same work and stored entries at 20 and at 200 elements", async () => {
     for (const which of CASES) {

@@ -37,6 +37,7 @@ import {
   observedDocumentKey,
 } from "./observation-label.ts";
 import type { ReadObservationShape } from "./observation-classes.ts";
+import { planWriteSource } from "./plan-write-targets.ts";
 import {
   type DerivedBy,
   type ElementInputs,
@@ -264,6 +265,14 @@ export const instantiatePlanLabels = (
   }
   const labels = new Map<string, InternedLabel>();
   const inProgress = new Set<string>();
+  // Per transaction: the label of a record that lists members or documents
+  // (`planWriteSource`), where the instantiation for one of its paths took
+  // no label the transaction staged: every path of the record then has
+  // that label. An instantiation that takes a staged label can differ by
+  // the path it is for, and is made for each.
+  const sourceLabels = new Map<PlanWriteInput, InternedLabel>();
+  // The slots resolved so far to a label the transaction staged.
+  let stagedTaken = 0;
   // Per transaction and set of inputs: the label of an `output` or `shared`
   // node, and the mint of a derivation.
   const named = new Map<string, Instantiated>();
@@ -279,7 +288,22 @@ export const instantiatePlanLabels = (
     }
     inProgress.add(coveringKey);
     try {
-      const label = instantiateWrite(covering.get(coveringKey)!.input);
+      const { input } = covering.get(coveringKey)!;
+      const source = planWriteSource(input);
+      const shared = source === input ? undefined : sourceLabels.get(source);
+      if (shared !== undefined) {
+        // The path is one the transaction wrote, as for a record of its
+        // own.
+        requireWritten(input);
+        work.memoHits++;
+        labels.set(coveringKey, shared);
+        return shared;
+      }
+      const before = stagedTaken;
+      const label = instantiateWrite(input);
+      if (source !== input && stagedTaken === before) {
+        sourceLabels.set(source, label);
+      }
       labels.set(coveringKey, label);
       return label;
     } finally {
@@ -289,6 +313,7 @@ export const instantiatePlanLabels = (
 
   /** The label staged at an address this transaction wrote. */
   const stagedLabel = (address: CfcAddress): InternedLabel => {
+    stagedTaken++;
     if (!env.wrote(address)) {
       throw new PlanLabelError(
         `a slot is bound to /${
@@ -390,12 +415,12 @@ export const instantiatePlanLabels = (
       // A position the write being instantiated covers is read as it was
       // stored: what the write itself stages there adds nothing to its own
       // label.
-      if (
-        binding.staged !== true || !env.wrote(address) ||
-        coveredInProgress(address)
-      ) {
+      if (binding.staged !== true || !env.wrote(address)) {
         return observed(address, observes);
       }
+      // What the position gives depends on the write being instantiated.
+      stagedTaken++;
+      if (coveredInProgress(address)) return observed(address, observes);
       const staged = stagedLabel(address);
       return {
         confidentiality: staged.confidentiality,
@@ -516,8 +541,8 @@ export const instantiatePlanLabels = (
     );
   };
 
-  /** Instantiates the template of one write. */
-  const instantiateWrite = (input: PlanWriteInput): InternedLabel => {
+  /** Throws where the transaction did not write the target of `input`. */
+  const requireWritten = (input: PlanWriteInput): void => {
     if (
       input.enumeration === true
         ? !env.wroteWithin(input.target)
@@ -529,6 +554,16 @@ export const instantiatePlanLabels = (
         } of ${input.target.id}, which the transaction did not write`,
       );
     }
+  };
+
+  /** Instantiates the template of one write. */
+  const instantiateWrite = (input: PlanWriteInput): InternedLabel => {
+    if (input.members !== undefined || input.documents !== undefined) {
+      throw new PlanLabelError(
+        "a plan-write lists members or documents that its target does not place",
+      );
+    }
+    requireWritten(input);
     const plan = env.registry.plan(
       input.compiledPattern,
       runtimeWritePolicyAuthorization,

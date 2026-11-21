@@ -981,6 +981,12 @@ export type ObservedPosition = {
   readonly alone?: true;
 };
 
+/**
+ * A member a write record lists (`PlanWrite.members`): its segment, or for
+ * the members at indices next to each other the first and the last index.
+ */
+export type PlanWriteMember = string | readonly [first: number, last: number];
+
 /** One write of a compiled pattern, as the executor reports it. */
 export type PlanWrite = {
   /**
@@ -990,8 +996,28 @@ export type PlanWrite = {
    */
   readonly inputs: number;
 
-  /** The written document and path. */
+  /**
+   * The written document and path. A record that lists `members` holds `*`
+   * in the path, at the position of the member.
+   */
   readonly target: CfcAddress;
+
+  /**
+   * The members the record covers, of the container whose path is that of
+   * `target` up to its `*`: the path of `target` with each member in the
+   * place of the `*` is a path the record covers, and the path with the `*`
+   * is none. A member is listed by its segment, and members at indices next
+   * to each other by the first and the last index. Every path covered
+   * takes the one label of the record's template.
+   */
+  readonly members?: readonly PlanWriteMember[];
+
+  /**
+   * The further documents the record covers, in the space and scope of
+   * `target`: the path of `target` in each of them takes the one label of
+   * the record's template, as that of `target` does.
+   */
+  readonly documents?: readonly string[];
 
   /** The identity `CompiledPlanRegistry.register` returned. */
   readonly compiledPattern: string;
@@ -1016,7 +1042,11 @@ export type PlanWrite = {
   /** The result-document id of the instance. */
   readonly instance: string;
 
-  /** The element keys of the writing cone instance, outermost first. */
+  /**
+   * The element keys of the writing cone instance, outermost first; those
+   * of the first of the records one record stands for, where it lists
+   * `members` or `documents`.
+   */
   readonly keys: readonly (readonly [collection: number, key: string])[];
 
   /**

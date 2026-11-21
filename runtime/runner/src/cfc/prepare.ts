@@ -271,6 +271,7 @@ import {
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
 } from "./schema-refs.ts";
+import { planWritesPerTarget } from "./plan-write-targets.ts";
 import { createTrustResolver } from "./trust.ts";
 import {
   CFC_ENFORCING_STRICTNESS,
@@ -5202,8 +5203,10 @@ const isMovedMemberWrite = (
 export const planWritesByTarget = (
   tx: IExtendedStorageTransaction,
 ): Map<string, PlanWriteInput[]> => {
-  const result = new Map<string, PlanWriteInput[]>();
   const state = tx.getCfcState();
+  const known = planWritesByTargetOf.get(tx);
+  if (known?.length === state.writePolicyInputs.length) return known.result;
+  const result = new Map<string, PlanWriteInput[]>();
   if (!state.planLabels) return result;
   const registry = tx.compiledPlans(runtimeWritePolicyAuthorization);
   if (registry === undefined) return result;
@@ -5215,17 +5218,35 @@ export const planWritesByTarget = (
     ) {
       continue;
     }
-    const key = targetKey({
-      space: input.target.space,
-      id: input.target.id as URI,
-      scope: normalizeCellScope(input.target.scope),
-    });
-    const known = result.get(key);
-    if (known === undefined) result.set(key, [input]);
-    else known.push(input);
+    // A record that lists members or documents is read as one record for
+    // each path it covers.
+    for (const one of planWritesPerTarget(input)) {
+      const key = targetKey({
+        space: one.target.space,
+        id: one.target.id as URI,
+        scope: normalizeCellScope(one.target.scope),
+      });
+      const held = result.get(key);
+      if (held === undefined) result.set(key, [one]);
+      else held.push(one);
+    }
   }
+  planWritesByTargetOf.set(tx, {
+    length: state.writePolicyInputs.length,
+    result,
+  });
   return result;
 };
+
+/**
+ * What `planWritesByTarget` returned for each transaction, with the number
+ * of write-policy inputs the transaction held then: the records of one
+ * preparation are read once.
+ */
+const planWritesByTargetOf = new WeakMap<
+  IExtendedStorageTransaction,
+  { length: number; result: Map<string, PlanWriteInput[]> }
+>();
 
 /**
  * The table of inputs the honored `plan-inputs` inputs of `tx` give for each

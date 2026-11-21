@@ -61,6 +61,7 @@ import {
   nestedPlanWrite,
   PlanInputsInterner,
 } from "../../../runtime/runner/src/cfc/plan-inputs.ts";
+import { mergedPlanWrites } from "../../../runtime/runner/src/cfc/plan-write-targets.ts";
 import { runtimeOwnedStoreOwnerKey } from "../../../runtime/runner/src/cfc/runtime-owned-stores.ts";
 import {
   type CfcAddress,
@@ -114,6 +115,18 @@ export type RuntimeCounts = {
    * as it was.
    */
   unchangedRecords: number;
+  /** Write records the executor gave in transactions that committed. */
+  recordsGiven: number;
+  /**
+   * The `plan-write` inputs recorded for them: one for the records that
+   * differ only in a member of one container or in the document.
+   */
+  recordsRecorded: number;
+  /**
+   * The size, as JSON text, of the `plan-write` and `plan-inputs` inputs
+   * recorded, where the adapter was asked to count it.
+   */
+  recordBytes: number;
   /**
    * The paths whose label entries a commit changed in a document for which
    * it recorded such a write record.
@@ -206,8 +219,13 @@ export class RuntimeTransactions implements TransactionHooks {
     reads: 0,
     writes: 0,
     unchangedRecords: 0,
+    recordsGiven: 0,
+    recordsRecorded: 0,
+    recordBytes: 0,
     labelEntriesChanged: 0,
   };
+  /** Whether `RuntimeCounts.recordBytes` is counted. */
+  readonly #countRecordBytes: boolean;
   /** The identifier of each document the storage holds. */
   readonly #documents = new Set<string>();
   /** The document of the executor that each entity holds. */
@@ -259,11 +277,17 @@ export class RuntimeTransactions implements TransactionHooks {
        * executor's write records are recorded with each write.
        */
       artifact?: Artifact;
+      /**
+       * Whether to count the size of the write records recorded
+       * (`RuntimeCounts.recordBytes`), which costs a pass over each.
+       */
+      countRecordBytes?: boolean;
     } = {},
   ) {
     this.#runtime = runtime;
     this.#space = space;
     this.#owner = options.owner;
+    this.#countRecordBytes = options.countRecordBytes === true;
     this.#compiledPattern = options.artifact === undefined ||
         !runtime.experimental.compiledPatterns || !runtime.servingPosture
       ? undefined
@@ -589,7 +613,6 @@ export class RuntimeTransactions implements TransactionHooks {
       );
     }
     this.#record(
-      tx,
       writes,
       attempts !== undefined && tx.getWriteAttemptLog?.().length === attempts,
       inputs,
@@ -716,18 +739,17 @@ export class RuntimeTransactions implements TransactionHooks {
         store,
       );
     }
-    this.#record(tx, writes, true, inputs);
+    this.#record(writes, true, inputs);
   }
 
   /**
-   * Records each write record with the runtime as an authorized
-   * `plan-write` input: `unchanged` for a write that left the value at its
-   * target as it was. The inputs a record names in `table`, the executor's
-   * table of inputs, are recorded as entries of the runtime's, each
+   * Keeps each write record as the runtime reads it, for the end of the
+   * transaction (`#recordWrites`): `unchanged` for a write that left the
+   * value at its target as it was. The inputs a record names in `table`,
+   * the executor's table of inputs, become entries of the runtime's, each
    * distinct one once for the transaction.
    */
   #record(
-    tx: IExtendedStorageTransaction,
     writes: readonly PlanWrite[],
     unchanged: boolean,
     table: InputsTable,
@@ -777,26 +799,46 @@ export class RuntimeTransactions implements TransactionHooks {
         this.#noteUnchanged(write.target.doc);
       }
     }
+    // The records are recorded with the runtime when the transaction ends
+    // (`#recordWrites`), those that differ in their target alone as one.
+    for (const write of recorded) this.#recorded.writes.push(write);
+  }
+
+  /**
+   * Records the write records of the transaction in progress with the
+   * runtime, as authorized `plan-write` inputs behind the `plan-inputs`
+   * input that holds the table they name: one record for those that name
+   * one record of the plan and one entry of the table and differ only in
+   * a member of one container or in the document (`mergedPlanWrites`).
+   */
+  #recordWrites(tx: IExtendedStorageTransaction): void {
+    if (this.#compiledPattern === undefined) return;
+    const { writes, interner } = this.#recorded;
+    if (writes.length === 0) return;
     // The runtime's mark: this adapter stands in for the runner, which
     // records what its own code computed.
-    const part = this.#recorded.interner.take();
+    const record = (
+      input: Parameters<
+        IExtendedStorageTransaction["recordCfcWritePolicyInput"]
+      >[0],
+    ) => {
+      if (this.#countRecordBytes) {
+        this.#counts.recordBytes += JSON.stringify(input).length;
+      }
+      tx.recordCfcWritePolicyInput(input, runtimeWritePolicyAuthorization);
+    };
+    const part = interner.take();
     if (part !== undefined) {
-      tx.recordCfcWritePolicyInput(
-        {
-          kind: "plan-inputs",
-          compiledPattern: this.#compiledPattern,
-          ...part,
-        },
-        runtimeWritePolicyAuthorization,
-      );
+      record({
+        kind: "plan-inputs",
+        compiledPattern: this.#compiledPattern,
+        ...part,
+      });
     }
-    for (const write of recorded) {
-      this.#recorded.writes.push(write);
-      tx.recordCfcWritePolicyInput(
-        { kind: "plan-write", ...write },
-        runtimeWritePolicyAuthorization,
-      );
-    }
+    const merged = mergedPlanWrites(writes);
+    this.#counts.recordsGiven += writes.length;
+    this.#counts.recordsRecorded += merged.length;
+    for (const write of merged) record({ kind: "plan-write", ...write });
   }
 
   /**
@@ -978,6 +1020,7 @@ export class RuntimeTransactions implements TransactionHooks {
     // depend on what this one wrote. The storage holds nothing this
     // transaction wrote then, so the next change of each document it wrote
     // writes the document whole. The commit finds the transaction prepared.
+    this.#recordWrites(tx);
     this.#runtime.prepareTxForCommit(tx);
     const refused = tx.getCfcState().prepare.status === "invalidated";
     if (refused) {
