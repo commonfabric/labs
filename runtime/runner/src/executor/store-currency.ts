@@ -358,11 +358,11 @@ export class StoreCurrency {
   abandonAllUpstream(): string[] {
     const released: string[] = [];
     for (const reader of [...this.upstreamProducers.keys()]) {
-      released.push(...this.abandonUpstream(reader));
+      for (const key of this.abandonUpstream(reader)) released.push(key);
     }
     // What is held or stale with no read named for it has nothing to wait
     // on either.
-    released.push(...this.#held.keys());
+    for (const key of this.#held.keys()) released.push(key);
     this.#held.clear();
     this.#staleRunning.clear();
     return released;
