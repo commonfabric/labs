@@ -14737,9 +14737,19 @@ export function* prepareBoundaryCommitSteps(
               path,
             )
           ) {
-            if (
-              array.length > path.length && derivedStampKeys.has(pathKey(array))
-            ) continue;
+            // An array at or below a path that stores a label of its own
+            // here takes that label, where that path is reached.
+            let labeledBelow = false;
+            for (
+              let length = path.length + 1;
+              length <= array.length && !labeledBelow;
+              length++
+            ) {
+              labeledBelow = derivedStampKeys.has(
+                pathKey(array.slice(0, length)),
+              );
+            }
+            if (labeledBelow) continue;
             persistedLabelEntries.push(markFlowStampEntry({
               path: array,
               label: {
