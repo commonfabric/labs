@@ -1728,3 +1728,100 @@ describe("the label of a position of the result of a `map`", () => {
     holdsAll(plain, ["notes"]);
   });
 });
+
+describe("the `identity` slots of a handler's binding state", () => {
+  it("bind an output the handler reads as a handle without the label of what the output holds", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const artifact = await artifactOf("identity-state");
+    const id = identifierOf({ test: "identity-state" });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    try {
+      const audience = await scenarioAudience();
+      const tx = runtime.edit();
+      const documents: { id: string; kind: string; value: unknown }[] = [];
+      const held = (name: string, value: unknown) => {
+        const schema = {
+          ifc: { confidentiality: [inputClause(name, audience)] },
+        } as JSONSchema;
+        const cell = runtime.getCell(
+          space,
+          { identityInput: name },
+          schema,
+          tx,
+        );
+        const link = cell.getAsNormalizedFullLink();
+        recordRelevantSchemaWritePolicyInput(tx, link, schema);
+        cell.set(value);
+        hooks.external(link.id);
+        documents.push({ id: link.id, kind: "input", value });
+        return { $link: { doc: link.id, path: [] } };
+      };
+      const given = { items: held("items", []), secret: held("secret", "s") };
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+      });
+      expect(await hooks.settled()).toEqual([]);
+
+      instance.send(bindingOf(instance, "add"), {});
+      instance.settle();
+
+      expect(await hooks.settled()).toEqual([]);
+      const read = runtime.edit();
+      try {
+        const labelAt = (doc: string, path: readonly string[]) => {
+          const metadata = readStoredCfcMetadata(read, {
+            space,
+            id: hooks.entityOf(doc),
+            scope: "space",
+          });
+          return JSON.stringify(
+            (metadata === undefined ? undefined : labelForConsumedEntries(
+              consumedEntriesForRead(metadata, path, {
+                nonRecursive: false,
+                consumes: "value",
+              }),
+              path,
+              false,
+            ))?.confidentiality ?? [],
+          );
+        };
+        const items = given.items.$link.doc;
+        const [entry] = instance.store.peek(items, []) as unknown[];
+        expect(isLink(entry)).toBe(true);
+        const record = (entry as { $link: { doc: string } }).$link.doc;
+        // What the push wrote: the position in `items` and the record.
+        expect(labelAt(items, ["0"])).not.toContain('"input:secret"');
+        expect(labelAt(record, ["title"])).not.toContain('"input:secret"');
+        // The record holds a link to the position of the result document
+        // that holds `summary`, and a read there holds the clause.
+        expect(instance.store.peek(record, ["source"])).toEqual({
+          $link: { doc: instance.id, path: ["summary"] },
+        });
+        expect(labelAt(record, ["source"])).not.toContain('"input:secret"');
+        expect(labelAt(instance.id, ["summary"])).toContain('"input:secret"');
+      } finally {
+        read.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+});
