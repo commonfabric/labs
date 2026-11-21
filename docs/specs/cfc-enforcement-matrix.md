@@ -723,9 +723,9 @@ The strict-only delta is:
     ceilings until the gate that should own them exists. `sqliteQuery` has
     that gate now. Its request stages under a `sqliteQuery` sink, which
     releases ungated under the max-enforcement posture for a reason of its
-    own: the provider a query reaches, in its own space or another, serves
-    the trusted runtime and keeps neither statement nor parameters, and the
-    rows' labels decide what each reader is shown
+    own: the server a query reaches, in its own space or another, is an
+    attested runtime applying the same access rules, and the rows' labels
+    decide what each reader is shown
     (`sqlite-builtin/06-cfc.md`). The
     control state takes the route, because a request hash is a function of
     parameters no author can foresee, while `/result`'s per-column entries

@@ -903,13 +903,13 @@ Three residuals are recorded against §8.17.6:
 
 A query whose database lies in another space is answered like one in the
 same space, labeled request or not. Its statement and parameters reach that
-space's provider, which serves the database for the trusted runtime and is
-inside the trusted base under this deployment's assumption (the
-specification's trusted-base list does not name storage providers); what
-each reader is shown is still decided by the rows' labels in that reader's
-runtime. An earlier refusal of a labeled
-request against a database in another space was a rule of this document
-alone, with no section of the specification behind it, and it is withdrawn.
+space's server, an attested runtime running the same code and applying the
+same access rules as the one that serves this space, so they reach nothing
+the result's own residency would not. What each reader is shown is still
+decided by the rows' labels in that reader's runtime. An earlier refusal of a
+labeled request against a database in another space guarded against a server
+outside that model, had no section of the specification behind it, and is
+withdrawn.
 
 The confidentiality a request carries is measured by the transaction's flow
 join, not the transaction-global consumed set the sink ceilings read — which

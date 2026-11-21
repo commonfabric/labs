@@ -94,7 +94,7 @@ describe("a builtin whose staged request is abandoned", () => {
         generateText: [],
         generateObject: [],
         // The `sqliteQuery` sink is ungated under the bundle, since the
-        // provider a query reaches serves the trusted runtime — so a deployment
+        // server a query reaches applies the same access rules — so a deployment
         // that wants a confidentiality gate on it declares one, as this case does.
         sqliteQuery: [],
       },

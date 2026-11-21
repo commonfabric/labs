@@ -35,11 +35,11 @@ export type InitialSinkName =
  *
  * `sqliteQuery` is the sink whose request is a read handed to the storage
  * provider holding a space's replicas: the statement, its parameters, and the
- * database the query names, in this space or another. The provider serves
- * the trusted runtime and keeps neither the statement nor the parameters;
- * which rows each reader is shown is decided by the rows' labels in that
- * reader's runtime. That the provider of another space is inside the trusted
- * base is this deployment's assumption, not a section of the specification.
+ * database the query names, in this space or another. Every space is served
+ * by an attested runtime running the same code, which applies the same
+ * access rules, so the server of another space is no different from the
+ * server of this one; which rows each reader is shown is decided by the rows'
+ * labels in that reader's runtime.
  */
 export const KNOWN_SINKS = [
   "fetchBinary",
@@ -70,10 +70,9 @@ export type KnownSinkName = (typeof KNOWN_SINKS)[number];
  * space's replicas. For that space's OWN data it reaches nobody the
  * destination document's residency does not already name, which is why a
  * rule written for a release leaving the runtime has no business firing
- * there. A request naming another space's database also reaches only a
- * provider serving the trusted runtime, under this deployment's assumption
- * that every space's provider is inside the trusted base; the class says
- * where a request goes rather than whether it may.
+ * there. A request naming another space's database reaches that space's
+ * server, an attested runtime applying the same rules; the class says where
+ * a request goes rather than whether it may.
  */
 export type SinkClass = "network" | "agent" | "storage";
 
@@ -174,17 +173,15 @@ const LLM_SINK_UNGATED: SinkUngatedRationale = Object.freeze({
  *
  * Ungated rather than public-only because a public-only ceiling would refuse
  * every query a pattern parameterizes out of the data it reads, while the
- * provider a query reaches, in this space or another, serves the trusted
- * runtime and keeps neither statement nor parameters. That holds under this
- * deployment's assumption that every space's provider is inside the trusted
- * base. A deployment for which it does not declares a ceiling for the sink.
+ * server a query reaches, in this space or another, is an attested runtime
+ * applying the same access rules. A deployment that wants a confidentiality
+ * gate on sqlite reads declares a ceiling for the sink.
  */
 const SQLITE_QUERY_SINK_UNGATED: SinkUngatedRationale = Object.freeze({
   reason:
-    "a sqlite query's statement and parameters reach only a storage provider serving the trusted runtime, which keeps neither, and a public-only ceiling would refuse every query parameterized by the data it reads",
+    "a sqlite query's statement and parameters reach only the server of the database's space, an attested runtime applying the same access rules, and a public-only ceiling would refuse every query parameterized by the data it reads",
   owner: "CFC runtime (sink governance) with the sqlite builtin",
-  retirement:
-    "a deployment serves a space from a provider outside its trusted base, or the specification rules on where a query's selection inputs may go; the sink then gets a ceiling",
+  retirement: "a deployment declares a confidentiality ceiling for the sink",
 });
 
 /** One posture's decision about every known sink. */

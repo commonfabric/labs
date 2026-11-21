@@ -1045,8 +1045,8 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
   describe("a database in another space", () => {
     it("settles a query whose parameter came out of a labeled row", async () => {
       // A database in another space answers a labeled request as one in this
-      // space does. The provider that receives the parameter is inside the
-      // trusted base, and each reader's runtime still applies the rows'
+      // space does. Its server is an attested runtime applying the same
+      // access rules, and each reader's runtime still applies the rows'
       // labels to what it shows.
 
       const db = labeledDb();

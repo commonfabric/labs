@@ -93,7 +93,7 @@ describe("whose cells an abandoned request's ending writes", () => {
         generateText: [],
         generateObject: [],
         // The `sqliteQuery` sink is ungated under the bundle, since the
-        // provider a query reaches serves the trusted runtime — so the query
+        // server a query reaches applies the same access rules — so the query
         // case here declares the ceiling its refusal comes from, as the llm
         // cases above do.
         sqliteQuery: [],
