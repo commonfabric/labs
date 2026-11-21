@@ -190,7 +190,10 @@ faced them:
   and seeds that demander's instances of the piece's owned cells
   declaring a default narrower than their owner (the arrival seed,
   serving-loop.md §7 `ownedDefaultSeeds`): the start that would have
-  seeded them runs on no viewer's runtime under served views.
+  seeded them runs on no viewer's runtime under served views. The
+  serving runtime's own start of a piece names no actor and seeds no
+  instance: not the service identity's session, which no viewer reads
+  and which every new serving runtime replaces.
   Demand-paced still: instances come only from demanders (never "all
   known principals"), and an eager/idle-scheduled node NOBODY demands
   with an identity keeps the wave-level fallback and, if it narrows,

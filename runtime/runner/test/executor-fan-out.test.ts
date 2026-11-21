@@ -753,6 +753,34 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     setup.cancel();
   });
 
+  it("(n2) the serving runtime's own start of a piece owning a per-session default seeds no instance of its own, while a session that arrives still finds its default seeded", async () => {
+    // The serving runtime starts the piece for Bob's demand with no actor
+    // of its own: identity arrives with the work (protocol.md, "Server-side
+    // runs never derive identity from their own session"). Its own session
+    // is never a viewer's, so a default seeded there is read by nobody, and
+    // a new serving runtime has a new session, so every start would seed
+    // the piece's defaults again.
+    const setup = await standUp({
+      names: { arg: "fo-n2-arg", result: "fo-n2-result" },
+      pattern: OWNED_DRAFT_PATTERN,
+      clients: [aliceSigner],
+    });
+    const { engine } = setup;
+    const bob = await setup.watchRoot(bobSigner);
+    const bobSession = resolveScopeKey("session", bob.scopeKeyIdentity);
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, bobSession, '"members":""'),
+    );
+    const serviceSessionRows = engine.database.prepare(
+      `SELECT COUNT(*) AS n FROM head WHERE scope_key LIKE :prefix`,
+    ).get({
+      prefix: `session:${encodeURIComponent(serviceSigner.did())}:%`,
+    }) as { n: number };
+    expect(serviceSessionRows.n).toBe(0);
+    setup.cancel();
+  });
+
   it("(o) a user who arrives watching a piece owning a per-user derivation finds their instance of it carrying its `result` back-link, so their own start of the piece writes none of it", async () => {
     // Every document the graph writes keeps its `result` back-link to the
     // piece that owns it, and a per-user instance is a document of its
