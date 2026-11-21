@@ -651,6 +651,7 @@ const runStorage = async (
             target.path.join("/")
           }`,
           bytes: JSON.stringify(write).length,
+          ...(Deno.env.get("SCALE_RECORDS") === "full" ? { write } : {}),
           members: Object.fromEntries(
             Object.entries(rest).map(([name, value]) => [
               name,
