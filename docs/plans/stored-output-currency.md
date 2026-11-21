@@ -237,7 +237,8 @@ it, and a load of that root starts the piece its `result` back-links lead to.
 The judgment follows the same links to the piece, and reads a computed
 document as the one piece the index records as writing it where there is
 one. A computed document is judged at any scope, so a viewer's own instance
-of one does not by itself start the piece. The store can serve a root when:
+of one can pass, and a root that passes is left unstarted under `skip` as
+below. The store can serve a root when:
 
 - the piece's `space` slice is clean and was recorded under the current
   epoch;
