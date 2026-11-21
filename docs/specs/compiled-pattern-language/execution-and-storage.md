@@ -3705,15 +3705,17 @@ entries.
   labeled data included, so every document of the keep set it writes holds
   the entry. Not yet built: the build prepares only the commits that read
   labeled data.
-- **For a value passed on by reference the atom is on the link.** A kept
-  path that holds a link to another address (section 4.2) is covered by
-  the same root entry, which there is the label of the link at the output
-  path. Nothing is written to the envelope of the document the link
-  names: the target keeps its own entries and gains no atom. A read
-  through the link takes its integrity from the target alone, so the atom
-  reaches a reader that observes the reference and not one that reads the
-  target's content through it (its §3.2 and §3.10; what such a reader is
-  given is its §8, question 72).
+- **For a value passed on by reference the atom is in the label of the
+  content at the output path.** A kept path that holds a link to another
+  address (section 4.2) is covered by the same root entry. By ruling
+  (2026-11-20; that document's §3.2, "Where the atom of a kept output is
+  stored") the atom is joined onto the content there, with no scope: it
+  is in the label that a read of the value at the path consumes, so a
+  read through the link takes it beside the integrity of the target.
+  Nothing is written to the envelope of the document the link names: the
+  target keeps its own entries, and a reader that reaches it through
+  another reference does not take the atom (what the ruling leaves open
+  is its §8, question 72).
 - **Each scope instance has its own envelope**, holding the entries of the
   paths that scope instance stores.
 - **Declared entries are unchanged.** They come from the result schema, and

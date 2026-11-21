@@ -5295,10 +5295,12 @@ the slot is **bound**.
   that of the reference. The elements of a `fold` are grouped by the same
   identifiers. The prototype compares them so (`Instance.#labelKey` of
   `base/pattern-compiler/exec/executor.ts`, with `TransactionHooks.labelOf`
-  given the class of the observation). One point is open (section 8, question
-  186): the report is smaller, but forming it still visits every position, so
-  over an array of references the work is linear in the elements. For an array
-  of plain values in place there is no further binding to report, and for the
+  given the class of the observation). The report is smaller, but forming it
+  this way still visits every position, so over an array of references the work
+  is linear in the elements. Section 4.7 removes that walk: a read that covers
+  the members of a container is bound by the groups kept with the collection
+  (adopted by ruling, being built; section 8, question 186). For an array of
+  plain values in place there is no further binding to report, and for the
   result of another per-element construct whose positions hold links the rule is
   that of an array of references.
 - **A value in place under a template of one reference slot.** A template that
@@ -5433,10 +5435,19 @@ the slot is **bound**.
     labels, no kept element is evaluated again for the removal, and the
     membership label is the template over the source's enumeration, which holds
     D. After a removal from the source, which element stands at a position of
-    the derived collection depends on D as well, and what a position stores of
-    it is not decided (section 8, question 192). An addition to the source puts
-    nothing on a position of the derived collection ("An addition through a
-    handle" below).
+    the derived collection depends on D as well. *Assumed, as built in milestone
+    4 of the integration and not ruled* (section 8, question 192): where the
+    members of a kept result of a per-element construct change otherwise than by
+    an addition at its end, the label of the collection's membership, which
+    holds D, is stored once for the positions of the result, as entries at its
+    `*` path in the classes `value`, `shape` and `followRef`, in place of the
+    ones the path carried, and a read of a position joins them with the
+    position's own entries (`PlanWrite.membersChanged` of
+    `runtime/runner/src/cfc/types.ts`). It holds over an array of references,
+    over an array of plain values in place and over the result of another
+    per-element construct as the source. An addition to the source puts nothing
+    on a position of the derived collection and leaves those entries as they are
+    ("An addition through a handle" below).
   - *Entries stored per position, when positions shift.* The specification keys
     every entry by path and has no operation that moves the members of an array.
     By ruling (2026-11-20; Z72 of the continuation plan) a kept element that
@@ -5484,7 +5495,15 @@ the slot is **bound**.
     the two records as those of writes that left the value as it was
     (`Instance.membersKept`). The `*` entries are kept for a list that a removal
     leaves empty. The deciding sites carry the `SPEC-PENDING` marker for specs
-    pull request 91.
+    pull request 91. One defect is open and not fixed (section 8, question 201):
+    `resolvedEntryGroups` resolves the classes `value` and `followRef` of origin
+    `structure` by the longest prefix, so a concrete `structure` entry further
+    down, such as the entry that a recorded link write mints at a slot, replaces
+    the `*` entry of a removal for that slot, and a read there does not consume
+    what decided the removal. The fix resolves an entry that the runtime minted
+    at a `*` path in a group of its own, as the `shape` class is resolved. It
+    changes the resolution with the experimental option off, so it waits for the
+    specification sentence above.
 - **An addition through a handle.** For `push`, `pushAll` and `addUnique` the
   enumeration of the list after the addition is the stored enumeration joined
   with what decided the addition, by the same argument as for a removal. An
@@ -5513,19 +5532,44 @@ the slot is **bound**.
   of a stored array is written as the number of members and the positions it
   changed, so the entries of the positions before it stay. The executor gives
   one record for each added member at its position, one for the number of
-  members and one for the membership (`Instance.#memberWrites`). At commit
-  `429a62aba5` the label of an added member's record is its template's label
-  joined with what the list stored of its membership, which puts what decided
-  earlier additions on positions; the ruling does not want that, and it is being
-  removed. `addUnique` compares as a removal does: where the list holds the
-  member, nothing is added and the number of members and the membership take
-  what the comparison read. A write through `key(n).set` at the position behind
-  the last member is recorded as an addition. A write that replaces an array
-  stores its label as the `enumerate` entry of the array as well. Two cases are
-  open: a read of a position that holds no member consumes nothing of the
-  membership after additions alone (section 8, question 193), and an array
-  inside a value written whole gets no `enumerate` entry (section 8, question
-  194).
+  members and one for the membership (`Instance.#memberWrites`). The record of
+  an added member holds the label of the write and of what the method compared,
+  and nothing of what the list stored of its membership, as the ruling has it;
+  the records of the number of members and of the membership hold it.
+  `addUnique` compares as a removal does: where the list holds the member,
+  nothing is added and the number of members and the membership take what the
+  comparison read. A write through `key(n).set` at the position behind the last
+  member is recorded as an addition. The plan has an envelope and no write edge
+  for such a write, so its records have no inputs and are given as bound: each
+  takes the transaction's join, joined for the number of members and the
+  membership with what the list stored of them (`PlanWrite.bound`). A write that
+  replaces an array stores its label as the `enumerate` entry of the array as
+  well. Three further rules close reads that consumed nothing of what decided
+  the members, each behind the experimental option:
+  - *A read of a position that holds no member consumes the list's membership.*
+    That a position holds no member says how many members the list has. For a
+    content read at a path through such a position, the resolver joins what a
+    read of the list's membership consumes: the `enumerate` entry at the list's
+    path and the entries above it
+    (`ObservationLabelResolver.#membershipOfAbsent` of
+    `runtime/runner/src/cfc/observation-label.ts`). It holds for an array of
+    plain values in place and for an array of references. It is the first
+    alternative of section 8, question 193.
+  - *An array inside a value written whole takes the label of the write as its
+    `enumerate` entry.* The entry is stored at the path of each array that the
+    written value holds, the target of a reference excepted, and takes the label
+    of the nearest path above the array that stores a label in the commit. It is
+    the first alternative of section 8, question 194, and is linear in the
+    arrays written.
+  - *A write that leaves a path holding nothing stores its label at the path.*
+    After `key(i).set(undefined)` the position holds nothing, and a reader of it
+    consumes what decided the write.
+
+  What the ruling on an append leaves open: a member appended after a removal.
+  For a stored list the `*` entries of the removal are joined on a read of the
+  later position. Whether every such position of a kept per-element result
+  stores a clause of what decided the earlier removal is not established
+  (section 8, question 192).
 
 A read stays `dynamic` where the plan cannot name its path ahead of the
 evaluation: a read through a handle that happens on some runs only or at a
@@ -6040,11 +6084,12 @@ expected. Sixteen more rules fix what a row of the comparison is.
   that contains it name different code (section 3.2). The comparison takes
   the two as corresponding: a row is equal on them where each side has its
   atom, and no row is looser because the identities differ.
-- **An atom on a link.** Where an output passes a value on by reference, the
-  pattern's atom is on the link at the output path and not on the target
-  (section 3.2). The template's side of the row holds that atom beside the
-  integrity of the dereferenced value, because the runtime's side, a copy
-  the callback wrote, holds its atom in one label with the value.
+- **The atom of an output that passes a value on by reference.** By ruling
+  (2026-11-20) the pattern's atom is in the label of the content at the output
+  path, with no scope, and a read through the link takes it (section 3.2). The
+  template's side of the row holds that atom beside the integrity of the
+  dereferenced value, as the runtime's side, a copy the callback wrote, holds
+  its atom in one label with the value.
 - **A selection the harness cannot establish.** `sel(i)` of section 3.2 is
   what the value code reports. A harness that has no value code reads the
   selection from the stored values, and a row whose selection it cannot
@@ -6101,53 +6146,48 @@ expected. Sixteen more rules fix what a row of the comparison is.
   that a failed cone takes a labeled error state. *Assumed* (section 8,
   question 76): the template's clauses at such an output are not counted
   as looser than today, and the output is no further exception.
-- **A write edge of a handler.** A write edge is a row where the scenario
-  sent the handler an event, the event's transaction committed, and the run
-  wrote the edge's target. The runtime's side is what a value read of the
-  written path consumes after the event, with every link followed, as for
-  an output. The template's side is the edge's template, beside the label
-  that the target's own type declares for the written path, which is
-  stored there on both sides (section 3.12). In the template each slot of
-  root
-  `event` has the label the event arrived with (section 3.12), each slot of
-  root `binding` resolves through the binding the event was sent to, and
-  each `identity` slot among the inputs of the body's `derive` has the
-  label of the link and is not dereferenced (section 2.2). For a handle
-  that the body neither reads nor writes through, and whose slot is not
-  `resolved`, that label leaves out the `link` entry of the position.
-  Only an edge
-  with a `reference` member, whose written value is the reference, is
-  joined with what a value read through the stored link consumes, so that
-  both sides read one target. The integrity of such a row is that of the
-  value read through the link, on both sides. What is stored at the
-  written path is a link, and a read through a link takes its integrity
-  from the target alone (section 3.10). The atom that the edge's template
-  mints for the body is in the label of the link, as the atom of a kept
-  output that passes a value on is (section 3.2), and the row counts
-  neither it nor the integrity of the `followRef` entry that the runtime
-  stamped at the link. An event whose transaction did not commit
-  gives no row, and neither does a write that the run did not make. A run
-  makes no write where the handler returns before it or takes another
-  branch on the event it was sent, and where the value it writes equals
-  what the target holds, because a write changes only the paths whose
-  value differs (`diffAndUpdate` in `runtime/runner/src/data-updating.ts`).
-  A scenario therefore gives the members of an event values that its
-  inputs do not hold, and an event whose declared type is a scalar is a
-  value of that type. The
-  outcome is read from the event's transaction and not from a log: the
-  runtime reports it once per event (`sendEvent` in
-  `runtime/runner/src/cell.ts`, with a callback that
+- **A write edge of a handler.** A write edge is a row where the scenario sent
+  the handler an event, the event's transaction committed, and the run wrote the
+  edge's target. The runtime's side is what a value read of the written path
+  consumes after the event, with every link followed, as for an output. The
+  template's side is the edge's template, beside the label that the target's own
+  type declares for the written path, which is stored there on both sides
+  (section 3.12). In the template each slot of root `event` has the label the
+  event arrived with (section 3.12), each slot of root `binding` resolves
+  through the binding the event was sent to, and each `identity` slot among the
+  inputs of the body's `derive` has the label of the link and is not
+  dereferenced (section 2.2). For a handle that the body neither reads nor
+  writes through, and whose slot is not `resolved`, that label leaves out the
+  `link` entry of the position. Only an edge with a `reference` member, whose
+  written value is the reference, is joined with what a value read through the
+  stored link consumes, so that both sides read one target. The integrity of
+  such a row is that of the value read through the link, on both sides. What is
+  stored at the written path is a link, and a read through a link takes its
+  integrity from the target alone (section 3.10). The atom that the edge's
+  template mints for the body is in the label of the link, and the row counts
+  neither it nor the integrity of the `followRef` entry that the runtime stamped
+  at the link. The ruling that puts the atom of a kept output on the content
+  (section 3.2) names kept outputs, and a write edge is *assumed* unchanged by
+  it (section 8, question 72). An event whose transaction did not commit gives
+  no row, and neither does a write that the run did not make. A run makes no
+  write where the handler returns before it or takes another branch on the event
+  it was sent, and where the value it writes equals what the target holds,
+  because a write changes only the paths whose value differs (`diffAndUpdate` in
+  `runtime/runner/src/data-updating.ts`). A scenario therefore gives the members
+  of an event values that its inputs do not hold, and an event whose declared
+  type is a scalar is a value of that type. The outcome is read from the event's
+  transaction and not from a log: the runtime reports it once per event
+  (`sendEvent` in `runtime/runner/src/cell.ts`, with a callback that
   `runFinalCommitCallback` and `notifyEventDropped` in
-  `runtime/runner/src/scheduler/events.ts` call), and a handler that threw
-  logs no refusal. Such events are counted apart by their reason. A
-  scenario has to give its inputs labels under which the events commit:
-  writer-fit measures what a handler read against the ceiling of each
-  store it writes (section 4.4), so a generated clause on an input has to
-  be one that every store of the scenario's space admits, and an input is
-  stored under the schema the runtime's argument schema has for it
-  (section 8, question 80). A member of an event that is declared as a
-  handle is given a handle or left out, because a plain value there reads
-  as a handle that cannot be written.
+  `runtime/runner/src/scheduler/events.ts` call), and a handler that threw logs
+  no refusal. Such events are counted apart by their reason. A scenario has to
+  give its inputs labels under which the events commit: writer-fit measures what
+  a handler read against the ceiling of each store it writes (section 4.4), so a
+  generated clause on an input has to be one that every store of the scenario's
+  space admits, and an input is stored under the schema the runtime's argument
+  schema has for it (section 8, question 80). A member of an event that is
+  declared as a handle is given a handle or left out, because a plain value
+  there reads as a handle that cannot be written.
 - **A binding with a `within` step.** The rule for a write edge holds for
   a binding of a pattern compiled in (`site` steps alone) and for a
   binding of an element body (an `element` step) as for a binding with
@@ -6757,37 +6797,59 @@ pattern that contains it. The atom's `identity` is an entry of
   the integration builds it: a transaction that records an authorized
   write record of a plan is prepared.
 
-**Where the atom of a kept output is stored.** A kept output that holds a
-value has the atom in the label of the value. A kept output that passes a
-value on by reference stores a link, and the atom is in the label of the link
-at the output path. It is the pattern's endorsement of the selection: this
-pattern chose that reference for this output. The target keeps its own label
-and gains no atom, and another output or another instance that refers to the
-same target says nothing about this pattern. The specification's rule for the
-integrity of a link is §3.7.2 (`03-core-concepts.md`). A read through the link
-takes its integrity from the target alone (section 3.10), so the atom reaches
-a reader that observes the reference and not one that reads the target's
-content through it; what such a reader is given is open (section 8, question
-72). The owner has confirmed (2026-11-19) that every kept output carries the
-atom. *Assumed* (section 8, question 71): the atom of an instance is the same
-at every kept output, so it is stored as one entry at the root of each
-document the keep set is stored in, which applies at every path below, and
-not as one entry per output.
+**Where the atom of a kept output is stored.** A kept output that holds a value
+has the atom in the label of the value. A kept output that passes a value on by
+reference stores a link. By ruling (2026-11-20; Z81 of the continuation plan)
+the pattern's atom is joined onto the content there, with no scope, so a read
+through the link takes it. The owner's words: "i think (c) is fine, i see it as
+lacking coarseness in differentiating selected vs computed, but what integrity
+means is really in a semantic space the pattern author owns / what this
+integrity means is anyway up for interpretation and passing through a selection
+just has low meaning". The atom is therefore no endorsement scoped to the
+selection: a reader cannot tell from it whether the pattern computed the value
+or chose it, and "What the atom of a kept output rests on" below says what it
+claims in both cases.
 
-**What the atom of a kept output rests on.** For a value the pattern passes
-on, the atom is integrity that the runtime does not store today, and "tighter
-means more integrity atoms" (section 3.1) covers it only if the atom is true.
-It claims that the code of the named pattern decided what this output holds:
-which value, selected from which inputs. It does not claim that the pattern
-computed the value, and the integrity of the value passed on stays what it
-was. Three things make the claim true. The plan is compiled from the
+The stored form: the atom is in the label that a read of the value at the output
+path consumes, which is an entry of the class `value` at that path in the
+document that holds the link, with a `shape` entry beside it. A read of the
+output that follows the link joins that entry with the integrity of the target.
+Nothing is written to the envelope of the document the link names: the target
+keeps its own entries, a reader that reaches the target through another
+reference does not take the atom, and another output or another instance that
+refers to the same target says nothing about this pattern. Where the links of
+the elements of an array have one label, one entry at the array's `*` path holds
+it (section 2.3). The label of such a path is stored in the same place whether
+the document that holds it is written whole or the path is written alone.
+Milestone 4 of the integration builds it (`prepareBoundaryCommitSteps` of
+`runtime/runner/src/cfc/prepare.ts`).
+
+The specification's rule for the integrity of a link is §3.7.2
+(`03-core-concepts.md`), which scopes the endorsement of a link to the
+selection. The ruling stores no scoped endorsement. What it leaves open is in
+section 8, question 72: whether the specification needs a sentence for an atom
+with no scope at the path of a link, and whether a write edge that stores a
+reference follows the same rule. The owner has confirmed (2026-11-19) that every
+kept output carries the atom. *Assumed* (section 8, question 71): the atom of an
+instance is the same at every kept output, so it is stored as one entry at the
+root of each document the keep set is stored in, which applies at every path
+below, and not as one entry per output.
+
+**What the atom of a kept output rests on.** For a value the pattern passes on,
+the atom is integrity that the runtime does not store today, and "tighter means
+more integrity atoms" (section 3.1) covers it only if the atom is true. It
+claims that the code of the named pattern decided what this output holds: which
+value, selected from which inputs. It does not claim that the pattern computed
+the value. A read of the output takes the atom beside the integrity of the value
+passed on, and the stored label of the value itself, at its own address, stays
+what it was. Three things make the claim true. The plan is compiled from the
 pattern's source by a trusted compiler (section 7.2), and its hash is part of
-the identity of the compiled pattern. The paths of the result are written by
-the runtime alone, from the plan: no body and no other instance writes a kept
-output. And the pattern's identity changes when its module does (section
-1.5). A rule that releases on `TransformedBy` of a pattern therefore releases
-whatever the pattern passes on as well as what it computes, and an author who
-names a pattern in a rule endorses its selections.
+the identity of the compiled pattern. The paths of the result are written by the
+runtime alone, from the plan: no body and no other instance writes a kept
+output. And the pattern's identity changes when its module does (section 1.5). A
+rule that releases on `TransformedBy` of a pattern therefore releases whatever
+the pattern passes on as well as what it computes, and an author who names a
+pattern in a rule endorses its selections.
 
 **What does not get the atom.** The ruling names the outputs of a pattern.
 *Assumed* (section 8, question 71): an interim output, the target of a write
@@ -7378,13 +7440,14 @@ confidentiality is equal where the selected branch carries every clause the
 other does, and tighter otherwise. The integrity of the `select` is the selected
 branch's alone, and by ruling no atom names the callback. Where the conditional
 is a kept output it carries the atom of the pattern that contains the
-`computed`, by the rule for every kept output of section 3.2: on the value where
-the output holds one, and on the link where the selected branch is passed on by
-reference. The runtime's copy carries the atom of the callback. The comparison
-takes the two atoms as corresponding (section 3.1), so the integrity is
-**equal** where the join is not empty and **tighter** where it is empty. The
-same conditional written in the pattern body, with no `computed`, has the same
-template and the same atom, where the runtime mints none: **tighter**.
+`computed`, by the rule for every kept output of section 3.2: in the label of
+the value where the output holds one, and in the label of the content at the
+output path where the selected branch is passed on by reference. The runtime's
+copy carries the atom of the callback. The comparison takes the two atoms as
+corresponding (section 3.1), so the integrity is **equal** where the join is not
+empty and **tighter** where it is empty. The same conditional written in the
+pattern body, with no `computed`, has the same template and the same atom, where
+the runtime mints none: **tighter**.
 
 ### 3.6 `map`
 
@@ -7931,7 +7994,7 @@ ruling: the link itself carries the label of at least the event.
   | --- | --- |
   | By a `handler`, an `action`, or an inline event handler: at a written path, a path of a child's argument or of a request, or a state path of a binding the handler makes | The slot joined with the body's `derive` template. The template holds the event slots, so the link carries the label of the event, and with it what else the run read: the state slots, the `dynamic` nodes, and the link each handle was given through |
   | By a `lift`, a `computed`, or an authored function the reactive tier calls: at a result path, or at a path of the kinds above | The slot alone for `passes`, and the slot joined with the body's `derive` template for `oneOf`, by the two rules above. The existence of a written path that the target's schema does not require has the body's template |
-  | By expression code of the reactive tier: an output path, a path of a child's argument, a state path of a binding of the reactive tier | The `slot` template, or the `select` or `pick` that chose it (sections 3.5 and 3.18). A kept output adds the pattern's atom on the link (section 3.2) |
+  | By expression code of the reactive tier: an output path, a path of a child's argument, a state path of a binding of the reactive tier | The `slot` template, or the `select` or `pick` that chose it (sections 3.5 and 3.18). A kept output adds the pattern's atom to the label of the content at the output path (section 3.2) |
 
   A handler's write happens because an event arrived and because the run
   reached the write. Which reference is written can be the same on every
@@ -8052,12 +8115,13 @@ stream a `bind` site returned are references the body was not given, so
   `Body.computed` otherwise. Its template for the path is that slot or that
   entry's template and nothing else. It has no `dynamic` node, because it
   does not follow the reference (section 3.10).
-- **A kept output that holds it** stores a link to the target. The atom of
-  the pattern is on the link, and the target gains none (section 3.2). The
-  label the target's type declares reaches a reader that follows the link
-  from the output, such as a renderer, by the rule for a dereference
-  (section 3.10). It is in no template of an instance that only passes the
-  reference on.
+- **A kept output that holds it** stores a link to the target. The atom of the
+  pattern is in the label of the content at the output path, so a read through
+  the link takes it, and the envelope of the target's document gains none
+  (section 3.2). The label the target's type declares reaches a reader that
+  follows the link from the output, such as a renderer, by the rule for a
+  dereference (section 3.10). It is in no template of an instance that only
+  passes the reference on.
 
 `patterns/examples/cfc-spec-gallery/main.tsx` is the case in the corpus. A
 `lift` with no labeled input creates a cell under a cause from its input,
@@ -9912,7 +9976,11 @@ has one part with a provisional decision and one with none.
      the label of that factory value. The rule for a tool applies to that
      value as it stands in the request, and the plan lists both entries in
      `Plan.closures`.
-   - *A closure through `inSpace`.* No provisional decision: the
+   - *A closure through `inSpace`.* By ruling (2026-11-20; Z83 of the
+     continuation plan) alternative (a) holds: a factory value with the
+     modifier `inSpace` is refused where it is given as a tool. Where the
+     modifier is needed on a tool later, alternative (b) is the one to
+     build, in the owner's words "whenever we need it, (b)". The three
      alternatives differ in where captured data is stored and who has to
      be able to read it, which is meaning and not form. (a) A factory
      value with the modifier `inSpace` is refused where it is given as a
@@ -10580,7 +10648,7 @@ nothing to compare.
 | Property access | Slot path extension | Equal |
 | Object, array construction | Template per path | Equal in pattern bodies; tighter in promoted expressions |
 | Conditional | `select` | Equal to the `derived` part; tighter than the static part of section 3.1, by ruling, with the static part included in the comparison (question 69): today a conditional over references stores no label of its condition, a finding against the runtime (section 3.5). A promoted `computed` mints no atom for its callback's code, by ruling; a conditional in one that is a kept output carries the pattern's atom, which the comparison takes as corresponding to the callback's |
-| A kept output (section 3.2) | The output's template, with the `TransformedBy` atom of the instance's pattern added; on the link where the output passes a value on by reference | Tighter on integrity, by ruling: an atom where the runtime stores none for a value the pattern body passes on or an unlabeled value; for a promoted `computed`, an atom that names the pattern where the runtime's names the callback |
+| A kept output (section 3.2) | The output's template, with the `TransformedBy` atom of the instance's pattern added; in the label of the content at the output path where the output passes a value on by reference | Tighter on integrity, by ruling: an atom where the runtime stores none for a value the pattern body passes on or an unlabeled value; for a promoted `computed`, an atom that names the pattern where the runtime's names the callback |
 | `map` | Element template; membership slot | Equal to the `derived` part; the container tighter than the static part of section 3.1, by ruling; tighter within an element as above |
 | `filter` | Pass-through elements; membership `fold` of predicates | Equal |
 | `flatMap` | Element template; membership `fold` of segment lengths | Tighter (content of other segments excluded) |
@@ -11079,14 +11147,18 @@ outcome: the join of all branches of a `select`, the join over all
 children of a `pick`, the whole collection for a prefix, and the
 transaction's join for a `dynamic` node. A bound is equal to or wider than
 the label the rule gives, never narrower, so it is sound, and it gives up
-the narrowing that the rule exists for. In the run of milestone 4 of the
-integration over the corpus the runtime took a bound 224 times over the
-210 modules that run without `wish`, and 333 times over the 238 modules
-of the later run, in each case because one of the six reports below is
-not made by the prototype. For each, the table has who knows the answer,
-what is reported, and where it is kept between evaluations, so that a
-change of a label alone (section 4.1) instantiates without running value
-code.
+the narrowing that the rule exists for. In the ninth run of milestone 4
+of the integration over the corpus the runtime took a bound 1,762 times,
+in 70 of the 238 modules that run. The count holds two kinds: a write
+that reaches the runtime without one of the six reports below, which the
+prototype does not make, and a record that the executor gives as bound
+because it has no inputs for it, which takes the transaction's join (a
+kept output the plan has no template for, an element entry with a slot
+that has no stored position, and a member change under an envelope). The
+run does not count the two apart. For each report, the table has who
+knows the answer, what is reported, and where it is kept between
+evaluations, so that a change of a label alone (section 4.1) instantiates
+without running value code.
 
 | What is decided | Who knows it | What is reported | Where it is kept |
 | --- | --- | --- | --- |
@@ -11923,6 +11995,224 @@ arrangement is the property: no write commits whose value, label or
 verdict was computed from a value or a label staged by a write that does
 not commit. The allocation record of section 3.14 is the one exception.
 
+### 4.7 Collections with many members
+
+A collection has `N` members, `G` distinct labels among them, and a transaction
+changes `Δ` of them. This section says which structures of instantiation grow
+with `N`, why the remedy is a change of representation and never a coarser label
+chosen by a size, which representation is adopted, and what an author can
+declare. Whenever a collection is named, the case is named with it: an array of
+references, an array of plain values in place, or the result of another
+per-element construct.
+
+**The class.** A plan and its data are in the class where some structure is
+sized by the positions that a read or a write covers, and the label needs only
+the distinct labels among them. A join uses the set of distinct labels of its
+inputs and nothing else, so one label identifier and a count carry what one
+entry per position carries.
+
+| What grows | With what | Where |
+| --- | --- | --- |
+| The bytes of the write records of a transaction | The records, times the paths by which a record reaches a named output, times the slots, times the positions reached | The inputs of a named output, copied into each record that names it, once per path; one chain per member or per group in the bindings of a slot (section 2.5); the one chain of an `identity` slot, which holds every position; one record per written member |
+| The work of instantiation | The bytes of the records, for the content hash of the memo keys; one lookup per position; one pass over the clauses per chain | Section 4.2 |
+| The stored label entries | The members written with a label of their own; for each derived position the size of its label, the number of distinct clauses joined | The envelope of each document |
+| The work of the evaluation per transaction | The positions each evaluated cone read | Finding the label identifier of each position, and the group of each element (section 4.2) |
+
+The constructs that put a plan in the class, by case:
+
+- **A whole read by a function body** (a `computed`, a `lift`, a handler). *An
+  array of references:* one chain per group of equal labels, found by a walk of
+  every member. *An array of plain values in place:* one position; the entries
+  below it are in one envelope and one recursive read resolves them, so the
+  records do not grow. *The result of another per-element construct:* the slot
+  is bound to the upstream outputs, and finding the groups visits every upstream
+  element.
+- **A value passed on that holds many links.** A slot of the class `identity`
+  whose read resolves through the links (section 2.5) keeps every position in
+  its one chain. It arises for an array of references alone.
+- **A whole write.** *An array of references:* `N` records and `N` documents,
+  each with its envelope. *An array of plain values in place:* one record and
+  one `*` entry (section 2.3). *The result of another per-element construct:*
+  one record per element evaluated, which is `Δ` except at the first evaluation.
+- **A `fold`** (the membership of a `filter`, an aggregate, `some`, `every`,
+  `find`, `reduce`). The record holds `G` groups with counts (section 4.2),
+  which is `N` where `G` is `N`.
+- **Per-element constructs inside each other.** The group key of an outer
+  element holds the set of groups of its inner collection (section 4.2): the
+  outer `N` times the inner `G`, unless a set of groups is held once and named.
+- **Many outputs over one wide input.** Each of `k` outputs that reaches the
+  wide slot through `output` nodes repeats its bindings in its record, so the
+  cost above is multiplied by `k`. The plan names another output's template by
+  reference (section 3.2, "A reference to an output"); a record that copies the
+  inputs of each output it names puts that growth back.
+
+Not in the class: a `map` over an array of references with `N` distinct labels
+gives `N` records of constant size and `N` entries, in proportion to the change;
+and a large array of plain values in place written whole is one record and one
+entry.
+
+**Two regimes.** Where `G` is small against `N`, the growth is in the
+representation alone: naming each distinct label once loses nothing. The
+measured case is `patterns/dev/experimental/folksonomy-stress-test.tsx`, an
+array of 10,000 references whose members have one label. No output of that
+pattern observes a difference between two members: every derived output is the
+result of a function body that reads the whole list, or of a `map` over such a
+result, and its label is the join over all members and the membership. Where `G`
+is close to `N`, the label of anything computed from the whole collection has
+`N` clauses, and that is the label: today's runtime stores the same one.
+Measured for a `filter` over an array of 10,000 references with 10,000 distinct
+clauses, the label is 1.45 MB with the templates and without. No representation
+removes it, and today's join over the transaction is the same label and no
+cheaper fallback. The only label that is both coarser and smaller is one an
+author declared ("What an author can declare", below).
+
+**A stored label never changes because a collection crossed a size.** By ruling
+(2026-11-20; Z78 of the continuation plan). A coarser label that the runtime
+chooses by a size is sound as a label, since each stored label is still at least
+what flowed, and is not safe as a flow. The counterexample: a list holds members
+that a reader R may read, its membership is labeled apart, and it has `T`
+members, the size above which the labels would be coarse. A handler reads a
+secret `s` that R may not learn and appends a member only where `s` is set.
+Under the exact rule the new member and the membership carry `s`, and member 0
+keeps its label. Under a rule by size the append moves the list over `T`, every
+member takes the join, which holds `s`, and R can no longer read member 0. R
+learns `s` from whether member 0 is readable, and reads no label to do so. The
+change of the labels of the other members is a label change that a write causes,
+the channel of section 14.3.5 of the specification's open problems chapter
+(`14-open-problems-and-proposals.md`). It holds alike for each coarse label a
+runtime could choose: one join for the members at the collection's `*` path, one
+join for the document, and the join of the transaction, where the same holds for
+an unrelated output written in that transaction. None of the three is smaller
+than the exact label of a whole read either, since each holds every distinct
+clause of the members.
+
+Two more reasons hold against a rule by size. Per-member labels that were never
+stored cannot be formed again for a list that a handler wrote, so a coarse label
+would stay until the list is replaced, and a member's label would depend on
+whether the list was ever above the size; a rule with no memory changes labels
+back and forth at the size, and each change is the channel above. And a client
+that has not loaded the whole list would evaluate a constraint on another label
+than the server stores.
+
+Instantiation therefore keeps four properties at every size: a stored
+confidentiality never lacks a clause of what flowed, and integrity is only ever
+under-claimed; the label of one path does not change because another path was
+written, unless a rule that holds at every size says so; the label that a
+serving runtime stores is a function of the plan and the committed state, and
+not of the size of a record, of how the evaluation batches its work, of a cache,
+or of which process serves; and nothing obliges the runtime to label again what
+is stored (section 8.9.4, `08-09-runtime-label-propagation.md`). The ruling
+names one possible exception, in the owner's words "possibly (c) once the
+ceiling proposal is ratified": the labels of the members of a container that a
+handler writes, up to the declared label of the container, which every read of a
+member would consume in any case. It is not adopted (section 8, question 199).
+
+**The representation.** By ruling (2026-11-20; Z75 of the continuation plan; the
+owner's words: "Yes, build them") three changes of representation are adopted.
+Each leaves every stored label as it is, which a run over the corpus that stores
+byte-equal labels before and after can check. They are being built in milestone
+4 of the integration, behind the experimental option, and no figure exists for
+them as built.
+
+- **(a) One table of inputs per transaction.** The inputs of each cone instance
+  are written once per transaction, and a write record names them by index. A
+  record that names an output holds the index of that output's inputs and no
+  copy of them. The memo keys of section 4.3 for an `output` and a `shared`
+  label are then the index, and no content hash of the inputs. The bytes of the
+  records of a transaction are linear in the cone instances evaluated plus the
+  records.
+- **(b) One record for equal writes into one container.** Writes with one plan
+  record and equal inputs, whose targets are members of one container, are one
+  record whose target holds `*` at the member's position. The runtime stores one
+  `*` entry where section 2.3 allows it, and applies the one label to the listed
+  members otherwise. It is the rule for a whole write over an array of
+  references; over an array of plain values in place a whole write is one record
+  already. The result of another per-element construct gives one record per
+  element evaluated, with the inputs of that element, and those records are one
+  only where the inputs are equal.
+- **(c) Groups with counts for any read that covers a whole container.** A slot
+  whose read covers the members of a container is bound as a `fold` with an
+  identity body is: by the groups of section 4.2, one entry per distinct label
+  identifier with a count, in place of chains. The one chain of an `identity`
+  slot that resolves through the links of a value is the same table for the
+  class `followRef`. The table, from label identifier to count per observation
+  class, is kept with the collection's assembly record
+  (`execution-and-storage.md` §2.5), and by the same rule for a stored array or
+  record that a whole read covers. A transaction updates it from the members it
+  wrote, `Δ` updates, and a label that changes alone updates it for the member
+  whose label changed (section 4.1). By ruling (2026-11-20; Z85 of the
+  continuation plan) the table is kept in memory with the collection and is not
+  stored: it is formed by one walk of the collection after a start, of the order
+  of computing the value, and it is a function of committed state, so two
+  runtimes form equal labels from it. A table stored in the container's envelope
+  would be a stored label that follows later changes of the labels of other
+  documents, against the ruling that a stored label is concrete (section 2.3).
+  The cost is of the order of `G` per record, `Δ` per transaction, and `N` once
+  per collection and runtime. It applies to an array of references and to the
+  result of another per-element construct; an array of plain values in place has
+  its entries in one envelope and needs no table.
+
+Measured by encoding again the records of the two large transactions of the
+measured case, and not by building the changes:
+
+| Transaction | Records | Bytes as recorded | With (a) | With (a) and (b) | With (a), (b) and (c) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A handler's write of 10,000 members, an array of references | 10,007 | 11,908,330 | 4,233,706 | 4,070 | 4,070 |
+| The outputs that read the list | 13 | 12,981,878 | 1,446,001 | 1,445,203 | 6,511 |
+
+The growth that (a) removes exists with small data as well: one transaction of
+`patterns/apps/person-workbench/main.tsx` records 503,983 bytes where 24,492
+hold the same content, and 14 of 276 corpus modules have a factor of 3 or more.
+
+One further change is not part of the ruling and is open (section 8, question
+200): the form of the stored entries where `G` is above 1. Per-member entries
+can hold a label by content address, `N` short references and `G` labels, and
+the label of a `fold` over `G` groups can be stored once by content address in
+place of once inline in each entry of each class that holds it.
+
+**What an author can declare.** The language has the form that makes a
+collection uniform at every size, and it is a declaration of a label, never of a
+size.
+
+| Declaration | Effect on the cost | Safe |
+| --- | --- | --- |
+| `Confidential<T, L>[]` (`language-subset.md` §8.4), with writer-fit | Each member's effective label is `L`, so `G` is 1 and every figure is that of the uniform case. It needs the label identifier of a member to absorb a clause that a declared clause implies (section 8, question 200) | Yes: static, and the same at every size. A member that does not fit is refused, which is a refusal that depends on data |
+| `Confidential<T[], L>` | The same, and the membership has `L` too | Yes |
+| `MaxConfidentiality<T, L>` on what a body reads | None by itself: the stored label of an output is the exact join. Where the author marks an output as stored at the ceiling, the join of `N` clauses becomes `L` (below) | Yes, since the rule is static |
+| A collection marked uniform with no declared label | `G` is 1 | No: a write of one member raises the label of the others, the channel of section 14.3.5. The language has no such form, and none is proposed |
+
+By ruling (2026-11-20; Z80 of the continuation plan) a body with a declared
+maximum confidentiality stores an output at the ceiling where the author marks
+the output. It is the one static rule that makes the label of a whole read
+smaller. It is not built, and the mark has no syntax yet (section 8, question
+198). Without the mark the stored label stays the exact join, and the ceiling is
+the constraint of section 4.4 alone.
+
+**A label of very many clauses.** By ruling (2026-11-20; Z79 of the continuation
+plan) the runtime reports a diagnostic when a stored label exceeds a number of
+clauses, and refuses the commit above a hard limit that is set well above that
+number. A refusal keeps every label exact and changes no meaning. It is a
+failure that depends on a size, so a reader who sees that an output stopped
+changing learns one bit (section 14.3.6 of the same chapter), and a pattern
+stops working at that size; the diagnostic comes first for that reason, and
+names the collection and the declaration that would bound it. Neither is built.
+The ruling does not say whether the limit counts clauses or encoded bytes, and
+no value is set for either number (section 8, question 197).
+
+**The write gate proposal.** By ruling (2026-11-20; Z77 of the continuation
+plan) the design waits for the specification's ruling on the write gate (section
+8, question 195) and makes no investment in per-member audience labels of the
+lists that a handler writes. Under the proposal's rule a container that a
+handler writes has one declared label, every entry a call creates takes it, and
+a content label above it is refused, so the effective audience of every member
+is the container's label at every size: a collection label by a static rule,
+with no threshold. The owner's words: "assume the proposal or something
+equivalent eventually lands and so don't worry about the potential for leaks
+now, but still make sure things are sound in terms of just correctly computing
+the labels under that relaxed condition". So a channel that the gate closes, a
+label change that a write under a secret causes, is not instantiation's to
+close, and each stored label is still at least what flowed.
+
 ## 5. Error states and termination
 
 ### 5.1 What the specification says
@@ -12713,10 +13003,16 @@ handler's template as the label of having been chosen. `body`, `sentAt` and
 `reactions` are required by the message schema, so their existence is
 constant.
 
-Kept outputs in the slice: the room's `messages` output (from `facts.list`),
+Kept outputs in the slice: the members of the room's `messages` output,
 and the rendered tree under `[UI]`, which holds the empty-state branch and
-each row's text, edited mark and thread label. `facts.main`,
-`facts.entries`, `facts.places` and `replies` are interim
+each row's text, edited mark and thread label. `room.tsx` returns
+`messages` as a record whose members `count`, `oldestAt`, `newestAt`,
+`latest`, `threads` and `legacyReplies` are each the member of that name
+of `facts.list`, beside the session's `windows` and the two streams that
+open and close a window. So each of those six is a kept output at a path
+below `messages`, computed in the cone `facts` with the template
+`T_facts`, and the plan has no one output for `messages` as a whole.
+`facts.main`, `facts.entries`, `facts.places` and `replies` are interim
 outputs: another cone, a `pick` or a collection refers to each.
 
 By the partition of section 1.4, the cones of the slice are `facts`,
@@ -12798,9 +13094,10 @@ expression is written: the room pattern for `isEmpty`, and the row pattern for
 `isEdited`. The table has what the templates mint. A row of it that is a kept
 output carries in addition the atom of the pattern the plan is compiled from,
 with no condition (section 3.2, "The atom of the pattern"). The kept outputs
-of the slice are `messages`, which is `facts.list`, and the positions of the
-rendered tree (section 6.2). There the atom of the room pattern stands beside
-`TransformedBy(messageFacts)` on `messages`, beside `TransformedBy(bodyText)`
+of the slice are the members of `messages` that come from `facts.list`, and
+the positions of the rendered tree (section 6.2). There the atom of the room
+pattern stands beside `TransformedBy(messageFacts)` on each of those members
+of `messages`, beside `TransformedBy(bodyText)`
 on a row's text, beside the row pattern's atom on the edited mark, and alone
 on the thread label where the selected branch mints nothing.
 
@@ -13887,7 +14184,8 @@ this document made.
     promoted `computed` mints no `TransformedBy` atom for the code of its
     callback, and every output of a pattern carries a `TransformedBy` atom
     that names the pattern, a value the pattern only passes on included; where
-    the value is passed on by reference the atom is on the link (section 3.2).
+    the value is passed on by reference the atom is in the label of the
+    content at the output path, by the ruling of 2026-11-20 (section 3.2).
     Two things the ruling does not decide are *assumed*. First, the pattern is
     identified by the hash of `{ module, binding }` (section 1.5), which is
     the form of `Body.code` under question 54 and the pair of members a rule
@@ -14012,25 +14310,24 @@ this document made.
     same pattern compiled in, which has no stored argument. A second
     alternative keeps the condition of question 66 for the atom of a kept
     output, so that an unlabeled output stores nothing.
-72. **What a reader that follows a link is given of the atom on the link.**
-    The atom of an output that passes a value on by reference is in the label
-    of the link, and a read through a link takes its integrity from the target
-    alone (section 3.10). *Assumed:* that stands, so a required integrity or
-    an exchange rule evaluated over what a dereferencing read consumed does
-    not see the pattern's atom, and one evaluated over the reference does.
-    The alternative has a read through the link carry the link's atoms beside
-    the target's, under the specification's rule for the integrity of a link
-    (§3.7.2, `03-core-concepts.md`). Not verified: this document's reading
-    against the text of that section, which is for the specification change.
-    Milestone 4 of the integration stores the atom on the link's entry and
-    found 5 rows of the corpus looser in integrity than today's for it. It
-    did not join the atom onto the target's content: that section scopes
-    the endorsement of a link to the selection, and an atom with no scope
-    on the content would claim that the pattern vouches for a value it
-    only chose. For the project owner: whether the atom of a kept output on
-    a link is a selection endorsement with a scope, which a read that
-    traverses the link takes as such. It is question 313 of the
-    continuation plan.
+72. **What a reader that follows a link is given of the atom of a kept output.**
+    Settled by ruling (2026-11-20; Z81 of the continuation plan): the pattern's
+    atom of a kept output that passes a value on by reference is joined onto the
+    content, with no scope, so a read through the link takes it (section 3.2).
+    The alternative that the ruling passes over stores the atom as an
+    endorsement scoped to the selection, under the specification's rule for the
+    integrity of a link (§3.7.2, `03-core-concepts.md`); the owner accepts that
+    a reader cannot tell "selected" from "computed". Milestone 4 of the
+    integration builds it. What the ruling leaves open, each *assumed* as built:
+    (1) the atom is stored in the `value` entry at the output path of the
+    document that holds the link, and the envelope of the target's document is
+    not written, so a reader that reaches the target another way does not take
+    it; (2) a write edge that stores a reference (section 3.1) keeps the atom of
+    its body in the label of the link, since the ruling names kept outputs; (3)
+    whether the specification needs a sentence for an atom with no scope at the
+    path of a link, which is for the specification pull request. Not verified:
+    this document's reading against the text of §3.7.2. It is question 313 of
+    the continuation plan.
 73. **A label that the schema of an event declares.** Today such a
     declaration adds nothing to what the handler writes (section 3.12), and
     no corpus pattern declares one. *Assumed:* the label of a slot of root
@@ -14052,10 +14349,11 @@ this document made.
     on to the rendered position, whose template is the label of the reference
     and has no clause, and the declared clause stays at the created cell
     (section 3.9, "A reference a site of the body made"). The rendered
-    position is a kept output and carries the pattern's atom on the link. In
-    the comparison both sides read the created cell through the stored link
-    (section 3.1), so the row is equal in confidentiality, and the runtime's
-    atom corresponds to the atom on the link. Without the atom of a kept
+    position is a kept output and carries the pattern's atom in the label of
+    the content at its path (section 3.2). In the comparison both sides read
+    the created cell through the stored link (section 3.1), so the row is
+    equal in confidentiality, and the runtime's atom corresponds to that
+    atom. Without the atom of a kept
     output the three rows are looser in integrity, by this assumption.
     The stage 3 comparison found the stamps of the document that holds
     the rendered tree to carry the caveat at every path, with the atom
@@ -16224,8 +16522,10 @@ this document made.
      whether a child compiled into its caller, which has no stored argument,
      checks the same requirement at its slots; and what the requirement
      costs a reader per read. It needs a specification change of its own.
-     *Assumed meanwhile:* nothing is attached, and question 71's assumption
-     stands. It is question 302 of the continuation plan.
+     By ruling (2026-11-20; Z82 of the continuation plan) it is scheduled
+     after milestone 4 of the integration, and its open points stay open
+     until then. *Assumed meanwhile:* nothing is attached, and question
+     71's assumption stands. It is question 302 of the continuation plan.
 177. **Whether every commit of a compiled pattern is prepared** (for the
      project owner). Settled by the ruling of 2026-11-19: every commit of a
      compiled pattern is prepared when the option is on, so every kept
@@ -16273,10 +16573,14 @@ this document made.
      as a tool** (for the project owner; section 3.15, point 4).
      *Assumed,* provisional (P36), for the conditional: a `select` over
      the `closure` nodes, with the tool rule applied to the selected
-     factory value. For a closure through `inSpace` nothing is assumed:
-     the three alternatives of that point differ in where captured data
-     is stored and who must be able to read it. It is question 310 of the
-     continuation plan.
+     factory value. P36 stays provisional. For a closure through
+     `inSpace`, settled by ruling (2026-11-20; Z83 of the continuation
+     plan): it is refused where it is given as a tool. When the modifier
+     is needed on a tool, the captures stay with the factory value,
+     alternative (b) of that point, in the owner's words "whenever we
+     need it, (b)". Not built: the prototype translates no closure used as
+     a value, and the diagnostic has no identifier yet. It is question 310
+     of the continuation plan.
 183. **The groups of a scan's prefix** (for the project owner to ratify;
      section 4.2, "The groups of a prefix"). *Assumed,* provisional
      (P37): a scan keeps a count per group over its prefix with its memo
@@ -16309,21 +16613,22 @@ this document made.
      joined with a member's own entries and are cleared by a write that replaces
      the list. The continuation plan records the first ruling under its question
      316.
-186. **How the write records of a transaction are bounded** (for the project
-     owner; sections 2.5 and 4.2). Further bindings with equal labels are
-     reported once. Three costs stay linear in the elements of a list: finding
-     the label identifier of every position a read reached; the one chain of an
-     `identity` slot, which holds every position; and one write record per
-     element of a write of many elements. *Assumed:* as built. The alternative
-     reports by group in each: the groups that P31 keeps with a collection's
-     assembly in place of chains, one chain with `*` at the element's position,
-     and one record per group with `*` in the target. Equal labels for a read of
-     the value at a position do not imply equal labels for a link followed
-     there, so the report of equal chains compares the identifier of each
-     observation (section 2.5). Measured
-     over an array of references; an array of plain values in place and the
-     result of another per-element construct were not measured. It is question
-     318 of the continuation plan.
+186. **How the write records of a transaction are bounded** (sections 2.5 and
+     4.7). The direction is settled by ruling (2026-11-20; Z75 of the
+     continuation plan; the owner's words: "Yes, build them"): the three changes
+     of representation of section 4.7, which leave every stored label as it is.
+     One table of inputs per transaction, named by index from the records; one
+     record with `*` in its target for equal writes into one container; and
+     groups with counts, kept with the collection, for any read that covers a
+     whole container. The three costs that were linear in the elements of an
+     array of references are the ones they remove: finding the label identifier
+     of every position a read reached, the one chain of an `identity` slot, and
+     one write record per element of a write of many elements. By ruling (Z85)
+     the group table is kept in memory with the collection. Being built in
+     milestone 4 of the integration; no result. Equal labels for a read of the
+     value at a position do not imply equal labels for a link followed there, so
+     a group compares the identifier of each observation (section 2.5). What is
+     not verified is question 196. It is question 318 of the continuation plan.
 187. **Whether the positions from the first removed one on take what a removal's
      decision read, over an array of plain values in place** (section 2.5, "The
      label rule of a removal through a handle"). Settled by ruling (2026-11-20;
@@ -16378,21 +16683,39 @@ this document made.
      collection's own entry holds it where a position does not. The alternatives
      for that: (1) store it once at the derived collection's `*` path, as
      question 187 has it for the source; (2) join it into the entry of every
-     position. *Assumed:* nothing; not built. It is question 328 of the
-     continuation plan.
+     position. *Assumed,* as built in milestone 4 of the integration and not
+     ruled: alternative 1, for a kept result whose members change otherwise than
+     by an addition at its end (section 2.5). Open with it: a member appended to
+     the source after a removal. The check of stored labels counts such a
+     position as no failure by the ruling on an append and reports it apart, 17
+     positions in 2 modules of the corpus, all of them appended after another
+     change of the list; whether each stores a clause of what decided the
+     earlier change is not established. It is question 328 of the continuation
+     plan.
 193. **Whether a read of a position that holds no member consumes the list's
      enumeration** (section 2.5, "An addition through a handle"). After
      additions alone, a read of a position behind the last member reveals the
      number of members and consumes nothing of it, over an array of plain values
      in place and over an array of references. After a removal the `*` entries
-     cover the read. *Assumed:* nothing; not built, and no test states the case.
-     It is question 329 of the continuation plan.
+     cover the read. *Assumed,* as built in milestone 4 of the integration and
+     not ruled: the resolver joins what a read of the list's membership
+     consumes, the `enumerate` entry at the list's path and the entries above
+     it, for a content read at a path through a position that holds no member,
+     behind the experimental option (section 2.5). The alternative has an
+     addition join what decided it into the `*` entries as a removal does, which
+     widens every read of a member. It is question 329 of the continuation plan.
 194. **An array inside a value written whole** (section 2.5, "An addition
      through a handle"). A write that replaces an array stores its label as the
      `enumerate` entry of the array, and an array at a path below the written
      one gets none, so a read of its members, their order or their number does
-     not consume the label of the write. *Assumed:* nothing; not built. It is
-     question 330 of the continuation plan.
+     not consume the label of the write. *Assumed,* as built in milestone 4 of
+     the integration and not ruled: an `enumerate` entry at the path of each
+     array that the written value holds, the target of a reference excepted,
+     with the label of the nearest path above it that stores a label in the
+     commit (section 2.5). It is linear in the arrays written. The alternative
+     has a read of the membership of an array with no entry of its own consume
+     the `value` entry of the nearest written path above it. It is question 330
+     of the continuation plan.
 195. **Whether the confidentiality ceiling of every path a handler can write is
      declared ahead** (for the project owner; section 3.12; not a ruling). The
      specification holds a proposal, not normative, for a write gate (sections
@@ -16409,6 +16732,108 @@ this document made.
      read against the declared label of each store it writes (section 4.4).
      Neither is the rule: nothing gives the paths a handler can write a declared
      label from its ceiling when the pattern is instantiated, and the label of a
-     handler's write is formed at the call. *Assumed:* nothing changes until the
+     handler's write is formed at the call. By ruling (2026-11-20; Z77 of the
+     continuation plan) the design waits for the specification's ruling and does
+     not invest in per-member audience labels of the lists a handler writes; the
+     owner's words: "assume the proposal or something equivalent eventually
+     lands and so don't worry about the potential for leaks now, but still make
+     sure things are sound in terms of just correctly computing the labels under
+     that relaxed condition". So a channel that the gate closes is recorded and
+     not closed here, and each stored label is still at least what flowed. The
+     case that milestone 4 of the integration records: a handler that makes no
+     write under a condition on a labeled input stores nothing, so no label says
+     that the paths it could have written depend on the condition. Other
+     channels of the same kind: which index an appended member stands at; a hole
+     that a write beyond the end of a list leaves before the position it writes;
+     and a removal that finds nothing, which leaves the positions as they were.
+     What the plan lacks for the proposal's rule: an authored ceiling per
+     handler, since the plan knows the slots a handler reads and not a ceiling
+     over them; the kind of a member change, since a write edge with `*` covers
+     an addition, a removal and a replacement alike, and the proposal lets a
+     call create entries in a writable container and forbids rewriting one; and
+     which targets exist before a call, since a target in the event or a
+     document the handler creates does not. *Assumed:* nothing changes until the
      proposal is ruled in the specification. It is question 335 of the
      continuation plan.
+196. **What is not verified of the three changes of representation** (section
+     4.7). That they store byte-equal labels is argued from the idempotence of
+     join and meet and is not built; the corpus run with them is the check. The
+     byte figures of section 4.7 are an encoding of real records and no
+     measurement of the changes, and for (c) a binding of more than 8 positions
+     is counted as 300 bytes. What the 20,001 positions of the one `identity`
+     chain of the measured case are was not read: the number fits one position
+     for the array and two per member. Only an array of references was measured;
+     an array of plain values in place and the result of another per-element
+     construct are reasoned. The patterns that read a whole list of references
+     that grows in use were named by reading their source and were not run at
+     size: the lifts `crossrefTable` and `cardRowsByActivity` of
+     `patterns/apps/topics/main.tsx`, which read the whole list of topics and
+     write one row cell per topic;
+     `patterns/system/summary-index/summary-index.tsx`,
+     `patterns/system/knowledge-graph/knowledge-graph.tsx` and
+     `patterns/system/backlinks-index/backlinks-index.tsx`, each a `computed`
+     over the mentionable pieces of a space, whose members come from several
+     patterns and users, so `G` is not small there; and the `computed`s over
+     catalogs in `patterns/system/fabrichat/manager.tsx`. *Assumed:* the labels
+     are equal, and the build is held to that by the corpus run. It is question
+     338 of the continuation plan.
+197. **The diagnostic and the hard limit for a label of very many clauses** (for
+     the project owner; section 4.7). By ruling (2026-11-20; Z79) a diagnostic,
+     and a refusal above a hard limit set well above it. Not ruled: whether the
+     limit counts clauses or encoded bytes; the two numbers; and how the
+     diagnostic is reported, where the recommendation is once per collection and
+     session, with a counter in the runtime's CFC statistics. A limit in encoded
+     bytes depends on the encoding, and a limit in clauses does not. *Assumed:*
+     nothing is built, and no number is set. It is question 339 of the
+     continuation plan.
+198. **How an author marks an output as stored at the declared ceiling** (for
+     the project owner; section 4.7). By ruling (2026-11-20; Z80) a body with a
+     declared maximum confidentiality stores an output at the ceiling where the
+     author marks the output. Not ruled: the syntax of the mark; which ceiling
+     an output takes where the inputs of the body declare different ones; and
+     whether the mark is on the output, on the body, or on the type of the
+     result. The mark changes what CFC stores, so it goes through the
+     specification procedure, where the write gate proposal has the same rule
+     for a container a handler writes (its section 5.9). *Assumed:* nothing is
+     built, and an output stores the exact join. It is question 340 of the
+     continuation plan.
+199. **Whether the labels of members may be coarse once the write gate is
+     adopted, and how any threshold is measured** (for the project owner;
+     section 4.7). By ruling (2026-11-20; Z78) a stored label never changes
+     because a collection crossed a size, with one exception left possible: the
+     members of a container up to its declared label, once the write gate
+     proposal is ratified. Not ruled, and the coordinator's condition for any
+     threshold that is ever adopted: it is measured by the serving runtime at
+     preparation, on committed state, in members of the stored container, never
+     in the bytes of a record or the state of the evaluation, and with no memory
+     of earlier sizes. Not ruled either: a form that marks a collection uniform
+     with no declared label, which is the unsafe form and is recommended
+     against. *Assumed:* no threshold and no such form. It is question 341 of
+     the continuation plan.
+200. **The stored entries where the members have several labels** (section 4.7).
+     Where `G` is above 1, per-member entries could hold a label by content
+     address, and the label of a `fold` could be stored once in place of once
+     inline in each entry of each class that holds it: measured for a `filter`
+     over 10,000 references with 10,000 distinct clauses, the label is stored
+     three times, 4.35 MB of entries where today's runtime stores 1.45 MB. Not
+     verified: whether the inline limit of content-addressed labels
+     (`CFC_LABEL_INLINE_LIMIT` of `runtime/runner/src/cfc/label-documents.ts`)
+     applies to those entries; and whether the normal form of a label absorbs a
+     clause that a declared clause implies, which a collection with a declared
+     label needs for its members to have one label identifier. The cost of
+     encoding every entry of a large envelope at each commit belongs with the
+     storage of long arrays in chunks (P20 of the continuation plan). *Assumed:*
+     the entries as built. It is question 342 of the continuation plan.
+201. **A removal's `*` entry that a more specific entry of origin `structure`
+     replaces** (section 2.5; for the specification pull request). The
+     resolution takes the longest prefix among the entries of origin `structure`
+     in the classes `value` and `followRef`, so a concrete entry of that origin
+     below the list replaces the `*` entry that holds what decided a removal,
+     and a read there does not consume the decision. It is unsound for that
+     slot. No test produces the pair, since the comparison adapter records no
+     link write. The fix resolves an entry that the runtime minted at a `*` path
+     in a group of its own, as the `shape` class is resolved, which is the
+     sentence of question 191 applied to the origin as well. It changes the
+     resolution with the experimental option off, so the specification comes
+     first. *Assumed:* not fixed until the sentence is reviewed. It is question
+     343 of the continuation plan.
