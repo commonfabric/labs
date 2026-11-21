@@ -1464,6 +1464,17 @@ export class SpaceServer implements TransactionSealDestination {
    * Entries retire with the last demand key naming the root. */
   readonly #seededDemanders = new Map<string, Set<string>>();
 
+  /** Owned cell, as `${scope}\0${doc id}`, → the piece root doc ids whose
+   * arrival seed passed the cell over because the demander it ran for did
+   * not reach it. A demander whose own instance of the cell later enters its
+   * demand has that root's seed run again for it. Entries retire with the
+   * root's `#seededDemanders` entry. */
+  readonly #passedOverOwnedCells = new Map<string, Set<string>>();
+
+  /** Piece root doc id → the owned cells its arrival seed passed over: the
+   * reverse of `#passedOverOwnedCells`, which retiring a root reads. */
+  readonly #passedOverByRoot = new Map<string, Set<string>>();
+
   /** The client demand set as the last demand pass read it, which is what
    * lets a pass reconcile only the keys whose rows changed since. */
   readonly #demandMirror = new DemandMirror();
@@ -6061,7 +6072,10 @@ export class SpaceServer implements TransactionSealDestination {
       for (const key of this.#warmDemandKeys.keys()) changed.add(key);
       this.#warmDemandKeysReconciled = this.#warmDemandKeys.size;
     }
-    if (this.#demandFullReconcile) {
+    // A full reconcile cannot tell which pairs entered a key: the arrival
+    // seed then treats every pair on a changed key as entering it.
+    const fullReconcile = this.#demandFullReconcile;
+    if (fullReconcile) {
       for (const key of this.#demandMirror.keys()) changed.add(key);
       for (const key of this.#demandersByKey.keys()) changed.add(key);
       for (const key of this.#warmDemandKeys.keys()) changed.add(key);
@@ -6088,6 +6102,8 @@ export class SpaceServer implements TransactionSealDestination {
     // arrival re-arm (`invalidateActionsForDemandRoots`) is KEPT for
     // root keys — a superset of the per-key check for root arrivals.
     const arrivals = new Set<string>();
+    /** Key → the pairs this pass entered on it, which the arrival seed reads. */
+    const enteredPairs = new Map<string, Set<string>>();
     let notCurrentRearms = 0;
     for (const key of changed) {
       const rows = this.#demandMirror.rowsFor(key);
@@ -6167,6 +6183,12 @@ export class SpaceServer implements TransactionSealDestination {
         known.set(pairKey, identity);
         this.#demandedPairCount += 1;
         if (this.#demandedRoots.has(key)) arrivals.add(key);
+        let entered = enteredPairs.get(key);
+        if (entered === undefined) {
+          entered = new Set();
+          enteredPairs.set(key, entered);
+        }
+        entered.add(pairKey);
       }
     }
     this.#demandFullReconcile = false;
@@ -6493,13 +6515,59 @@ export class SpaceServer implements TransactionSealDestination {
     // demanding pair the defaults of its owned cells scoped narrower than
     // their owner, and a start seeds them only for the identity it runs
     // under. A viewer whose runtime runs none of the pattern never starts
-    // the piece, so the serving runtime seeds the viewer's instances here,
-    // once per (root, pair) in a tenure; without it the viewer's first
-    // write into such a cell creates the instance holding that one field.
+    // the piece, so the serving runtime seeds the viewer's instances here;
+    // without it the viewer's first write into such a cell creates the
+    // instance holding that one field. It seeds only the instances the
+    // pair's demand reaches: a view that can write a cell renders it, and
+    // rendering it watches the instance, absent or not, so the instance is
+    // in the pair's demand before any write. A piece reached only for its
+    // values, such as one a list card links to, owes that viewer nothing.
+    // A root is seeded once per (root, pair) in a tenure, and again for a
+    // pair whose demand reaches a cell an earlier seed passed over.
     // Awaited ahead of the arrival re-arm, so a node re-run for the
     // arriving demander reads the seeded instance instead of running once
     // more when the seed lands.
-    for (const key of new Set([...rootKeys.keys(), ...changed])) {
+    const reopened = new Map<string, Set<string>>();
+    for (const key of changed) {
+      const sep = key.indexOf("\0");
+      const scopeKey = key.slice(0, sep);
+      const roots = this.#passedOverOwnedCells.get(
+        `${scopeOfScopeKey(scopeKey)}\0${key.slice(sep + 1)}`,
+      );
+      if (roots === undefined) continue;
+      const pairs = this.#demandersByKey.get(key);
+      if (pairs === undefined) continue;
+      // The pairs that reach this instance of the cell newly, and whose own
+      // instance of it this is: a pair already on the key was seeded with
+      // it reached, and a key a user's sessions share changes as each one
+      // comes and goes.
+      const entering: string[] = [];
+      for (const [pairKey, identity] of pairs) {
+        if (!fullReconcile && !enteredPairs.get(key)?.has(pairKey)) continue;
+        if (scopeKeyApplicableTo(scopeKey, identity)) entering.push(pairKey);
+      }
+      if (entering.length === 0) continue;
+      for (const rootId of roots) {
+        let open = reopened.get(rootId);
+        if (open === undefined) {
+          open = new Set();
+          reopened.set(rootId, open);
+        }
+        for (const pairKey of entering) open.add(pairKey);
+      }
+    }
+    const seedKeys = new Set([...rootKeys.keys(), ...changed]);
+    for (const rootId of reopened.keys()) {
+      for (const key of this.#keysByRootId.get(rootId) ?? []) {
+        seedKeys.add(key);
+      }
+      for (const key of this.#keysByResolvedRoot.get(rootId) ?? []) {
+        seedKeys.add(key);
+      }
+    }
+    // A root several keys name is seeded once a pass for each pair.
+    const seededThisPass = new Set<string>();
+    for (const key of seedKeys) {
       if (
         !this.#demandedRoots.has(key) ||
         this.#pendingStructureLoads.has(key) ||
@@ -6526,19 +6594,34 @@ export class SpaceServer implements TransactionSealDestination {
       }
       for (const [pairKey, identity] of demanders) {
         const seedKey = `${rootScope}\0${pairKey}`;
-        if (seeded.has(seedKey)) continue;
+        if (seeded.has(seedKey) && !reopened.get(rootId)?.has(pairKey)) {
+          continue;
+        }
+        const passKey = `${rootId}\0${seedKey}`;
+        if (seededThisPass.has(passKey)) continue;
+        seededThisPass.add(passKey);
         const root = runtime.getCellFromLink({
           space: this.#options.space,
           id: rootId as never,
           path: [],
           scope: rootScope,
         });
+        const passedOver = new Set<string>();
+        const reached = (link: NormalizedFullLink): boolean => {
+          const demanded = this.#demandersByKey.get(
+            toDirtyKey(link.id, resolveScopeKey(link.scope, identity)),
+          )?.has(pairKey) === true;
+          if (!demanded) passedOver.add(`${link.scope}\0${link.id}`);
+          return demanded;
+        };
         try {
           const complete = await runtime.runner.seedOwedDefaultsFor(
             root,
             identity,
+            reached,
           );
           if (!this.#active || this.#runtime !== runtime) return;
+          this.#notePassedOver(rootId, passedOver);
           // An incomplete seeding — the piece stopped, or a declaration
           // the manifest no longer vouches for — is asked again when the
           // key next changes.
@@ -6811,6 +6894,7 @@ export class SpaceServer implements TransactionSealDestination {
       if (keys.size === 0) {
         this.#keysByRootId.delete(id);
         this.#seededDemanders.delete(id);
+        this.#forgetPassedOver(id);
       }
     }
     const resolvedRoots = [
@@ -6826,8 +6910,46 @@ export class SpaceServer implements TransactionSealDestination {
         if (rkeys.size === 0) {
           this.#keysByResolvedRoot.delete(resolved);
           this.#seededDemanders.delete(resolved);
+          this.#forgetPassedOver(resolved);
         }
       }
+    }
+  }
+
+  /**
+   * Records `cells`, each `${scope}\0${doc id}`, the owned cells the arrival
+   * seed of the piece at `rootId` passed over for a demander not reaching
+   * them, so a demander whose instance of one enters its demand later has
+   * the seed run again for it.
+   */
+  #notePassedOver(rootId: string, cells: ReadonlySet<string>): void {
+    if (cells.size === 0) return;
+    let held = this.#passedOverByRoot.get(rootId);
+    if (held === undefined) {
+      held = new Set();
+      this.#passedOverByRoot.set(rootId, held);
+    }
+    for (const cell of cells) {
+      held.add(cell);
+      let roots = this.#passedOverOwnedCells.get(cell);
+      if (roots === undefined) {
+        roots = new Set();
+        this.#passedOverOwnedCells.set(cell, roots);
+      }
+      roots.add(rootId);
+    }
+  }
+
+  /** Drops what `#notePassedOver` recorded for the piece at `rootId`. */
+  #forgetPassedOver(rootId: string): void {
+    const cells = this.#passedOverByRoot.get(rootId);
+    if (cells === undefined) return;
+    this.#passedOverByRoot.delete(rootId);
+    for (const cell of cells) {
+      const roots = this.#passedOverOwnedCells.get(cell);
+      if (roots === undefined) continue;
+      roots.delete(rootId);
+      if (roots.size === 0) this.#passedOverOwnedCells.delete(cell);
     }
   }
 
@@ -9008,6 +9130,8 @@ export class SpaceServer implements TransactionSealDestination {
     this.#pieceRootByDemandKey.clear();
     this.#pieceRootAddressByDemandKey.clear();
     this.#seededDemanders.clear();
+    this.#passedOverOwnedCells.clear();
+    this.#passedOverByRoot.clear();
     this.#keysByRootId.clear();
     this.#keysByResolvedRoot.clear();
     this.#enclosingRootsByDemandKey.clear();

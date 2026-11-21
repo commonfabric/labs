@@ -11346,12 +11346,9 @@ export class Runner {
       options.onSyncError(error);
       return false;
     }
-    return await this.#seedOwedDefaults(
-      instances,
-      identity,
-      isCurrent,
-      options.allowReadOnly,
-    );
+    return await this.#seedOwedDefaults(instances, identity, isCurrent, {
+      allowReadOnly: options.allowReadOnly,
+    });
   }
 
   /**
@@ -11370,7 +11367,8 @@ export class Runner {
    * Fills the absent actor instances of the defaults `instances` declare at
    * a scope narrower than that of the instance's result, each in a
    * transaction of its own (`#prepareCellsForRunningPattern` says why),
-   * under `identity` and while `isCurrent` holds. Returns whether every one
+   * under `identity` and while `isCurrent` holds. With `options.only`,
+   * fills only the cells whose doc ids it holds. Returns whether every one
    * was verified or seeded.
    *
    * A serving runtime fills no instance of its own. Its starts name no actor,
@@ -11386,11 +11384,15 @@ export class Runner {
     instances: readonly ResumePatternInstance[],
     identity: ScopeKeyIdentity | undefined,
     isCurrent: () => boolean,
-    allowReadOnly?: boolean,
+    options: {
+      allowReadOnly?: boolean;
+      only?: ReadonlySet<string>;
+    } = {},
   ): Promise<boolean> {
     if (this.#runtime.servingPosture && this.#isServingOwnIdentity(identity)) {
       return true;
     }
+    const { allowReadOnly, only } = options;
     let defaultsPrepared = true;
     const readOnlySpaces = new Map<MemorySpace, boolean>();
     for (const instance of instances) {
@@ -11414,6 +11416,7 @@ export class Runner {
           ? descriptor.schema.default
           : undefined;
         if (schemaDefault === undefined) continue;
+        if (only !== undefined && !only.has(derivedLink.id)) continue;
         if (!isCurrent()) return false;
         if (allowReadOnly && !this.#runtime.servingPosture) {
           let readOnly = readOnlySpaces.get(derivedLink.space);
@@ -12763,13 +12766,16 @@ export class Runner {
    * probed in the instance `identity` resolves it to, and loaded first when
    * neither the replica nor the store read-through can say whether it holds
    * a value; the cells found absent are seeded, one transaction per piece
-   * instance (`#seedOwedDefaults`). Returns whether every owed default was
-   * verified or seeded. A piece not running here, or whose pattern pointer
-   * this runtime cannot read, seeds nothing and returns `false`.
+   * instance (`#seedOwedDefaults`). With `reached`, only the owed cells it
+   * accepts are probed and seeded: the arrival seed passes the cells the
+   * viewer's demand reaches. Returns whether every owed default it was asked
+   * for was verified or seeded. A piece not running here, or whose pattern
+   * pointer this runtime cannot read, seeds nothing and returns `false`.
    */
   async seedOwedDefaultsFor(
     resultCell: Cell<any>,
     identity: ScopeKeyIdentity,
+    reached?: (derivedLink: NormalizedFullLink) => boolean,
   ): Promise<boolean> {
     const isCurrent = this.#currentWithinLifecycle();
     const link = resultCell.getAsNormalizedFullLink();
@@ -12814,6 +12820,8 @@ export class Runner {
       instances,
     );
     const seeds: ResumePatternInstance[] = [];
+    // The owed cells `reached` accepted, which alone are seeded.
+    const accepted = new Set<string>();
     for (const instance of instances) {
       const ownerScope = instance.resultCell.getAsNormalizedFullLink().scope;
       let owesSeed = false;
@@ -12825,6 +12833,10 @@ export class Runner {
           !ownedCellOwesSeed(derivedLink, ownerScope) ||
           !canResolveScopeKey(derivedLink.scope, identity)
         ) continue;
+        if (reached !== undefined) {
+          if (!reached(derivedLink)) continue;
+          accepted.add(derivedLink.id);
+        }
         if (this.#documentPresent(readTx, derivedLink)) continue;
         if (!this.#storeReportedAbsent(derivedLink, identity)) {
           // The store may hold a value the replica has not loaded; the
@@ -12839,7 +12851,12 @@ export class Runner {
       if (owesSeed) seeds.push(instance);
     }
     if (seeds.length === 0) return true;
-    return await this.#seedOwedDefaults(seeds, identity, isCurrent);
+    return await this.#seedOwedDefaults(
+      seeds,
+      identity,
+      isCurrent,
+      reached === undefined ? {} : { only: accepted },
+    );
   }
 
   /**

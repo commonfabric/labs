@@ -12,6 +12,7 @@ import {
 import * as Engine from "@commonfabric/memory/v2/engine";
 
 import { cellTx } from "../../src/cell.ts";
+import type { NormalizedFullLink } from "../../src/link-types.ts";
 import {
   DEFAULT_FLUSH_DEADLINE_MS,
   SpaceServer,
@@ -47,7 +48,14 @@ function logged(key: string, level: "debug" | "info" | "warn"): number {
 }
 
 /** A demand row: a watch root of the session `sessionId` of `principal`. */
-type DemandRow = { id: string; principal: string; sessionId: string };
+/** A row of a session's demand: a space-scoped root, or with `scope`, the
+ * session's own instance of a document, which is no root. */
+type DemandRow = {
+  id: string;
+  principal: string;
+  sessionId: string;
+  scope?: "session";
+};
 
 describe("SpaceServer", () => {
   let previous: boolean;
@@ -132,14 +140,17 @@ describe("SpaceServer", () => {
     const scopeKey = resolveScopeKey("space", { principal: service.did() });
     const rowsOf = (roots: readonly (string | DemandRow)[]) =>
       roots.map((root) => {
-        const { id, principal, sessionId } = typeof root === "string"
+        const { id, principal, sessionId, scope } = typeof root === "string"
           ? { id: root, principal: owner.did(), sessionId: "viewer" }
           : root;
         return {
           id,
-          scope: "space" as const,
-          scopeKey,
-          root: true,
+          scope: scope ?? "space" as const,
+          scopeKey: scope === undefined ? scopeKey : resolveScopeKey(scope, {
+            principal,
+            sessionId: sessionId as never,
+          }),
+          root: scope === undefined,
           identity: { principal, sessionId },
         };
       });
@@ -149,7 +160,10 @@ describe("SpaceServer", () => {
     const hooks: {
       onSync?: (id: string, traversal: boolean) => Promise<void> | void;
       onStart?: (id: string) => Promise<void> | void;
-      onSeed?: (id: string) => Promise<boolean>;
+      onSeed?: (
+        id: string,
+        reached?: (link: NormalizedFullLink) => boolean,
+      ) => Promise<boolean>;
       onReconcile?: (id: string) => Promise<void>;
     } = {};
     const manager = EmulatedStorageManager.connectTo(server, { as: service });
@@ -187,13 +201,13 @@ describe("SpaceServer", () => {
       return true;
     };
     const seeds: string[] = [];
-    runtime.runner.seedOwedDefaultsFor = (cell, identity) => {
+    runtime.runner.seedOwedDefaultsFor = (cell, identity, reached) => {
       const { space: target, id } = cell.getAsNormalizedFullLink();
       seeds.push(
         `${target === space ? "" : `${target} `}${id} for ` +
           identity.sessionId,
       );
-      return hooks.onSeed?.(id) ?? Promise.resolve(true);
+      return hooks.onSeed?.(id, reached) ?? Promise.resolve(true);
     };
     const reconciles: string[] = [];
     runtime.sourceReconciler.reconcile = async (cell) => {
@@ -672,6 +686,53 @@ describe("SpaceServer", () => {
         expect(logged("demand-seed-failed", "warn")).toBe(seedFailures);
         expect(fixture.stats.demand.ownedDefaultSeeds).toBe(1);
         expect(fixture.stats.demandArrivals).toBe(0);
+      });
+
+      it("seeds a viewer's piece again once the viewer's demand reaches a cell its first seeding passed over, once however many keys name the piece", async () => {
+        // A view writes only a cell it renders, and rendering it watches the
+        // viewer's instance of it: the seed waits for that instance to enter
+        // the viewer's demand. The piece here is named by its own key and by
+        // its argument's, which resolves to it.
+        const piece = "of:arms-reach-piece";
+        const argument = "of:arms-reach-argument";
+        const draft = "of:arms-reach-draft";
+        const fixture = await openFixture([piece, argument]);
+        fixture.loadable = true;
+        fixture.commit({
+          [piece]: { value: {}, patternIdentity: pointer },
+          [argument]: { value: {}, result: fixture.link(piece) },
+        });
+        const draftReached: boolean[] = [];
+        fixture.hooks.onSeed = (_id, reached) => {
+          draftReached.push(
+            reached?.({
+              space,
+              id: draft,
+              path: [],
+              scope: "session",
+              type: "application/json",
+            } as NormalizedFullLink) ?? false,
+          );
+          return Promise.resolve(true);
+        };
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        expect(fixture.seeds).toEqual([`${piece} for viewer`]);
+        expect(draftReached).toEqual([false]);
+
+        fixture.setDemand([piece, argument, {
+          id: draft,
+          principal: owner.did(),
+          sessionId: "viewer",
+          scope: "session",
+        }]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+        ]);
+        expect(draftReached).toEqual([false, true]);
+        expect(fixture.stats.demand.ownedDefaultSeeds).toBe(2);
       });
 
       it("seeds the defaults a piece in its own space owes, and leaves a piece in another space to that space", async () => {
