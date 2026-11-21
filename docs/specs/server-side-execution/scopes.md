@@ -190,7 +190,12 @@ faced them:
   and seeds that demander's instances of the piece's owned cells
   declaring a default narrower than their owner (the arrival seed,
   serving-loop.md §7 `ownedDefaultSeeds`): the start that would have
-  seeded them runs on no viewer's runtime under served views. The
+  seeded them runs on no viewer's runtime under served views. A
+  viewer's first write can create its instance before the seed reaches
+  it, holding only the field written; the seed then fills the default's
+  other fields under it and changes none the instance holds, and a seed
+  whose create a wave dropped for that write runs once more to do so
+  (serving-loop.md §3d). The
   serving runtime's own start of a piece names no actor and seeds no
   instance: not the service identity's session, which no viewer reads
   and which every new serving runtime replaces.

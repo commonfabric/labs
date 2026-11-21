@@ -177,6 +177,27 @@ describe("scoped-internal-cell-seed", () => {
     });
   }
 
+  it("fills the default's missing fields under an instance a session's first write created, keeping the field it wrote", async () => {
+    // A session's first keystroke can create its instance before the seed
+    // reaches it, holding only the field it typed. The seed then owes the
+    // fields the instance lacks, and nothing it holds.
+    await load("session", owner);
+    const second = openRuntime(owner);
+    const piece = second.getCell(space, "draft holder", resultSchema);
+    await piece.sync();
+    const draft = piece.key("draft").resolveAsCell();
+    await draft.sync();
+    expect(draft.getRawUntyped()).toBeUndefined();
+    const typed = second.edit();
+    draft.withTx(typed).setRawUntyped({ title: "typed" });
+    expect((await typed.commit().settled).error).toBeUndefined();
+
+    await second.runSynced(piece, draftHolder(second, "session"), {});
+    await second.idle();
+
+    expect(draft.getRawUntyped()).toEqual({ title: "typed", members: "" });
+  });
+
   it("keeps a user's per-user value when that user loads again", async () => {
     await writeTitle(await load("user", owner), "kept");
     const reloaded = await load("user", owner);

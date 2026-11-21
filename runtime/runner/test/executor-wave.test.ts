@@ -1349,6 +1349,64 @@ describe("stage D seal-into-wave", () => {
     });
   });
 
+  it("drops a bookkeeping write over an intrusion the sealing replica had not taken, though the wave's basis covers it — a seed never lands over the write it raced", async () => {
+    // The loop's own writes read the same lagging view. A seed that found a
+    // viewer's instance absent, sealing into a wave opened after the
+    // viewer's first write was admitted, would otherwise create the
+    // instance over that write.
+
+    const w = runtime.getCell<{ value: number }>(
+      space,
+      "wave-stale-bookkeeping",
+      undefined,
+    );
+    await w.sync();
+    const wLink = w.getAsNormalizedFullLink();
+    Engine.applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: wLink.id,
+          value: { value: { value: 99 } },
+        }],
+      },
+    });
+    const lease = await liveLease();
+    const wave = newWave({ lease });
+    expect(
+      Engine.selectDocHead(engine, { id: wLink.id, scopeKey: "space" }),
+    ).toBeLessThanOrEqual(wave.basisSeq);
+    runtime.installSealDestination(wave);
+
+    const tx = runtime.edit();
+    stampWaveRunContext(tx, { actionId: "seed-w", kind: "bookkeeping" });
+    expect(w.withTx(tx).get()).toBeUndefined();
+    w.withTx(tx).set({ value: 1 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const settlement = waveSettlementOf(tx);
+    expect(settlement).toBeDefined();
+
+    runtime.clearSealDestination();
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+
+    expect(outcome.aborted).toBeUndefined();
+    expect(outcome.dispositions[0]).toEqual({ kind: "dropped" });
+    expect(
+      ((await settlement!).error as
+        | { waveWithdrawalCause?: unknown }
+        | undefined)?.waveWithdrawalCause,
+    ).toBe("contribution-dropped");
+    expect(outcome.seq).toBeUndefined();
+    expect(Engine.readState(engine, { id: wLink.id })?.document).toEqual({
+      value: { value: 99 },
+    });
+  });
+
   it("commits a derived write over a move the sealing replica had not taken when the move was this tenure's OWN derived commit — not every older view is an intrusion", async () => {
     // The control for the drop above. A serving tenure advances its own
     // output documents under runs still in flight, so a view older than
