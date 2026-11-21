@@ -21,6 +21,9 @@
  *   set to `distinct`, each topic has a clause of its own, and otherwise
  *   every topic has the clause of the input `topics`. With `SCALE_CHECK`
  *   set, each edit also checks the labels it stored (`StorageStep.checked`).
+ *   With `SCALE_REORDER` set, a step `reorder` follows the edits: a writer
+ *   outside the board writes the `lastActivityAt` of the topic filed first,
+ *   which makes it the one last active.
  * - `today`: today's runtime, with no label stored.
  * - `today-labeled`: today's runtime with `cfcFlowLabels` at `persist` and
  *   the same clauses on the topics and the inputs.
@@ -558,7 +561,16 @@ export type StorageStep = Step & {
    * changed outside the topic it wrote, and those among them whose stored
    * label lacks the clause of that topic.
    */
-  checked?: { positions: number; unsound: string[] };
+  checked?: {
+    positions: number;
+    unsound: string[];
+    /**
+     * The same check at the positions below those: each stored leaf that
+     * changed, read alone and not with what is beside it, and how many of
+     * them lack the clause, with the first eight.
+     */
+    leaves: { positions: number; lacking: number; first: string[] };
+  };
 };
 
 /** The numeric members of `after` that differ from `before`, as the difference. */
@@ -843,7 +855,7 @@ const runStorage = async (
       before: Map<string, string>,
       except: string,
       clause: unknown,
-    ): { positions: number; unsound: string[] } => {
+    ): NonNullable<StorageStep["checked"]> => {
       // A clause as text, with its alternatives in one order.
       const text = (held: unknown): string => {
         const alternatives = (held as { anyOf?: unknown[] } | null)?.anyOf;
@@ -856,6 +868,26 @@ const runStorage = async (
       const wanted = text(clause);
       const unsound: string[] = [];
       let positions = 0;
+      const leaves = { positions: 0, lacking: 0, first: [] as string[] };
+      // The paths of the leaves at which two stored values differ: a
+      // position that holds no container on either side.
+      const differing = (
+        was: unknown,
+        now: unknown,
+        at: string[],
+        found: string[][],
+      ): string[][] => {
+        const container = (held: unknown): held is Record<string, unknown> =>
+          typeof held === "object" && held !== null && !isLink(held);
+        if (container(was) && container(now)) {
+          for (
+            const name of new Set([...Object.keys(was), ...Object.keys(now)])
+          ) {
+            differing(was[name], now[name], [...at, name], found);
+          }
+        } else if (JSON.stringify(was) !== JSON.stringify(now)) found.push(at);
+        return found;
+      };
       const tx = runtime.edit();
       try {
         for (const [doc, value] of storage.stored()) {
@@ -873,8 +905,7 @@ const runStorage = async (
             ).map((name) => [name])
             : [[]];
           const metadata = readStoredCfcMetadata(tx, address(doc));
-          for (const path of paths) {
-            positions += 1;
+          const holdsAt = (path: string[]) => {
             const label = metadata === undefined
               ? undefined
               : labelForConsumedEntries(
@@ -885,9 +916,28 @@ const runStorage = async (
                 path,
                 false,
               );
-            const holds = (label?.confidentiality ?? []).some((held) =>
-              text(held) === wanted
-            );
+            return {
+              label,
+              holds: (label?.confidentiality ?? []).some((held) =>
+                text(held) === wanted
+              ),
+            };
+          };
+          for (const leaf of differing(was, value, [], [])) {
+            leaves.positions += 1;
+            if (holdsAt(leaf).holds) continue;
+            leaves.lacking += 1;
+            if (leaves.first.length < 8) {
+              leaves.first.push(
+                `${instance?.store.docs.get(doc)?.kind ?? "?"} /${
+                  leaf.join("/")
+                }`,
+              );
+            }
+          }
+          for (const path of paths) {
+            positions += 1;
+            const { label, holds } = holdsAt(path);
             if (!holds) {
               const kind = instance?.store.docs.get(doc)?.kind ?? "?";
               unsound.push(
@@ -901,7 +951,7 @@ const runStorage = async (
       } finally {
         tx.abort();
       }
-      return { positions, unsound };
+      return { positions, unsound, leaves };
     };
     let instance: Instance | undefined;
     const measure = async (
@@ -1034,6 +1084,31 @@ const runStorage = async (
           const tx = runtime.edit();
           recordRelevantSchemaWritePolicyInput(tx, address(doc), schema);
           diffAndUpdate(runtime, tx, address(doc, ["title"]), title);
+          runtime.prepareTxForCommit(tx);
+          const { error } = await tx.commit().settled;
+          if (error !== undefined) throw error;
+        },
+      });
+    }
+    if (Deno.env.get("SCALE_REORDER") !== undefined) {
+      // The topic filed first becomes the one last active: a writer
+      // outside the board writes its `lastActivityAt`, which moves its card
+      // to the first place on a board that orders its cards by activity,
+      // and every card before it one place down.
+      const doc = "topic-0";
+      const at = 2_000_000;
+      const schema = topicSchemaOf(0, audience);
+      await measure("reorder topic 0", () => {
+        instance!.store.write(new Ref(doc, ["lastActivityAt"]), at);
+        instance!.settle();
+      }, {
+        doc,
+        clause: (schema as { ifc: { confidentiality: unknown[] } }).ifc
+          .confidentiality[0],
+        write: async () => {
+          const tx = runtime.edit();
+          recordRelevantSchemaWritePolicyInput(tx, address(doc), schema);
+          diffAndUpdate(runtime, tx, address(doc, ["lastActivityAt"]), at);
           runtime.prepareTxForCommit(tx);
           const { error } = await tx.commit().settled;
           if (error !== undefined) throw error;
