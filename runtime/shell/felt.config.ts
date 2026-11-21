@@ -2,7 +2,7 @@ import type { Config } from "@commonfabric/felt";
 
 import ports from "@commonfabric/ports" with { type: "json" };
 
-import { fromFileUrl } from "@std/path";
+import { fromFileUrl, relative, resolve } from "@std/path";
 
 import {
   compileCacheVersionSourceOf,
@@ -31,6 +31,13 @@ const COMPILE_CACHE_RUNTIME_VERSION =
         fromFileUrl(new URL("../../", import.meta.url)),
       )
       : await computeCurrentCompilerVersion());
+
+// SPIKE(boardgame-trusted-components): a path to one built ES module that
+// defines custom elements from outside this repository. The shell bundles it
+// as `scripts/trusted-components` and loads it beside the `cf-*` set, so a
+// pattern's JSX can name those elements. Nothing decides who may set this: it
+// stands in for a user's policy admitting a component set.
+const SPIKE_TRUSTED_COMPONENTS = Deno.env.get("CF_SPIKE_TRUSTED_COMPONENTS");
 
 const SHELL_PORT = parseInt(
   Deno.env.get("SHELL_PORT") || String(ports.shell),
@@ -70,6 +77,13 @@ const config: Config = {
       // boot bundle. `index` above is a plain, unsplit bundle.
       splitting: true,
     },
+    ...(SPIKE_TRUSTED_COMPONENTS
+      ? [{
+        // An entry's path is joined to this directory, so it is made relative.
+        in: relative(Deno.cwd(), resolve(SPIKE_TRUSTED_COMPONENTS)),
+        out: "scripts/trusted-components",
+      }]
+      : []),
   ],
   outDir: "dist",
   hostname: "127.0.0.1",
@@ -101,6 +115,9 @@ const config: Config = {
       "$ENVIRONMENT": ENVIRONMENT,
       "$API_URL": Deno.env.get("API_URL"),
       "$COMMIT_SHA": Deno.env.get("COMMIT_SHA"),
+      "$SPIKE_TRUSTED_COMPONENTS": SPIKE_TRUSTED_COMPONENTS
+        ? "/scripts/trusted-components.js"
+        : undefined,
       "$EXPERIMENTAL_MODERN_CELL_REP": Deno.env.get(
         "EXPERIMENTAL_MODERN_CELL_REP",
       ),

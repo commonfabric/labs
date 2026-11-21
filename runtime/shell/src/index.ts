@@ -24,6 +24,7 @@ import { setupHostToggles } from "./lib/host-toggles.ts";
 import { handleLoomPairingLink } from "./lib/loom-pairing-login.ts";
 import { consumeLoomPairingFragment } from "./lib/loom-pairing.ts";
 
+import "./lib/spike-trusted-components.ts";
 import "./components/index.ts";
 import "./views/index.ts";
 
