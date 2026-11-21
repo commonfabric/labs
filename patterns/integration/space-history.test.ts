@@ -21,24 +21,28 @@ const waitForCounter = (page: Page, ordinal: string): Promise<void> =>
   );
 
 /**
- * Opens the history panel and returns the seq of the newest step it lists,
- * which is the point of history holding the space as it stands.
+ * Opens the history panel and returns the seq the newest step it lists began
+ * at. A step is named by where it began: its own seq is that of its last
+ * commit, which moves while the step is still growing.
  */
 async function newestStep(page: Page): Promise<string> {
   await page.evaluate("globalThis.app.setConfig('showHistoryView', true)");
-  const step = await page.waitForSelector(".step[data-seq]", {
+  const step = await page.waitForSelector(".step[data-start-seq]", {
     strategy: "pierce",
   });
-  const seq = await step.evaluate((el: Element) => el.getAttribute("data-seq"));
-  if (seq === null) throw new Error("the newest step names no seq");
+  const seq = await step.evaluate((el: Element) =>
+    el.getAttribute("data-start-seq")
+  );
+  if (seq === null) throw new Error("the newest step names no start");
   return seq;
 }
 
-/** Opens, in the history panel, the step whose seq is `seq`. */
-async function openStep(page: Page, seq: string): Promise<void> {
-  const step = await page.waitForSelector(`.step[data-seq="${seq}"]`, {
-    strategy: "pierce",
-  });
+/** Opens, in the history panel, the step that began at `startSeq`. */
+async function openStep(page: Page, startSeq: string): Promise<void> {
+  const step = await page.waitForSelector(
+    `.step[data-start-seq="${startSeq}"]`,
+    { strategy: "pierce" },
+  );
   await step.click();
 }
 
@@ -65,9 +69,9 @@ describe("space history", () => {
   /**
    * Creates a counter, opens it in the shell and increments it three times
    * from the page, opening the history panel after the first. Returns the
-   * page and the seq of the step that left the counter at one. The panel
-   * keeps the steps it has listed as the space moves on, so that step stays
-   * listed whichever side computes the space.
+   * page and the seq the step that left the counter at one began at. The
+   * panel keeps the steps it has listed as the space moves on, so that step
+   * stays listed whichever side computes the space.
    */
   async function openCountedToThree(): Promise<{ page: Page; first: string }> {
     const program = await resolveLocalProgram(
@@ -154,10 +158,10 @@ describe("space history", () => {
     // not the one it opened on is one it listed as the space moved on.
     const { page, first } = await openCountedToThree();
     await page.waitForSelector(
-      `ol > li:first-child > .step:not([data-seq="${first}"])`,
+      `ol > li:first-child > .step:not([data-start-seq="${first}"])`,
       { strategy: "pierce" },
     );
-    await page.waitForSelector(`.step[data-seq="${first}"]`, {
+    await page.waitForSelector(`.step[data-start-seq="${first}"]`, {
       strategy: "pierce",
     });
   });
