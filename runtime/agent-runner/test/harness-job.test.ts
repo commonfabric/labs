@@ -186,6 +186,18 @@ describe("runHarnessJob()", () => {
       return loopResult(runRoot);
     };
 
+  it("throws before preparing a workspace when the spec asks for progress with nowhere to publish it", async () => {
+    await expect(
+      runHarnessJob(plainSpec({ progress: true }), {
+        runRoot,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("Progress requires a host publication channel");
+    await expect(Deno.stat(join(runRoot, "workspace"))).rejects.toThrow(
+      Deno.errors.NotFound,
+    );
+  });
+
   for (const progress of [false, true]) {
     it(`offers milestone reporting only when opted in: ${progress}`, async () => {
       const messages: string[] = [];
@@ -766,6 +778,23 @@ describe("runHarnessJob()", () => {
           "submit_result",
         ]);
       }
+    });
+
+    it("says a job's published patterns are made for a person only when the spec says so", async () => {
+      const { seen } = await runScripted(
+        plainSpec({
+          tools: ["run_pattern"],
+          fabric: localFabric(),
+          patternIndexUrl: "https://index.example",
+          patternIndexOrigin: "agent",
+        }),
+        answering("Titan"),
+      );
+      expect(seen.loopOptions?.engine?.config.patternIndex).toEqual({
+        baseUrl: "https://index.example",
+        origin: "agent",
+      });
+      expect(seen.loopOptions?.engine?.patternIndexOrigin).toBe("agent");
     });
 
     it("configures no pattern index for a spec that names none", async () => {

@@ -162,10 +162,10 @@ describe.
   them needs each destination to tell the transaction when its last effect is
   retired or dropped. It is a transaction with an external request in it, so a
   Topic create leaves none.
-- `deepFrozenCache` is a `WeakSet`, and the charge the tools gave it was the
-  weak set's own table, which V8 sizes by the peak number of live frozen
-  objects; it fell to nothing once the transactions above were released, since
-  what they kept was frozen documents. The entry is kept here because the
+- `deepFrozenCache` is a set of `WeakSet` generations, and the charge the
+  tools gave it was their own tables, which V8 sizes by the peak number of
+  live frozen objects each holds; it fell to nothing once the transactions
+  above were released, since what they kept was frozen documents. The entry is kept here because the
   charge will come back with any holder that keeps frozen values, and it names
   the holder, not the cache.
 - The read logs of the active computations, about 42 KB, which grow with the

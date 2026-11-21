@@ -114,7 +114,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/debug-strings.tsx#default"
+            "sha256:92ee08b058c6de2e7972f06d6435b52675648d362786c84aa8833122c1b95c8e"
           ],
           "picks": [],
           "selectors": [],

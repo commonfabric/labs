@@ -21,11 +21,11 @@
                     "site"
                   ],
                   "place": {
-                    "slot": 11
+                    "slot": 10
                   },
                   "template": {
                     "op": "slot",
-                    "slot": 11
+                    "slot": 10
                   }
                 }
               ],
@@ -73,7 +73,7 @@
                   "at": [
                     "title"
                   ],
-                  "slot": 7
+                  "slot": 4
                 }
               ],
               "widenings": [],
@@ -102,7 +102,7 @@
                     "result",
                     "title"
                   ],
-                  "slot": 7
+                  "slot": 4
                 }
               ],
               "widenings": [],
@@ -145,14 +145,14 @@
                     "event",
                     "to"
                   ],
-                  "slot": 9
+                  "slot": 8
                 },
                 {
                   "at": [
                     "binding",
                     "site"
                   ],
-                  "slot": 10
+                  "slot": 9
                 }
               ],
               "widenings": [],
@@ -163,7 +163,7 @@
                   "target": {
                     "kind": "handle",
                     "path": [],
-                    "slot": 10
+                    "slot": 9
                   },
                   "template": {
                     "by": {
@@ -172,11 +172,11 @@
                     "inputs": [
                       {
                         "op": "slot",
-                        "slot": 9
+                        "slot": 8
                       },
                       {
                         "op": "slot",
-                        "slot": 10
+                        "slot": 9
                       }
                     ],
                     "op": "derive"
@@ -198,14 +198,14 @@
                     "event",
                     "id"
                   ],
-                  "slot": 12
+                  "slot": 11
                 },
                 {
                   "at": [
                     "binding",
                     "payload"
                   ],
-                  "slot": 13
+                  "slot": 12
                 }
               ],
               "widenings": [],
@@ -216,7 +216,7 @@
                   "target": {
                     "kind": "handle",
                     "path": [],
-                    "slot": 13
+                    "slot": 12
                   },
                   "template": {
                     "by": {
@@ -225,11 +225,11 @@
                     "inputs": [
                       {
                         "op": "slot",
-                        "slot": 12
+                        "slot": 11
                       },
                       {
                         "op": "slot",
-                        "slot": 13
+                        "slot": 12
                       }
                     ],
                     "op": "derive"
@@ -403,7 +403,7 @@
               "selectors": [],
               "slots": [
                 2,
-                7
+                4
               ],
               "within": [],
               "writes": []
@@ -421,7 +421,7 @@
               "selectors": [],
               "slots": [
                 2,
-                7
+                4
               ],
               "within": [],
               "writes": []
@@ -470,7 +470,7 @@
                 3
               ],
               "slots": [
-                8
+                7
               ],
               "within": [],
               "writes": []
@@ -485,7 +485,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                14
+                13
               ],
               "within": [],
               "writes": []
@@ -681,7 +681,7 @@
                   },
                   {
                     "op": "slot",
-                    "slot": 7
+                    "slot": 4
                   }
                 ],
                 "op": "derive"
@@ -705,7 +705,7 @@
                   },
                   {
                     "op": "slot",
-                    "slot": 7
+                    "slot": 4
                   }
                 ],
                 "op": "derive"
@@ -729,7 +729,7 @@
                 ],
                 "condition": {
                   "op": "slot",
-                  "slot": 8
+                  "slot": 7
                 },
                 "op": "select",
                 "selector": 3
@@ -744,12 +744,12 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 14
+                "slot": 13
               }
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/effects.tsx#default"
+            "sha256:22c5d8f1988ae5af097acdeaf3217d2e5eb5ba029bb81493c8936f77efdf7958"
           ],
           "picks": [],
           "selectors": [
@@ -805,7 +805,7 @@
               }
             },
             {
-              "observes": "identity",
+              "observes": "value",
               "path": [
                 "result",
                 "title"
@@ -829,17 +829,6 @@
               "observes": "value",
               "path": [
                 "error"
-              ],
-              "root": {
-                "kind": "operation",
-                "operation": 0
-              }
-            },
-            {
-              "observes": "value",
-              "path": [
-                "result",
-                "title"
               ],
               "root": {
                 "kind": "operation",

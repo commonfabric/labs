@@ -12,7 +12,8 @@ import {
 export interface RouteContext {
   path: string;
   params: Record<string, string>;
-  query: Record<string, string>;
+  // A query parameter the URL leaves out is absent, so a reader can fall back.
+  query: Partial<Record<string, string>>;
 }
 
 interface Route {

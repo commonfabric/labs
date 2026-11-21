@@ -1507,17 +1507,22 @@ numbers have gaps.
      §1.5, §3.2 "The atom of the pattern"). `Plan.patterns` lists the pattern
      the plan is compiled from and each pattern compiled in, in the order of its
      first site. A `derive` by expression code and a `fold` hold `pattern` where
-     the pattern is not entry 0. PL has the hash of `{ module, binding }` as an
-     entry, with the module's identity in it. The crate has neither, so an entry
-     is the placeholder `unhashed:pattern/`, the path of the module, `#`, and
-     the binding: `unhashed:pattern/row.tsx#default`. For an inline
-     `pattern(...)` that no `const` names, PL forms the binding from the
-     enclosing pattern's, the `within` steps and the name of the site. The crate
-     writes the enclosing binding, `/`, and the line and column of the inline
-     pattern, which names the same pattern and is not PL's form. The emitter
-     makes a `derive` and a `fold` in functions that hold no emitter state, so
-     the pattern being evaluated is a thread-local that the evaluation of a
-     compiled-in pattern sets.
+     the pattern is not entry 0. An entry is the hash of `{ module, binding }`,
+     as PL §1.5 has it (`pattern_identity` in `src/plan.rs`): `module` is the
+     content-addressed identity of the module the `pattern(...)` call is written
+     in, formed from its path, its source text and the identities of the modules
+     it imports, an import cycle as one (`module_identity` in `src/program.rs`),
+     and `binding` the steps of the pattern's binding. The hash is SHA-256 over
+     the JSON text of the record, written `sha256:` and hex; the runtime's value
+     hasher has no Rust implementation, so it is not the string
+     `computeModuleHashes` forms. For an inline `pattern(...)` that no `const`
+     names, PL forms the binding from the enclosing pattern's, the `within`
+     steps and the name of the site. The crate writes the enclosing binding and
+     the line and column of the inline pattern as the last step, which names the
+     same pattern and is not PL's form. The emitter makes a `derive` and a
+     `fold` in functions that hold no emitter state, so the pattern being
+     evaluated is a thread-local that the evaluation of a compiled-in pattern
+     sets.
 209. **The atom of a kept output in the comparison** (PL §3.1 "An atom that
      names code", §3.2 "Every kept output"; closes notes 202 and 197's
      `isEdited` row). The evaluator mints the atom of the pattern for expression
@@ -2909,9 +2914,10 @@ numbers have gaps.
        that runs, with source maps. The crate's output is the plan: the records,
        the label templates, and the schemas. An emitter of value code will add
        time that is not in the crate's figure.
-     - The crate forms no hash. A plan names its schemas, bodies and patterns
-       `unhashed:…`. Today's figure includes the content identity of every
-       module.
+     - The crate forms no hash of a schema: a plan names its schemas
+       `unhashed:schema/` and a number. It forms the identity of every module
+       and pattern (note 208), as today's figure includes the content identity
+       of every module.
      - The crate's type checker is its own and does less than TypeScript's: it
        does not check a generic function per instantiation, and it applies
        assignability at four kinds of site (README, "What it does not cover").
@@ -6449,10 +6455,10 @@ pin.
      makes; and `stream:`, the instance, `:` and the binding. The lists of keys
      in these are written with the prototype's `canonical`, a JSON text with
      sorted members, and not with the codec. In the crate: `unhashed:schema/`
-     and a number, `unhashed:pattern/`, the path, `#` and the binding, the steps
-     of a binding joined with `/`, a line and a column joined with `:`, the name
-     of a record with `#` and an ordinal, and `/` before the sidecar of
-     `$ofOperation`. The first two stand where the documents have a hash.
+     and a number, which stands where the documents have a hash, a pattern's
+     identity as note 208 forms it, a line and a column joined with `:` for the
+     step of an inline pattern, the name of a record with `#` and an ordinal,
+     and `/` before the sidecar of `$ofOperation`.
 441. **Z50: an `asInstance()` instance that a re-key replaces** (answers the
      request of note 426). The executor did this already, and one test on
      `fixtures/as-instance.tsx` pins it: over an array of plain values in place
@@ -6809,17 +6815,14 @@ result of another per-element construct.
      into a cause, and `compare/values.ts`, `compare/harness.ts` and
      `compare/corpus.ts` write a name of several parts into a report as the text
      of the codec (`nameText` in `exec/store.ts`). Not converted:
-     `unhashed:schema/` and a number and `unhashed:pattern/` with the path, `#`
-     and the binding stand where the documents have a hash, which the crate
-     cannot form, since the value hasher has no implementation in Rust in this
-     tree; a record in their place would change every reader for a form the
-     documents do not have either. Inside the second, the steps of a binding are
-     joined with `/` and a line and a column with `:`. A state cell that a site
-     of a body creates under a constant cause is named `{ body, site }`, where
-     PL §1.1 has `{ body, cause }`: the crate records the site and not the
-     cause. The `site` step of a `within` holds the name of its call as a
-     string, and whether two calls of one name in one body get an ordinal there
-     was not examined.
+     `unhashed:schema/` and a number stands where the documents have the hash of
+     a schema, which the crate does not form, since the value hasher has no
+     implementation in Rust in this tree. A pattern's identity is a hash the
+     crate forms (note 208). A state cell that a site of a body creates under a
+     constant cause is named `{ body, site }`, where PL §1.1 has
+     `{ body, cause }`: the crate records the site and not the cause. The `site`
+     step of a `within` holds the name of its call as a string, and whether two
+     calls of one name in one body get an ordinal there was not examined.
 456. **The key fields reach a reader that is compiled in by every way**
      (replaces the limit of note 434). The crate notes the key fields of a
      computed value wherever an expression of a type that declares them denotes
@@ -6897,7 +6900,7 @@ result of another per-element construct.
      the test of the result of another per-element construct given to an
      instance passed when they were written and pin what existed. The names of
      the memo have no test of their own. Not done: the secret is still a string
-     that the store holds and not a labeled document; the `unhashed:`
+     that the store holds and not a labeled document; the `unhashed:schema/`
      identifiers of the crate; and the cost measurement and the comparison of
      labels over the corpus. Not verified: nothing of rulings Z54 to Z57 is
      compared with today's runtime, which has neither `ArrayByKey` nor
@@ -9352,3 +9355,20 @@ generated from scratch, and none of a `flatMap`.
      undone in the part documents as in the store, with no test of its own; a
      part document or a chunk under concurrent writers, which the executor does
      not have.
+536. **W6 over a value whose type declares no structure** (FA §5.2). FA states
+     W6 by type: a path that enters a recursive type a second time widens below
+     the position of the second entry. A body that walks a value of type
+     `unknown` through helpers, as `patterns/apps/weekly-calendar/view-walk.ts`
+     walks a view, reaches no type that says where it re-enters, and recorded
+     every interleaving of `children` and `*` its composed calls reach
+     (`headerOf`: 28,799 read entries). Chosen, and needing a rule in FA: a path
+     widens, as below a second entry, where it ends in a sequence of segments
+     repeated at once that holds a key, or in three `*` at once (`square_end` in
+     `src/footprint.rs`), and where a key is read again on a value whose type
+     declares no structure for it, which is no type, `unknown`, or an object
+     type with an index signature (`holds_key`). The entry is `value` at the
+     position, without a last `*`. On a declared recursive type W6 by type
+     decides first. Both rules are wider than W6 and never narrower: a path
+     through no recursive type that repeats a sequence with a key, or that holds
+     three `*` at once, widens where W6 does not. Over the corpus no plan
+     changed; `headerOf` records 45 entries.

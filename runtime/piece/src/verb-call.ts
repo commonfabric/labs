@@ -19,9 +19,11 @@ import {
   type EventAppendDeliveryOutcome,
   type IExtendedStorageTransaction,
   isStream,
+  isWithheldDelivery,
   type NormalizedFullLink,
   type Runtime,
   sendEvent,
+  startWithInputSources,
   transactionFailureMessage,
 } from "@commonfabric/runner";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -111,9 +113,14 @@ export interface VerbEventCommitted {
   /**
    * Waits for the handling itself to land — under server execution the
    * served handling's consequence, otherwise the commit already in hand — and
-   * returns its failure, if it failed there.
+   * returns its failure, if it failed there, or `withheld` for a handling
+   * whose outcome is withheld: one that read data its stream's space doesn't
+   * admit, which reports the same thing whether it committed or not
+   * (`isWithheldDelivery()`).
    */
-  handled(): Promise<{ status: "handled" } | VerbHandlingFailed>;
+  handled(): Promise<
+    { status: "handled" } | { status: "withheld" } | VerbHandlingFailed
+  >;
 }
 
 const defaultTime = <T>(
@@ -249,6 +256,7 @@ export async function sendVerbEvent(
       ) {
         return { status: "failed", error: handledStatus.error };
       }
+      if (isWithheldDelivery(handledTx)) return { status: "withheld" };
       return { status: "handled" };
     },
   };
@@ -289,6 +297,10 @@ export type VerbCall =
   | { status: "refused"; message: string }
   /** Sent, and the handling failed: nothing it wrote was kept. */
   | { status: "failed"; message: string }
+  /** Sent, and the handling's outcome is withheld: it read data its stream's
+   * space doesn't admit, so whether it committed, and what it returned, is
+   * not told. */
+  | { status: "withheld"; message: string }
   | VerbCallSettled;
 
 /** A call whose handling landed. */
@@ -351,8 +363,9 @@ const isValueLessReceipt = (raw: unknown): boolean =>
  * converts to the link the verb stores. A name that is not a verb, and an
  * event the gate refuses, are refused before anything is sent.
  *
- * The piece is started in `runtime` if it is not running, and the handling
- * runs there. With an `invocation`, a retry naming the same pair settles on
+ * The piece is started in `runtime` if it is not running, after the pieces
+ * that enclose it (`startWithInputSources()`), and the handling runs
+ * there. With an `invocation`, a retry naming the same pair settles on
  * the original outcome rather than committing twice.
  */
 export async function callVerb(
@@ -360,7 +373,7 @@ export async function callVerb(
   piece: NormalizedFullLink,
   verb: string,
   event: unknown,
-  options: { invocation?: VerbInvocation } = {},
+  options: Pick<SendVerbEventOptions, "invocation" | "sendEvent"> = {},
 ): Promise<VerbCall> {
   const cell = runtime.getCellFromLink({ ...piece, schema: undefined });
   let pattern: Pattern;
@@ -396,7 +409,7 @@ export async function callVerb(
     };
   }
 
-  if (!await runtime.start(cell)) {
+  if (!await startWithInputSources(runtime, cell, () => runtime.start(cell))) {
     return {
       status: "refused",
       message:
@@ -427,6 +440,14 @@ export async function callVerb(
       status: "failed",
       message: `the handler for "${verb}" failed, and nothing it wrote was ` +
         `kept: ${transactionFailureMessage(handling.error)}`,
+    };
+  }
+  // Its receipt may never have been written, and is not read.
+  if (handling.status === "withheld") {
+    return {
+      status: "withheld",
+      message: `the event for "${verb}" was handled, and its outcome is ` +
+        "withheld: the handler read data this space does not admit",
     };
   }
   const committed = sent as VerbEventCommitted;

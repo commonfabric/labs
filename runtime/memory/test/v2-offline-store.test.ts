@@ -94,6 +94,13 @@ describe("offline-store", () => {
       expect(preflight).toThrow(`${store}-journal is not empty`);
     });
 
+    it("rethrows what SQLite raises taking the lock on a file that is not a database", () => {
+      Deno.writeTextFileSync(store, "not a database ".repeat(64));
+
+      expect(preflight).toThrow("file is not a database");
+      expect(() => preflight()).not.toThrow(Refused);
+    });
+
     it("refuses a missing store, and a result path that exists", () => {
       expect(preflight).toThrow(`no store at ${store}`);
       write("delete");
@@ -158,6 +165,22 @@ describe("offline-store", () => {
 
       expect(() => checkRewrittenStore(db)).toThrow(
         "PRAGMA foreign_key_check reports 1 violation(s)",
+      );
+    });
+
+    it("refuses a store whose index does not match its table, naming each fault", () => {
+      write("wal");
+      const db = new Database(store);
+      db.exec(`CREATE INDEX tx ON t (x); INSERT INTO t VALUES (2)`);
+      db.exec("PRAGMA writable_schema = ON");
+      db.exec(
+        `UPDATE sqlite_schema SET sql = 'CREATE INDEX tx ON t (-x)' WHERE name = 'tx'`,
+      );
+      // The edited schema reaches only the connections opened after it.
+      db.close();
+
+      expect(() => checkRewrittenStore(hold())).toThrow(
+        "PRAGMA integrity_check: row 1 missing from index tx; row 2 missing from index tx",
       );
     });
   });

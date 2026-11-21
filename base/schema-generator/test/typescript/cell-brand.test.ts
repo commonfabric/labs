@@ -1,10 +1,13 @@
 import { assertEquals, assertExists } from "@std/assert";
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 import ts from "typescript";
 
 import {
   getCellBrand,
   getCellWrapperInfo,
 } from "../../src/typescript/cell-brand.ts";
+import { createTestProgram } from "../utils.ts";
 
 function createProgram(source: string): {
   checker: ts.TypeChecker;
@@ -103,7 +106,8 @@ Deno.test("getCellWrapperInfo handles unions containing branded cells", () => {
 
 Deno.test("getCellBrand ignores synthetic brand properties", () => {
   const source = `
-    type SyntheticBrand = { [Key in "CELL_BRAND"]: "cell" };
+    declare const CELL_BRAND: unique symbol;
+    type SyntheticBrand = { [Key in typeof CELL_BRAND]: "cell" };
 
     interface Schema {
       value: SyntheticBrand;
@@ -113,10 +117,75 @@ Deno.test("getCellBrand ignores synthetic brand properties", () => {
   const { checker, sourceFile } = createProgram(source);
   const type = getPropertyType(checker, sourceFile, "Schema", "value");
   const brand = checker.getPropertiesOfType(type).find((property) =>
-    property.getName() === "CELL_BRAND"
+    property.getName().startsWith("__@CELL_BRAND")
   );
 
   assertExists(brand);
   assertEquals(brand.getDeclarations(), undefined);
   assertEquals(getCellBrand(type, checker), undefined);
+});
+
+describe("cell-brand", () => {
+  /** The type of each member of the interface `Probes` in `code`, by name. */
+  async function probes(code: string) {
+    const { checker, sourceFile } = await createTestProgram(code);
+    const probe = sourceFile.statements.find((
+      statement,
+    ): statement is ts.InterfaceDeclaration =>
+      ts.isInterfaceDeclaration(statement) && statement.name.text === "Probes"
+    )!;
+    const types = new Map<string, ts.Type>();
+    for (const member of probe.members.filter(ts.isPropertySignature)) {
+      types.set(
+        member.name.getText(),
+        checker.getTypeFromTypeNode(member.type!),
+      );
+    }
+    return { checker, types };
+  }
+
+  describe("getCellBrand()", () => {
+    it("returns the brand of a member keyed by a `CELL_BRAND` that is a string", async () => {
+      // The member's name is the string, which names no cell marker; the
+      // computed key it is declared with says it is the brand.
+      const { checker, types } = await probes(`
+        export {};
+        declare const CELL_BRAND: "brand";
+        interface Keyed<T> { readonly [CELL_BRAND]: "cell"; value: T }
+        interface Named<T> { readonly brand: "cell"; value: T }
+        interface Probes { keyed: Keyed<number>; named: Named<number> }
+      `);
+
+      expect(getCellBrand(types.get("keyed")!, checker)).toBe("cell");
+      expect(getCellBrand(types.get("named")!, checker)).toBeUndefined();
+    });
+
+    it("returns `undefined` for a member whose string key is `CELL_BRAND`", async () => {
+      const { checker, types } = await probes(`
+        interface Plain<T> { readonly CELL_BRAND: "cell"; value: T }
+        interface Probes { plain: Plain<number>; cell: Cell<number> }
+      `);
+
+      expect(getCellBrand(types.get("plain")!, checker)).toBeUndefined();
+      expect(getCellBrand(types.get("cell")!, checker)).toBe("cell");
+    });
+  });
+
+  describe("getCellWrapperInfo()", () => {
+    it("returns `undefined` for a cell whose brand names no wrapper", async () => {
+      const { checker, types } = await probes(`
+        interface Odd<T> extends BrandedCell<T, "odd"> {}
+        interface Probes { odd: Odd<number>; cell: Cell<number> }
+      `);
+
+      expect(getCellBrand(types.get("odd")!, checker)).toBe("odd");
+      // An info holds checker types, which `expect` takes too long to print
+      // in a failure, so the case tests for its absence as a boolean.
+      expect(getCellWrapperInfo(types.get("odd")!, checker) === undefined)
+        .toBe(true);
+      expect(getCellWrapperInfo(types.get("cell")!, checker)?.kind).toBe(
+        "Cell",
+      );
+    });
+  });
 });

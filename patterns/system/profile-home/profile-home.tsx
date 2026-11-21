@@ -630,7 +630,7 @@ const appendElement = (
 // the per-row remove) must be an INSTANCE of this one implementation.
 // Instances differ only in bound state — including the explicit `mode`
 // below — which doesn't change the implementation identity.
-const mutateElements = handler<
+export const mutateElements = handler<
   MutateProfileElementsEvent,
   {
     elements: Writable<ProfileElement[]>;
@@ -962,7 +962,10 @@ function normalizeVerifiedAt(value: string): string | undefined {
     : undefined;
 }
 
-function isCanonicalVerifiedIdentity(
+/** Whether `identity` is in the canonical form a profile collects: a trimmed,
+ * lowercase type, a non-empty trimmed value, and a `verifiedAt` naming a real
+ * instant, written in the UTC form `Date#toISOString()` gives. */
+export function isCanonicalVerifiedIdentity(
   identity: ExternalIdentityAssertion,
 ): boolean {
   const type = identity.type;

@@ -2,8 +2,13 @@
 
 This directory contains self‑contained TypeScript projects that measure how
 expensive particular exported types from `base/api/index.ts` are to check. Each
-scenario lives in its own `.ts` file with a matching `tsconfig.*.json` so that
-we can profile the types independently.
+scenario lives in its own `.ts` file under `fixtures/`, with a matching
+`tsconfig.*.json` in this directory, so that we can profile the types
+independently. The scenarios are compiler input: nothing runs them.
+
+The package's tests compile the empty control case through `run-benchmarks.ts`
+(`base/api/test/perf/run-benchmarks.test.ts`), which is what keeps the harness
+usable between profiling sessions.
 
 `run-tsc.ts` resolves the TypeScript version from `base/api/deno.jsonc`, so the
 harness uses the same compiler pin as the runtime packages. Follow the

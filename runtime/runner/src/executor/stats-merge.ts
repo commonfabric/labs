@@ -49,6 +49,7 @@ const RULES: Readonly<Record<string, Rule>> = {
   "workers.spare": "level",
   "workers.parked": "level",
   "workers.heapUsed": "level",
+  "workers.heapStopped": "level",
 };
 
 /**

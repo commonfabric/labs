@@ -574,11 +574,11 @@ structure tree lists sections with the keys and hosts in each.
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each
-row. Other bytes use the same control-picture glyphs as the pager's
-non-printable display mode. Use `--language binary` or its `bytes` alias to
-select it explicitly for piped input. Interactive views retain at most 256 KiB
-and report the omitted byte count when the complete size is known. Use `--plain`
-to stream the complete dump without building it in memory.
+row. Other bytes use the same control-picture glyphs as the pager's pictures
+mode. Use `--language binary` or its `bytes` alias to select it explicitly for
+piped input. Interactive views retain at most 256 KiB and report the omitted
+byte count when the complete size is known. Use `--plain` to stream the complete
+dump without building it in memory.
 
 Each language selects how bytes are decoded. Text languages currently require
 valid UTF-8. The binary language keeps each raw byte unchanged. An explicit
@@ -612,21 +612,33 @@ button activates that button. Releasing it anywhere else, or pressing a key
 first, lets go of the button without activating it. Printable keys enter text
 while a filter is active.
 
-Some dialogs also hold check boxes and input lines, drawn as Turbo Vision draws
-them. Tab and Shift-Tab, like the navigation keys, move the focus through those
-first and then through the buttons. Space toggles the focused check box, and so
-does a click on it. Moving the focus to an input line selects its text, so that
-typing replaces it. While an input line is focused, every key but Tab,
-Shift-Tab, Enter, Escape, and Alt with a letter goes to it: typed text goes in,
-Backspace and Delete (or Ctrl-D) delete a character, Alt-Backspace deletes the
-word before the cursor, and Left, Right, Home, and End (or Ctrl-B, Ctrl-F,
-Ctrl-A, and Ctrl-E) move its cursor. A click on an input line puts its cursor
-where the click lands, and a click on its label selects its text. An arrow at
-either end of the line says that its text runs on past that end. A check box's
-highlighted letter toggles it, an input line's moves the focus to it, and a
-button's activates it; while an input line is focused, Alt with the letter does.
-Enter activates the default button wherever the focus is, unless it is on
-another button.
+Some dialogs also hold check boxes, radio buttons, and input lines, drawn as
+Turbo Vision draws them. On a screen too short for all of a dialog's fields, its
+buttons stay in view and its fields scroll to show the focused one. Tab and
+Shift-Tab, like the navigation keys, move the focus through those first and then
+through the buttons. Space toggles the focused check box, and so does a click on
+it. Moving the focus to an input line selects its text, so that typing replaces
+it. While an input line is focused, every key but Tab, Shift-Tab, Enter, Escape,
+and Alt with a shortcut letter goes to it: typed text goes in, Backspace and
+Delete (or Ctrl-D) delete a character, Alt-Backspace deletes the word before the
+cursor, and Left, Right, Home, and End (or Ctrl-B, Ctrl-F, Ctrl-A, and Ctrl-E)
+move its cursor. A click on an input line puts its cursor where the click lands,
+and a click on its label selects its text. An arrow at either end of the line
+says that its text runs on past that end. A check box's highlighted letter
+toggles it, an input line's moves the focus to it, a radio button's selects it
+and moves the focus to its set, and a button's activates it. Alt with the letter
+does the same wherever the focus is, including on an input line or among radio
+buttons. Alt with a letter that is no control's shortcut types into a focused
+input line the character the terminal says it typed, if any, and otherwise does
+nothing. Enter activates the default button wherever the focus is, unless it is
+on another button.
+
+While a dialog is up, the viewer asks the terminal to report every key in full,
+as the kitty keyboard protocol defines. In that mode, iTerm2 reports Option with
+a letter as Alt with that letter even when its Option key is set to "Normal",
+which otherwise types characters such as `ß`. A terminal without the protocol
+reports Alt only when its Option key is set to send Escape first, which iTerm2
+calls "Esc+" and Terminal calls "Use Option as Meta key".
 
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
@@ -687,46 +699,167 @@ positions, and hunk expansion remain in place.
 Press `P` to push the branch checked out in the repository the viewer runs in,
 as it stands, to the branch of the same name on `origin`. The push is forced,
 but fails rather than discard commits on `origin` that the branch has never
-included, even when they have been fetched. A dialog shows git's output as it
-arrives, with an Abort button that stops the push. When the push ends, the
-dialog adds how it ended, and two buttons replace Abort. Close leaves that
-summary in the status line. Quit (`Q`) closes the viewer, first offering to save
-any unsaved edits. When the server's reply offers a page for creating a pull
-request, the viewer opens it in the browser. Git asks nothing on the terminal
-while the viewer holds it; a question such as a key's passphrase goes to the
-program `SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
-`origin`'s default branch, and refuses when `origin` names no default branch
+included, even when they have been fetched. A dialog says which branch it pushes
+where, then shows git's output as it arrives, with an Abort button that stops
+the push. Up, Down, Page Up, Page Down, Home, End, and the mouse wheel scroll
+the output, and Left and Right move the focus between the buttons. When the push
+ends, the dialog adds how it ended, and two buttons replace Abort. Close leaves
+that summary in the status line. Quit (`Q`) closes the viewer, first offering to
+save any unsaved edits. Git asks nothing on the terminal while the viewer holds
+it; a question such as a key's passphrase goes to the program `SSH_ASKPASS`
+names, and fails when it names none. `P` refuses to push `origin`'s default
+branch, and refuses when `origin` names no default branch
 (`git remote set-head origin --auto` finds it). It also refuses a checkout not
 on a branch, and refuses when git started the viewer as its pager for a
 different repository.
 
-Press `O` to open the settings dialog. Its check box, "Quit when the pushed
-branch's pull request opens", has the viewer watch the GitHub webhook relay
-while the push dialog is up. The relay passes on each delivery of the
-organization's GitHub webhook as it arrives, and keeps none for a subscriber
-that was not connected; `github-webhook-relay/README.md` in the infra repository
-describes it. The dialog's input line holds the `host:port` of the relay's
-subscriber listener. When the push succeeds and the server offers a page for
-creating a pull request, the viewer connects to the relay, and opens the page
-once it has connected or failed to. While it connects, Abort, or an interrupt,
-gives up on the connection and opens the page. When a delivery reports that a
-pull request was opened from the pushed branch, at the pushed commit, in the
-GitHub repository that `origin` names, the viewer closes the push dialog and
-quits as Quit does. Once the screen is restored, it prints the pull request's
-address on the terminal. The address is printed only when the viewer quit for
-it, so a quit after cancelling the save prompt it raised prints nothing. With
-the check box on, the push dialog says under git's output whether the viewer is
-connecting or watching, or why it is not watching: no relay is set, `origin` is
-not on GitHub, or the connection failed or ended. Closing the push dialog stops
-the watch.
+The push and land dialogs draw what the viewer says in bright text, and the
+names it mentions, such as a branch, a repository, a commit, or a pull request's
+number, in a second bright color, with a blank line between paragraphs. Each
+line that says what the viewer is doing, such as "Pushing feature to origin...",
+ends in three dots, and the latest step still running also has a spinner after
+them. A line that waits for someone, as the request to touch a security key and
+the wait for a pull request to open or merge do, has neither. Once a step ends,
+it shows a check mark, or a cross when it failed or was aborted; when a step
+fails inside another, such as the touch of a security key while a pull request
+is created, only the step that failed shows the cross. Git's output, the reason
+GitHub gives for refusing a request, and the message touch-gate gives when it
+creates a pull request without naming it are quoted: indented two columns, in
+the dialog's ordinary color. When color is on, each web address and pull request
+number in the dialog is a link for terminals that open links.
 
-The viewer keeps these settings in git's configuration, as the boolean
-`cf-view.quitOnPullRequest` and the string `cf-view.webhookRelay`, so the
-`git config` command can set them too. OK saves each setting that differs from
-what the dialog opened showing. It saves it in the configuration file that git
-read the setting's value from, which may be a file another one includes, so that
-git then reads the new value. A value read from the machine's own configuration
-file, or set nowhere, is saved in the user's global configuration file instead.
+When `origin` already has the branch, as git last fetched or pushed it, the
+dialog asks before pushing. It says which commit `origin`'s branch is at, and
+what pushing would do to it: add commits, replace it, removing the commits that
+the checkout does not have, or leave it as it is. In a shallow checkout, whose
+history git cannot count to the end, it says so in place of the counts. It also
+gives the number and address of the pull request open from the branch, which it
+looks for as `L` does, below, or says that there is none, or why it could not
+look; Abort stops that search, and the dialog asks without it. Push (`u`) then
+pushes, its output following the question, and Cancel takes the dialog down. No
+button is the default, so Enter does nothing until a button has the focus, and
+pressing `P` again does not push.
+
+When git fails to push or is aborted, as it can when the network is unreliable,
+a Retry push button (`P`) pushes again, unless git says the push was rejected,
+or GitHub says the account has no permission to push, which pushing again cannot
+change. Each later push's output follows the earlier one's in the same dialog.
+
+Once the push succeeds, the settings say what happens next, and the radio
+buttons under "Pull requests" choose one of the four ways below. The first and
+the third act on the page for creating a pull request that the server's reply
+may offer, which GitHub does when the branch has new commits and no open pull
+request. The second and the fourth create the pull request after any push that
+succeeds, including one that had nothing new to push, unless the branch already
+has an open pull request, which they look for as `L` does, below. The pull
+request goes to the GitHub repository of the remote named `upstream`, `github`,
+or `origin`, whichever is the first to name one, and merges into that remote's
+default branch, from the branch on `origin`. Its title and description are the
+subject and the rest of the message of the branch's oldest commit that the
+default branch, as last fetched, does not have, leaving out merges and commits
+whose changes that branch already has.
+
+- "Just push, and link to them": the summary gives the page's address, which the
+  status line makes a link for terminals that open links.
+- "Use the GitHub API": the viewer creates the pull request with GitHub's REST
+  API, using `GH_TOKEN`, `GITHUB_TOKEN`, or else the token `gh auth token`
+  prints.
+- "Show them in the browser", the default: the viewer opens the page in the
+  browser.
+- "Use touch-gate and a security key": the viewer asks a touch-gate server to
+  create the pull request with the token the settings name. The dialog asks for
+  the named security key to be touched, as "Touch the “carthusian” security key
+  to create a PR.", and the server acts only once it is. As soon as the security
+  key is touched, that step is done, and the dialog shows a step that sends the
+  server the approval. When a security key fails, the summary says what
+  libfido2's error means, as "the security key stopped answering", followed by
+  the tool and the error's name, or else gives what the tool printed. The
+  server's address, its certificate, the secret its clients share, and the
+  registered security keys come from `~/.config/touch-gate`, as the touch-gate
+  project's client keeps them, and the viewer talks to the security key through
+  libfido2's `fido2-token` and `fido2-assert` tools.
+
+When creating the pull request with the GitHub API or touch-gate fails, or is
+aborted, the dialog says what went wrong, and a Create PR button (`P`) tries
+again, with the settings as they are then, its output following the failed
+attempt's. Trying again looks for an open pull request first, in case the failed
+attempt created one.
+
+When GitHub refuses a creation or a merge, whether the viewer asked it directly
+or through touch-gate, the summary gives GitHub's status and the message its
+reply gives, as "GitHub answered 405: Merge already in progress". The button
+that tries again is left out when the status says the request itself cannot
+succeed: 404 (not found), 405 (not allowed), 409 (in conflict), or 422 (not
+valid).
+
+Press `L` to land the checked-out branch's open pull request; `l` pans right,
+and `h` and `H` pan left. A dialog like the push's opens at once, saying what it
+looks for, and its Abort button stops the search. The viewer looks for the pull
+request in `~/.cache/github-prs.tsv`, a list of open pull requests that another
+program keeps, one a line as its repository, branch, and number separated by
+tabs. The list does not say whose fork a branch is in, so unless it names
+exactly one pull request for the branch, the viewer asks GitHub. When the branch
+has no open pull request, or the viewer cannot land it, the dialog says so. With
+the first radio button, the dialog gives the pull request's address. With the
+third, the viewer opens the pull request in the browser, or, when no browser can
+be opened, gives its address as the first does. With the second or the fourth,
+the viewer asks GitHub's GraphQL API how GitHub's page would merge the pull
+request: by the method the token's account last used, or else by the
+repository's default. GitHub's merge API itself merges with a merge commit
+unless told otherwise, which a repository that allows only squashing or rebasing
+refuses. With the second radio button, the dialog then asks whether to merge
+that way, with Merge and Cancel buttons in place of Abort. No button is its
+default: Enter does nothing until Tab or an arrow key has moved the focus to a
+button, while a button's letter acts at once. With the fourth, the touch of the
+security key approves the merge, so the viewer asks nothing first. The viewer
+merges the pull request with GitHub's API or touch-gate in the same dialog, its
+output following what the dialog found. The merge happens only while the pull
+request's head is the commit the viewer has checked out. Asking for the merge
+method needs a GitHub token, from the same places the API uses. When the merge
+fails or is aborted, a Merge PR button (`P`) merges the same pull request, at
+the same commit and by the same method, again, with the settings as they are
+then, without looking for it again and without asking first. When a creation or
+a merge is aborted after its request was sent, it may have happened anyway, and
+the summary says so.
+
+Press `O` to open the settings dialog. Below the radio buttons, an input line
+holds the name of the token the touch-gate server uses. Its check box, "Quit
+when the pull request opens or merges", has the viewer quit as soon as it
+creates or merges the pull request, printing its address as described below, and
+otherwise has it watch the GitHub webhook relay while the push or land dialog is
+up. The relay passes on each delivery of the organization's GitHub webhook as it
+arrives, and keeps none for a subscriber that was not connected;
+`github-webhook-relay/README.md` in the infra repository describes it. The
+dialog's last input line holds the `host:port` of the relay's subscriber
+listener. When the push succeeds and the server offers a page for creating a
+pull request, or `L` finds the pull request with the first or third radio
+button, the viewer connects to the relay, and gives the address or opens the
+page once it has connected or failed to. While it connects, Abort, or an
+interrupt, gives up on the connection. When a delivery reports that a pull
+request was opened from the pushed branch, at the pushed commit, in the GitHub
+repository that `origin` names, or that the pull request `L` found merged, the
+dialog gives the pull request's address and says it is quitting, and two seconds
+later the viewer closes the dialog and quits as Quit does, unless the dialog was
+closed meanwhile. Pressing Quit in that moment quits at once, for the pull
+request all the same. Quitting once the viewer creates or merges the pull
+request works the same way. Once the screen is restored, it prints the pull
+request's address on the terminal. The address is printed only when the viewer
+quit for it, so a quit after cancelling the save prompt it raised prints
+nothing. When the viewer would watch the relay, in the cases above where it
+connects to it, the dialog shows, under how the task ended, a step that connects
+to the relay and then one that waits for the pull request, or says why it is not
+watching: no relay is set, `origin` is not on GitHub, or the connection failed
+or ended. Closing the dialog stops the watch.
+
+The viewer keeps these settings in git's configuration, as the strings
+`cf-view.pullRequestTool` (`link`, `api`, `browser`, or `touch-gate`) and
+`cf-view.touchGateToken`, the boolean `cf-view.quitOnPullRequest`, and the
+string `cf-view.webhookRelay`, so the `git config` command can set them too. OK
+saves each setting that differs from what the dialog opened showing. It saves it
+in the configuration file that git read the setting's value from, which may be a
+file another one includes, so that git then reads the new value. A value read
+from the machine's own configuration file, or set nowhere, is saved in the
+user's global configuration file instead.
 
 In the main view, `b` shows or hides the blame column in place of paging up;
 Page Up and Ctrl-B still page up there. The column takes the right 20 columns of
@@ -744,26 +877,40 @@ text, so edited lines read `uncommitted` before they are saved. In a diff, a
 file that follows a commit header is blamed as it stands in that commit. Any
 other hunk is blamed as its file stands in the working tree, and only while that
 file still holds the hunk's added and context lines where the hunk places them.
-Removed lines show nothing. The column fills in as `git blame` finishes for each
-file in view. When git cannot blame a file, the status line says why, and the
-viewer does not try that file again.
+A commit header, and the lines after it that are not part of the diff, such as
+the commit's author, date, and message, show the commit's own entry when the
+viewer can find the commit's repository: when the commit was authored, and its
+author. Such a line edited since the view was loaded or last saved shows
+nothing. Removed lines show nothing. The column fills in as git finishes reading
+each file and commit in view. Turning the column on when no line on the screen
+can be blamed says so in the status line. When git cannot blame a file, the
+status line says why, and the viewer does not try that file again.
 
 Press `\` in the interactive pager to cycle through unwrapped lines, hard
 wrapping, and word wrapping. Hard wrapping fills every screen row before it
 continues. Word wrapping breaks at whitespace and indents each continuation row
 by the width of the line's leading punctuation and whitespace. A row is drawn
 unindented when it could hold the rest of the line only without the indentation,
-or when it is too narrow for the indentation and any text.
+or when it is too narrow for the indentation and any text. Either way, a row
+does not start in the middle of a character that takes two columns, such as a
+Han character or an emoji. A character the edge of the screen would cut in two
+when lines are not wrapped is left blank.
 
-Press `c` to cycle how non-printable characters are shown. The first mode draws
-each control character as its control-picture glyph, such as `␉` for a tab, one
-column per character. The ANSI color mode applies color escape sequences to the
-text that follows them instead of showing them. It also advances each tab to the
-next column that is a multiple of 4, counting the columns drawn from the start
-of the line. Other control characters still appear as control pictures. The
+Press `c` to cycle how non-printable characters are shown. The pager starts in
+the ANSI color mode, which applies color escape sequences to the text that
+follows them instead of showing them. It also advances each tab to the next
+column that is a multiple of 4, counting the columns drawn from the start of the
+line. It draws a character overstruck through backspaces once, the way a printer
+would: struck over itself it is bold, and struck over an underscore it is
+underlined. Other characters struck together draw the last one struck, as a
+terminal would. This is how `man` marks emphasis, so a manual page that `man`
+formats for `cf view` keeps its bold and underlined text. Other control
+characters appear as their control-picture glyphs, such as `␇` for a bell. The
 hidden mode drops every complete escape sequence that starts with `ESC [`, and
 shows each run of other control characters, including the escape characters of
-other sequences, as one `…`. Editing always uses the first mode.
+other sequences, as one `…`. The pictures mode draws each control character as
+its control-picture glyph, such as `␉` for a tab, one column per character.
+Editing always uses the pictures mode.
 
 Redirected text output keeps the source text verbatim by default and adds ANSI
 color only when the selected color mode permits it. Binary output uses its
@@ -2317,18 +2464,19 @@ contract before that restriction is widened.
 
 A host profile may bound each model call with `maxInputBytes` and
 `maxOutputTokens`; a caller may only narrow either ceiling. Bounded calls use
-`openai-codex`, make one provider attempt without transport retries, check the
-final UTF-8 request body before sending it, and set the provider's output-token
-ceiling, including reasoning tokens. The byte check includes instructions,
-history and tool schemas and rejects oversized context without discarding it.
-The same model client carries these limits into research and delegated calls. A
-run under the gateway provider refuses these limits as its model client is
-built, before any model call. An input-byte ceiling is not a token count;
-callers budgeting tokens must reserve separate provider framing headroom.
-Provider-added native-search context and image token expansion require separate
-accounting; the serialized byte check does not bound them. A response that
-reaches its output-token ceiling ends as a provider failure, with no partial
-structured result admitted.
+`openai-codex`, make one provider attempt without transport retries (a request
+whose access token the provider refuses is issued once more with a refreshed
+token), check the final UTF-8 request body before sending it, and set the
+provider's output-token ceiling, including reasoning tokens. The byte check
+includes instructions, history and tool schemas and rejects oversized context
+without discarding it. The same model client carries these limits into research
+and delegated calls. A run under the gateway provider refuses these limits as
+its model client is built, before any model call. An input-byte ceiling is not a
+token count; callers budgeting tokens must reserve separate provider framing
+headroom. Provider-added native-search context and image token expansion require
+separate accounting; the serialized byte check does not bound them. A response
+that reaches its output-token ceiling ends as a provider failure, with no
+partial structured result admitted.
 
 `imageAttachments` contains at most eight `{mediaType, base64}` objects, using
 PNG, JPEG, GIF or WebP bytes. Canonical base64 and the declared image signature
@@ -3210,9 +3358,9 @@ the launcher's current directory. This preserves `deno task cf` behavior from a
 caller directory. Direct sandbox or wrapper callers should pass `--cwd` when
 they need to ignore a stale inherited `INIT_CWD`.
 
-The child CLI process inherits the parent environment. The launcher only adds
-`CF_CLI_NAME=cf`, so caller-provided `CF_API_URL`, `CF_IDENTITY`, experimental
-flags, and CFC/sandbox-related environment variables continue to flow through.
+The child CLI process inherits the parent environment unchanged, so
+caller-provided `CF_API_URL`, `CF_IDENTITY`, experimental flags, and
+CFC/sandbox-related environment variables continue to flow through.
 
 From the Labs checkout:
 
@@ -3239,6 +3387,181 @@ deno run --allow-run --allow-env --allow-read vendor/labs/runtime/cli/launcher.t
 
 Use `--launcher-help` for launcher-specific help. Normal CLI flags such as
 `--help` are passed through to `cf`.
+
+## Keeping, sharing and publishing in the pattern index
+
+The pattern index is where a person's patterns are kept while they work on them,
+and where shared and published patterns are found. `cf index` holds the
+membership commands and `cf pattern` the rest: `cf index join` once, after which
+each deploy of the person's own pattern is kept as a private version
+(`cf pattern history`, `cf pattern rollback`); `cf pattern share` shares one
+anonymously, `cf pattern publish` under the person's name, and `cf pattern ls`
+(also `cf pattern mine`) says where shared ones stand. Every call to the index
+signs with the identity (`--identity` or `CF_IDENTITY`), except the invite
+redemption in `cf index join`, which the index-only root key it creates signs
+(see "Joining"). All of them talk to the index `--pattern-index-url` or
+`CF_PATTERN_INDEX_URL` names, the deployment's by default.
+
+### Joining
+
+The index admits people by invite. `cf index join` reads the invite link from
+stdin, which keeps the secret code in its fragment out of shell history and
+transcripts, or takes it as an argument. It makes a key for the index alone,
+redeems the invite with it so it becomes the root of the person's membership,
+and has that root delegate `/index` to the `cf` identity. The person's own
+identity never becomes their index root, so nothing the index learns links to
+their spaces or profile. The root key and the chains it issued are kept under
+`$XDG_STATE_HOME/commonfabric/pattern-index/<host>/` (or `~/.local/state/…`, or
+`CF_PATTERN_INDEX_HOME`), private to the user; that directory is the person's
+standing on the index and is worth backing up. Joining again redeems nothing,
+and a join whose redemption landed without its answer arriving is completed by
+running it again.
+
+A link to a signing key holds for at most 90 days, so every index call from `cf`
+renews it from the kept root when it has under a week left. Other keys act for
+the same person through chains the root issues:
+
+- `cf delegation issue --index --to <did> --out <file>` writes the chain another
+  key presents: a Loom instance key, or a second machine, which then runs
+  `cf index join --chain <file>` instead of redeeming a second invite. A chain
+  adopted this way is not renewed where the root is not kept; the root's machine
+  issues a new one before it lapses.
+- `cf delegation issue --index-root --to <did> --out <file>` writes the
+  single-use delegation that moves the membership to a new root key, which
+  presents it with `cf index move-root <file>`. Chains from the old root stop
+  working.
+
+`cf index sharing` shows the person's give-to-get setting, the same one their
+loom's settings change, and `cf index sharing on|off` and `--self-built on|off`
+change it. On, which is the default, their patterns are shared anonymously once
+they open them in their loom and they pass the privacy check, and they see what
+others share; off, nothing of theirs is shared on its own (what they shared with
+`cf pattern share` stays shared until `cf pattern unshare`), and search and
+listings show them only patterns published under a name, though a shared pattern
+opened by its id, as an import or `--from-index` does, still works.
+`--self-built` says whether that covers the patterns they build themselves in
+`cf` and Claude Code.
+
+`cf index whoami` says which member the index sees the identity as. An admin
+admits a key without an invite with `cf index admit <did>`.
+
+### Private versions
+
+On an index that keeps versions, each `cf piece new <file>` and
+`cf piece setsrc` of a pattern the person owns is kept as a version only they
+can read, once the deploy commits, and the deploy prints one line saying which
+version it is (`piece new --json` carries it as `version`, whose `status` is
+`recorded`, `unchanged`, `not-joined`, `skipped` or `failed`). A deploy whose
+source the newest version already has keeps no new one and says so
+(`unchanged`). An index from before private versions is sent nothing, and the
+deploy prints no version line (`--json` reports `skipped`). A version holds the
+source as deployed, personal details included, so it is kept where only its
+owner can read it, and admins cannot see it. The versions of one entry file form
+its lineage, which the index finds by a slot `cf` computes. In a git checkout
+with an `origin` remote the slot is a hash of the remote and the file's path in
+the repository, so every worktree and clone continues one lineage. Elsewhere it
+is the absolute path keyed with a secret kept in this machine's index store, so
+the index cannot confirm a guessed path; moving such a file starts a new
+lineage. A deploy from the index (`--from-index`), a `setsrc --origin` deploy (a
+system or repository pattern), and a file fetched from someone else's pattern
+and deployed unchanged keep no version; an edited one is kept as the person's
+remix of it. When this machine never joined an index, a deploy makes no index
+call and says so once. The index write never changes a deploy's outcome: a
+failure is reported in one line and the deploy's exit status stands.
+
+A deploy never shares a version by itself: drafts land many times an hour. The
+index shares a version once it settles, when its owner opens it in a loom, and
+only while their sharing setting (kept by the index; `cf index sharing` and
+Loom's settings change it) covers what they build; the deploy's line says so,
+and `--json` carries it as `version.autoShare: "when_used"`. `cf pattern share`
+shares one at once. The index write follows the deploy's commit and never
+changes its outcome, but the command waits for it before exiting.
+
+`cf pattern history` lists the person's lineages; `cf pattern history <entry>`
+lists one entry's versions, newest first, and where each stands.
+`cf pattern rollback <entry> <version>` writes an earlier version's files over
+the entry's, then makes it the newest version in the index. It refuses when a
+file it would write over holds something no version keeps, since nothing could
+bring that back, unless `--force`, and it never writes outside the pattern's
+directory. Naming the current version with `--force` writes its files back
+without a new version. Running pieces keep the source they have until the next
+`cf piece setsrc`.
+
+### Sharing
+
+`cf pattern share <entry file>` compiles the pattern as `cf piece new` does,
+against the same fabric (`--api-url`, `--space`), so that the id it shares under
+is the one a deploy computes; `--test`, `--datafile`, `--main-export` and
+`--root` package it the same way and must match how the piece was deployed. The
+description is the first paragraph of the entry's doc comment, which may follow
+`//` lines and imports, and the tags are its `@hashtags` and `@keywords` lines;
+`--description`, `--hashtags` and `--keywords` override them. An identity that
+is no member is refused before anything compiles. What it shares is a version of
+the entry's lineage. Others who share see it under a pseudonym of that lineage
+alone, never linked to the person's other lineages, beside a coarse tier of how
+much their other shared work is used.
+
+Before sharing, it asks the index's own privacy question locally: it fetches the
+prompt the index's privacy check runs and sends it, with the pattern, to the
+fabric toolshed's LLM. When the answer is that the pattern would reveal
+something identifying, it asks for a generalized version, with specific values
+lifted into arguments and fields renamed away from personal names, at most
+twice, recompiling and checking each. A rewrite may change only the files the
+findings name. A rewrite that passes is written over those files only when git
+tracks each one, it has no uncommitted edits, it is not a symbolic link, and it
+has not changed since it was read (`--allow-dirty` waives the git checks), or,
+outside git or over uncommitted edits, once the source as it stood is kept as a
+private version, which `cf pattern rollback` restores. The command then names
+the kinds of change and the files, never a value, and says how to take it back.
+When a rewrite passes but cannot be written, nothing is shared and the command
+exits 1, saying what to do. When no rewrite passes, the pattern is shared as it
+is, with the findings shown. The index's own check then holds it unlisted until
+they are fixed: it is in no one else's search or listing, and only its author
+and admins see it listed, though anyone given its id can still open it, as with
+any unlisted pattern. When the LLM call fails, the local check is skipped with
+one line saying so; the index checks every listing request either way.
+`--skip-local-check` skips it on purpose.
+
+A share names the id last shared from the same entry file on this machine as its
+predecessor (`priorPatternId`), so the new version keeps the old one's standing.
+A file `cf piece getsrc` wrote from a piece that `cf piece new --from-index`
+created is published as a remix of that pattern (`remixedFrom`), or as a new
+version of it when it was the caller's own; `--remixed-from` names the source
+where `cf` has no record. Sharing then requests a listing. Past the index's
+daily limit it says when the limit resets, and running the same command then
+requests it again. The next step it prints is deploying the pattern with
+`cf piece new --from-index <id>`, or opening it in a loom with
+`/deploy index:<id>`. A listed pattern moves from Unvetted to Main once its
+author opens it in a loom.
+
+`cf pattern unshare <entry>` takes the pattern out of others' searches and
+listings and shares no later version until `cf pattern share` runs again. A
+version already shared stays readable by its id, so imports of it keep working.
+
+### Publishing under a name
+
+`cf pattern publish <entry file>` shares the pattern as `cf pattern share` does,
+then names the person as its author under one of their Common Fabric profiles
+(`--profile <space>`, the one `#profile` answers with by default). Only that
+lineage is named; the person's other lineages stay anonymous and are not linked
+to it. Without `--as "<the profile's name>"` it prints one line saying the name
+will be shown to every member and cannot be unseen, and names nothing: repeating
+the name is how an agent shows it asked the person. The index takes the profile
+only with proof that it is the person's: the delegation the profile space issued
+to their identity, which Home records. A profile made before profiles owned
+themselves has none and cannot be published under yet. Everything that can
+refuse the naming is checked before anything is shared; a naming the index
+refuses afterwards leaves the pattern shared, says so, and exits 1.
+`cf pattern unpublish <entry>` stops showing the name from then on; the lineage
+stays shared under its pseudonym.
+
+### Where patterns stand
+
+`cf pattern ls` lists the caller's patterns, one row per lineage (a pattern and
+its later versions): whether the newest version is being checked, held (with the
+findings to fix and the command that republishes it), in error waiting for an
+admin re-run, or listed, and then its bucket, its use counts, and what moves it
+on.
 
 ## JSON command contract
 
@@ -3280,7 +3603,21 @@ The supported output switches are:
   accepted, documented no-ops for callers that select JSON explicitly.
 - `cf delegation show --json` prints one row per delegation of each chain the
   file holds; `cf delegation issue --out <file> --json` reports the write as one
-  object naming the file, the space, the audience, and the chain's length.
+  object naming the file, the space, the audience, and the chain's length; with
+  `--index` or `--index-root` the object names the command and the index root
+  instead of a space, and the expiry.
+- `cf index join --json` and `cf index move-root --json` print
+  `{handle, role, root, signer, joined, storeDir, rootKeptHere}`, where
+  `rootKeptHere` says whether backing up `storeDir` keeps the root key;
+  `cf index whoami --json` prints the handle, the role and the signer.
+- `cf pattern share --json` prints the share report. Its `outcome` is `shared`,
+  with the id, the version, whether it was new, the listing request's outcome
+  and the next step, or `blocked`, with nothing shared and the next step. Both
+  carry the local check's outcome: findings and changes by category and file,
+  never a value. `cf pattern publish --json` prints the same report with a
+  `named` line once the name is shown. `cf pattern ls --json` prints its rows,
+  `cf pattern history --json` the versions (or, without an entry, the lineages),
+  and `cf pattern rollback --json` what it restored and wrote.
 - `cf check --json` compiles without evaluating and prints one object with a
   `files` array. Each entry has the input `path` and the compiled module bodies
   in `output`.

@@ -47,6 +47,7 @@ import {
   VINTAGES_DIR,
 } from "./pattern-vintage-lib.ts";
 import { isUpgradeTarget } from "./pattern-vintage-run.ts";
+import { type CommandOutput, emit } from "./command-output.ts";
 
 /** Where an adopt resolves keys and writes fixtures. Same shape as the gate's
  * roots, so a test can point everything at a temp tree. */
@@ -328,7 +329,7 @@ export async function adoptVintage(options: AdoptOptions): Promise<string> {
     const control = vintageRoot<Record<string, unknown>>(vintage, undefined);
     const { error } = await vintage.runtime.editWithRetry((tx) => {
       control.withTx(tx).set({
-        adoptedFrom: snapshotPath.split("/").pop() ?? snapshotPath,
+        adoptedFrom: snapshotPath.slice(snapshotPath.lastIndexOf("/") + 1),
       });
     });
     if (error !== undefined) {
@@ -355,27 +356,42 @@ export async function adoptVintage(options: AdoptOptions): Promise<string> {
   }
 }
 
-if (import.meta.main) {
-  const childArgs = Deno.args.filter((arg) => arg.startsWith("--child="));
-  const positional = Deno.args.filter((arg) => !arg.startsWith("--child="));
+/**
+ * Adopt the snapshot the command line `args` name into the tree at
+ * `repoRoot`, logging each step through `log`, under the fixture signer the
+ * gate replays with. A refusal throws, as `adoptVintage()` does; arguments it
+ * cannot read return the usage.
+ *
+ *   vintage-adopt.ts <snapshot.sqlite> <identity> <test key> <main> [cause]
+ *     [--child=<cellId>=<main>]...
+ */
+export async function runVintageAdopt(
+  args: readonly string[],
+  repoRoot: string,
+  log: (line: string) => void,
+): Promise<CommandOutput> {
+  const childArgs = args.filter((arg) => arg.startsWith("--child="));
+  const positional = args.filter((arg) => !arg.startsWith("--child="));
   const [snapshotPath, expectedIdentity, testKey, main] = positional;
   if (!snapshotPath || !expectedIdentity || !testKey || !main) {
-    console.error(
-      "usage: vintage-adopt.ts <snapshot.sqlite> <identity> <test key> " +
+    return {
+      err: "usage: vintage-adopt.ts <snapshot.sqlite> <identity> <test key> " +
         "<main> [cause] [--child=<cellId>=<main>]...",
-    );
-    Deno.exit(2);
+      code: 2,
+    };
   }
-  const children = childArgs.map((arg) => {
+  const children: { cellId: string; main: string }[] = [];
+  for (const arg of childArgs) {
     const value = arg.slice("--child=".length);
     const split = value.indexOf("=");
     if (split < 1) {
-      console.error(`malformed --child argument: ${arg}`);
-      Deno.exit(2);
+      return { err: `malformed --child argument: ${arg}`, code: 2 };
     }
-    return { cellId: value.slice(0, split), main: value.slice(split + 1) };
-  });
-  const repoRoot = Deno.cwd();
+    children.push({
+      cellId: value.slice(0, split),
+      main: value.slice(split + 1),
+    });
+  }
   await adoptVintage({
     snapshotPath,
     expectedIdentity,
@@ -389,6 +405,11 @@ if (import.meta.main) {
       vintagesRoot: `${repoRoot}/${VINTAGES_DIR}`,
       signer: await Identity.fromPassphrase("pattern vintage fixture"),
     },
-    log: (line) => console.log(line),
+    log,
   });
+  return { code: 0 };
+}
+
+if (import.meta.main) {
+  emit(await runVintageAdopt(Deno.args, Deno.cwd(), console.log));
 }

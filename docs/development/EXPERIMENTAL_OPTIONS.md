@@ -43,6 +43,7 @@ was last checked against the code.
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
 | [`pieceCreatorRecord`](#piececreatorrecord) | `EXPERIMENTAL_PIECE_CREATOR_RECORD` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | off | Bernhard Seefeld (2026-11-01) | graduate once the ruling that binds an update-added owner field to the piece's creator merges, then delete the flag | implemented, off by default |
 | [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | make it reachable on servers, turn deployments' posture on, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default, with a runtime whose naming mode differs from its space's refused that space; must not turn on before deployments' posture names instances |
+| [`compiledPatterns`](#compiledpatterns) | `EXPERIMENTAL_COMPILED_PATTERNS` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | off | Bernhard Seefeld (2026-11-19) | graduate once specs pull request #91 and the decision on how the store accepts template labels are ruled and the integration's milestones 3 to 6 land, or delete | measurement only, off by default |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`sessionOpenProofs`](#sessionopenproofs) | Memory hello capability; toolshed withholds it under `MEMORY_ACL_DELEGATIONS=false` or `0` | on | Robin McCollum (2026-10-26) | retain as protocol negotiation while deployments may contain servers that admit no chain | implemented end to end and on by default; a profile space owns itself and its owner's runtime presents the chain Home records |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
@@ -1191,6 +1192,47 @@ holds the measurements and the conditions for revisiting.
   authority and shell-source entries, `namesInstances()`,
   `TransformationOptions.instanceNames`, and the cache variant.
 
+### `compiledPatterns`
+
+- **Toggle via.** `EXPERIMENTAL_COMPILED_PATTERNS` env, or
+  `RuntimeOptions.experimental.compiledPatterns`. Server-authoritative in
+  `EXPERIMENTAL_FLAG_AUTHORITY` and `"deployment"` in `SHELL_FLAG_SOURCES`,
+  since which labels a compiled pattern's writes store is the deployment's
+  choice. `Runtime` hands it to each transaction it creates
+  (`setCfcPlanLabels`) only where the runtime is the serving one
+  (`RuntimeOptions.servingPosture`): a client's speculative run is never the
+  stored result, so a client's transactions keep it off. The transaction
+  keeps it as `CfcTxState.planLabels` and reports it among the dials of a
+  refused write when it is on.
+- **Added by.** Bernhard Seefeld, 2026-11-19.
+- **Purpose.** The one option for the compiled pattern language integration
+  ([`docs/plans/compiled-pattern-language-integration.md`](../plans/compiled-pattern-language-integration.md)).
+  It gates labels from templates at commit: with it on in a serving
+  runtime, the commit preparation stamps a path that a compiled pattern's
+  write covers, at or below a path the transaction wrote, with the
+  label instantiated from the plan's label template
+  (`runtime/runner/src/cfc/plan-template.ts`,
+  `runtime/runner/src/cfc/plan-labels.ts`), in place of the one join over the
+  transaction's reads, where the runtime recorded that write as a `plan-write`
+  write-policy input with its own authorization and registered the compiled
+  pattern. Every other path keeps the join. With it off, every `plan-write`
+  input is ignored and the preparation and its prepared digest are what they
+  are without the option. The runner path for compiled patterns is to be
+  gated by the same option.
+- **Current default and planned end state.** Off by default. A measurement
+  only: the specification the template labels rest on is specs pull request
+  #91, unmerged, and the deciding sites carry its `SPEC-PENDING` marker. The
+  end state is graduation once that pull request and the decision on whether
+  the store verifies a template label are ruled, and the integration's later
+  milestones land, or deletion.
+- **Status on 2026-11-19.** Default off, pinned by
+  `runtime/runner/test/cfc-runtime-options.test.ts` and
+  `runtime/runner/test/experimental-options.test.ts`; the template labels are
+  pinned by `runtime/runner/test/cfc-plan-labels.test.ts`.
+- **Path to removal.** Delete the runtime option, its env, authority and
+  shell-source entries, `CfcTxState.planLabels`, and either the `plan-write`
+  path or the gate on it.
+
 ## Category 2: Contextual Flow Control enforcement rollout dials
 
 Contextual Flow Control (CFC) is the label-propagation and egress-gating layer
@@ -2086,8 +2128,13 @@ the per-epic implementation notes).
   is denied.
 - **Current default and planned end state.** On by default; a browser profile
   opts out with `commonfabric.cfcRenderCeiling(false)`, which is what the
-  `cfcRenderCeiling` localStorage key records. The end state is to remove the
-  toggle and make the ceiling unconditional.
+  `cfcRenderCeiling` localStorage key records. Opting out declares no ceiling to
+  the worker (`renderConfidentialityCeiling: null`) and allows author
+  declassification (`renderDeclassificationPolicy: "allow"`): a host that
+  declares nothing is given the same default ceiling the toggle populates, with
+  declassification denied, so a host's renders and reads go ungated only where
+  it declares `null`, as the toggle does. The end state is to remove the toggle
+  and make the ceiling unconditional.
 - **Status on 2026-09-23.** Exchange resolution is implemented, including
   module policies. Where reader membership is required, missing or unsynced
   ACL evidence keeps the content blocked; a reader grant admits it and a
@@ -2264,8 +2311,9 @@ the per-epic implementation notes).
   ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that moves the serving loop
   off the request thread.
-- **Purpose.** The serving loop's hosts and serving runtimes run in Web
-  Workers of the toolshed process, one worker per served space, instead of on
+- **Purpose.** The serving loop's hosts and serving runtimes run in worker
+  threads of the toolshed process, one worker per served space up to a cap and
+  shared past it, instead of on
   the thread that answers the
   memory server's frames and the HTTP routes. A wave's settle step is a run of
   synchronous scheduler actions, and on one thread every client round trip waits
@@ -2276,26 +2324,44 @@ the per-epic implementation notes).
   runtimes' storage sessions cross as frames; and the server's observer crosses
   as events. The memory server's store has to be a file for the worker to open
   it. The pattern-lifecycle verbs reach the loop as descriptors on both arms.
-  The pool that places spaces on workers takes three more variables from the
+  The pool that places spaces on workers takes five more variables from the
   same bootstrap, each a whole number: `SERVER_EXECUTION_MAX_WORKERS`, how
   many workers spaces are placed on before a space joins a worker that
-  already serves one (default 16; `1` serves every space from one worker),
+  already serves one (default 4 in the toolshed, 16 in the pool itself; `1`
+  serves every space from one worker),
   `SERVER_EXECUTION_SPARE_WORKERS`, how many workers are kept started ahead
-  of a placement (default 1 in the toolshed; `0` keeps none), and
+  of a placement (default 1 in the toolshed; `0` keeps none),
+  `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`, the largest each worker's heap may
+  grow before that worker alone is ended (default 2048 in the toolshed, 256
+  at least, and the literal `0` for none; a worker with a limit is a
+  `node:worker_threads` thread, and one without is a Deno `Worker`, as the
+  serving memory server tests build starts), and
   `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, how large the workers' heaps may
   be together before workers kept only for parked runtimes are closed
-  (default none). The serving memory server tests build reads the first.
+  (default none), and `SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS`, how long a
+  worker may send no message, its heartbeats included, before it is killed
+  (default 60, at least 10). The watchdog checks every 10 seconds, so the kill
+  comes at the first check at or past that many seconds of silence in a row:
+  15 kills at 20. The serving memory server tests build reads the first.
+  Where the workers' runtimes compile takes two more:
+  `SERVER_EXECUTION_COMPILE_WORKERS`, how many compile workers the process
+  holds for every serving runtime (default 1), and
+  `SERVER_EXECUTION_COMPILE_CACHE_DIR`, the compiled-module cache directory
+  every toolshed on the host shares (default `compiled-modules` under
+  `CACHE_DIR`).
   [`docs/plans/serving-loop-worker.md`](../plans/serving-loop-worker.md) is the
   design and its stages.
 - **Current default and planned end state.** On by default in the toolshed
   over a file store, off in the test harness's serving memory server. The end
   state is the in-process arm gone, with the knob.
-- **Status on 2026-11-11.** Implemented, on by default in the toolshed over a
-  file store, with a worker per served space. Each worker's entry builds a
-  compiled-module byte cache for the spaces that worker serves, as the
-  main-thread loop builds one for its process. Run with the variable `true`,
+- **Status on 2026-11-14.** Implemented, on by default in the toolshed over a
+  file store, with a worker per served space up to the cap
+  (`SERVER_EXECUTION_MAX_WORKERS`, 4 by default), past which spaces share
+  workers. The workers compile in the
+  process's compile workers and share the host's compiled-module cache
+  directory, as the main-thread loop does. Run with the variable `true`,
   the pattern integration suites the `MultiRuntimeHarness` drives pass with a
-  worker per space;
+  worker per space under the runner's own cap of 16;
   the private-inbox and FabriChat suites need a serving runtime to run no child
   placed in a space other than the one it serves (#9418). No CI lane runs them
   that way yet: in CI the workers run in the toolshed-backed lanes and the
@@ -2803,6 +2869,27 @@ handshake's job stays what it is: refusing a connection whose peer resolved a
 wire contract differently — which, for a client that adopts, is a mismatch
 that should no longer arise.
 
+### A server that follows another deployment
+
+A client that talks to two servers can run only one posture, so the two
+servers have to run the same one. A local toolshed whose client also talks to
+a hosted deployment is the case: Loom's runs beside its owner's hosted home.
+Such a toolshed follows the hosted deployment's posture. Whoever starts it
+reads the deployment's `/api/meta` and passes its `experimental` object, as
+JSON, in `EXPERIMENTAL_FOLLOWED_POSTURE`. The toolshed resolves every flag it
+reads, for its own runtime, its serving runtimes and its memory route, with
+`experimentalOptionsWithFollowedPosture`: an explicit `EXPERIMENTAL_*` wins,
+otherwise the followed posture's value for a `"server"` flag, otherwise the
+default, the rule `adoptServerExperimentalOptions` applies for a client. As
+for a client, a followed posture silent on `readerSchemaPrecedence` or
+`agentBuiltin` is an older deployment's and gives each the legacy `false`,
+and a followed posture of `null`, which a deployment publishes before its
+Runtime exists, adopts nothing. The toolshed then publishes the posture it
+resolved, so its own clients adopt the followed deployment's flags in turn.
+Any other value that is not a JSON object stops the toolshed from starting. The toolshed does not fetch the posture itself:
+the launcher decides what to do when the deployment cannot be reached, for
+instance starting with the last posture it saw.
+
 ## Enabling flags locally
 
 Set the environment variables before building the shell (for browser-side flags)
@@ -3091,8 +3178,7 @@ sweep does not mistake them for missing experimental flags:
 - **Runner diagnostics** (environment): `CF_TRAVERSE_CAPTURE`,
   `CF_TRAVERSE_CAPTURE_MAX`, `CF_TRAVERSE_DIAGNOSTICS`. What each one does is in
   [the configuration reference](./CONFIGURATION.md#runner-diagnostics).
-- **CLI controls** (environment): `CF_EXEC_SHEBANG`, `CF_CLI_TRACE_TIMINGS`,
-  `CF_PROFILE_DONE_MARKER`.
+- **CLI controls** (environment): `CF_EXEC_SHEBANG`, `CF_CLI_TRACE_TIMINGS`.
 - **`CF_ADOPT_SERVER_FLAGS`** — set to `false` to stop a client that is not
   built alongside its server from adopting that deployment's posture, leaving
   it on its own environment. An escape hatch over the mechanism, not a flag

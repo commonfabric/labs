@@ -36,7 +36,6 @@ import {
   FabricEpochNsec,
   FabricHash,
   FabricKeyPair,
-  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 import type { FabricPrimitiveClassesByName } from "@/fabric-primitives/impl.ts";
@@ -61,20 +60,6 @@ type TextCase = {
 type StubbedClass = {
   /** Makes a value of the class. */
   readonly stubbed: () => FabricValue;
-};
-
-/**
- * A class that binds no codec, so that a value of it has no text.
- *
- * TODO(danfuzz): Remove, with the `noCodec` branch of the class cases, once
- * `FabricRegExp` is deleted.
- */
-type NoCodecClass = {
-  /** Makes a value of the class. */
-  readonly noCodec: () => FabricValue;
-
-  /** A text under the tag the class would have. */
-  readonly text: string;
 };
 
 /**
@@ -224,7 +209,7 @@ const FORMAT_TAG_CASES: Readonly<
 const CLASS_CASES: Readonly<
   Record<
     keyof FabricPrimitiveClassesByName | keyof FabricInstanceClassesByName,
-    readonly TextCase[] | StubbedClass | NoCodecClass
+    readonly TextCase[] | StubbedClass
   >
 > = {
   FabricBytes: [
@@ -273,13 +258,9 @@ const CLASS_CASES: Readonly<
           new Uint8Array([4, 5]),
         ),
       text:
-        'fvj1:{"/KeyPair@1":{"algorithm":"Ed25519","privateKey":"BAU","publicKey":"AQID"}}',
+        'fvj1:{"/KeyPair@1":{"algorithm":"Ed25519","privateKey":{"/Bytes@1":"BAU"},"publicKey":{"/Bytes@1":"AQID"}}}',
     },
   ],
-  FabricRegExp: {
-    noCodec: () => new FabricRegExp(/ab+c/gi),
-    text: 'fvj1:{"/RegExp@1":{"flags":"gi","flavor":"es2025","source":"ab+c"}}',
-  },
   FabricUnavailable: [
     {
       what: "a transient reason",
@@ -295,7 +276,7 @@ const CLASS_CASES: Readonly<
       what: "an error with a message",
       make: () => new FabricUnavailable("error", "network", "offline"),
       text:
-        'fvj1:{"/Unavailable@1":{"errorKind":"network","errorMessage":"offline","reason":"error"}}',
+        'fvj1:{"/Unavailable@1":{"errorKind":"network","message":"offline","reason":"error"}}',
     },
   ],
   FabricError: [
@@ -369,18 +350,6 @@ describe("fvj1-exact-text", () => {
             expect(() => jsonFromFabricValue(cases.stubbed())).toThrow(
               "not yet implemented",
             );
-          });
-        } else if ("noCodec" in cases) {
-          it("refuses to encode a value, the class binding no codec", () => {
-            expect(() => jsonFromFabricValue(cases.noCodec())).toThrow(
-              "No codec registered",
-            );
-          });
-
-          it("decodes a text under its tag to an `UnknownValue`", () => {
-            const decoded = fabricFromJsonValue(cases.text);
-            expect(decoded).toBeInstanceOf(UnknownValue);
-            expect(jsonFromFabricValue(decoded)).toBe(cases.text);
           });
         } else {
           describeTextCases(cases);

@@ -204,7 +204,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+            "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
           ],
           "picks": [],
           "selectors": [],
@@ -609,7 +609,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+                "compiled": "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
               },
               "name": {
                 "name": "Rows",
@@ -620,7 +620,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+                "compiled": "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
               },
               "name": {
                 "name": "Rows",
@@ -631,7 +631,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+                "compiled": "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
               },
               "name": {
                 "name": "Rows",
@@ -642,7 +642,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+                "compiled": "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
               },
               "name": {
                 "name": "Rows",
@@ -1624,8 +1624,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#default",
-            "unhashed:pattern/compare/fixtures/array-by-key-reader.tsx#Rows"
+            "sha256:4a7bf2345e27eff8a9281dae4e4f81f25bc5a1c567e90835c84f0cf07a27083d",
+            "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
           ],
           "picks": [],
           "selectors": [],

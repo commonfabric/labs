@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/module-policy.tsx",
-              "source": "const { \"Default\": Default, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst { \"cfcPattern\": cfcPattern, \"exchangeRule\": exchangeRule, \"exchangeRules\": exchangeRules, \"THIS_POLICY\": THIS_POLICY, \"v\": v } = $rt.external(\"commonfabric/cfc\");\nconst releaseToReader = exchangeRule({\n  appliesTo: THIS_POLICY,\n  pre: {\n    integrity: [\n      cfcPattern.hasRole(v(\"reader\"), THIS_POLICY.subject, \"reader\"),\n    ],\n  },\n  post: {\n    addAlternatives: [cfcPattern.user(v(\"reader\"))],\n  },\n});\nconst rules = exchangeRules([releaseToReader]);\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/module-policy.tsx#default\",\n));\nObject.defineProperty($exports, \"releaseToReader\", { enumerable: true, get: () => releaseToReader });\nObject.defineProperty($exports, \"rules\", { enumerable: true, get: () => rules });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ message: $h.slot(0) })));\n});"
+              "source": "const { \"Default\": Default, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst { \"cfcPattern\": cfcPattern, \"exchangeRule\": exchangeRule, \"exchangeRules\": exchangeRules, \"THIS_POLICY\": THIS_POLICY, \"v\": v } = $rt.external(\"commonfabric/cfc\");\nconst releaseToReader = exchangeRule({\n  appliesTo: THIS_POLICY,\n  pre: {\n    integrity: [\n      cfcPattern.hasRole(v(\"reader\"), THIS_POLICY.subject, \"reader\"),\n    ],\n  },\n  post: {\n    addAlternatives: [cfcPattern.user(v(\"reader\"))],\n  },\n});\nconst rules = exchangeRules([releaseToReader]);\n\nconst $default = (pattern(\n  \"sha256:5cfcc81134ec6723db6d76762747e03a80e6e23b88df6ea45aa339f00c070526\",\n));\nObject.defineProperty($exports, \"releaseToReader\", { enumerable: true, get: () => releaseToReader });\nObject.defineProperty($exports, \"rules\", { enumerable: true, get: () => rules });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ message: $h.slot(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -74,7 +74,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/module-policy.tsx#default"
+            "sha256:5cfcc81134ec6723db6d76762747e03a80e6e23b88df6ea45aa339f00c070526"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

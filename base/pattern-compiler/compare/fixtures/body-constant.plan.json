@@ -153,7 +153,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/body-constant.tsx#List"
+            "sha256:e53e25aca790341be0cc02f7e7d1e989ae72e42210afcb5c3da8c0d5b4d1eb9f"
           ],
           "picks": [],
           "selectors": [],
@@ -474,8 +474,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/body-constant.tsx#default",
-            "unhashed:pattern/compare/fixtures/body-constant.tsx#List"
+            "sha256:659b4bc975b55fd199e5bd0fc36feb1cfc30ac0026f2d867f84c615b39f4630f",
+            "sha256:e53e25aca790341be0cc02f7e7d1e989ae72e42210afcb5c3da8c0d5b4d1eb9f"
           ],
           "picks": [],
           "selectors": [],

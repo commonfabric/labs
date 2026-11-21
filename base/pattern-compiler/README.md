@@ -119,22 +119,24 @@ deno run -A --no-check base/pattern-compiler/compare/corpus.ts report results.js
 ```
 
 `run` takes each module the crate emits a plan for with no unsupported
-construct, skips the ones that need `wish` or request an effect, and appends one
-line per module to the results file. It sends the events of the handlers bound
-in no element body and no pattern compiled in first, and with `--plan-order` it
-sends every event in the order of the plan's bindings. `report` prints the
-modules run and skipped by reason, the outputs and write edges compared by
-category, what was not compared by reason, each output classified without the
-atom of a kept output and with it, the events committed and refused with the
-runtime's reason for each refusal, the looser rows by what differs, and the
-outputs the run holds no value at by what the run stores there, with one example
-each. Notes 177 to 186, 191 to 193, and 197 on of `SPEC-NOTES.md` say what the
-comparison takes as each side's label and what it found, notes 217 to 227 why
-the runtime refuses an event and what the generator does about it, notes 228 to
-240 what ruling U1 and the comparison rules of PL §3.1 changed, notes 241 to 251
-the events for handlers bound in an element body or in a pattern compiled in,
-and notes 252 on the order of the events and the state a write row is compared
-on.
+construct, skips the ones that request an effect, and appends one line per
+module to the results file. A module that calls `wish` runs in a seeded home
+(`compare/wish-home.ts`, under "The serving loop, error states and effects"
+below), and is skipped where its executor resolves a `wish` the home does not
+simulate. It sends the events of the handlers bound in no element body and no
+pattern compiled in first, and with `--plan-order` it sends every event in the
+order of the plan's bindings. `report` prints the modules run and skipped by
+reason, the outputs and write edges compared by category, what was not compared
+by reason, each output classified without the atom of a kept output and with it,
+the events committed and refused with the runtime's reason for each refusal, the
+looser rows by what differs, and the outputs the run holds no value at by what
+the run stores there, with one example each. Notes 177 to 186, 191 to 193, and
+197 on of `SPEC-NOTES.md` say what the comparison takes as each side's label and
+what it found, notes 217 to 227 why the runtime refuses an event and what the
+generator does about it, notes 228 to 240 what ruling U1 and the comparison
+rules of PL §3.1 changed, notes 241 to 251 the events for handlers bound in an
+element body or in a pattern compiled in, and notes 252 on the order of the
+events and the state a write row is compared on.
 
 `compare/cost.ts` measures what compiling and running the same modules costs
 today: the time of today's compile by phase, and for each module's generated
@@ -163,6 +165,68 @@ the crate implements it, implements the part syntax decides, leaves it to the
 type checker or to footprint analysis, or lists it as retired.
 `tests/catalog.rs` compares that table with the identifiers in the
 specification, so the two cannot differ without a failing test.
+
+## The interim acceptance of `patternTool`
+
+By the owner's ruling of 2026-11-19 the crate accepts a call of `patternTool`
+for an interim period, so that one pattern source runs in today's runtime and is
+compiled by the crate. `src/tool_rewrite.rs` replaces the call in the module's
+text before any other stage reads the module, by an inline pattern closure that
+calls the pattern with the bound values (`language-subset.md` §4.4.2):
+
+```text
+patternTool(Search, { donuts })
+pattern<Omit<Parameters<typeof Search>[0], "donuts">>((rest) => Search({ ...rest, donuts }))
+```
+
+The input type of the closure is the input type of the pattern without the bound
+keys. A call with no second argument becomes
+`pattern<Parameters<typeof Search>[0]>((rest) => Search(rest))`. For an inline
+`pattern<I, O>(...)` as the first argument, the type is `I` as written, and the
+inline pattern is the callee of the closure's call. The parameter is named
+`rest`, or `rest2` and so on where the call already uses the name. Where the
+name `pattern` is not bound at the call, the rewrite adds it to the import that
+`patternTool` comes from.
+
+An accepted call is reported with the warning
+`removed-form:pattern-tool-interim`, whose message holds the closure. The
+identifier is not in the catalog of `language-subset.md`, and `src/catalog.rs`
+lists it as provisional. A rewritten call is counted as a `patternTool` call in
+the corpus report.
+
+A call is accepted where all of these hold: the callee is the name `patternTool`
+imported from `commonfabric`, with no alias, no namespace and no type argument;
+the call is in the reactive tier; the first argument is the name of a pattern
+declared at module scope or imported, or an inline `pattern(...)` with a written
+input type; the second argument is absent or is an object literal whose
+properties are plain or shorthand with a key that is an identifier or a string
+literal, each key once; and, where keys are bound, the input type of the pattern
+is an object type that declares each of them. A call whose result is spread,
+read by a member access or called is not accepted, since the closure is not the
+record `{ pattern, extraParams }` that today's `patternTool` returns. A call
+that holds another `patternTool` call is not accepted either, and the inner call
+is decided on its own. Every other call stays in the text and is refused with
+`removed-form:pattern-tool`, as `patternTool` used as a value is.
+
+The rewrite is made on the text because the later stages read the text at the
+spans of the syntax tree. A replacement holds as many line breaks as the text it
+replaces, so every line keeps its number. A diagnostic of a rewritten module is
+reported at its position in the text as written, and an offset inside a
+replacement is reported at the start of the text that was replaced. The offsets
+in a plan and the module text in value code are those of the rewritten text.
+Deciding a call needs its tier and the input type of the pattern, so a program
+in which some module names `patternTool` is parsed twice, and its modules that
+name `patternTool` are walked twice by `src/check`.
+
+The crate does not translate a pattern closure used as a value: the plan lists
+it as the unsupported construct "the built-in `pattern` in the reactive tier",
+`Plan.closures` is empty, no plan with slots of root `params` is made for the
+inline pattern, and the write edge at the path that holds the closure has no
+template. Value code for the closure is not what `plan-and-label-templates.md`
+§3.15 describes, and the executor holds the request of
+`compare/fixtures/pattern-tool.tsx` without the tool. So a module with a
+rewritten call is accepted by the rules and has no complete plan.
+`tests/pattern_tool.rs` states this for that fixture.
 
 ## Value code and the executor
 
@@ -604,8 +668,11 @@ one its `id` option gives. A name of several parts in a plan is a record
 several declarations of one name, `{ body, site }` for a thing that a site of a
 body makes, and `{ operation, sidecar }` for a sidecar. The names of the memo
 and of the element tables are the texts that the codec gives a record. The
-identifier of a schema and that of a pattern are placeholders that begin with
-`unhashed:`, where the documents have a hash that the crate does not form.
+identifier of a schema is a placeholder that begins with `unhashed:schema/`,
+where the documents have a hash that the crate does not form. The identifier of
+a pattern is the hash PL §1.5 states, of the record `{ module, binding }` with
+the content-addressed identity of the pattern's module in it, written `sha256:`
+and hex (SPEC-NOTES note 208).
 
 The store resolves a reference by key from the key alone (`Store.locate`,
 `fieldsOfKey` in `exec/store.ts`): it forms the keys of the array with the
@@ -735,8 +802,11 @@ completion with `Instance.complete`, or answers from a table with
 `Instance.answer`. A handler requests an effect by calling the built-in, and the
 request leaves when the event commits. A `wish` resolves to a reference to what
 the option `wishes` gives for its operands, and the clock is a document that
-`Instance.tick` writes. A stream has a document from its first event
-(`execution-and-storage.md` §4.7).
+`Instance.tick` writes. The option gives either a value, which the executor
+stores in a document of its own, or the outcome itself, whose links lead to
+documents the instance was given (`options.documents`); such a document can be
+in another space, which the address of a reference to it then names. A stream
+has a document from its first event (`execution-and-storage.md` §4.7).
 
 `exec/test/serving.test.ts`, `effects.test.ts` and `growth.test.ts` test these,
 and `compare/test/batch.test.ts` compares a batch with today's runtime under its
@@ -756,6 +826,24 @@ runtime as well, with `fetch` replaced by a function that answers the same.
 and `growth.ts` what one change of a list costs the executor at several lengths.
 Notes 479 on of `SPEC-NOTES.md` have what was tested, what the documents do not
 decide, and the figures.
+
+A pattern that calls `wish` is compared in a seeded home
+(`compare/wish-home.ts`), by `corpus.ts run`, `values-corpus.ts run`,
+`integrated.ts` and `stored-labels.ts` alike. Before the pattern is compiled,
+today's runtime is given a profile in a space of its own, under a schema whose
+confidentiality is a user atom, and a root of the home space that lists the
+profile and holds an empty list of mentionable pieces and an empty piece
+registry; today's `wish` resolves against them. The profile holds the data
+members of the result of `patterns/system/profile-home/profile-home.tsx` and is
+no running instance of it. The executor is given the same documents and a table
+that answers `#profile`, `#profileName`, `#profileBio`, `#mentionable`,
+`#pieceRegistry` and a search for a tag with the outcome today's runtime stores
+for them, so a read of the profile is a read through a reference into the other
+space. Where the executor's documents are in the runtime's storage, the profile
+is the document the storage holds, with its label. A module whose executor
+resolves any other `wish` is not run, and its result names the query.
+`compare/fixtures/wish-home.tsx` and `compare/test/wish-home.test.ts` hold one
+`wish` of each kind.
 
 A template names the template of another output by a node
 `{ op: "output", output }` (ruling Z58), a template that a plan holds at more
@@ -871,6 +959,42 @@ transactions, and the hooks are told of each as a transaction of its own, of
 cause `send` and `watermark`. The option `documents` makes documents that exist
 before the instance, outside any transaction, such as the input cells an
 argument links to.
+
+Each change comes with the record of each path of the plan it wrote
+(`exec/plan-write.ts`, the shape of `PlanWrite` in PL §4.1 without labels): the
+record of the plan whose template gives the path's label (an entry of
+`Plan.outputs` for a write of the result, of `Body.writes` for a write through a
+handle, of `Cone.writes` for the argument of a child or the request of an
+operation, and `StateCell.first`), the instance, the element keys, and the
+binding of each slot the template reaches: the positions the read of the slot
+went through when the cone instance, the handler or the body last read it, with
+the slot's observation class. A change of the result at a path above several
+outputs has one record per output and per row written. An `output` node of the
+template is reported with the inputs of the named output, and a `fold` with its
+elements in the two forms of provisional decision P31: one set of bindings whose
+paths hold `*` at the element, for a collection over a stored array whose
+elements are all plain values in place when the body has no `select`, `pick`,
+`fold`, `dynamic` or `output` node; otherwise one group per distinct set of
+element inputs with its count. The groups are kept with the assembly of the
+collection and updated when an element's cone instance is evaluated or the
+element leaves, so a change of one element updates one group whatever the length
+of the list (`Counts.groupUpdates`), over an array of references and over the
+result of another per-element construct alike. Elements are grouped by the label
+identifier the hook `labelOf` gives for each position; without it every position
+is a group of its own. The slot of an element of the result of another
+per-element construct is bound to the output of the upstream element that holds
+it. Value code reports the branch each selector of its cone takes and the key
+each pick it chooses takes (`$h.select` around the test of a conditional
+expression, `&&`, `||`, `??` and an `if` of a block, and `$h.pick` around a
+computed key; `Facts.selector` and `Facts.pick` in `src/emit.rs` say which
+selector or pick the code at a span has), and a record carries `selections` and
+`picks` for those its template reaches. A selector the runtime decides, such as
+the `through` of a scan or the `select` over the keys of a constructed record,
+is not reported. A read through a handle of a handler or a body is reported to
+the hook `read` with the body and the entry of its `Body.handles`
+(`Store.reader`), and a record carries, at each `dynamic` node of kind `handle`,
+the positions the body read through that handle before the write. The executor
+keeps none of this when it is given no hooks.
 
 `compare/runtime-transactions.ts` implements the hooks with the runtime's own
 transactions (`Runtime.edit()`): each read is read through the transaction, each

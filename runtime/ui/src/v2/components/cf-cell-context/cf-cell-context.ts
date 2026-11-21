@@ -58,6 +58,6 @@ export class CFCellContext extends RetiredElement {
   accessor label: string | undefined = undefined;
 
   /** Retained for source compatibility; unused. */
-  @property({ type: Boolean })
+  @property({ type: Boolean, reflect: true })
   accessor inline = false;
 }

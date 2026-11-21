@@ -535,6 +535,214 @@ cost. A key derived from a value is salted with a secret of the space
 before it enters a document identifier, so that an identifier does not
 reveal the value (`plan-and-label-templates.md`, §1.3).
 
+**A declared key.** By ruling the key of the elements of an array is
+declared on the array, with the array type `ArrayByKey<T, "field">`.
+`ArrayByKey<Repo, "id">` is a `Repo[]` whose elements are plain `Repo`:
+the type of an element carries no key. It is a type-level declaration
+with no run-time call. The compiler writes the key field into the schema
+of the array, and the key of an element then names that field and holds
+a salted hash of its value, with the count of earlier elements that
+have the same value of it. By ruling the declaration can name several
+fields, written as a union of field names, as
+`ArrayByKey<Repo, "owner" | "name">`. The element then has one key,
+formed across those fields: two elements are the same element where
+they agree in every one of them. What the declaration does depends on
+the case of the collection.
+
+- **An array of plain values in place.** The declaration applies. Its
+  use is a plain array that is generated from scratch, where one
+  computation produces the whole array each time, as the result of an
+  API call is: nothing upstream identifies an element there, and
+  without the declaration an element whose value changes in one member
+  is a new element. With it, an element of a new array that has the
+  same value of the field is the same element, and keeps the state of
+  its row. It applies as well to plain values that are stored in place
+  and edited where they stand, such as the records of a pattern's
+  input: an edit that leaves the field as it was changes no key.
+- **An array of references.** The declaration is not needed. The key is
+  the identity of the element's cell, which is tied to the cause of
+  adding the item, as where a handler instantiates a pattern and pushes
+  the result, and an edit of the item changes no key. *Assumed*
+  ([§13](#13-open-questions), question 43): the declaration written on
+  such an array is accepted and has no effect.
+- **The result of another per-element construct.** An element has the
+  key of the upstream element it came from, so a declared key is
+  carried through a `filter`, a `map`, and every construct after them.
+  The author declares the key once, on the source.
+
+```tsx
+// Shown for illustration only.
+type Repo = { id: number; name: string; stars: number };
+
+const response = fetchJson<{ items: ArrayByKey<Repo, "id"> }>({ url });
+// A repository keeps its row, and the instance of `RepoRow`, when a
+// new response holds the same `id` with another `stars`.
+const rows = response.result.items
+  .filter((repo) => repo.stars >= minStars)
+  .map((repo) => RepoRow.asInstance()({ repo }));
+```
+
+A key with two fields, for the same three cases. The array is a plain
+array generated from scratch, the `filter` and the `map` are the
+result of another per-element construct, and an array of references
+would need no declaration.
+
+```tsx
+// Shown for illustration only.
+type Repo = { owner: string; name: string; stars: number };
+
+const response = fetchJson<{
+  items: ArrayByKey<Repo, "owner" | "name">;
+}>({ url });
+// The key of a repository is formed across `owner` and `name`. Two
+// repositories with one `name` and two `owner`s are two elements, and
+// a repository keeps its row when a new response holds the same
+// `owner` and `name` with another `stars`.
+const rows = response.result.items
+  .filter((repo) => repo.stars >= minStars)
+  .map((repo) => RepoRow.asInstance()({ repo }));
+```
+
+`ArrayByKey` is written wherever an array type is written: in a
+pattern's input type, in the type argument of `fetchJson` or of a cell
+constructor, in the declared result type of a `computed` or a `lift`.
+The array type, the union form for several fields, and the order of the
+fields are ruled. So is that the key belongs to the array and not to
+the element. Each point below says what of it is ruled and what is
+*assumed*; the assumed ones are questions 138, 141, 145, 147, 149
+and 150 of `plan-and-label-templates.md` §8 and question 44 of
+[§13](#13-open-questions).
+
+- **The fields.** The second argument is a string literal type, or a
+  union of string literal types, and each names a required property
+  of `T` at the top level whose type is `string` or `number`.
+  *Assumed:* a literal type of a string or of a number, and a union
+  of such types, count as `string` or `number` here, as the
+  prototype's compiler has it. A name can hold any character, a `:`
+  included, because the key holds the names as strings of a fabric
+  value and joins them with no separator
+  (`plan-and-label-templates.md` §1.2, "Written forms").
+  Anything else is refused (`array-by-key:declaration`). The name of
+  the diagnostic is *assumed*. The owner deferred one extension, with
+  priority 2: a key field that holds a reference, whose identity
+  enters the key in the place of a value.
+- **The order.** By ruling the order in which the union is written has
+  no meaning: `ArrayByKey<Repo, "owner" | "name">` and
+  `ArrayByKey<Repo, "name" | "owner">` are one type and declare one
+  key. The fields enter the key in the order of their names.
+- **An element in a second array.** By ruling an element that is put
+  into a second array has the key that the second array declares, or
+  none. A `computed` that reads the elements of an
+  `ArrayByKey<Repo, "id">` and returns some of them in a new array
+  returns a plain array generated from scratch, and its elements are
+  keyed by the key that the type of that array declares, or by their
+  whole value where it declares none. The two arrays hold two copies.
+  The result of another per-element construct is not such a second
+  array: its elements have the upstream key.
+- **A reader whose type is a plain array type.** A parameter that is
+  typed `Repo[]` accepts an `ArrayByKey<Repo, "id">`. By ruling the
+  reader learns the key fields of the array it is given from the
+  schema that is traversed while the link to the array is resolved,
+  where that schema has the keyword of the declaration, and forms
+  keys with them. So the key is carried forward and the reader does
+  not repeat the declaration. That is for an array of plain values in
+  place, a plain array generated from scratch included; an element of
+  the result of another per-element construct has the upstream key
+  already. *Assumed* (`plan-and-label-templates.md` §8, question
+  145): where no schema with the keyword is met on the way, the
+  reader forms keys from the whole value. By ruling (its question 149) a
+  pattern called through `asInstance()` that is given whole a plain
+  array generated from scratch, which is what a `lift` or a `computed`
+  returns whole, is given a link to the stored output with the schema of
+  the array, and not the values. So it forms keys with the declared
+  fields. *Assumed* (its question 149): a pattern that is compiled in
+  resolves no link, and the compiler gives its collection the key fields
+  that the type of the caller's place or of the argument expression
+  declares; and the result of another per-element construct that is
+  given whole to a pattern called through `asInstance()` is given as the
+  assembled values.
+- **Per-element state with no declared key.** Provisional (P21 of the
+  continuation plan, as replaced; §13, question 47). The compiler
+  reports nothing where the body of a per-element construct holds
+  per-element state and the array type declares no key. The cost of
+  the case is real: over an array of plain values in place, and over a
+  plain array generated from scratch, the key of an element with no
+  declared key is formed from the whole value, so an edit of the row
+  is a new element. Each edit moves the state of the row to another
+  key or leaves it stored under the old one, and an array that is
+  replaced by new values leaves the documents of every key it held.
+  Per-element state is what stores a document under the element key: a
+  handler binding, a state cell, an operation, and a child called
+  through `asInstance()`. An instance of a `lift` or a `computed` in
+  the body is none. But no type of the subset says whether an array
+  holds plain values in place or references: `Item[]` is the type of
+  both, and a list that is filled by `push` of a record through a
+  handle holds references, over which the key is the identity of the
+  cell and the cost does not arise. A warning computed from the types
+  was counted by the prototype over the corpus: 168 reports in 80 of
+  the 286 modules that are accepted with a pattern, each at a `map`,
+  most of them for lists that hold references at run time. So the
+  report is the runtime's, which knows what an array holds:
+  `array-by-key:state-under-value-key`, the name *assumed*, once for
+  each collection in a session, at the first edit that moves stored
+  state to another key or leaves it under a key that left
+  (`execution-and-storage.md` §2.5). It names the two corrections:
+  declare a key on the array with `ArrayByKey`, or hold the rows as an
+  array of references. It is no diagnostic of the catalog of §10,
+  which lists what the compiler reports. The rulings that make the
+  cost are not changed by it.
+- **Two declared keys for one array.** *Assumed:* an array whose type
+  declares one key is not assignable to a parameter whose type
+  declares another key, and the compiler reports it where it sees both
+  types (`array-by-key:mismatch`). A parameter whose type declares no
+  key accepts the array. *Assumed* as well
+  (`plan-and-label-templates.md` §8, question 147): an array whose
+  type declares no key is accepted where a key is declared, and
+  nothing is reported for it. The prototype's compiler checks an
+  argument, an attribute of a tag that names a pattern, a returned
+  value under a written return type, and an initializer under an
+  annotation, and does not check an assignment or the argument of a
+  handle method. By ruling (its question 150), for the result of another
+  per-element construct over an array with a declared key: the type of a
+  `map` result keeps the key of its receiver, as the type of a `filter`
+  result does, since the elements of both results have the upstream
+  keys. So either result is reported where another key is declared. The
+  prototype's compiler does so.
+  *Assumed* (its questions 150 and 155): the type of a `map` result
+  declares the key fields of its receiver only where the element type
+  of the result has them, so the result of a `map` whose callback
+  computes a value of another type declares no key and is not
+  reported; and the type of a `flatMap`
+  result declares no key, so nothing is reported for it. The rule is for
+  plain values, in an array of
+  plain values in place and in the result of another per-element
+  construct where the upstream position holds a value; on an array of
+  references the declaration has no effect, and nothing is reported.
+
+A key that names its fields is resolved with no schema, by ruling, so
+a reader whose type declares no key, or that holds a reference to a
+member below the element, still resolves it
+(`plan-and-label-templates.md` §1.3, "A declared key field"). By ruling
+the key holds the names of the fields and one salted hash of their
+values, and not the values, so a stored reference does not show them.
+By ruling an element of a plain array generated from scratch, which a
+`lift` or a `computed` returns whole, has a reference by key as an
+element of a stored array of plain values has, with or without a
+declared key; the owner accepts a copy there if the reference proves
+complex to build for little gain (its §8, question 148). By ruling that
+holds as well for an array that a `lift` or a `computed` of an element
+body returns whole, whichever of the three cases that body is over, and
+a link to one of its elements reads the current value (its question
+151). A known limit, for now: an array at a path below a value that a
+function body returns, and an array that the reactive tier writes, give
+their elements no such reference.
+`ArrayByKey` is unrelated
+to the method `keyBy` ([§4.7](#47-cell-and-handle-methods)), which
+builds an index of a collection and declares the key of no element.
+`plan-and-label-templates.md` §1.3 owns the key, and
+`execution-and-storage.md` §2.6 has this example worked through,
+beside one of an array of references.
+
 **The index parameter keeps that property.** A callback that declares
 the index parameter and uses it is keyed as any other. The index is given
 to the nodes of the body that read it: a declaration, the returned
@@ -590,8 +798,11 @@ reuse one outcome for both.
 
 Equal elements are told apart by their order alone. Where two equal
 values stand in a list and the first is removed, the one that remains is
-the first occurrence and has the state of the first occurrence. The state
-dropped is that of the last occurrence. An author who needs state that
+the first occurrence and has the state of the first occurrence. The key
+that left is that of the last occurrence. By ruling a removal deletes
+nothing stored under a key, over references and over plain values alike,
+so a second equal value that is added later reads the state that the
+last occurrence had. An author who needs state that
 stays with one of two equal records gives the records something that
 distinguishes them.
 
@@ -638,6 +849,10 @@ comes from.
   construction such as another `map` that builds object literals, in a
   standard-library member marked "R" that builds its elements, such as
   `Object.entries`, or in a function body that built the records.
+- A record of the argument that an instance is created with, or of a
+  default, is a plain value: it is stored in place
+  (`plan-and-label-templates.md` §1.3, "Which stored forms make which
+  case").
 - A record written into a stored array by `set`, `push`, or `addUnique`
   is stored as a document of its own, and the array holds a link to it
   (`builtin-inventory.md`, "Element keys"). A record a function body
@@ -648,6 +863,57 @@ comes from.
 - The elements of a tier-R `filter` are the source's elements, with
   their keys (`plan-and-label-templates.md`, §1.3), and `find` yields one
   of them.
+
+An element that is a plain value in place can be referred to all the
+same. By ruling it is named by its collection and its key, and a
+reference to it or to a member of it resolves to the position the
+element has at each read and each write. So in a callback over plain
+values, `equals(selected, item)` is true for the element a handler
+stored in `selected`, `$checked={item.done}` writes the member of the
+element in the array, and a handler given `item` writes through it,
+before and after the elements move. By ruling a write through the
+element that changes its value keeps the element: the runtime gives
+it its new key in the same transaction and moves the state of its row
+with it, so the state cells of the callback survive and a handler can
+write two members one after the other. Two things differ from an
+element that is a cell. An edit that is not made through the element,
+such as a `set` of the whole array with a changed value at the
+position, makes a new element, so the callback is evaluated for it
+again, with new state cells; where the array declares a key
+("A declared key", above) and the edit leaves every key field as it
+was, the element stays the same element. And once the element is
+removed or
+edited, a reference to it that was stored elsewhere, by a node of the
+reactive tier or as a handle a handler was given, reads as
+`undefined`; in the runtime of today such a reference names the
+position and reads the element that stands there. A function body
+that reads the value through a handle holds a copy, by ruling: it
+stores the value where it writes it elsewhere, as today, and a cell
+it wrote keeps the value after the element is removed. A handler
+that declares a data type for the element in its state, as
+`stop: Stop`, is ruled the other way: the value it is given for the
+element is a reference by key, a member read from it, as
+`stop.position`, carries the reference with the member's path, and
+`center.set(stop.position)` stores a reference by key, which reads
+as `undefined` after the element is removed. The binding copies
+nothing under either answer, because a binding made in an element
+body binds by reference, so the stream is the same stream when the
+element's data changes. By ruling as well, a member handle read
+through a handle of handles, as `Writable<Writable<Item>[]>`, is a
+reference by key where the member is a plain value in place
+(`plan-and-label-templates.md` §1.3, "What a function body holds").
+By the prototype's measurement the runtime of today stores a link to
+the position where such a handler stores a member. `items.key(i)` is a
+handle by position, at the call and when it is stored: nothing
+rewrites it to a reference to the element, so `items.key(0)` names
+the first element, whichever it is, over an array of references, an
+array of plain values in place, and the result of another per-element
+construct alike. It is equal to the element that stands at `i` at the
+moment of the comparison. A record that a function body wrote into
+the array with `set`, `push`, or `addUnique` is a cell and not this
+case: a reference to it reads the record after the array no longer
+holds it, today and in this design
+(`plan-and-label-templates.md` §1.3).
 
 ```tsx
 // Shown for illustration only.
@@ -683,12 +949,17 @@ identified by the handling or by an explicit cause, and by no element
 key. And a statically resolved pattern called in the body is compiled
 into the surrounding instance: it has no result cell of its own, and a
 state cell it declares is a state cell of the body, per occurrence as
-any other.
+any other. A statically resolved pattern that is called through
+`asInstance()` is not compiled in: it is an instance of its own, named
+through the element key, that stays when its element leaves the
+collection ([§4.4.2](#442-patterns-and-handlers-as-callees), "A call
+that is an instance of its own").
 
 #### 4.4.2 Patterns and handlers as callees
 
 A pattern is called with one object argument, optionally through the
-modifiers `asScope(scope)` and `inSpace(space, options)`. There are two
+modifiers `asInstance()`, `asScope(scope)` and
+`inSpace(space, options)`. There are two
 kinds of callee, and they differ in what the compiler can do.
 
 - **A statically resolved pattern.** The callee is a `pattern(...)`
@@ -708,6 +979,87 @@ kinds of callee, and they differ in what the compiler can do.
   argument against the first, and gives the call the second. What the plan
   records for such a child, and the label rule of its result, are defined in
   `plan-and-label-templates.md` (§3.15).
+
+**A call that is an instance of its own.** By ruling `asInstance()` is
+a modifier of a pattern factory, beside `asScope(scope)` and
+`inSpace(space, options)`. It takes no argument and returns a factory
+of the same input and result types. A call through it, as
+`Row.asInstance()({ r })`, is an instance of its own, with an argument
+document and a result document of its own. It is not compiled into the
+surrounding instance, also where the callee is statically resolved.
+The three modifiers compose, in any order. A call through `inSpace` is
+such an instance already, so `asInstance()` adds nothing to it.
+
+```tsx
+// Shown for illustration only.
+// Each donut has a `DonutCard` instance of its own. A note that a
+// handler of the card stores stays with the donut's key when the
+// donut leaves `matches`, and is there when it returns.
+const cards = matches.map((donut) => DonutCard.asInstance()({ donut }));
+```
+
+In the body of a per-element construct the modifier decides what
+survives the element. This is the rule, with the case of the source
+named in each part.
+
+- **Without the modifier.** A statically resolved pattern called in the
+  body is compiled into the body. What it declares is kept per element
+  key, and its cone instances and its bindings exist while the key is
+  in the collection. When the key leaves, the stored state stays and
+  nothing runs: an event for a stream of the body is refused until the
+  key returns. That is the same over an array of references, over an
+  array of plain values in place, and over the result of another
+  per-element construct.
+- **With the modifier.** The call is an instance of its own from the
+  moment the element first appears. It is identified by the site of the
+  call, the collection, and the element key, in each of the three
+  cases. Over an array of references the argument holds the reference
+  to the element. Over an array of plain values in place, and over the
+  result of another per-element construct whose upstream position
+  holds a value, the argument holds the value, and the runtime writes
+  it again when the element changes while it is in the collection.
+  When the element leaves, nothing is written and the instance stays:
+  no copy is made, at that time or when a handler stores a reference
+  to the instance somewhere else. When the same key returns, the row
+  has the same instance. An event for a stream of the instance is
+  handled whether or not the element is in the collection.
+
+So a list of search results that changes with the query, with an
+action that collects a result into another list, is written with
+`asInstance()` on the row: the collected reference names an instance
+that stays when the query changes, and any state the row accumulated,
+through its handlers in particular, is there when the same result is
+served again. The key of a result is derived from upstream causes and
+is stable where the results are references or come from a per-element
+construct over a stable source
+(`plan-and-label-templates.md` §1.3). Where the results are a plain
+array generated from scratch, as the result of an API call is, the
+author declares the key with `ArrayByKey<T, "field">`, and a result
+that a later response holds again under the same value of the field, or
+of each field where the declaration names several, has the same instance
+([§4.4.1](#441-collection-callbacks), "A declared key"). Without a
+declared key such a result is keyed by its whole value, and a
+response in which one member of it changed makes a new instance.
+
+Three things are not ruled.
+
+- *Assumed* ([§13](#13-open-questions), question 41): a handler that
+  stores a reference to the result of a pattern call written in a
+  per-element body, anywhere outside the collection that the body is
+  over, is a compile error unless the call has `asInstance()` or
+  `inSpace(...)` (`element-body:result-stored-outside`). Without the
+  modifier such a result has no result cell that a reference could
+  name once the element has left. The rule is the same over the three
+  cases of a source.
+- *Assumed* ([§13](#13-open-questions), question 42): `asInstance()` is
+  legal outside the body of a per-element construct, wherever the
+  instantiation it modifies is legal, with the same meaning: the call
+  is an instance of its own and is not compiled in.
+- Nothing in the design removes an instance that no element and no
+  stored reference refers to any more. Cleanup of such instances is
+  deferred. It is the question of reclaiming storage that a removed
+  element's state cells already raise
+  (`execution-and-storage.md` §2.6).
 
 **Handlers** have the same two kinds of callee. A `handler(...)` definition
 called by the name it is declared or imported under is statically resolved:
@@ -935,7 +1287,15 @@ expressions.
   equivalent to an `action`.
 - An arrow function in any other attribute is refused
   (`pattern-context:function-creation`).
-- Spread attributes and spread children are allowed.
+- Spread attributes and spread children are allowed. By ruling a
+  spread child, `{...xs}`, is one child at the position it is written
+  at, as the expression child `{xs}` is, and so is an array literal
+  among the children that itself has a spread or a hole, which is
+  stored as one nested array value. An array literal with
+  neither has its members written out among the children
+  (`plan-and-label-templates.md` §3.4). The same whether `xs` is a
+  collection over an array of references, over an array of plain
+  values in place, or the result of another per-element construct.
 
 ### 4.6 Captures
 
@@ -1042,10 +1402,27 @@ to the handle's cell: reads its value, writes it, or neither.
 | `new X(value)`, `X.of(value)`, `X.for(cause)`, and the same three under `X.perSpace`, `X.perUser`, `X.perSession`, for `X` among `Cell`, `Writable`, `OpaqueCell`, `Stream`, `ComparableCell`, `ReadonlyCell`, `WriteonlyCell` | The constructor | R, F. In tier R the argument of `X.for` is a string literal | Creates a cell. In tier R it is a state cell of the plan. In tier F it is the cell-creation call of §5.2 |
 | `sqliteDatabase(options?)` | The function | R | Declares a SQLite database and yields its handle, of type `SqliteDb` (note below) |
 | `X.equals(a, b)`, `X.equalLinks(a, b)` | The constructor | R, F | Neither. Compares identity |
-| `asScope(scope)`, `inSpace(space, options)` | A pattern factory | Where the instantiation they modify is legal | Neither |
+| `asInstance()`, `asScope(scope)`, `inSpace(space, options)` | A pattern factory | Where the instantiation they modify is legal | Neither |
 
-Twelve notes on the table.
+Thirteen notes on the table.
 
+- **The first value of a state cell.** In tier R, `new X(value)` and
+  `X.of(value)` declare a state cell and give it a first value. By
+  ruling, a first value that is a constant, which is a static
+  initializer as [§8.8](#88-defaults-and-scopes) defines it, is the
+  default of the cell's schema: nothing is written when the cell is
+  created, and a read of a cell that nothing has written gives the
+  value. A first value that is not a constant, such as `cell(index)` in
+  the body of a collection callback or a value read from an input, is
+  computed once and written when the cell is first created, and a later
+  change of what it was computed from does not write it again. It is
+  always stored as a value and never as a reference: after
+  `Writable.of(start)` a write to the cell does not reach `start`. A
+  write below the root of a cell that holds nothing, such as
+  `draft.key("text").set("x")` on a cell with a constant first value,
+  creates the cell's document from that value with the write applied,
+  so the other members stay readable
+  (`plan-and-label-templates.md` §1.3).
 - **`for` on an instantiation.** The form is legal in every kind of
   function body. Its argument is the explicit cause of the instance, which
   `plan-and-label-templates.md` calls the tag. In a `lift` or a `computed`
@@ -1075,6 +1452,8 @@ Twelve notes on the table.
   `h.key("glaze")` is a path projection, like `h.glaze`. `h.key(k)` and
   `h.elementById(k)` with a key that is not a constant are a chosen child,
   like `a[k]` (§4.4): they observe the key and the one child it selects.
+  What `elementById` selects is the record of the key, which by ruling
+  is a cell of its own and no position of the list (note below).
   `h.get()` reads the value at the handle's path.
 - **A handle may hold a handle, and `key` flattens.** `Cell<Cell<T>>` is a
   valid type, and so is any handle type inside any handle type
@@ -1143,7 +1522,12 @@ Twelve notes on the table.
   declaration in `base/api/index.ts` today gives the result the element
   type without `undefined` (`elementById` of `IKeyable`), and it is
   published with this type when the declaration of `key` is
-  ([§8.6.1](#861-the-published-typings)).
+  ([§8.6.1](#861-the-published-typings)). By ruling the record is, as
+  today, a cell of its own, named by the address of the list and the
+  key. It is not a member of the list until a reference to it is
+  added, with `addUnique` for instance, and a reader of the list's
+  label does not cover it before that
+  (`execution-and-storage.md` §2.4).
 - **`resolveAsCell`** observes a reference and not a value. In tier R, and
   in a function body where the call is static in the sense of
   `footprint-analysis.md` §7.1, the plan records it as an `identity`
@@ -1768,7 +2152,10 @@ it is promoted.
 ### 6.2 What promotion preserves
 
 A promoted `computed` computes the same value as the unpromoted one. Four
-things differ, none of them in the value.
+things differ, none of them in the value. *Assumed*
+([§13](#13-open-questions), question 45): two forms are exceptions, in
+which the value differs as well: a template literal with a handle among
+its substitutions, and a JSX element with a `$` attribute.
 
 - **Labels.** The unpromoted result has one label, the join over the body's
   footprint. The promoted result has a label template per output path, a
@@ -1864,6 +2251,7 @@ higher-kinded types to express the same rules to TypeScript.
 | `Reactive<T>` | The same type as `T` |
 | `Default<T, V>`, `DeepDefault<V>` | `T` with a default-value annotation `V`; `V` is a literal-like type, or `typeof` of a constant with a static initializer, and its value is assignable to `T` ([§8.8](#88-defaults-and-scopes)) |
 | `PerSpace<T>`, `PerUser<T>`, `PerSession<T>`, `PerAny<T>`, `Scoped<T, S>` | `T` with a scope annotation ([§8.8](#88-defaults-and-scopes)) |
+| `ArrayByKey<T, "field">` | An array type: `T[]` with a key declaration, whose elements are plain `T`. The element key of a plain value of the array names the property and holds a salted hash of its value. The second argument can be a union of property names, as `ArrayByKey<Repo, "owner" \| "name">`, and an element then has one key across them ([§4.4.1](#441-collection-callbacks), "A declared key"). For assignability it is `T[]`, except that *assumed* an array whose type declares one key is not assignable where another key is declared (`array-by-key:mismatch`). It is a type of this design, and `base/api/index.ts` does not export it. It is not the method `keyBy` |
 | The CFC aliases | `T` with label annotations ([§8](#8-labels-as-annotations)) |
 | `VNode`, `JSONSchema`, `JSONValue`, the built-in parameter and state types | Opaque named types or ordinary object types, as the API declares them |
 | `PatternFactory<I, O>`, `HandlerFactory<E, S>` | Factory types, and data types: a value is a reference to a compiled definition, so it may sit in a pattern input or result, a cell, a handler's state, or an event. Calling one follows §4.4.2. The result of `pattern(...)` has the first type and the result of `handler(...)` the second. The result of `lift(...)` is a function, a code type |
@@ -2226,6 +2614,22 @@ Eight points complete the table.
   not its own type declares a default
   ([§7.6.1](#761-optional-properties-of-an-input);
   `plan-and-label-templates.md`, §2.5, "A default belongs to the place").
+  For a pattern compiled into its caller two more cases are ruled. A
+  path that the call leaves out, where the callee declares a default
+  for it, reads that default. And a path that the call binds to a place
+  at which nothing is stored also reads the callee's default, as it
+  does today. A reference to such a path that the callee passes on
+  carries the callee's declared default, so a reader of the callee's
+  result reads it as well. Which default is read where several are declared is
+  ruled: the one declared nearest the end of the chain of places the
+  read resolves through, the stored place last, and the reader's own,
+  a callee's included, only where no place along the chain declares
+  one. So where the place the call binds declares a default of its own,
+  the place's default is read (`plan-and-label-templates.md` §1.1 and
+  §2.5). Two things are assumed there (its §8, questions 103 and 104):
+  that an absent property reads the same default in a read of an object
+  whole as in a selection of it, and that a stored `undefined` reads as
+  an absent value does.
 - **Writability.** The second row does not ask whether the place the
   argument denotes can be written, whatever the kind of the declared
   handle. The type of a reactive value does not say whether it is an
@@ -3527,7 +3931,7 @@ from the source, its types, and the calls between its functions.
 | `footprint:widened`, `footprint:dynamic-read`, `footprint:materializer`, `side-write:not-idempotent`, `mergeable-push:read-then-push` (§10.3) | The footprint analysis of one body, with the summaries of the authored functions it calls (`footprint-analysis.md` §5.3, §7.2, §6.3, §6.6, §6.4). No other body and nothing of the plan |
 | `binding:write-to-computed` (§10.2) | The write edges and write envelopes of the callee's record (`footprint-analysis.md` §6.2), and what the bound path resolves to in the enclosing plan: an output whose template passes no reference on (`plan-and-label-templates.md` §3.11) |
 | `side-write:cycle` (§10.3) | `Plan.edges`, the edges between the cones of an instance, which are built from the write edges of every body and the slots of every cone (`plan-and-label-templates.md` §3.11) |
-| `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`, `cfc-flow:write-policy`, `cfc-flow:write-floor`, `cfc-flow:writer-fit`, `cfc-flow:ui-contract` (§10.5) | The label templates of the plan and the declared labels of their slots (`plan-and-label-templates.md` §4.4) |
+| `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`, `cfc-flow:write-policy`, `cfc-flow:write-floor`, `cfc-flow:writer-fit`, `cfc-flow:ui-contract` (§10.5) | The label templates of the plan and the declared labels of their slots (`plan-and-label-templates.md` §4.4). Provisional (P19 of the continuation plan): for a pattern that is compiled in, the four that evaluate a template on declared labels, `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`, `cfc-flow:write-floor` and `cfc-flow:writer-fit`, are computed once from the callee's record, against the declared labels of its argument, and once for each call site from what the site binds and where it puts the result; none follows an argument into the caller's template (its §1.1, "The checks on declared labels are modular") |
 
 A compiler that stops after footprint analysis reports the first five and
 none of the other eight.
@@ -3569,6 +3973,7 @@ none of the other eight.
 | `reactive:unsupported-expression` | error | `new` of a non-cell constructor other than `new Date()` with no argument (which is `function-body:ambient-read`), `await`, `yield`, `this`, `instanceof`, a tagged template whose tag is not `debugStr` (§4.4.4), `void`, or the comma operator in tier R. Also an object literal with a computed key that is not static (§4.3), and a default value or a rest element in a `const` destructuring whose initializer is not a constant expression (§4.2). An expression that is an expression statement, such as `void x;`, is `pattern-context:statement` and is not reported here | Wrap the expression in `computed(() => ...)`. For a default in a destructuring, write it as an expression: `const glaze = donut.glaze ?? "plain"` | new (replaces the remaining cases of `pattern-context:computation`) |
 | `opaque-get:invalid-call` | error | `.get()` on a value of a data type that is not `Cell`, `Writable`, or `ReadonlyCell`, a `Stream` included: to test that a stream is stored, read the position through a view typed `unknown` ([§12.9](#129-test-that-a-stream-is-present-through-a-view-typed-unknown)). A call of a `get` method that the value's own type declares, as on a `Map` or on a local object typed `{ get(): T }`, is an ordinary method call and is not reported (§4.4) | Read the value directly: `donut.name`, not `donut.get().name`. Only `Cell<T>`, `Writable<T>`, and `ReadonlyCell<T>` are read with `.get()` | carries |
 | `pattern-context:self-access` | error | `x[SELF]` where `x` is not the pattern's own input parameter, or anywhere in tier F | Read `const self = input[SELF]` in the pattern body, or destructure `[SELF]: self`, and capture `self` | carries |
+| `element-body:result-stored-outside` | error | *Assumed* (§13, question 41). A function body stores, outside the collection, a reference to the result of a pattern call that is written in the body of a per-element construct without `asInstance()` or `inSpace(...)` (§4.4.2). The same over an array of references, an array of plain values in place, and the result of another per-element construct | Call the pattern through `asInstance()`: `Row.asInstance()({ r })`. The row is then an instance of its own, which stays when its element leaves the collection | new |
 | `ses-callback:callable-capture` | error | A tier-F body inside tier R captures a function value from an enclosing function scope. In a function body: the state of a handler binding, in either spelling of §5.2, or an inline `pattern(...)` used as a callee (§4.4.2) holds or captures a function value or a value of another code type, such as a `Map`, a `Set`, a `Date`, or an `Error` | Move the function to module scope. For a value of another code type, capture data, such as an array of entries or a timestamp, and build the value inside the body that uses it | changes (now also covers a handler binding and an inline pattern in a function body, and a code type other than a function) |
 | `removed-form:helper` | warning | A direct call of `ifElse`, `when`, or `unless`, or a `str` tagged template, in tier R (§4.4.3). An error once the builder form is retired | The rewrite: `c ? a : b` for `ifElse(c, a, b)`, `c && v` for `when(c, v)`, `c \|\| f` for `unless(c, f)`, a plain template literal for `str` | new |
 | `removed-form:helper-unsupported` | error | One of those four in any other form: with schema arguments, passed as a value, or through an alias. Also one of the four, in any form, in a function body or at module scope (§4.4.3) | The same rewrite. In a function body the operator is ordinary JavaScript | new |
@@ -3674,6 +4079,8 @@ none of the other eight.
 | `cfc-flow:ui-contract` | warning | A handler whose write policy requires a UI contract is bound by elements of the pattern, and none of them sits under a surface that carries the pattern and integrity names the contract requires, so no event from this pattern's UI can satisfy the policy (`plan-and-label-templates.md` §4.4) | The handler, the contract, and the elements that bind it. Bind the handler on an element inside the surface the contract names, or name in the policy the handler that the surface's control does bind | new (reserved here, specified there) |
 | `default:not-static` | error | A `Default` value that is neither a literal-like type nor `typeof` of a module-scope constant with a static initializer (§8.8), or that is not assignable to its type. A constant whose initializer is a call or a `new` expression is such a value: `Default<typeof INITIAL>` with `const INITIAL = createInitial()` | Write the value as a literal of the declared type, in the type or as the initializer of the constant | changes (was the warning `schema-default:unresolved`) |
 | `scope:union-member` | error | A scope wrapper on a member of a union that has a member other than `null` and `undefined` | Put the scope around the union: `PerUser<A \| B>` | new |
+| `array-by-key:declaration` | error | *Assumed*, the name included (§4.4.1, "A declared key"; §13, question 44; `plan-and-label-templates.md` §8, question 138). An `ArrayByKey<T, "field">` whose second argument is not a string literal type, or a union of string literal types, each of which names a required top-level property of `T` of type `string` or `number`. The declaration concerns an array of plain values in place, a plain array generated from scratch included; on an array of references it is accepted and has no effect (§13, question 43) | Name required `string` or `number` properties of the element: `ArrayByKey<Repo, "id">`, or `ArrayByKey<Repo, "owner" \| "name">` | new |
+| `array-by-key:mismatch` | error | *Assumed*, the name included (§4.4.1, "A declared key"; §13, question 44; `plan-and-label-templates.md` §8, question 141). An array whose type declares one key with `ArrayByKey` is passed to a parameter, or assigned to a place, whose type declares another key, where the compiler sees both types. A place whose type is a plain array type accepts the array, and by ruling forms keys with the key fields that the schema traversed while the link to the array is resolved declares (`plan-and-label-templates.md` §8, questions 143 and 145). *Assumed:* an array whose type declares no key is accepted where a key is declared (its question 147). By ruling the type of the result of a `map` over an array with a declared key keeps the key of its receiver, as the type of the result of a `filter` does, so either result is reported; *assumed:* the type of a `flatMap` result declares no key, and nothing is reported for it (its question 150). The rule concerns plain values, in an array of plain values in place and in the result of another per-element construct where the upstream position holds a value; on an array of references nothing is reported | Declare the same key fields on both types, or declare a plain array type on the receiving side | new |
 
 ## 11. Corpus evidence
 
@@ -4678,3 +5085,132 @@ use, so that the other numbers stay as other documents cite them.
     alternative reports in the module of the inner binding, which reports a
     pattern for what one of its callers gives it. A pattern compiled by itself
     is not reported for the path, since the path is its input there.
+41. **A stored reference to the result of a pattern call in a
+    per-element body** (to the project owner). By ruling a pattern call
+    through `asInstance()` is an instance of its own, which stays when
+    its element leaves the collection, and a call without it is
+    compiled into the body, where an event for one of its streams is
+    refused once the element has left
+    ([§4.4.2](#442-patterns-and-handlers-as-callees)). *Assumed:* a
+    function body that stores, outside the collection, a reference to
+    the result of a pattern call written in a per-element body is a
+    compile error unless the call has `asInstance()` or `inSpace(...)`
+    (`element-body:result-stored-outside`). The rule was proposed to
+    the owner, who did not object, and it is not ruled. Not settled
+    with it: how the compiler finds such a store, since the reference
+    can reach a handler through its state, through a child's argument,
+    or through a value a `computed` returns; *assumed:* the error is
+    reported where the compiler can follow the result to a write edge
+    whose target is outside the collection, and nothing is reported
+    where it cannot. The alternative allows the store and lets the
+    reference read as nothing after the element leaves. The same over
+    an array of references, over an array of plain values in place,
+    and over the result of another per-element construct.
+42. **`asInstance()` outside a per-element body** (to the project
+    owner). The ruling gives the modifier for a pattern call in the
+    body of a per-element construct. *Assumed:* it is legal wherever
+    the instantiation it modifies is legal, with the same meaning: the
+    call is an instance of its own, with its own argument and result
+    documents, and is not compiled into the surrounding instance. On a
+    pattern factory value, whose call is such an instance already, it
+    changes one thing in an element body: the child stays when its
+    element leaves. The alternative refuses the modifier outside a
+    per-element body. Not about one case of a per-element source.
+43. **`ArrayByKey` on an array of references** (to the project owner).
+    By ruling `ArrayByKey<T, "field">`, with one field or a union of
+    several, declares the key of the plain values of an array,
+    and an array of references does not need it: its key is the
+    identity of the element's cell
+    ([§4.4.1](#441-collection-callbacks), "A declared key"). The
+    ruling does not say what the declaration is where it is written on
+    an array of references, and the owner gave no assumption. *Assumed*
+    by this document: it is accepted and has no effect. Whether a
+    position holds a plain value or a link is a fact of the stored
+    collection that the checker does not always know, and a position
+    that holds a link is keyed by its cell whatever the type says.
+    The alternative reports an error, or a hint, where the compiler
+    can tell that the elements are cells, as for an element type that
+    is a cell handle or the result type of a pattern. The question is
+    about an array of references alone. Over an array of plain values
+    in place the declaration is ruled, and over the result of another
+    per-element construct the upstream key governs.
+44. **The diagnostics of `ArrayByKey`** (to the project owner). By
+    ruling the key is declared on the array, with `ArrayByKey`. Two
+    diagnostics of the catalog ([§10](#10-diagnostics-catalog))
+    concern the declaration, and the owner agreed to both without
+    ruling them. *Assumed:* a declaration whose second argument does
+    not name required top-level properties of `T` of type `string` or
+    `number` is an error named `array-by-key:declaration`, and an
+    array whose type declares one key, passed where the compiler sees
+    that another key is declared, is an error named
+    `array-by-key:mismatch` (`plan-and-label-templates.md` §8,
+    question 141). The names follow the type name and are this
+    document's choice. The alternative for the first reports the
+    declaration as a type error of the checker with no name of its
+    own. Both concern plain values: an array of plain values in place,
+    a plain array generated from scratch included, and the result of
+    another per-element construct where the upstream position holds a
+    value. On an array of references the declaration has no effect
+    (question 43), and neither is reported for what the array holds.
+45. **A `computed` that meets the criterion of promotion and whose body
+    computes another value as a function body** (to the project owner;
+    from the prototype). §6.2 says that a promoted `computed` computes
+    the same value as the unpromoted one. Two bodies of the corpus meet
+    the criterion of §6.1 and do not. A template literal with a handle
+    among its substitutions, as `` `Double counter: ${state.value}` ``
+    with `state.value` a `Writable<number>`, converts the handle to a
+    string as a function body and reads the value where it is promoted.
+    A JSX element with a `$` attribute, as `<cf-input $value={name} />`,
+    binds the attribute both ways where it is promoted, and as a
+    function body the JSX factory of today throws. *Assumed:* such a
+    `computed` is promoted and has the value of tier R, which is what
+    the criterion gives as it is written, and the first sentence of §6.2
+    does not hold for these two forms. The alternatives leave such a
+    `computed` in tier F, or refuse it. It is question 217 of the
+    continuation plan.
+46. **A write through a handle to a path that the call of a pattern
+    compiled in leaves out** (to the project owner; from the prototype).
+    `binding:write-to-computed` (§10.2) does not report a property that
+    the argument leaves out. By ruling such a path is the callee's
+    default, held as a constant, and a write through a handle to a
+    constant is refused (`plan-and-label-templates.md` §1.1;
+    `execution-and-storage.md` §2.4). So `Counter({})`, whose `value`
+    the callee declares as a handle and increments in a handler, is
+    accepted, and every increment is refused. With a plan of its own the
+    same pattern writes the path of its argument document. *Assumed:*
+    the rules as they stand. The alternatives report the call, or give
+    the path a place so that the write lands. It is question 219 of the
+    continuation plan.
+47. **No compile-time warning for per-element state under a key formed
+    from the value** (to the project owner). *Assumed,* provisional
+    (P21 of the continuation plan as replaced, the coordinator's
+    decision, and not ruled): the compiler reports nothing for the
+    case, and the runtime reports
+    `array-by-key:state-under-value-key` at the first edit that moves
+    or leaves stored state (§4.4.1; `execution-and-storage.md` §2.5 and
+    its question 112). The alternative is a warning of the compiler
+    where the body of a per-element construct over an array whose type
+    declares no key holds a handler binding, a state cell, an
+    operation or a child called through `asInstance()`. The prototype
+    built that warning and counted it over the corpus: 168 reports in
+    80 of 286 modules, each at a `map`, 163 for a handler binding, 10
+    for an operation, 4 for a state cell and 2 for a child instance.
+    Most are for lists that are filled by `push` of a record through a
+    handle, which hold references, where the cost does not arise: the
+    type of an array does not say which of the two it holds. A warning
+    that is right needs a type, or an annotation, that says that an
+    array holds plain values in place, which the subset does not have;
+    whether it should have one is part of this question, and nothing
+    is assumed. The prototype measured the cost that the report names,
+    on a `map` over an array of plain values in place with no declared
+    key whose rows have a state cell, a handler binding, a `lift` and
+    an `asInstance()` child. Each edit of one row that a handler makes
+    through its reference to the element re-keys the row, moves its
+    state, stores the row again and leaves one new stream document: 20
+    edits leave 20 stream documents. A list of 100 records replaced 100
+    times leaves 20,202 documents, where the same list with
+    `ArrayByKey`, or as an array of references, holds 202 throughout.
+    Both follow from rulings, that a plain value edited in place is a
+    new element and that nothing stored under a key is deleted, which
+    the report does not change. It is questions 254, 255, 291 and 301
+    of the continuation plan.

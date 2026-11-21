@@ -195,7 +195,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/input-writes.tsx#default"
+            "sha256:89f343b968d209a076fd417f87efc2de1063fb57ed57f76834121a99bfa5970a"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

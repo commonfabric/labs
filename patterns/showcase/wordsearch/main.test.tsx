@@ -6,7 +6,15 @@
  *
  * Run: deno task cf test patterns/showcase/wordsearch/main.test.tsx
  */
-import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
 import {
   findNodeByProp,
   textContent,
@@ -54,6 +62,8 @@ export default pattern(() => {
         ),
       },
       { assertion: assert(() => onlyForwards(maker.puzzle)) },
+      // The piece is named by its title.
+      { assertion: assert(() => maker[NAME] === "Fruit") },
       { assertion: assert(() => textContent(maker[UI]).includes("banana")) },
       // The Play tab plays the same puzzle, nothing found yet.
       {

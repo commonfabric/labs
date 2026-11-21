@@ -1391,6 +1391,10 @@ export class RemoteSessionFactory implements SessionFactory {
   readonly #defaultSigner: Signer;
   readonly #createSocket: MemorySocketFactory;
 
+  /** Whether this factory's sessions are demand (`Options.demand` of the
+   * storage manager; the memory client's `ConnectOptions.demand`). */
+  readonly #demand: boolean;
+
   /** The chains held here, one of which a session's open presents. */
   readonly #delegations = new DelegationStore();
 
@@ -1399,11 +1403,13 @@ export class RemoteSessionFactory implements SessionFactory {
     defaultSigner: Signer,
     createSocket: MemorySocketFactory = createMemorySocket,
     clientBuild?: ClientBuild,
+    demand = true,
   ) {
     this.#resolveAddress = resolveAddress;
     this.#defaultSigner = defaultSigner;
     this.#clientInfo = createClientInfo(clientBuild);
     this.#createSocket = createSocket;
+    this.#demand = demand;
   }
 
   /** @inheritDoc */
@@ -1652,6 +1658,7 @@ export class RemoteSessionFactory implements SessionFactory {
         transport,
         client: this.#clientInfo,
         instanceNames: this.#instanceNames,
+        demand: this.#demand,
         syncCidReferences: this.#syncCidReferences,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
@@ -1694,6 +1701,7 @@ export class RemoteSessionFactory implements SessionFactory {
         signal,
         client: this.#clientInfo,
         instanceNames: this.#instanceNames,
+        demand: this.#demand,
         syncCidReferences: this.#syncCidReferences,
       });
       return client.serverFlags;
@@ -1717,6 +1725,7 @@ export class RemoteSessionFactory implements SessionFactory {
         signal,
         client: this.#clientInfo,
         instanceNames: this.#instanceNames,
+        demand: this.#demand,
         syncCidReferences: this.#syncCidReferences,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
@@ -1792,6 +1801,7 @@ export class RemoteSessionFactory implements SessionFactory {
         signal,
         client: this.#clientInfo,
         instanceNames: this.#instanceNames,
+        demand: this.#demand,
         syncCidReferences: this.#syncCidReferences,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,

@@ -8,6 +8,7 @@ import {
   UI,
   type VNode,
 } from "commonfabric";
+import { promptAbout } from "./suggestion.ts";
 
 // ===== Types =====
 
@@ -41,10 +42,9 @@ const Checklist = pattern<ChecklistInput, ChecklistOutput>(
     // state and makes no call until one arrives. A checklist with no topic
     // has no steps to draw up, so the model is asked only once a caller names
     // what the steps are for.
-    const prompt = computed(() => {
-      if (!topic) return "";
-      return `Generate a checklist of actionable steps for: ${topic}`;
-    });
+    const prompt = computed(() =>
+      promptAbout(topic, "Generate a checklist of actionable steps for: ")
+    );
 
     const response = generateObject<{ items: ChecklistItem[] }>({
       system:
@@ -90,7 +90,7 @@ const Checklist = pattern<ChecklistInput, ChecklistOutput>(
             {ifElse(
               response.pending,
               <div style="color: var(--cf-theme-color-text-secondary);">
-                <cf-loader show-elapsed /> Generating checklist...
+                <cf-loader showElapsed /> Generating checklist...
               </div>,
               <div>
                 {items.map((item) => (

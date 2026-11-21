@@ -570,7 +570,11 @@ fn commit_edit_has_the_footprint_of_section_12_3() {
             "state.message : identity, shape",
             "state.myProfile : identity (resolved), shape",
             "state.myProfile-> : shape",
-            "state.room : identity",
+            // FA §12.2 has the two calls of `spaceOf` in the right operand
+            // of `||`. The source now throws for an absent link first and
+            // calls `isInRoomOf` unconditionally, so the resolution of
+            // `room` is static.
+            "state.room : identity (resolved)",
         ]
     );
     assert_eq!(
@@ -589,8 +593,9 @@ fn commit_edit_has_the_footprint_of_section_12_3() {
         [
             "labelMetadata",
             "link: event.message, state.message",
+            // No `link: state.room`: its resolution is static (see the
+            // reads above), and is no journaled read.
             "link: state.composer->editing",
-            "link: state.room",
         ]
     );
     assert_eq!(
@@ -644,4 +649,39 @@ fn a_write_through_what_a_site_returned_is_an_edge_or_an_envelope_that_names_the
         ["argument n0", "created n1", "created n2", "request n3"]
     );
     assert_eq!(record.envelopes, ["created n0", "created n3"]);
+}
+
+// ----- §5.2: W6 on a value whose type declares no structure -----
+
+/// A body that walks a view through helpers over `unknown`, composing
+/// `kids` `depth` times, as `patterns/apps/weekly-calendar/view-walk.ts`
+/// does.
+fn walk_of_depth(depth: usize) -> Record {
+    let mut call = "ui".to_string();
+    for _ in 0..depth {
+        call = format!("kids({call})[0]");
+    }
+    analyze(&format!(
+        "const isRecord = (value: unknown): value is Record<PropertyKey, unknown> => typeof value === \"object\" && value !== null;\n\
+         const childNodes = (node: unknown): unknown[] => {{ if (Array.isArray(node)) return node; if (!isRecord(node)) return []; const ui = node[\"$UI\"]; return [...(ui === undefined ? [] : [ui]), ...(Array.isArray(node.children) ? node.children : [node.children])]; }};\n\
+         const kids = (node: unknown): unknown[] => childNodes(node).flatMap((child) => Array.isArray(child) ? child : [child]);\n\
+         const f = lift((ui: unknown) => String({call}));\n"
+    ))
+}
+
+#[test]
+fn a_walk_over_a_value_of_no_declared_type_records_entries_bounded_by_its_keys_not_by_its_depth() {
+    // FA §5.2, W6: a path that enters a recursive type a second time
+    // widens. Over `unknown` no type says where it re-enters, and the
+    // crate takes a path that repeats a segment sequence at once, `XX`,
+    // as re-entering the position after the first `X`.
+    let shallow = walk_of_depth(3);
+    let deep = walk_of_depth(6);
+    assert!(
+        deep.reads.len() <= 16,
+        "{} entries: {:?}",
+        deep.reads.len(),
+        deep.reads
+    );
+    assert_eq!(shallow.reads.len(), deep.reads.len(), "{:?}", deep.reads);
 }

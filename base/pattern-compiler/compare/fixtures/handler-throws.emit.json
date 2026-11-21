@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/handler-throws.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst record = handler((_event, { label, last }) => {\n  if (last.get() === undefined) throw new Error(\"nothing recorded yet\");\n  last.set(label);\n});\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/handler-throws.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ last: $h.slot(4), record: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { label, last }) => {\n  if (last.get() === undefined) throw new Error(\"nothing recorded yet\");\n  last.set(label);\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst record = handler((_event, { label, last }) => {\n  if (last.get() === undefined) throw new Error(\"nothing recorded yet\");\n  last.set(label);\n});\n\nconst $default = (pattern(\"sha256:3b8510b7d1c75a2ea85fccb21437951933c361332ed14ae1981d4b105f7e6efc\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ last: $h.slot(4), record: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { label, last }) => {\n  if (last.get() === undefined) throw new Error(\"nothing recorded yet\");\n  last.set(label);\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -175,7 +175,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/handler-throws.tsx#default"
+            "sha256:3b8510b7d1c75a2ea85fccb21437951933c361332ed14ae1981d4b105f7e6efc"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

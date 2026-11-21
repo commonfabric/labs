@@ -119,27 +119,6 @@ export async function validateEmbeddedSpaces(
 }
 
 /**
- * Whether a reference names its parts in the self-identifying spellings — a
- * handle and a DID — rather than in ones only a session resolves.
- *
- * A reference bound for a durable link has to. A link stores the id and the
- * space verbatim, so a slug or a space name written into one is an edge that
- * resolves to nothing: the name was never the identity, and nothing downstream
- * of the write is holding a session to look it up with. `cf`'s own intake
- * resolves both before it uses them, which is why it takes the wider
- * vocabulary; a value crossing into stored data has no such step and is held
- * to the narrower one.
- *
- * The colon is what decides, not the length. A handle always carries one and
- * a slug never may, where the length rule alone would read any slug past
- * twenty characters as a handle — and a slug may run to eighty.
- */
-export function namesResolvedParts(ref: NormalizedLLMFriendlyRef): boolean {
-  return !isSlugAddress(ref.pieceId) && isPieceHandle(ref.pieceId) &&
-    (ref.embeddedSpace === undefined || isDID(ref.embeddedSpace));
-}
-
-/**
  * Hold the piece segment to one of the two vocabularies a reference admits.
  *
  * A colon is what separates them: a handle carries one (`of:fid1:...`) and a

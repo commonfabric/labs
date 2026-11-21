@@ -389,6 +389,12 @@ const samePath = (a: readonly string[], b: readonly string[]): boolean =>
 export const keyFieldsOf = (schema: Schema | undefined): string[] =>
   typeof schema === "object" ? schema.keyFields ?? [] : [];
 
+/**
+ * The body a read is made through a handle of, and the entry of its
+ * `Body.handles` that is the handle.
+ */
+export type ReadThrough = { body: number; handle: number };
+
 /** A reference to a position of a document. */
 export class Ref {
   constructor(
@@ -687,6 +693,13 @@ export class Store {
   readonly #space: string | undefined;
 
   /**
+   * The space of each document that is in another space than the store's:
+   * one that exists outside the instances of the store, which a reference
+   * leads to.
+   */
+  readonly spaces = new Map<string, string>();
+
+  /**
    * Constructs an instance with no document. `secret` is the secret of
    * the space; without it the store mints one, and its keys of plain
    * values then differ from those of every other store. `space` is the
@@ -837,6 +850,16 @@ export class Store {
   onWrite: ((doc: string, path: readonly string[]) => void) | undefined;
 
   /**
+   * Called for a write that leaves the value at its path as it was, with
+   * the document, the path and the schema of the reference the write was
+   * made through. The write is no change: nothing is journaled and no
+   * reader is marked.
+   */
+  onUnchanged:
+    | ((doc: string, path: readonly string[], schema?: Schema) => void)
+    | undefined;
+
+  /**
    * Called after each change of a document, with what changed: whoever
    * keeps an index from a position to its readers marks them
    * (`scheduler-and-serving-loop.md` §3.1). `keyed` is absent where the
@@ -871,9 +894,25 @@ export class Store {
    * the path: the position of each link the read follows, and the
    * position it ends at. Whoever keeps the documents in a store with a
    * journal of reads, as the runtime's transactions do, records the read
-   * there.
+   * there. `by` is the body and the entry of its `Body.handles` that the
+   * read is made through, while `reader` names one.
    */
-  onRead: ((doc: string, path: readonly string[]) => void) | undefined;
+  onRead:
+    | ((
+      doc: string,
+      path: readonly string[],
+      by?: ReadThrough,
+    ) => void)
+    | undefined;
+
+  /**
+   * The body and the handle of the read being made through a handle, and
+   * each position that read went through so far (PL §1.1,
+   * `DynamicRead`).
+   */
+  reader:
+    | { by: ReadThrough; seen: { doc: string; path: string[] }[] }
+    | undefined;
 
   /**
    * What each change of a transaction in progress replaced, in order,
@@ -1458,8 +1497,9 @@ export class Store {
   addressOf(named: Ref): ElementPart {
     const at = named.path.findLastIndex(isKeySegment);
     if (at < 0) {
+      const space = this.spaces.get(named.doc) ?? this.#space;
       return {
-        ...(this.#space === undefined ? {} : { space: this.#space }),
+        ...(space === undefined ? {} : { space }),
         document: named.doc,
         path: [...named.path],
       };
@@ -1630,7 +1670,7 @@ export class Store {
           };
         }
         reads?.push({ doc, path: at });
-        this.onRead?.(doc, at);
+        this.#read(doc, at);
         const below = rest.reduce(schemaBelow, value.$link.schema);
         // The schema of the first link crossed, where the reference has
         // none of its own, and the default of the last link that
@@ -1728,7 +1768,7 @@ export class Store {
       named_ = [...named_, segment];
     }
     reads?.push({ doc, path: at });
-    this.onRead?.(doc, at);
+    this.#read(doc, at);
     return {
       ref: new Ref(doc, at, schema),
       value,
@@ -1739,6 +1779,13 @@ export class Store {
       given,
       fallback,
     };
+  }
+
+  /** Reports a position a read went through (`onRead`, `reader`). */
+  #read(doc: string, path: string[]): void {
+    const { reader } = this;
+    reader?.seen.push({ doc, path });
+    this.onRead?.(doc, path, reader?.by);
   }
 
   /**
@@ -1938,6 +1985,11 @@ export class Store {
   ): unknown {
     if (isLink(value)) {
       const { doc, path, schema } = value.$link;
+      // The position of a link the value holds is one the read crossed,
+      // where its path names the position and not an element by its key.
+      if (!at.path.some(isKeySegment)) {
+        reads?.push({ doc: at.doc, path: at.path });
+      }
       return this.#deep(new Ref(doc, path, schema), reads, open, copies);
     }
     if (isStream(value)) return { $stream: true };
@@ -2063,6 +2115,7 @@ export class Store {
       };
       this.docs.set(doc, document);
     } else if (JSON.stringify(located.value) === JSON.stringify(value)) {
+      this.onUnchanged?.(doc, path, located.ref.schema);
       return;
     } else {
       this.onWrite?.(doc, path);

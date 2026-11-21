@@ -635,10 +635,9 @@ describe("read-accounting", () => {
       ).get();
       const result = data.value +
         data.items.reduce((sum, value) => sum + value, 0);
-      const before = tx.getReactivityLog?.();
-      expect(before).toBeDefined();
+      const before = tx.getReactivityLog();
       const counts = finish?.(0);
-      const after = tx.getReactivityLog?.();
+      const after = tx.getReactivityLog();
       expect(after).toEqual(before);
       tx.abort();
       return { result, log: after, counts };

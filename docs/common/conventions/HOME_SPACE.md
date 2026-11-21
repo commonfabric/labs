@@ -206,20 +206,23 @@ committed it ([`principal-of.md`](../../features/principal-of.md)).
 
 A profile's face is its `picture`, or else its legacy `avatar` text, when that
 value's own cell represents its owner. The runtime decides whom a value's own
-cell represents by one rule (`runtime/runner/src/cfc/written-principal.ts`):
-the one principal the label of the cell a write to the field lands in names,
-when the value is the whole of that cell and no link stored there leads
-elsewhere. That label says nothing of who pointed the field at the cell; a
-profile's owner-protected fields keep their write redirects from being
-repointed. A pattern asks
+cell represents by one rule (`runtime/runner/src/cfc/written-principal.ts`): the
+one principal the label of the cell a write to the field lands in names, when
+the value is the whole of that cell, that cell is in the space of the document
+holding the field, and no link stored there leads elsewhere. That label says
+nothing of who pointed the field at the cell. A cell in another space is
+refused, since its label says who wrote the value there, not that anyone put it
+at this field. Within the profile's space, a visitor can still point a face
+field at another cell the owner wrote there. A reader names the field through
+the profile, as `profile.key("picture")` does: a write redirect of its own to
+the field, stored in its own space, is refused like any other. A pattern asks
 with `writtenPrincipalOf()`, a host holding a runtime with
 `writtenPrincipalAt()`, and a host holding cell handles with
-`observeWrittenPrincipal()` from `@commonfabric/runtime-client`. Patterns read
-a face with `profileFace()` from
-`patterns/system/profile-face/profile-face.ts`, which compares that principal
-with `profileOwnerOf()`; `cf-profile-badge` compares it with the principal its
-seal shows. So a picture a visitor set, or one stored before pictures were
-labeled, is not shown as the owner's face.
+`observeWrittenPrincipal()` from `@commonfabric/runtime-client`. Patterns read a
+face with `profileFace()` from `patterns/system/profile-face/profile-face.ts`,
+which compares that principal with `profileOwnerOf()`; `cf-profile-badge`
+compares it with the principal its seal shows. So a picture a visitor set, or
+one stored before pictures were labeled, is not shown as the owner's face.
 
 A field's writes are checked only once a write stores its policy in the value
 cell. A field with a default, such as `name` or `bio`, has its owner-protected
@@ -364,17 +367,25 @@ delivered there stays readable. The host's share intake follows the offers in
 the inbox Home holds and in each one it retains, vets each as the user, and
 registers each one that passes in Home's shared-space catalog through Home's
 `registerSharedSpace` stream; it leaves every offer in its inbox. Home creates
-an inbox from `patterns/system/private-inbox/private-inbox.tsx` only when it
-holds none and no profile points at one. An inbox that fails vetting is neither
+an inbox from `patterns/system/private-inbox/private-inbox.tsx` once, in a step
+of its own that reads nothing labeled before it, and records it in
+`defaultPattern.ownPrivateInbox`. The host has Home take that step, through
+Home's `createOwnPrivateInbox` stream, before an ensure for which Home may need
+it, and waits for it, so a creation that fails fails the ensure. Home takes that
+inbox when it holds none and
+no profile points at one, and in place of an inbox it did not make, such as a
+loom daemon's, which it then retains. An inbox that fails vetting is neither
 adopted nor replaced, and Home keeps what it holds, or holds none. While Home
-holds an inbox, it points each profile that points at no inbox at it, through
-the profile's `inbox` field, which is how a sender finds it, and leaves a
-profile pointing at another inbox as it is. While it holds none, as after a
+holds an inbox, it points each profile that points at no inbox, or at an inbox
+Home gave up or replaced, at it, through the profile's `inbox` field, which is
+how a sender finds it, and leaves a profile pointing at any other inbox as it
+is. While it holds none, as after a
 failed vetting, a profile that points at no inbox stays unpointed. A failed
 vetting is recorded in `defaultPattern.privateInboxRefusal`, under `refusal`:
 the host's reason code, a link to the refused inbox, and when Home first
 recorded it. Each ensure, which is to say the next bring-up of Home in a runtime
-worker, clears it when Home adopts or creates an inbox, when the deciding
+worker, that records no refusal itself clears it when Home adopts an inbox or
+takes its own, when the deciding
 profile points at the inbox Home holds, or when no profile points at the refused
 inbox any longer. Nothing else clears it automatically in between, though the
 owner can clear it by replacing the refused inbox, as below, and the owner's own
@@ -383,19 +394,21 @@ stream. It is read from Home's root like any other field of Home, the root being
 the link the `#default` wish answers with, as "Custom Home Pattern" below says,
 and Home shows it as a notice above its tabs, by its code and time alone. The
 notice's "Use a new inbox" button, which a click on it sends, has Home clear the
-refusal, keep its inbox or create its own, and point the profiles that point at
+refusal, keep its inbox or take its own, and point the profiles that point at
 the refused inbox at it, and records that in
-`defaultPattern.privateInboxReplacement`. A profile created once Home holds the
-inbox is pointed at it as it is created; one created earlier is pointed by the
-next ensure. Home decides only when an ensure runs, so a pointer that moves is
+`defaultPattern.privateInboxReplacement`. The notice offers no button while Home
+holds no inbox and the refused inbox is Home's own, which the click never takes.
+A profile created once Home holds the inbox is pointed at it as it is created;
+one created earlier is pointed by the next ensure. Home decides only when an
+ensure runs, so a pointer that moves is
 decided at the first bring-up of Home in the next runtime worker to start, once
 the current worker's ensure has succeeded. A loom daemon does the same in the
 other direction, adopting the inbox a profile advertises and never replacing a
 pointer to a different one. A client that would otherwise create an inbox of its
 own, as a loom daemon does, asks Home for it through
 `defaultPattern.requestPrivateInbox`, naming the profile it finds the owner by:
-Home ensures its inbox with an event naming nothing, which keeps or creates
-Home's inbox and points the profiles that point at none but adopts nothing,
+Home ensures its inbox with an event naming nothing, which keeps Home's inbox or
+takes its own and points the profiles that point at none but adopts nothing,
 and its handling's receipt links to Home's answer for that profile, which
 reads `ensured` once the profile points at Home's inbox, or a final status
 saying why it never will.

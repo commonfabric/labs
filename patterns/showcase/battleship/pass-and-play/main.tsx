@@ -5,6 +5,7 @@ import {
   pattern,
   Stream,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 
@@ -51,6 +52,7 @@ interface BoardCell {
 type Input = Record<string, never>;
 
 export interface Output {
+  [UI]: VNode;
   game: Writable<GameState>;
   fireShot: Stream<{ row: number; col: number }>;
   passDevice: Stream<void>;

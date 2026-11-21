@@ -1,0 +1,319 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Aisle": {
+        "properties": {
+          "description": {
+            "default": "",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "type": "object"
+      },
+      "Department": {
+        "properties": {
+          "description": {
+            "default": "",
+            "type": "string"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "location": {
+            "$ref": "#/$defs/WallPosition",
+            "default": "unassigned"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "icon",
+          "location",
+          "description"
+        ],
+        "type": "object"
+      },
+      "Entrance": {
+        "properties": {
+          "position": {
+            "$ref": "#/$defs/WallPosition"
+          }
+        },
+        "required": [
+          "position"
+        ],
+        "type": "object"
+      },
+      "ItemLocation": {
+        "properties": {
+          "correctAisle": {
+            "type": "string"
+          },
+          "incorrectAisle": {
+            "default": "",
+            "type": "string"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "itemName",
+          "correctAisle",
+          "incorrectAisle",
+          "timestamp"
+        ],
+        "type": "object"
+      },
+      "WallPosition": {
+        "enum": [
+          "front-left",
+          "front-center",
+          "front-right",
+          "back-left",
+          "back-center",
+          "back-right",
+          "left-front",
+          "left-center",
+          "left-back",
+          "right-front",
+          "right-center",
+          "right-back",
+          "unassigned",
+          "not-in-store",
+          "in-center-aisle"
+        ]
+      }
+    },
+    "properties": {
+      "aisles": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Aisle"
+        },
+        "type": "array"
+      },
+      "departments": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Department"
+        },
+        "type": "array"
+      },
+      "entrances": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Entrance"
+        },
+        "type": "array"
+      },
+      "itemLocations": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/ItemLocation"
+        },
+        "type": "array"
+      },
+      "storeName": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "My Store",
+        "type": "string"
+      }
+    },
+    "required": [
+      "storeName",
+      "aisles",
+      "departments",
+      "entrances",
+      "itemLocations"
+    ],
+    "type": "object"
+  },
+  "pattern": "apps/store-mapper/store-mapper.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Aisle": {
+        "properties": {
+          "description": {
+            "default": "",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "type": "object"
+      },
+      "Department": {
+        "properties": {
+          "description": {
+            "default": "",
+            "type": "string"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "location": {
+            "$ref": "#/$defs/WallPosition",
+            "default": "unassigned"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "icon",
+          "location",
+          "description"
+        ],
+        "type": "object"
+      },
+      "Entrance": {
+        "properties": {
+          "position": {
+            "$ref": "#/$defs/WallPosition"
+          }
+        },
+        "required": [
+          "position"
+        ],
+        "type": "object"
+      },
+      "ItemLocation": {
+        "properties": {
+          "correctAisle": {
+            "type": "string"
+          },
+          "incorrectAisle": {
+            "default": "",
+            "type": "string"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "itemName",
+          "correctAisle",
+          "incorrectAisle",
+          "timestamp"
+        ],
+        "type": "object"
+      },
+      "WallPosition": {
+        "enum": [
+          "front-left",
+          "front-center",
+          "front-right",
+          "back-left",
+          "back-center",
+          "back-right",
+          "left-front",
+          "left-center",
+          "left-back",
+          "right-front",
+          "right-center",
+          "right-back",
+          "unassigned",
+          "not-in-store",
+          "in-center-aisle"
+        ]
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "aisleCount": {
+        "type": "number"
+      },
+      "aisles": {
+        "items": {
+          "$ref": "#/$defs/Aisle"
+        },
+        "type": "array"
+      },
+      "correctionCount": {
+        "type": "number"
+      },
+      "departments": {
+        "items": {
+          "$ref": "#/$defs/Department"
+        },
+        "type": "array"
+      },
+      "deptCount": {
+        "type": "number"
+      },
+      "entrances": {
+        "items": {
+          "$ref": "#/$defs/Entrance"
+        },
+        "type": "array"
+      },
+      "itemLocations": {
+        "items": {
+          "$ref": "#/$defs/ItemLocation"
+        },
+        "type": "array"
+      },
+      "outline": {
+        "type": "string"
+      },
+      "storeName": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "storeName",
+      "aisles",
+      "departments",
+      "entrances",
+      "itemLocations",
+      "outline",
+      "aisleCount",
+      "deptCount",
+      "correctionCount",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

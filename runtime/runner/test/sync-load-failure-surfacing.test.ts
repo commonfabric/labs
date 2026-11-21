@@ -19,7 +19,7 @@ import {
   StorageManager,
 } from "../src/storage/v2.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import { captureLogs } from "./support/log-capture.ts";
+import { captureLogs } from "./support/captured-logs.ts";
 
 // The silent-collapse pin for sync-layer failures.
 //
@@ -407,7 +407,7 @@ describe("sync load failure surfacing", () => {
           { space: foreignSpace, id: "of:own-printed" as never, scope: "user" },
           { principal: serviceSigner.did() },
         );
-        expect(logs.lines("own-instance-read-refused")).toEqual([
+        expect(logs.textsOf("own-instance-read-refused")).toEqual([
           expect.stringContaining(
             `sync completed without data for of:own-printed in ${foreignSpace}: ` +
               "ForeignScopedReadRefusedError: ",

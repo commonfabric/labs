@@ -1,0 +1,1 @@
+{"date":"2026-11-20","from":{"k":"unit","s":"cli","n":"cf profile command actions > profileRenameAction() > renames the profile to the trimmed name"},"to":{"k":"unit","s":"cli","n":"profile-command > profileRenameAction() > renames the profile to the trimmed name"}}

@@ -224,3 +224,32 @@ Deno.test("command identity wins over the shared session identity", async () => 
       JSON.stringify(cells(first)[1].cause),
   );
 });
+
+Deno.test("session identity spans the source, not the session ID alone", async () => {
+  const scope = { agentConnector: "session-index" };
+  const first = materialize(
+    await planStableArrayCells({
+      sessions: [
+        { sourceId: "codex", nativeSessionId: "session-1", title: "Old" },
+        { sourceId: "claude", nativeSessionId: "session-1", title: "Old" },
+      ],
+    }, scope),
+  );
+  const updated = materialize(
+    await planStableArrayCells({
+      sessions: [
+        { sourceId: "claude", nativeSessionId: "session-1", title: "New" },
+        { sourceId: "codex", nativeSessionId: "session-1", title: "New" },
+      ],
+    }, scope),
+  );
+
+  const cells = (result: ReturnType<typeof materialize>) =>
+    (result.value as Record<string, unknown>).sessions as FakeCell[];
+  assertEquals(cells(first)[0].cause, cells(updated)[1].cause);
+  assertEquals(cells(first)[1].cause, cells(updated)[0].cause);
+  assert(
+    JSON.stringify(cells(first)[0].cause) !==
+      JSON.stringify(cells(first)[1].cause),
+  );
+});

@@ -1,4 +1,12 @@
-import { Default, NAME, pattern, Stream, UI } from "commonfabric";
+import {
+  Default,
+  NAME,
+  pattern,
+  Stream,
+  UI,
+  type VNode,
+  Writable,
+} from "commonfabric";
 import { getValue, roll } from "./dice-handlers.ts";
 
 interface PatternState {
@@ -6,6 +14,7 @@ interface PatternState {
 }
 
 export interface PatternOutput {
+  [UI]: VNode;
   value: number;
   something: {
     nested: string;
@@ -14,6 +23,7 @@ export interface PatternOutput {
 }
 
 export default pattern<PatternState, PatternOutput>((state) => {
+  const report = new Writable("");
   return {
     [NAME]: `Dice Roller`,
     [UI]: (
@@ -21,15 +31,16 @@ export default pattern<PatternState, PatternOutput>((state) => {
         <cf-button onClick={roll(state)}>
           Roll D6
         </cf-button>
-        <cf-button onClick={roll(state)}>
-          getValue(state), Roll D20
+        <cf-button onClick={roll({ value: state.value, sides: 20 })}>
+          Roll D20
         </cf-button>
         <span id="dice-result">
           Current value: {state.value}
         </span>
-        <cf-button onClick={getValue(state)}>
+        <cf-button onClick={getValue({ value: state.value, report })}>
           Check value
         </cf-button>
+        <span id="dice-report">{report}</span>
       </div>
     ),
     value: state.value,

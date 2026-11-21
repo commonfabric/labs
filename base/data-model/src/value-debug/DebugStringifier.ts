@@ -685,13 +685,9 @@ export class DebugStringifier {
    * string is one empty line.
    */
   static #linesOf(value: string): string[] {
-    const lines = value.split(AFTER_LINE_BREAK_REGEX);
-
-    if ((lines.length > 1) && (lines.at(-1) === "")) {
-      lines.pop();
-    }
-
-    return lines;
+    // A split by a regular expression tries no match at the end of the
+    // string, so a line break there leaves no empty string after it.
+    return value.split(AFTER_LINE_BREAK_REGEX);
   }
 
   /**

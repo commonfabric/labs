@@ -66,8 +66,8 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                2,
-                3
+                3,
+                4
               ],
               "within": [
                 {
@@ -90,7 +90,8 @@
               ],
               "slots": [
                 0,
-                1
+                1,
+                2
               ],
               "within": [],
               "writes": []
@@ -110,7 +111,7 @@
               "slots": [
                 0,
                 1,
-                4
+                5
               ],
               "within": [],
               "writes": []
@@ -125,8 +126,8 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                5,
-                6
+                6,
+                7
               ],
               "within": [
                 {
@@ -145,8 +146,8 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                10,
-                11
+                13,
+                14
               ],
               "within": [
                 {
@@ -169,9 +170,11 @@
                 6
               ],
               "slots": [
-                7,
                 8,
-                9
+                9,
+                10,
+                11,
+                12
               ],
               "within": [],
               "writes": []
@@ -237,7 +240,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 3
+                "slot": 4
               }
             },
             {
@@ -247,8 +250,21 @@
               "kept": false,
               "path": [],
               "template": {
-                "op": "shared",
-                "template": 3
+                "branches": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "condition": {
+                  "op": "slot",
+                  "slot": 0
+                },
+                "op": "select",
+                "selector": 0
               }
             },
             {
@@ -312,7 +328,7 @@
                 "inputs": [
                   {
                     "op": "slot",
-                    "slot": 4
+                    "slot": 5
                   }
                 ],
                 "op": "derive"
@@ -400,7 +416,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 6
+                "slot": 7
               }
             },
             {
@@ -425,7 +441,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 11
+                "slot": 14
               }
             },
             {
@@ -487,7 +503,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/block-const.tsx#default"
+            "sha256:4f78804f8b43d80abfc48f2039a130caf2848bdb7d81ddf5a9149fb0ca1f8d07"
           ],
           "picks": [],
           "selectors": [
@@ -526,6 +542,16 @@
             },
             {
               "observes": "identity",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
               "path": [
                 "items"
               ],
@@ -617,6 +643,26 @@
             {
               "observes": "value",
               "path": [
+                "spare"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "fleet"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "value",
+              "path": [
                 "done"
               ],
               "root": {
@@ -640,7 +686,7 @@
             {
               "body": {
                 "op": "slot",
-                "slot": 2
+                "slot": 3
               },
               "collection": 0,
               "op": "fold"
@@ -653,7 +699,7 @@
                 "inputs": [
                   {
                     "op": "slot",
-                    "slot": 5
+                    "slot": 6
                   },
                   {
                     "op": "output",
@@ -673,7 +719,7 @@
                 "inputs": [
                   {
                     "op": "slot",
-                    "slot": 10
+                    "slot": 13
                   }
                 ],
                 "op": "derive"
@@ -684,8 +730,20 @@
             {
               "branches": [
                 {
-                  "op": "slot",
-                  "slot": 1
+                  "by": {
+                    "expression": true
+                  },
+                  "inputs": [
+                    {
+                      "op": "slot",
+                      "slot": 1
+                    },
+                    {
+                      "op": "slot",
+                      "slot": 2
+                    }
+                  ],
+                  "op": "derive"
                 },
                 {
                   "op": "const"
@@ -701,17 +759,41 @@
             {
               "branches": [
                 {
-                  "op": "slot",
-                  "slot": 8
+                  "by": {
+                    "expression": true
+                  },
+                  "inputs": [
+                    {
+                      "op": "slot",
+                      "slot": 9
+                    },
+                    {
+                      "op": "slot",
+                      "slot": 11
+                    }
+                  ],
+                  "op": "derive"
                 },
                 {
-                  "op": "slot",
-                  "slot": 9
+                  "by": {
+                    "expression": true
+                  },
+                  "inputs": [
+                    {
+                      "op": "slot",
+                      "slot": 10
+                    },
+                    {
+                      "op": "slot",
+                      "slot": 12
+                    }
+                  ],
+                  "op": "derive"
                 }
               ],
               "condition": {
                 "op": "slot",
-                "slot": 7
+                "slot": 8
               },
               "op": "select",
               "selector": 4

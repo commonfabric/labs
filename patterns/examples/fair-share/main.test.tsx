@@ -170,7 +170,7 @@ export default pattern(() => {
     return h.name === "Ann" && equals(peopleCell.get()[0], h);
   });
 
-  const assert_picture_backfilled = assert(() =>
+  const assert_picture_is_smile = assert(() =>
     bytesAre(peopleCell.get()[0]?.picture, SMILE)
   );
   // KEY: the stale-but-once-valid reference still equals()-matches the
@@ -183,10 +183,6 @@ export default pattern(() => {
   // orphaned entity if the backfill had re-minted identity).
   const assert_held_reads_backfill = assert(() =>
     bytesAre(held.get().picture, SMILE)
-  );
-
-  const assert_picture_not_clobbered = assert(() =>
-    bytesAre(peopleCell.get()[0]?.picture, SMILE)
   );
 
   const assert_bob_added_with_picture = assert(() => {
@@ -233,13 +229,13 @@ export default pattern(() => {
 
       // Picture backfill preserves identity
       { action: action_join_ann_with_picture },
-      { assertion: assert_picture_backfilled },
+      { assertion: assert_picture_is_smile },
       { assertion: assert_held_survives_backfill },
       { assertion: assert_held_reads_backfill },
 
       // Existing picture is not overwritten
       { action: action_join_ann_other_picture },
-      { assertion: assert_picture_not_clobbered },
+      { assertion: assert_picture_is_smile },
 
       // New person push branch
       { action: action_join_bob },

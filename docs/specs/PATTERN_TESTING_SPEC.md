@@ -91,7 +91,12 @@ type TestStep =
     event?: unknown; // the payload, sent to the stream as authored
     trustedUi?: { surface: string; action: string };
   }
-  | { press: VNode; control: string; within?: string } // click a rendered control
+  | {
+    press: VNode; // click a rendered control
+    control: string;
+    within?: string;
+    modifiers?: ("alt" | "ctrl" | "meta" | "shift")[];
+  }
   | { render: VNode } // one headless VDOM demand window
   | { settle: true } // wait for full async settlement
   | { label: string } // announce a marker to other participants
@@ -113,8 +118,12 @@ the handler receives it from the test's own runtime with the UI provenance the
 control's rendered markers give, as it would from a page. Where the view shows
 `control` more than once, `within` names text an element around the one meant
 shows: the control pressed is the one whose nearest enclosing element showing
-that text holds no other. A press step that finds no such control, or more than
-one, fails. It counts as an action in the results, and settles as one.
+that text holds no other. `modifiers` names the keys held down during the
+click: the click's `altKey`, `ctrlKey`, `metaKey` and `shiftKey` are true for
+the keys named and false for the rest, so `["meta"]` is a Cmd-click on a Mac. A
+press step that finds no such control, or more than one, fails, and so does one
+whose `modifiers` names any other key. It counts as an action in the results,
+and settles as one.
 
 `{ label }` and `{ await }` synchronize a multi-user test — a participant
 announces reaching `label`, and another blocks on `await` until it is

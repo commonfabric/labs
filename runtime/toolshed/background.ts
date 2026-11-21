@@ -191,8 +191,8 @@ export async function runBackgroundParent(
 ): Promise<void> {
   const spawn = deps.spawn ?? defaultSpawn;
   const exit = deps.exit ?? Deno.exit;
-  const writeOut = deps.writeOut ?? ((line: string) => console.log(line));
-  const writeErr = deps.writeErr ?? ((line: string) => console.error(line));
+  const writeOut = deps.writeOut ?? console.log;
+  const writeErr = deps.writeErr ?? console.error;
   const readLog = deps.readLog ?? ((path: string) => Deno.readTextFile(path));
   const makeTempLog = deps.makeTempLog ??
     (() => Deno.makeTempFileSync({ prefix: "toolshed-", suffix: ".log" }));
@@ -236,8 +236,12 @@ export async function runBackgroundParent(
  * method both the console redirect and the request logger send lines to. */
 export function backgroundLogStream(
   path: string,
+  open: (
+    path: string,
+    options: Deno.OpenOptions,
+  ) => Pick<Deno.FsFile, "writeSync"> = Deno.openSync,
 ): { write(chunk: string): void } {
-  const file = Deno.openSync(path, { write: true, create: true, append: true });
+  const file = open(path, { write: true, create: true, append: true });
   const encoder = new TextEncoder();
   return {
     write(chunk: string): void {
@@ -271,11 +275,13 @@ export function redirectConsoleToFile(path: string): void {
 
 /** Route uncaught errors through console.error so the background log records a
  * failure the runtime would otherwise print to a discarded stderr. */
-export function logUncaughtErrors(): void {
-  globalThis.addEventListener("error", (event) => {
+export function logUncaughtErrors(
+  target: Pick<typeof globalThis, "addEventListener"> = globalThis,
+): void {
+  target.addEventListener("error", (event) => {
     console.error("Uncaught error:", event.error ?? event.message);
   });
-  globalThis.addEventListener("unhandledrejection", (event) => {
+  target.addEventListener("unhandledrejection", (event) => {
     console.error("Unhandled promise rejection:", event.reason);
   });
 }

@@ -164,7 +164,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/rekey-made.tsx#Row"
+            "sha256:869cb5d273f92e1831a39457f5e574cf76d30058757716a4af9575a4d6a24342"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",
@@ -722,7 +722,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/rekey-made.tsx#default"
+            "sha256:ffb3bf6a5e37e02b9a40e6360b31cbc6883b470060b958b6b62fcac9b20251d1"
           ],
           "picks": [],
           "selectors": [],

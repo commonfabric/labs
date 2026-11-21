@@ -205,11 +205,13 @@ fn plan(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
             let Some(file) = files.iter().find(|file| file.path == module.path) else {
                 continue;
             };
+            // The offsets of a plan are in the text the plan was made from.
+            let source = module.rewritten.as_deref().unwrap_or(&file.text);
             for plan in &module.plans {
                 for (kind, start) in &plan.unsupported {
-                    let start = (*start as usize).min(file.text.len());
-                    let line = file.text[..start].matches('\n').count() + 1;
-                    let text: String = file.text[start..]
+                    let start = (*start as usize).min(source.len());
+                    let line = source[..start].matches('\n').count() + 1;
+                    let text: String = source[start..]
                         .chars()
                         .take(70)
                         .map(|ch| if ch == '\n' { ' ' } else { ch })

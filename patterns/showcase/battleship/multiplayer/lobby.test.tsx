@@ -7,11 +7,28 @@
  * - Player 2 joining
  * - Game state transition to "playing" when both players join
  * - Reset functionality
+ * - What the lobby shows as players join, and joining with a profile
  *
  * Run: deno task cf test patterns/showcase/battleship/multiplayer/lobby.test.tsx --verbose
  */
-import { action, assert, pattern, TESTS, Writable } from "commonfabric";
-import BattleshipLobby from "./lobby.tsx";
+import {
+  action,
+  assert,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
+import {
+  clickButton,
+  findElement,
+  findElementByText,
+  hasText,
+  propValue,
+} from "../../../tools/test-support/vnode-helpers.ts";
+import type { ProfileFaceFields } from "../../../system/profile-face/profile-face.ts";
+import BattleshipLobby, { BattleshipLobbyCore } from "./lobby.tsx";
 import {
   createInitialShots,
   type GameState,
@@ -34,6 +51,21 @@ export default pattern(() => {
     player2: player2Cell,
     shots: shotsCell,
     gameState: gameStateCell,
+  });
+
+  // A lobby given a stand-in for the viewer's profile, which a pattern test
+  // cannot resolve with `#profile`.
+  const profile = new Writable<{ name?: string } & ProfileFaceFields>({
+    name: "Dana",
+  });
+  const core = BattleshipLobbyCore({
+    gameName: "Harbor",
+    player1: new Writable<PlayerData | null>(null),
+    player2: new Writable<PlayerData | null>(null),
+    shots: new Writable<ShotsState>(createInitialShots()),
+    gameState: new Writable<GameState>(INITIAL_GAME_STATE),
+    profile,
+    profileName: "Dana",
   });
 
   // ==========================================================================
@@ -76,6 +108,66 @@ export default pattern(() => {
   const action_rejoin_after_stale_slot = action(() => {
     lobby.joinWithName.send("Carol");
   });
+
+  const action_join_with_profile = action(() => {
+    clickButton(core[UI], "Join as Dana");
+  });
+  // Joining again, already seated, changes nothing.
+  const action_join_again = action(() => {
+    core.joinWithName.send("Dana");
+  });
+
+  // ==========================================================================
+  // View Assertions
+  // ==========================================================================
+
+  // Without a profile, the join button asks for one and stays disabled.
+  const assert_initial_view = assert(() => {
+    const ui = lobby[UI];
+    return lobby[NAME] === "Battleship - Battleship" &&
+      hasText(ui, "Join to deploy the first fleet.") &&
+      hasText(ui, "Player 1: Open") && hasText(ui, "Player 2: Open") &&
+      propValue(findElement(ui, "cf-avatar"), "name") === "?" &&
+      propValue(
+          findElementByText(ui, "cf-button", "Create a profile to join"),
+          "disabled",
+        ) === true;
+  });
+  const assert_one_player_view = assert(() => {
+    const ui = lobby[UI];
+    return hasText(ui, "Waiting for a second captain.") &&
+      hasText(ui, "Player 1: Alice") && hasText(ui, "Player 2: Open") &&
+      propValue(findElement(ui, "cf-avatar"), "name") === "Alice";
+  });
+  const assert_full_view = assert(() => {
+    const ui = lobby[UI];
+    return hasText(ui, "Both fleets are deployed.") &&
+      hasText(ui, "Player 2: Bob") &&
+      hasText(ui, "This game already has two players.") &&
+      !hasText(ui, "Create a profile to join") &&
+      lobby.shots[1].every((row) => row.every((cell) => cell === "empty"));
+  });
+
+  const assert_profile_join_offered = assert(() =>
+    core[NAME] === "Harbor - Battleship" &&
+    propValue(
+        findElementByText(core[UI], "cf-button", "Join as Dana"),
+        "disabled",
+      ) ===
+      false
+  );
+  // The stand-in is nobody's own profile, so the seat takes no face from it.
+  const assert_joined_with_profile = assert(() =>
+    core.player1?.name === "Dana" && core.player1?.avatar === undefined &&
+    core.myName === "Dana" && core.myPlayerNumber === 1
+  );
+  // A seated viewer is shown the room instead of the lobby.
+  const assert_room_shown = assert(() =>
+    hasText(core[UI], "Playing as") && !hasText(core[UI], "Join as Dana")
+  );
+  const assert_join_again_ignored = assert(() =>
+    core.player2 === null && core.myPlayerNumber === 1
+  );
 
   // ==========================================================================
   // Initial State Assertions
@@ -211,6 +303,7 @@ export default pattern(() => {
       { assertion: assert_initial_phase_waiting },
       { assertion: assert_initial_current_turn },
       { assertion: assert_initial_winner_null },
+      { assertion: assert_initial_view },
 
       // === Edge case: Empty name ignored ===
       { action: action_join_empty_name },
@@ -223,6 +316,7 @@ export default pattern(() => {
       { assertion: assert_player1_has_color },
       { assertion: assert_player2_still_null },
       { assertion: assert_still_waiting_one_player },
+      { assertion: assert_one_player_view },
 
       // === Player 2 Joins ===
       { action: action_join_player2 },
@@ -230,6 +324,7 @@ export default pattern(() => {
       { assertion: assert_player2_has_ships },
       { assertion: assert_phase_playing },
       { assertion: assert_current_turn_player1 },
+      { assertion: assert_full_view },
 
       // === Reset ===
       { action: action_reset },
@@ -244,7 +339,16 @@ export default pattern(() => {
       { assertion: assert_stale_slot_prepared },
       { action: action_rejoin_after_stale_slot },
       { assertion: assert_stale_slot_rejoined },
+
+      // === Joining with a profile ===
+      { assertion: assert_profile_join_offered },
+      { action: action_join_with_profile },
+      { assertion: assert_joined_with_profile },
+      { assertion: assert_room_shown },
+      { action: action_join_again },
+      { assertion: assert_join_again_ignored },
     ],
     lobby,
+    core,
   };
 });

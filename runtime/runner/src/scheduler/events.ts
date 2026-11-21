@@ -1,5 +1,5 @@
 import { getLogger } from "@commonfabric/logger";
-import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import type { ScopeKey, ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { entityKey } from "./keys.ts";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
@@ -15,7 +15,9 @@ import type { Cancel } from "../cancel.ts";
 import {
   ensurePieceRunningVerdict,
   type EnsurePieceVerdict,
+  handlerRunCounts,
   type OwningRootAddress,
+  type RefusedUpdate,
 } from "../ensure-piece-running.ts";
 import {
   isAclDocumentWriteRefusal,
@@ -23,16 +25,24 @@ import {
   waveSettlementOf,
 } from "../executor/wave.ts";
 import {
+  runOutcomeIsWithheld,
+  withholdProcessedClaimOutcome,
+} from "../executor/processed-claim.ts";
+import {
   addressKey,
   areNormalizedLinksSame,
   type NormalizedFullLink,
 } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import { diagnosticPrefix } from "../storage/diagnostics.ts";
-import { commitPromiseRejectionOf } from "../storage/extended-storage-transaction.ts";
+import {
+  commitPromiseRejectionOf,
+  runBeforeAbort,
+} from "../storage/extended-storage-transaction.ts";
 import type {
   CommitError,
   IExtendedStorageTransaction,
+  IMemorySpaceAddress,
   IPreconditionFailedError,
   IReadActivity,
   IStorageManager,
@@ -171,6 +181,36 @@ export class EventHandlerRegistry {
 }
 
 const guardedImplementations = Symbol("guarded event implementations");
+
+/**
+ * The scoped instance a served handler's withdrawn run waits on, if any: the
+ * one link resolution found unproduced on the run's reads
+ * (`unproducedScopedInstance`), when a writer that owes it will still run
+ * (`Scheduler.comingOwedScopedInstance()`), as its document and its instance's
+ * scope key. Undefined when the run read no such instance, or when no writer
+ * that owes it is coming to produce it, so that nothing the drain could wait
+ * on will change what the argument reads.
+ */
+function servedNotRunWait(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+): { space: MemorySpace; id: string; scopeKey: ScopeKey } | undefined {
+  const unproduced = tx.tx.unproducedScopedInstance;
+  if (unproduced === undefined) return undefined;
+  // Recorded as `<space>/<scope>/<id>`; neither a space DID nor a scope holds
+  // a slash.
+  const [space, scope, ...rest] = unproduced.split("/");
+  if (scope !== "user" && scope !== "session") return undefined;
+  const address = {
+    space: space as MemorySpace,
+    id: rest.join("/") as IMemorySpaceAddress["id"],
+    scope: scope as "user" | "session",
+  };
+  const scopeKey = runtime.scheduler.comingOwedScopedInstance(address, tx);
+  return scopeKey === undefined
+    ? undefined
+    : { space: address.space, id: address.id, scopeKey };
+}
 
 type GuardedDispatcher = EventHandler & {
   [guardedImplementations]: {
@@ -420,6 +460,7 @@ export function isHeadEventParked(
     headEvent?.patternChangePending === true ||
     headEvent?.retryReadinessPending === true ||
     headEvent?.presyncPending === true ||
+    headEvent?.multiSpaceCommitPending === true ||
     (headEvent?.notBefore !== undefined && headEvent.notBefore > now);
 }
 
@@ -910,18 +951,45 @@ function chainOnCommit(
 }
 
 /**
+ * What a drop for want of a handler adds when the started piece refused its
+ * latest pattern update (`EnsurePieceVerdict.refusedUpdate`): the piece runs
+ * its previous program, which can lack a stream the offered one has. The note
+ * names the offered program and the reason code, and leaves the refusal's own
+ * words in the piece's reconciliation record, to which it points. Those words
+ * are whatever error the refusal raised, and a served drop's reason is
+ * written into the dropped-event notice on the stream (events.md §5).
+ *
+ * The note only explains the drop, so a probe that throws adds nothing and is
+ * logged, and the drop goes ahead as it would without one.
+ */
+function refusedUpdateNote(verdict: EnsurePieceVerdict): string {
+  let refused: RefusedUpdate | undefined;
+  try {
+    refused = verdict.refusedUpdate?.();
+  } catch (error) {
+    logger.warn(
+      "scheduler",
+      "Reading a piece's refused update failed: " + describeFailure(error),
+    );
+    return "";
+  }
+  if (refused === undefined) return "";
+  const reason = refused.reason === undefined ? "" : ` (\`${refused.reason}\`)`;
+  return `, which still runs its previous program because its update to ` +
+    `\`${refused.offered.identity}\` was refused${reason}; the piece's ` +
+    `\`pieceReconciliation\` record has the detail`;
+}
+
+/**
  * Starts the piece an event's stream belongs to. A runtime whose run of the
- * handler is the one that counts, a serving runtime or any runtime with server
- * execution off, starts first the pieces its inputs come from
- * (`EnsurePieceOptions.startInputSources`): a stream a nested pattern defines
- * belongs to the nested instance, whose handler reads what the instance
- * enclosing it derives. A client under server execution runs the handler only
- * as its speculative echo, which the served run replaces, so it starts the
- * piece alone and leaves the pieces upstream of it, and the documents they
- * read, to the server. A serving runtime also has the piece's origin followed
- * before its first start of it (`EnsurePieceOptions.originFollowed`, which
- * the serving loop installs as `Runtime.pieceOriginFollowed`): nothing else
- * opens a piece it serves, so the start is where the piece's source is
+ * handler is the one that counts (`handlerRunCounts()`) starts first the
+ * pieces its inputs come from (`EnsurePieceOptions.startInputSources`): a
+ * stream a nested pattern defines belongs to the nested instance, whose
+ * handler reads what the instance enclosing it derives. Any other runtime
+ * starts the piece alone. A serving runtime also has the piece's origin
+ * followed before its first start of it (`EnsurePieceOptions.originFollowed`,
+ * which the serving loop installs as `Runtime.pieceOriginFollowed`): nothing
+ * else opens a piece it serves, so the start is where the piece's source is
  * brought up to date; the pieces its inputs come from are followed the same
  * way before they start. A start a follow is still owed, the piece's own or
  * an input source's, is declined, and the served event it was for is
@@ -931,10 +999,16 @@ function startEventPiece(
   runtime: Runtime,
   eventLink: NormalizedFullLink,
 ): Promise<EnsurePieceVerdict> {
+  // TODO(danfuzz): On a serving runtime, require the pieces enclosing a nested
+  // piece (`EnsurePieceOptions.sourcesRequired` with `enclosingSourcesOnly`),
+  // as the serving loop's demand start does, and hold the event while one
+  // cannot start; until then an enclosing piece that fails to start leaves the
+  // nested piece to start alone here, and its handler reads what that piece
+  // derived last. `space-server-enclosing-start.test.ts` pins it.
   return ensurePieceRunningVerdict(runtime, eventLink, {
-    startInputSources: runtime.experimental.serverExecution !== true ||
-      runtime.servingPosture,
+    startInputSources: handlerRunCounts(runtime),
     originFollowed: runtime.pieceOriginFollowed,
+    forEvent: true,
   });
 }
 
@@ -1155,7 +1229,8 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
             // graph probe reads as installed: only a start walk mints
             // one, and its absence says nothing about the piece.
             const reason = `Event dropped: no handler registered for ` +
-              `${args.eventLink.id} after starting its piece`;
+              `${args.eventLink.id} after starting its piece` +
+              refusedUpdateNote(verdict);
             if (queuedEvent.served !== undefined) {
               dropQueuedEvent(state, queuedEvent, reason);
             } else {
@@ -1993,6 +2068,30 @@ function holdHeadEventForPresync(
 }
 
 /**
+ * Holds the head while a multi-space commit issued before it still has writes
+ * to hand to a later space's replica, and returns whether it did. Such a
+ * commit hands a space its writes only once the server has answered for the
+ * spaces before it, so a handler that ran meanwhile would read none of them:
+ * a second click would not see the first click's writes to its own space.
+ * The head holds its FIFO slot, as it does while its inputs presync, and the
+ * hand-over queues a fresh tick. A one-space commit's writes are in the
+ * replica as the commit is issued, so it holds nothing.
+ */
+function holdHeadEventForMultiSpaceCommits(
+  state: SchedulerEventExecutionState,
+  queuedEvent: QueuedEvent,
+): boolean {
+  const applied = state.runtime.storageManager.multiSpaceCommitsApplied?.();
+  if (applied === undefined) return false;
+  queuedEvent.multiSpaceCommitPending = true;
+  void applied.then(() => {
+    delete queuedEvent.multiSpaceCommitPending;
+    state.queueExecution();
+  });
+  return true;
+}
+
+/**
  * Brings `implementation`'s input documents for `event` into the local replica
  * through its `presyncInputs`, under the event's actor. Never rejects: a
  * failure is logged.
@@ -2086,6 +2185,11 @@ export async function processPullQueuedEventDuringExecute(
   if (state.isHeadEventLoadParked(queuedEvent)) {
     return;
   }
+
+  // The head holds its slot while an earlier multi-space commit hands its
+  // later spaces' writes to their replicas; the hand-over queues a fresh tick.
+  if (queuedEvent.multiSpaceCommitPending) return;
+  if (holdHeadEventForMultiSpaceCommits(state, queuedEvent)) return;
 
   if (
     queuedEvent.notBefore !== undefined &&
@@ -2394,6 +2498,33 @@ export async function dispatchQueuedEvent(state: {
     }
   };
 
+  // Whether a served run's outcome is withheld: whether its join carries a
+  // clause its stream's space doesn't admit, so that its processed claim, and
+  // every failure it reports, says the same thing whatever happened
+  // (`runOutcomeIsWithheld()`). Decided once, while the transaction is still
+  // open: before the commit, before a failed run's transaction is aborted,
+  // or, when the handler aborts the transaction itself, first thing in that
+  // abort.
+  let outcomeWithheld: boolean | undefined;
+  const servedOutcomeWithheld = (): boolean => {
+    if (served === undefined) return false;
+    outcomeWithheld ??= runOutcomeIsWithheld(
+      tx,
+      queuedEvent.eventLink.space,
+    );
+    return outcomeWithheld;
+  };
+  if (served !== undefined) {
+    runBeforeAbort(tx, () => {
+      servedOutcomeWithheld();
+    });
+  }
+  /** `outcome`, with `withheld` set when the served run's outcome is. */
+  const servedErrorOutcome = (message: string): ServedEventFailureOutcome =>
+    servedOutcomeWithheld()
+      ? { kind: "error", message, withheld: true }
+      : { kind: "error", message };
+
   let failureFinalized = false;
   // A failed setup or handler completes every owner notification once, even
   // when one observer throws. The original failure remains the event outcome.
@@ -2403,6 +2534,8 @@ export async function dispatchQueuedEvent(state: {
     const handlerError = error instanceof Error
       ? error
       : new Error(String(error));
+    // Decided before the abort below takes the observations it reads.
+    servedOutcomeWithheld();
     for (
       const complete of [
         () => {
@@ -2414,10 +2547,10 @@ export async function dispatchQueuedEvent(state: {
         releaseLineage,
         () => state.handleError(handlerError, action, queuedEvent.id),
         () =>
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: handlerError.message,
-          }),
+          reportServedEventFailure(
+            served,
+            servedErrorOutcome(handlerError.message),
+          ),
         runFinalCommitCallback,
         () => tx.abandonStagedWork(eventAbandonError("event execution failed")),
       ]
@@ -3025,8 +3158,28 @@ export async function dispatchQueuedEvent(state: {
         // Taken before the abort, since the read set is what the client arm
         // parks on.
         const runLog = txToReactivityLog(tx);
+        // The reason can name a document the run reached, which a foreign
+        // join's value may have chosen, and the drop notice it can harden
+        // into is written on the entry. Decided before the abort below takes
+        // the observations it reads.
+        // The deferral of later events and the abort's error carry it too,
+        // into the serving host's log and the transaction's settle callbacks.
+        const withheld = servedOutcomeWithheld();
+        const notRunMessage = withheld
+          ? "the handler did not run, and its outcome is withheld"
+          : reason;
+        // What a served withdrawal waits on, decided from the run's own reads
+        // before the abort: a scoped instance a writer that will still run
+        // owes it (events.md §5).
+        const waitsOn = served === undefined
+          ? undefined
+          : servedNotRunWait(state.runtime, tx);
         if (tx.status().status === "ready") {
-          tx.abort(new Error(`handler did not run: ${reason}`));
+          tx.abort(
+            new Error(
+              withheld ? notRunMessage : `handler did not run: ${reason}`,
+            ),
+          );
         }
         if (served !== undefined) {
           // Mark/effects atomicity (events.md §4, RULED 2026-08-27 — the
@@ -3048,7 +3201,8 @@ export async function dispatchQueuedEvent(state: {
           reportServedEventFailure(served, {
             kind: "deferred",
             cause: "handler-not-run",
-            message: reason,
+            message: notRunMessage,
+            ...(waitsOn !== undefined ? { waitsOn } : {}),
           });
           // The withdrawal is a deferral, and a deferral carries the
           // drain's arrival-order BARRIER (events.md §2; review-6459 F1):
@@ -3060,7 +3214,9 @@ export async function dispatchQueuedEvent(state: {
           deferLaterSameSpaceServedEvents(
             state,
             queuedEvent,
-            `whose served handler did not run (${reason})`,
+            withheld
+              ? "whose served handler did not run, its outcome withheld"
+              : `whose served handler did not run (${reason})`,
           );
           runFinalCommitCallback();
           return;
@@ -3146,6 +3302,15 @@ export async function dispatchQueuedEvent(state: {
         return;
       }
 
+      if (served !== undefined) {
+        withholdProcessedClaimOutcome(
+          state.runtime,
+          tx,
+          queuedEvent.eventLink.space,
+          served.streamEntry,
+          servedOutcomeWithheld(),
+        );
+      }
       try {
         state.runtime.prepareTxForCommit(tx);
       } catch (error) {
@@ -3267,7 +3432,9 @@ export async function dispatchQueuedEvent(state: {
 
         // A served event's CFC verdict seals an error consequence (events.md
         // §5: the error IS the consequence — the same honesty as the throw arm
-        // in `finalize` above). Without one the durable entry stays
+        // in `finalize` above), or, for a run whose join is foreign to its
+        // stream's space, the same withheld consequence a commit records
+        // (`servedErrorOutcome`). Without one the durable entry stays
         // unconsequenced and every later drain pass runs it into the identical
         // refusal. Scoped to exactly the class `reportDroppedCfcRejectedWrite`
         // reports; a CFC refusal that is not a verdict defers instead
@@ -3277,10 +3444,7 @@ export async function dispatchQueuedEvent(state: {
         // still-"queued" copy.
         const sealCfcRefusalConsequence = (): void => {
           if (served === undefined || !isCfcRejectedCommitError(error)) return;
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: error.message,
-          });
+          reportServedEventFailure(served, servedErrorOutcome(error.message));
         };
         // The seal's refusal of a write to the space's ACL document is
         // deterministic in the same way, so a run delivering a durable entry
@@ -3293,10 +3457,7 @@ export async function dispatchQueuedEvent(state: {
           ) {
             return;
           }
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: error.message,
-          });
+          reportServedEventFailure(served, servedErrorOutcome(error.message));
         };
         // For a served event, a commit preparation that failed for a cause a
         // fresh attempt may clear (`failedCommitPreparation`) is a delivery
@@ -3378,10 +3539,10 @@ export async function dispatchQueuedEvent(state: {
           if (served === undefined || !isExplicitTransactionAbort(error)) {
             return;
           }
-          reportServedEventFailure(served, {
-            kind: "error",
-            message: "Event handler aborted its transaction",
-          });
+          reportServedEventFailure(
+            served,
+            servedErrorOutcome("Event handler aborted its transaction"),
+          );
         };
 
         let requeue: Promise<void> | undefined;

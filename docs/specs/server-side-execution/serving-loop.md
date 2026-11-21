@@ -80,8 +80,8 @@ execution observer and decides which worker serves which space:
   other, and that worker's host decides what to activate as a host on the
   main thread does.
 - A space gets a worker of its own while fewer than `maxWorkers` workers are
-  placed on (default 16; `SERVER_EXECUTION_MAX_WORKERS` in the toolshed
-  bootstrap). At the cap a space joins the placed-on worker that serves the
+  placed on (default 16; 4 in the toolshed, `SERVER_EXECUTION_MAX_WORKERS`
+  in its bootstrap). At the cap a space joins the placed-on worker that serves the
   fewest spaces, one holding only parked runtimes first, and that worker's
   host serves several spaces as the diagram allows. `1` serves every space
   from one worker.
@@ -89,6 +89,76 @@ execution observer and decides which worker serves which space:
   (default none; one in the toolshed, `SERVER_EXECUTION_SPARE_WORKERS`), so
   that a placement finds a worker whose modules have loaded. Spares do not
   count toward the cap.
+- Given `heapLimitMb` (2048 in the toolshed,
+  `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`, whose literal `0` sets none), the
+  pool starts each worker as a `node:worker_threads` thread whose old
+  generation the limit bounds (`serving-thread.ts`), since a Deno `Worker`
+  takes no limit and one that reaches the isolate's limit aborts the process.
+  Reaching the limit stops what was growing the heap, and what happens next
+  depends on where the thread was. While it evaluated its modules, or in a
+  timer's callback, it ends and reports an error. In a message's handler,
+  Deno ends the handler: the thread reports nothing, takes no further
+  message, and keeps running its timers. In a promise's continuation, Deno
+  ends the continuation, whose promise never settles, and the thread goes on
+  serving. In the last two Deno also raises the thread's limit, which is how
+  the thread knows (`watchHeapLimit()`): its heartbeat says that its heap
+  reached the limit, and the pool takes it out as a failed worker. The heap's
+  size is not the signal, since a handler ends with the heap just short of
+  the limit, and the heap shrinks once the handler is gone. The limit does
+  not bound buffers outside the heap, so the pool also takes out a worker
+  whose heartbeat reports as many megabytes of those as the limit. Both
+  checks run at the heartbeat, so a worker can pass the limit for up to one
+  heartbeat interval before it is ended.
+
+  A process-wide `--max-old-space-size`, which the toolshed's binary, tasks
+  and `start-local-dev.sh` set to 16384 for the main thread, replaces the
+  limit V8 gives each worker. The pool sees that from the `heap_size_limit` a
+  worker's init reports (`heap-limit-overridden`) and holds such a worker to
+  `heapLimitMb` itself. A heartbeat's heap includes garbage V8 has not
+  collected yet, so at a heartbeat that reports a heap of `heapLimitMb` or
+  more the pool asks the worker to collect its garbage (`host.collectedMemory`,
+  one request at a time), and takes it out as one that reached its limit only
+  if its heap is still that large once collected. A worker whose collected
+  heap is under the limit goes on serving. One that refuses the request, or
+  does not answer it while its heartbeats go on, is taken out at six
+  heartbeats in a row past the limit. The toolshed exposes V8's collector at
+  startup for this (`EXPOSE_GC` decides only whether
+  `/api/health/collected-memory` answers); a pool without it
+  (`collectBeforeEnding` unset) takes the worker out at two heartbeats in a
+  row past the limit. Pattern code cannot reach the collector: V8 gives
+  `gc()` only to contexts created by `vm`, not to a worker's own realm or to
+  a SES compartment. This check needs the worker's heartbeats, which its timers send between tasks,
+  so a worker that allocates without yielding is bounded only by the process
+  flag and by the watchdog, which ends it after `watchdogLimitMs` of silence.
+  Either way
+  the process goes on. The worker's spaces are not placed again as a failed
+  worker's are, since a program that grew one heap to the limit grows the
+  next, and the limit is the worker's, so the pool learns which space grew
+  by where it was:
+  - A space that was alone on the worker is left unplaced, whatever session
+    it has and whatever events its store holds. A commit admitted afterwards
+    that would start a tenure places it again, as does a pattern-lifecycle
+    verb that names it: those are what can change its program or its input.
+    The commits the worker had taken or was owed place nothing. Each such
+    placement waits out the failure-park backoff, counted across the workers
+    the space has had ended at the limit; a committed wave does not clear
+    that count.
+  - Spaces that shared the worker are each placed again on a worker of
+    their own, past `maxWorkers` if need be, and no other space joins those
+    workers. The one that grows then ends a worker nothing else is on, and
+    is left unplaced as above. The first kill counts as no failure of
+    theirs, and their placement waits out the base backoff.
+
+  A space stays on workers of its own until one of them closes with nothing
+  left to serve, which also clears its count. Spaces whose heaps reach the
+  limit only taken together are separated the same way and stay separate
+  until then.
+- The workers' runtimes compile in compile workers the process holds, not
+  each worker its own: `SERVER_EXECUTION_COMPILE_WORKERS` of them in the
+  toolshed (default 1), each started at its first compile. They read and put
+  compiled modules in the directory every toolshed on the host shares
+  (`SERVER_EXECUTION_COMPILE_CACHE_DIR`, default `compiled-modules` under
+  `CACHE_DIR`).
 - A host reports what it holds (`ExecutorHost.occupancy`): `busy` while it
   serves, starts, ends or re-evaluates a tenure or holds a notice for a
   tenure to come, `parked` while it holds nothing but runtimes kept from
@@ -136,7 +206,21 @@ A space stays placed on its worker for as long as the worker runs. Counted:
 A space is ACTIVE when it has ≥1 live client session or undelivered
 events; otherwise it MAY be parked (lease released, loop stopped, and
 the runtime disposed or kept for the space's next tenure — Parking
-below).
+below). A client session is any session except a serving loop's own
+and one that declared that it is not demand. A serving loop's own is a
+session of the deployment's service identity that reached the memory
+server from the process holding it, or declared the serving binding
+(`actingAs: "space-owner"`, a serving runtime of another process). A
+session of any identity declares that it is not demand with
+`demand: false`: the toolshed's own webhook runtime does, since it keeps
+a session on every space it touched for as long as it runs and no one
+waits on it, and so does a client that only copies documents, such as
+the Topics command-line tool's mirror, whose watches would otherwise
+make the server start every piece whose documents it holds.
+The connection and the session's declaration decide, not the key: a local
+toolshed that runs under the identity its operator's client also signs
+with still counts that client's sessions as client sessions, for
+activation, parking and demand alike.
 Activation on: session open, event append, or explicit warm request.
 *(AMENDED 2026-09-09: a fourth trigger — a pattern-lifecycle verb
 request, which the host queues on the space's serving loop; the loop
@@ -303,6 +387,14 @@ because that session's demand has already made its attempt to load it. The resul
 pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
 asks for (`docs/features/document-release.md`).
+
+**A nested piece a demand reaches.** A demand that reaches a nested instance's
+values starts the instances that enclose it first, whether or not it reaches
+any of theirs (runtime-mapping.md, N22): the documents of an enclosing
+instance's that a demand reaches may all be ones the demand pass starts nothing
+from, such as its argument and a `computed:` document holding a link to the
+nested instance. The walk does not reach past a piece a handler made to the
+piece whose handler made it.
 
 **Parking.** A park releases the lease and stops the loop. A park for a
 failed loop, a failed initialization or a closing host disposes the runtime. An IDLE park (§3's "on idle") that abandoned no
@@ -560,7 +652,9 @@ the lease:
 - The worker posts a heartbeat every 10 s from a timer of its own.
 - The main thread checks each worker every 10 s. After six consecutive
   intervals with no message of any kind from a worker, which is at least 60 s
-  of silence, it terminates that worker and releases its leases, then places
+  of silence (`watchdogLimitMs` sets another limit, in whole intervals;
+  `SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS` in the toolshed), it terminates
+  that worker and releases its leases, then places
   its spaces again under a fresh component through the path a worker failure
   takes (§1, Workers). The other workers are not affected.
 - The check counts its own firings rather than reading a clock, so nothing but
@@ -570,16 +664,28 @@ the lease:
   a worker has no timer to post from and no lease to release.
 - A long stretch of work on the worker's thread silences the heartbeat too, since
   the heartbeat is a timer on that thread. So a serving runtime runs the
-  type-check, transform and emit step of a compile in the compile worker its
-  serving worker starts (`ModuleCompileWorker`), and yields between the steps it
+  type-check, transform and emit step of a compile in the compile workers its
+  process holds on the memory server's thread (`ModuleCompilerPool`, reached
+  over the serving port), and yields between the steps it
   keeps: the security check of each emitted module and the evaluation of each
   module of a graph (`EngineOptions.interleaveCompile`), as its settle loop
   yields between actions. The longest stretch a pattern load holds the thread is
   then one module's check, one module's evaluation, or one write of the compile
   cache, and a thread that does that work is not silent for the length of a
-  whole program. The runtimes of one worker take turns at a cold compile
-  (`CompileTurns`), so one program compiles once per worker however many of its
-  spaces load it at the same time. A compile worker that dies fails the compiles
+  whole program. Every runtime on the host takes a turn at a cold compile of a
+  set of modules, keyed by that set, on the shared compiled-module cache's lock
+  (`openSharedCompileCache()`), so one program compiles once on the host however
+  many workers and processes load it at the same time, and the others read what
+  it put. A turn whose holder ends, however it ends, passes to the next. A
+  compile that fails puts nothing, and the next turn compiles again. A reload
+  from stored source puts its modules once their evaluation has verified them,
+  under a version of its own that a compile of fresh source never reads: it
+  reports as warnings some of what a fresh compile refuses, and a fresh
+  compile that took its modules for a hit would skip those checks. A module
+  file that does not hold its module, as one cut short when its host lost
+  power, is removed and compiled again, and a module that cannot be written
+  is logged and fails no compile. A compile
+  worker that dies fails the compiles
   it held as failures of where they ran, never as deterministic compile
   failures, and the next compile starts a fresh one.
 - Nothing waits for a killed worker's teardown. `terminate()` takes effect when
@@ -1349,7 +1455,11 @@ seal resolves its scoped writes (the defaults setup seeds in the
 start's own transaction among them) against the same instances
 rather than the wave-level service identity. The stamp still
 carries no acting principal (protocol.md §1's "The SpaceServer's
-own writes"). A piece-start
+own writes"). A builtin's ending for a request that never
+went out (builtins.md §2) is stamped `bookkeeping` the same way,
+with the staging run's identity, when it has one, as its
+addressing, and seals into the open wave behind the writes that
+run's predecessors left pending there. A piece-start
 commit that FAILS after start() resolved (the path is
 fire-and-forget by design) must SURFACE — loudly logged in every
 arm and counted into §7's `structureLoadFailures` on a serving
@@ -1486,11 +1596,21 @@ or dropped meanwhile; that refusal is retried like a stale read.
   landing, runs it again.
 - A derivation run that read, through a link, an absent user- or
   session-scoped instance of a document another derivation registered in
-  this runtime declares as a write (a builtin's stores included) aborts its
-  tx the same way: the serving loop has not produced that instance yet, so
-  the absence is not its state (speculation.md §2's serving-runtime
-  corollary to the scoped first-write carve-out). Its read of the instance
-  stays subscribed, so it runs again once the instance is produced.
+  this runtime declares as a write (a builtin's stores included), and that
+  writer has not yet run for that instance, aborts its tx the same way: the
+  serving loop has not produced that instance yet, so the absence is not
+  its state (speculation.md §2's serving-runtime corollary to the scoped
+  first-write carve-out). A JavaScript derivation whose run for the
+  instance finished without being withdrawn and left it absent, as a run
+  whose result is `undefined` does, has produced it, and the read commits.
+  "For the instance" is per instance key on a fanned-out writer and any
+  run on one that is not; a withdrawn run produced nothing, and a builtin
+  writer is owed until it writes. Its read of the instance
+  stays subscribed, so it runs again once the instance is produced. A run
+  that threw after such a read is withdrawn the same way and its error is
+  not reported: the throw came from the same absence its writes did. A
+  throw from the run once the instance is produced is reported as any
+  other.
 - On a client (OFF arm, and speculation in the ON arm) seal == commit /
   overlay-apply as today — one abstraction, two destinations. Anchor:
   `runtime/runner/src/storage/extended-storage-transaction.ts`.
@@ -1951,7 +2071,9 @@ started, its demand key stays pending and its served event defers, and the
 loop runs the follow BESIDE its cycles rather than inside one. The pieces
 an event's piece takes its inputs from, which its auto-start starts first
 (runtime-mapping.md), are answered the same way, and a follow still owed
-for one of them defers the event as the piece's own would. The
+for one of them defers the event as the piece's own would. So are the
+pieces enclosing a piece the demand pass starts, which it starts first, and
+a follow still owed for one of them leaves the demanded root pending. The
 reconciler's compile seals the candidate's closure into whatever wave is
 open when it finishes, and its adopting write is a direct commit (below)
 that would read that closure, so the reconciler waits for every wave open
@@ -2284,16 +2406,18 @@ structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, settle:
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
 visibilityDeferrals, deferredRescansArmed, deferredRescansFired,
 lt1LeftoversPurged, lt1LateSealsRefused, orphanDeliveriesRefused,
-handlerNotRunDeferrals, staleReadRequeues, arrivalHeldDeferrals,
-originPendingDeferrals, programWaitDeferrals, loadParkDeferrals,
+handlerNotRunDeferrals, handlerNotRunWaits, staleReadRequeues,
+arrivalHeldDeferrals, originPendingDeferrals, programWaitDeferrals,
+loadParkDeferrals,
 loadParkFailures, deliveryDeferralsActive, deliveryFailuresActive,
 maxAccumulatedDeliveryFailureMs, deliveryFailureWakesArmed,
 deliveryFailureWakesFired, needsAttention: {total, byPhase},
 needsAttentionSealFailures, deliveryCheckpointWriteFailures, explicitRetries,
 dropped}, memo: {hits, misses, inflight}, outbox: {queued, completed, failed,
 budgetDeferrals}, lease: {held, lost}, parkedRuntimes: {retained, reused,
-discarded, held}, workers: {serving, spare, parked, heapUsed, started,
-retired, evicted, failed, shared}, push: {prioritizedSessions,
+discarded, held}, workers: {serving, spare, parked, heapUsed, heapStopped,
+started, retired, evicted, failed, shared, heapLimited}, push:
+{prioritizedSessions,
 followerSessions, mixedFlushes} }`
 (where the loop runs in workers, the block is every worker's counters taken
 together with the last counters of each worker that has closed
@@ -2309,7 +2433,9 @@ the workers' heartbeats last reported, in bytes; `started`, `retired`,
 `evicted` and `failed` count workers spawned, closed once vacant, closed
 while parked for the parked-worker cap or the heap budget, and failed or
 killed; `shared` counts placements that joined a worker already serving
-another space at the cap; §1's Workers;
+another space at the cap; `heapLimited` counts the workers, among the
+failed, that reached their heap limit, and `heapStopped` is how many spaces
+are on no worker now because a worker they were alone on did; §1's Workers;
 `parkedRuntimes` counts the runtimes idle parks kept, those a successor
 tenure served with, and those disposed unused — expired, evicted, tainted,
 or turned down at activation because the store head moved — with `held`

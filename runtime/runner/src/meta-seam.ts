@@ -55,6 +55,10 @@ export const META_FIELDS = Object.freeze(
     // the build it loads against it
     "patternSource", // active web or `cf:` source origin
     "pieceSourceHistory", // append-only source revisions and retention roots
+    "pieceSourceDelegations", // {identity, delegations, edges}: the closed
+    // writer delegations of the pattern the piece runs, and the direct edges
+    // of every delegation the piece's history made; every source transition
+    // writes it for the next pattern
     "pieceReconciliation", // what following the active origin last did:
     // {outcome, at, origin, offered?, reason?, detail?} — a piece that refused
     // or could not reach its origin looks otherwise exactly like one that is

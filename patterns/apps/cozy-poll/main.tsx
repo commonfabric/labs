@@ -1123,7 +1123,7 @@ export default pattern<CozyPollInput, CozyPollOutput>(
                           $value={optionDraft}
                           placeholder="Add an option…"
                           aria-label="Option title"
-                          timing-strategy="immediate"
+                          timingStrategy="immediate"
                           style="flex:1"
                         />
                         <cf-button onClick={boundAddOption}>Add</cf-button>

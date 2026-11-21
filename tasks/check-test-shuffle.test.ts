@@ -583,6 +583,22 @@ describe("check-test-shuffle", () => {
       expect(await scan(root)).toEqual([]);
     });
 
+    it("passes over a task a member's test script is told to run that the member does not have", async () => {
+      const root = await fixtureMember({
+        test: "deno run -A ../tasks/run-member-tests.ts deno-test absent",
+        "deno-test": `deno test ${SHUFFLE} -A`,
+      });
+      expect(await scan(root)).toEqual([]);
+    });
+
+    it("passes over a tracked TypeScript source the working tree no longer holds", async () => {
+      const root = await fixtureMember({ test: `deno test ${SHUFFLE} -A` }, {
+        "tasks/run.ts": 'await run(["deno", "test", "-A"]);\n',
+      });
+      await Deno.remove(join(root, "tasks/run.ts"));
+      expect(await scan(root)).toEqual([]);
+    });
+
     it("fails a member whose test script runs nothing it knows", async () => {
       const root = await fixtureMember({
         test: "deno run -A ../tasks/run-member-tests.ts deno-test",

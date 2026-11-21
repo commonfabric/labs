@@ -138,6 +138,31 @@ describe("fabric-session", () => {
       expect(disposed).toEqual(["runtime"]);
     });
 
+    it("disposes the session when a foreign route names the session's own space, registering nothing", async () => {
+      const disposed: string[] = [];
+      const registered: string[] = [];
+      const controller = controllerBoundedBy({}, disposed);
+      controller.getSpace = () => "did:key:zLocal";
+      controller.runtime.resolveSpaceHost = (space) => {
+        registered.push(space);
+        return Promise.resolve({ accepted: true });
+      };
+      const factory = createHarnessFabricSessionFactory({
+        apiUrl: "https://local.example/",
+        identityKeyPath: "/fixture.key",
+        space: "local",
+        foreignSpaces: { "did:key:zLocal": "https://foreign.example" },
+      }, {
+        loadIdentity: () => Promise.resolve(identity),
+        initialize: () => Promise.resolve(controller),
+      });
+      await expect(factory()).rejects.toThrow(
+        "Foreign space host route was refused by the session",
+      );
+      expect(registered).toEqual([]);
+      expect(disposed).toEqual(["runtime"]);
+    });
+
     const bounded = {
       apiUrl: "https://toolshed.example/",
       identityKeyPath: "/keys/agent.pkcs8",

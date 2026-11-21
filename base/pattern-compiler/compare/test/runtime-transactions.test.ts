@@ -7,24 +7,41 @@ import {
   resetAllTimingStats,
 } from "../../../logger/src/logger.ts";
 import type { JSONSchema } from "../../../../runtime/runner/src/builder/types.ts";
-import type { MemorySpace } from "../../../../runtime/runner/src/cell.ts";
+import {
+  type MemorySpace,
+  recordRelevantSchemaWritePolicyInput,
+} from "../../../../runtime/runner/src/cell.ts";
+import {
+  consumedEntriesForRead,
+  labelForConsumedEntries,
+} from "../../../../runtime/runner/src/cfc/consumed-label.ts";
 import { readStoredCfcMetadata } from "../../../../runtime/runner/src/cfc/metadata.ts";
+import { parseLink } from "../../../../runtime/runner/src/link-utils.ts";
+import type { NormalizedFullLink } from "../../../../runtime/runner/src/link-types.ts";
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../../runtime/runner/src/storage/cache.deno.ts";
-import { type Artifact, Instance } from "../../exec/executor.ts";
+import {
+  type Artifact,
+  Instance,
+  type LabelChange,
+} from "../../exec/executor.ts";
 import { identifierOf, isLink, Ref, Store } from "../../exec/store.ts";
-import { inputClause } from "../generate.ts";
+import { generateInputs, inputClause } from "../generate.ts";
 import { scenarioAudience } from "../harness.ts";
 import { labeledInputs } from "../integrated.ts";
 import { RuntimeTransactions } from "../runtime-transactions.ts";
+import { CASES, type Figures, measure } from "../template-cost.ts";
 
-const artifactOf = async (name: string): Promise<Artifact> => {
+const artifactOf = async (
+  name: string,
+  pattern = "default",
+): Promise<Artifact> => {
   const [{ patterns }] = JSON.parse(
     await Deno.readTextFile(
       new URL(`../fixtures/${name}.emit.json`, import.meta.url),
     ),
   ) as { patterns: Artifact[] }[];
-  return patterns.find((pattern) => pattern.name === "default") ??
+  return patterns.find((artifact) => artifact.name === pattern) ??
     patterns[patterns.length - 1];
 };
 
@@ -376,6 +393,786 @@ describe("RuntimeTransactions", () => {
       ).toBeUndefined();
     } finally {
       read.abort();
+    }
+  });
+});
+
+describe("RuntimeTransactions with labels from templates", () => {
+  /**
+   * The labels stored on the result of `briefing.tsx` at `climate`,
+   * `briefing` and the `[UI]` text, run over labeled inputs with the
+   * experimental option `compiledPatterns` as `enabled` says: for each, the
+   * clauses of the label a value read there consumes, as text, and whether
+   * that label carries the atom of a compiled pattern.
+   */
+  const briefing = async (enabled: boolean) => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: enabled },
+      servingPosture: true,
+    });
+    const id = identifierOf({ test: "briefing" });
+    const artifact = await artifactOf("briefing");
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    try {
+      const inputs = generateInputs(
+        artifact.plan as Parameters<typeof generateInputs>[0],
+        artifact.schemas as Parameters<typeof generateInputs>[1],
+        await scenarioAudience(),
+      );
+      const { given, documents } = await labeledInputs(
+        runtime,
+        space,
+        inputs,
+        { secret: "s", city: "Paris" },
+        hooks,
+      );
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+      });
+      expect(await hooks.settled()).toEqual([]);
+      const read = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(read, {
+          space,
+          id: hooks.entityOf(instance.id),
+          scope: "space",
+        });
+        // The label a value read at the path consumes.
+        const at = (path: readonly string[]) => {
+          const label = metadata === undefined
+            ? undefined
+            : labelForConsumedEntries(
+              consumedEntriesForRead(metadata, path, {
+                nonRecursive: false,
+                consumes: "value",
+              }),
+              path,
+              false,
+            );
+          return {
+            clauses: JSON.stringify(label?.confidentiality ?? []),
+            atom: (label?.integrity ?? []).some((atom) =>
+              JSON.stringify(atom).includes('"kind":"compiled"')
+            ),
+          };
+        };
+        return {
+          climate: at(["climate"]),
+          briefing: at(["briefing"]),
+          text: at(["$UI", "children", "1"]),
+        };
+      } finally {
+        read.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  it("stores at each output the label of its template, with the pattern's atom, with the option on", async () => {
+    const { climate, briefing: both, text } = await briefing(true);
+    expect(climate.clauses).toContain('"input:city"');
+    expect(climate.clauses).not.toContain("demo-secret");
+    // The text holds the reference to `city`, whose template observes the
+    // reference's identity and not the content it points to.
+    expect(text.clauses).toBe("[]");
+    expect(both.clauses).toContain('"input:city"');
+    expect(both.clauses).toContain("demo-secret");
+    expect([climate.atom, both.atom, text.atom]).toEqual([true, true, true]);
+  });
+
+  it("reports to the executor the label entries a commit changed in a document whose labels it asked for", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      artifact: await artifactOf("briefing"),
+    });
+    try {
+      const write = async (schema: JSONSchema, value: string) => {
+        const tx = runtime.edit();
+        const cell = runtime.getCell<string>(space, { probe: 1 }, schema, tx);
+        recordRelevantSchemaWritePolicyInput(
+          tx,
+          cell.getAsNormalizedFullLink(),
+          schema,
+        );
+        cell.set(value);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        return cell.getAsNormalizedFullLink().id;
+      };
+      const id = await write({ type: "string" }, "a");
+      hooks.external(id);
+      const plain = hooks.labelOf(id, []);
+      const changes: LabelChange[] = [];
+      hooks.watchLabels((changed) => {
+        for (const change of changed) changes.push(change);
+      });
+      await write({
+        type: "string",
+        ifc: { confidentiality: [inputClause("probe")] },
+      } as JSONSchema, "b");
+      // The executor's next transaction hears of it first.
+      hooks.begin("event");
+      hooks.end({ committed: false });
+      expect(changes.map(({ doc }) => doc)).toEqual([id]);
+      expect(changes[0].paths).toContainEqual([]);
+      expect(hooks.labelOf(id, [])).not.toBe(plain);
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("gives two links written under different labels one identifier for a read of their values, and two for a read of them as references", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      artifact: await artifactOf("briefing"),
+    });
+    try {
+      const seed = runtime.edit();
+      const list = runtime.getCell<{ items: unknown[] }>(
+        space,
+        { probe: "list" },
+        undefined,
+        seed,
+      );
+      list.set({ items: [] });
+      for (const name of ["a", "b"]) {
+        const schema = {
+          type: "string",
+          ifc: { confidentiality: [inputClause(name)] },
+        } as JSONSchema;
+        const source = runtime.getCell<string>(
+          space,
+          { probe: `source ${name}` },
+          schema,
+          seed,
+        );
+        recordRelevantSchemaWritePolicyInput(
+          seed,
+          source.getAsNormalizedFullLink(),
+          schema,
+        );
+        source.set(name);
+        runtime.getCell<string>(
+          space,
+          { probe: `target ${name}` },
+          undefined,
+          seed,
+        )
+          .set("public");
+      }
+      expect((await seed.commit().settled).error).toBeUndefined();
+      // Each link is written by a transaction that read another source.
+      for (const [index, name] of ["a", "b"].entries()) {
+        const tx = runtime.edit();
+        runtime.getCell<string>(
+          space,
+          { probe: `source ${name}` },
+          undefined,
+          tx,
+        )
+          .get();
+        runtime.getCell<{ items: unknown[] }>(
+          space,
+          { probe: "list" },
+          undefined,
+          tx,
+        ).key("items").key(index).set(
+          runtime.getCell<string>(
+            space,
+            { probe: `target ${name}` },
+            undefined,
+            tx,
+          ),
+        );
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      const id = list.getAsNormalizedFullLink().id;
+      hooks.external(id);
+
+      expect(hooks.labelOf(id, ["items", "0"])).toBe(
+        hooks.labelOf(id, ["items", "1"]),
+      );
+      expect(hooks.labelOf(id, ["items", "0"], "identity")).not.toBe(
+        hooks.labelOf(id, ["items", "1"], "identity"),
+      );
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("stores the transaction's join at each output with the option off", async () => {
+    const { climate, text } = await briefing(false);
+    expect(climate.clauses).toContain("demo-secret");
+    expect(text.clauses).toContain("demo-secret");
+    expect(climate.atom).toBe(false);
+  });
+});
+
+describe("write records the runtime instantiates with the option on", () => {
+  /**
+   * Runs a fixture over labeled inputs with the experimental option
+   * `compiledPatterns` on, and returns the refused commits and the label
+   * stored at `path` of the result document.
+   */
+  const commitWithOptionOn = async (
+    name: string,
+    argument: Record<string, unknown>,
+    path: readonly string[],
+    /** The binding of a handler to send one event to, once settled. */
+    binding?: number,
+    /** Changes the artifact before it is run. */
+    edit?: (artifact: Artifact) => void,
+    /** The pattern of the fixture to run. */
+    pattern = "default",
+  ) => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const id = identifierOf({ test: name });
+    const artifact = await artifactOf(name, pattern);
+    edit?.(artifact);
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    try {
+      const inputs = generateInputs(
+        artifact.plan as Parameters<typeof generateInputs>[0],
+        artifact.schemas as Parameters<typeof generateInputs>[1],
+        await scenarioAudience(),
+      );
+      const { given, documents } = await labeledInputs(
+        runtime,
+        space,
+        inputs,
+        argument,
+        hooks,
+      );
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+      });
+      const refused = await hooks.settled();
+      if (binding !== undefined) {
+        instance.send(binding, {});
+        for (const reason of await hooks.settled()) refused.push(reason);
+      }
+      const read = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(read, {
+          space,
+          id: hooks.entityOf(instance.id),
+          scope: "space",
+        });
+        const label = metadata === undefined
+          ? undefined
+          : labelForConsumedEntries(
+            consumedEntriesForRead(metadata, path, {
+              nonRecursive: false,
+              consumes: "value",
+            }),
+            path,
+            false,
+          );
+        // The clauses a reader of `path` observes: those stored at the
+        // position, and where a link is stored at it or above it, those at
+        // the link and at the position the link leads to, followed in turn.
+        const through: unknown[] = [];
+        let at: NormalizedFullLink | undefined = {
+          space,
+          id: hooks.entityOf(instance.id),
+          path: [...path],
+          scope: "space",
+        };
+        for (let hop = 0; at !== undefined && hop < 8; hop++) {
+          let value: unknown = read.readValueOrThrow({ ...at, path: [] });
+          let reached = 0;
+          while (
+            reached < at.path.length && parseLink(value, at) === undefined
+          ) {
+            value = (value as Record<string, unknown> | undefined)?.[
+              at.path[reached]
+            ];
+            reached++;
+          }
+          const position = at.path.slice(0, reached);
+          const stored = readStoredCfcMetadata(read, at);
+          if (stored !== undefined) {
+            const consumed = labelForConsumedEntries(
+              consumedEntriesForRead(stored, position, {
+                nonRecursive: false,
+                consumes: "value",
+              }),
+              position,
+              false,
+            );
+            for (const clause of consumed?.confidentiality ?? []) {
+              through.push(clause);
+            }
+          }
+          const link: NormalizedFullLink | undefined = parseLink(value, at);
+          at = link === undefined
+            ? undefined
+            : { ...link, path: [...link.path, ...at.path.slice(reached)] };
+        }
+        // The entries stored at `path` itself.
+        const entries = (metadata?.labelMap.entries ?? []).filter((entry) =>
+          JSON.stringify(entry.path) === JSON.stringify(path)
+        );
+        return { refused, label, through, entries };
+      } finally {
+        read.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  it("binds the `shape` slot of the left operand of `??` to the position its value was read at, and commits", async () => {
+    const { refused, label } = await commitWithOptionOn(
+      "coalesce",
+      { name: "ada" },
+      ["shout"],
+    );
+    expect(refused).toEqual([]);
+    // The label of the template is stored: a kept output carries the atom
+    // of its pattern.
+    expect(JSON.stringify(label?.integrity ?? [])).toContain(
+      '"kind":"compiled"',
+    );
+    // The selected branch passes the scalar on as its `value` (PL §3.5),
+    // and `toUpperCase()` reads it: its clause is in the stored label.
+    expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+      '"input:name"',
+    );
+  });
+
+  it("binds a slot whose position the transaction read after it wrote it to the label the write staged", async () => {
+    // `bumped` reads `count` and writes it from `trigger`; `shown` reads
+    // `count` in the same transaction after that write, and sees the value
+    // the write made: the label of `shown` holds the clause of `trigger`.
+    const { refused, label } = await commitWithOptionOn(
+      "read-after-side-write",
+      { trigger: 1 },
+      ["shown"],
+    );
+    expect(refused).toEqual([]);
+    expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+      '"input:trigger"',
+    );
+  });
+
+  it("binds the element slot of an empty collection to the position of its elements, and commits", async () => {
+    // The `identity` slot of `list/*` reads no element of the empty list.
+    // It is bound to `*` below the list, which covers no element entry and
+    // has the label of the list above it.
+    const { refused, label } = await commitWithOptionOn(
+      "spread-empty",
+      { trigger: 1 },
+      ["appended"],
+    );
+    expect(refused).toEqual([]);
+    expect(label).toBeDefined();
+  });
+
+  it("journals the shape of a position whose value a slot of the same template observes too, and commits", async () => {
+    const { refused, label } = await commitWithOptionOn(
+      "shape-and-keys",
+      { box: { a: 1, b: 2 } },
+      ["count"],
+    );
+    expect(refused).toEqual([]);
+    expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+      '"input:box"',
+    );
+  });
+
+  it("resolves an `enumeration` slot as a read of the container's shape, without the clause a member of an element declares", async () => {
+    // `items.length` observes which elements the list has (PL §2.2: an
+    // `enumeration` slot resolves as a `shape` read at the container's
+    // path). The clause `note` of an element declares is at `items/*/note`.
+    const { refused, label } = await commitWithOptionOn(
+      "length-of-labeled",
+      { items: [{ note: "a", amount: 1 }, { note: "b", amount: 2 }] },
+      ["count"],
+    );
+    expect(refused).toEqual([]);
+    const clauses = JSON.stringify(label?.confidentiality ?? []);
+    expect(clauses).toContain('"input:items"');
+    expect(clauses).not.toContain("item-note");
+  });
+
+  it("stores at a text of a whole list the clauses of the list and of a record the list holds a link to", async () => {
+    // The handler appends a record, which is a document of its own that
+    // the list links to. The read of the list's value goes through the
+    // list's array and through that link: the label of `all` holds the
+    // clause of the list, and the clause its elements declare on `note`.
+    const { refused, entries } = await commitWithOptionOn(
+      "whole-after-push",
+      { items: [{ note: "a", amount: 1 }] },
+      ["all"],
+      0,
+    );
+    expect(refused).toEqual([]);
+    const value = JSON.stringify(
+      entries.filter((entry) => entry.observes === "value")
+        .map((entry) => entry.label.confidentiality ?? []),
+    );
+    expect(value).toContain('"input:items"');
+    expect(value).toContain("item-note");
+  });
+
+  it("binds a `value` slot that no evaluation bound through the link at its position, where a slot that observes the reference there was bound", async () => {
+    // The pattern compiled in binds a handler to `items`, which observes
+    // the reference the argument holds, and computes a text of the list.
+    // The `value` slot of the text resolves through that reference (PL
+    // §2.5): its label is the list's, with the clause an element declares.
+    const { refused, entries } = await commitWithOptionOn(
+      "whole-in-child",
+      { items: [{ note: "a", amount: 1 }] },
+      ["$UI", "children", "0", "children", "0"],
+    );
+    expect(refused).toEqual([]);
+    const value = JSON.stringify(
+      entries.filter((entry) => entry.observes === "value")
+        .map((entry) => entry.label.confidentiality ?? []),
+    );
+    expect(value).toContain('"input:items"');
+    expect(value).toContain("item-note");
+  });
+
+  it("binds the slot of a handler's write edge that read the position the edge writes to what it read, and commits", async () => {
+    // The edge writes the input's own cell, which the result document does
+    // not hold: what is asserted is that the commit is not refused.
+    const { refused } = await commitWithOptionOn(
+      "increment",
+      { count: 1 },
+      [],
+      0,
+    );
+    expect(refused).toEqual([]);
+  });
+
+  it("gives no write record for an output the plan has no template for, and commits with the transaction's join there", async () => {
+    // The crate emits some kept outputs with no template; the runtime has
+    // nothing to instantiate for them.
+    const { refused, label } = await commitWithOptionOn(
+      "coalesce",
+      { name: "ada" },
+      ["shout"],
+      undefined,
+      (artifact) => {
+        delete (artifact.plan as { outputs: { template?: unknown }[] })
+          .outputs[0].template;
+      },
+    );
+    expect(refused).toEqual([]);
+    expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+      '"input:name"',
+    );
+  });
+
+  it("binds the source slot of the result of a `map` over plain values in place that a selector's branch names from outside the element body, and commits", async () => {
+    const { refused, label } = await commitWithOptionOn(
+      "collection-output",
+      { names: ["a", "b"] },
+      ["$UI", "children", "0"],
+    );
+    expect(refused).toEqual([]);
+    expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+      '"input:names"',
+    );
+  });
+  it("stores the atom of a pattern's expression code, equal whether the pattern runs alone or compiled into another", async () => {
+    /** The pattern identities of the `TransformedBy` atoms of a label. */
+    const minted = (label: { integrity?: readonly unknown[] } | undefined) =>
+      (label?.integrity ?? []).flatMap((atom) => {
+        const identity =
+          (atom as { identity?: { kind?: string; pattern?: string } })
+            .identity;
+        return identity?.kind === "compiled" ? [identity.pattern] : [];
+      });
+    const alone = await commitWithOptionOn(
+      "compiled-in",
+      { title: "t" },
+      ["shout"],
+      undefined,
+      undefined,
+      "Row",
+    );
+    const within = await commitWithOptionOn(
+      "compiled-in",
+      { title: "t" },
+      ["row", "shout"],
+    );
+    expect(alone.refused).toEqual([]);
+    expect(within.refused).toEqual([]);
+    const row = minted(alone.label);
+    // Alone, the kept output and the expression code both name `Row`.
+    expect(new Set(row).size).toBe(1);
+    // Compiled in, the expression code names `Row` and the kept output
+    // names the pattern of the instance.
+    expect(minted(within.label)).toContain(row[0]);
+    expect(new Set(minted(within.label)).size).toBe(2);
+  });
+
+  it("binds the slot of a literal a handler binding gives its state as a constant, and commits", async () => {
+    const { refused } = await commitWithOptionOn(
+      "constant-state",
+      { title: "t" },
+      [],
+      0,
+    );
+    expect(refused).toEqual([]);
+  });
+
+  it("binds the slot of a state cell that a pattern compiled in passes to an element property, and commits", async () => {
+    const { refused } = await commitWithOptionOn(
+      "state-to-component",
+      { title: "t" },
+      ["controls"],
+    );
+    expect(refused).toEqual([]);
+  });
+
+  it("binds the slots of a `reduce` over an array of plain values in place a cell holds, and commits", async () => {
+    const { refused, label } = await commitWithOptionOn(
+      "reduce-entries",
+      { entries: [{ amount: 1 }, { amount: 2 }] },
+      ["total"],
+    );
+    expect(refused).toEqual([]);
+    expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+      '"input:entries"',
+    );
+  });
+
+  for (
+    const [fixture, argument, path, source] of [
+      ["pass-through", { secret: "s", flag: true }, ["whole"], "secret"],
+      [
+        "pass-through",
+        { secret: "s", flag: true },
+        ["member", "inner"],
+        "secret",
+      ],
+      ["pass-through", { secret: "s", flag: true }, ["element", "0"], "secret"],
+      ["pass-through", { secret: "s", flag: true }, ["chosen"], "secret"],
+      ["pass-through", { secret: "s", flag: true }, ["parameter"], "secret"],
+      ["pass-through", { secret: "s", flag: true }, ["lifted"], "secret"],
+      ["pass-through", { secret: "s", flag: true }, ["fromLift"], "secret"],
+      ...([
+        [["chosenList", "0"], "list"],
+        [["chosenBox", "a"], "box"],
+        [["spreadList", "0"], "list"],
+        [["member"], "box"],
+        [["element"], "list"],
+        [["mapped", "0"], "list"],
+        [["local", "a"], "box"],
+      ] as const).map(([path, source]) =>
+        [
+          "pass-through-containers",
+          { list: ["s"], box: { a: "s" }, flag: true, other: ["o"] },
+          path,
+          source,
+        ] as const
+      ),
+    ] as const
+  ) {
+    it(
+      `stores the clause of \`${source}\` that value code passes on, at \`${
+        path.join(".")
+      }\` of \`${fixture}\` or at the position the link stored there leads to`,
+      async () => {
+        const { refused, through } = await commitWithOptionOn(
+          fixture,
+          argument,
+          path,
+        );
+        expect(refused).toEqual([]);
+        expect(JSON.stringify(through)).toContain(`"input:${source}"`);
+      },
+    );
+  }
+});
+
+describe("a commit the preparation refuses", () => {
+  it("writes a document whole in the next transaction where the refused commit created it, before the refused commit settles", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const doc = identifierOf({ test: "refused-first-write" });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: doc,
+      artifact: await artifactOf("coalesce"),
+    });
+    try {
+      const store = new Store();
+      store.docs.set(doc, { kind: "result", value: { box: {} } });
+      // The first transaction creates the document with a write record
+      // that binds none of its template's slots: the preparation refuses
+      // the commit.
+      hooks.begin("send");
+      hooks.change(doc, [], store, undefined, [{
+        target: { doc, path: ["elsewhere"] },
+        record: { output: 0 },
+        instance: doc,
+        keys: [],
+        slots: {},
+      }]);
+      hooks.end({ committed: true });
+      // The second, begun before the first settled, writes below the root.
+      store.put(doc, ["box"], { n: 1 });
+      hooks.begin("send");
+      hooks.change(doc, ["box"], store);
+      hooks.end({ committed: true });
+      const refused = await hooks.settled();
+      expect(refused.length).toBe(1);
+      expect(refused[0]).toContain("plan-label refused");
+      expect(withoutSchemas(hooks.stored().get(doc))).toEqual({
+        box: { n: 1 },
+      });
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+});
+
+describe("a change that leaves the stored value as it was", () => {
+  it("records its write record as that of a write that left the value as it was, and stores the label of the record at the path", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const doc = identifierOf({ test: "unchanged-write" });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: doc,
+      artifact: await artifactOf("coalesce"),
+    });
+    try {
+      const store = new Store();
+      store.docs.set(doc, { kind: "result", value: { shout: "A" } });
+      hooks.begin("send");
+      hooks.change(doc, [], store);
+      hooks.end({ committed: true });
+      expect(await hooks.settled()).toEqual([]);
+      // The executor writes `shout` again with the value it holds: the
+      // storage records no write, and the write record is given as that of
+      // a write that left the value as it was, which names a path the
+      // transaction did not write.
+      hooks.begin("send");
+      hooks.change(doc, ["shout"], store, undefined, [{
+        target: { doc, path: ["shout"] },
+        record: { output: 0 },
+        instance: doc,
+        keys: [],
+        slots: { 0: { constant: true }, 1: { constant: true } },
+        selections: { 0: 0 },
+      }]);
+      hooks.end({ committed: true });
+      expect(await hooks.settled()).toEqual([]);
+      expect(hooks.counts.unchangedRecords).toBe(1);
+      // The kept output's label is the atom of its pattern.
+      const reader = runtime.edit();
+      try {
+        const entries = readStoredCfcMetadata(reader, {
+          space,
+          id: hooks.entityOf(doc),
+          scope: "space",
+        })?.labelMap.entries ?? [];
+        expect(
+          entries.filter((entry) =>
+            entry.observes === "value" && entry.path.join("/") === "shout"
+          ).map((entry) => entry.label.integrity?.length),
+        ).toEqual([1]);
+      } finally {
+        reader.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+});
+
+describe("the cost of labels from templates for a `filter`", () => {
+  it("commits a change of one element over plain values in place, over references, and over the result of a `map`, one that leaves the filtered list and one that stays in it, with the same work and stored entries at 20 and at 200 elements", async () => {
+    for (const which of CASES) {
+      const [small, large] = [
+        await measure(which, 20, true),
+        await measure(which, 200, true),
+      ];
+      for (const figures of [small, large]) {
+        expect({ which, refused: figures.refused }).toEqual({
+          which,
+          refused: [],
+        });
+      }
+      const work = ({ prepareMs: _ms, size: _size, ...rest }: Figures) => rest;
+      expect(work(large)).toEqual(work(small));
     }
   });
 });

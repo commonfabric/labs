@@ -279,8 +279,8 @@ changes nothing; a refusal writes nothing else. A thread's title is stored the
 same way, labeled with the member who last set it, by `commitSetThreadTitle`,
 which records its outcomes in `threadTitleRequests`, and by `commitSend` and
 `commitThreadSend` for a send that titles the thread it starts. Its record's
-policy names those three, and a later schema can neither add a writer to a
-stored policy nor drop one.
+policy names those three. A stored policy keeps every writer it names, whether
+or not a later schema lists it, and gains one only where a release admits it.
 `canSend` is computed for each session from the reader's access and whether
 their profile resolves.
 
@@ -300,13 +300,14 @@ each setting at an initial value:
 | How far before the clock a proposed time is accepted | `proposedTimeMaxAgeNsec` | 10 minutes |
 | How far after the clock a proposed time is accepted | `proposedTimeMaxLeadNsec` | 10 seconds |
 | How long an entry stays in `recentActivity` | `recentActivityWindowNsec` | 10 minutes |
-| How many of the newest messages `messages.latest` holds | `maxWindowCount` | 100 |
+| How many of the newest messages `messages.latest`, and a window, hold | `maxWindowCount` | 100 |
 | The most message windows a session can have open | `maxOpenWindows` | 50 |
 | The most attachments a message may have | `maxAttachments` | 10 |
 
 These are the first build's values. Once the configuration exists, rooms can
 differ from them. The room reads `ownersMayObliterate`,
-`deletionIsObliteration`, `maxWindowCount`, and `maxAttachments`; the other
+`deletionIsObliteration`, `maxWindowCount`, `maxOpenWindows`, and
+`maxAttachments`; the other
 keys are stated for
 the policy's shape, which a user's Home carries, and read by nothing. `ownersMayObliterate` is there for a group room with many
 OWNERs; a direct room is set up without it, and its two people each obliterate

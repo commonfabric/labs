@@ -18,7 +18,10 @@ import {
   inspectHarnessTranscriptPairing,
 } from "./contracts/transcript.ts";
 import { assertInputCellNamesAvailable } from "./input-cells.ts";
-import type { HarnessInputCellSpec } from "./contracts/input-cells.ts";
+import type {
+  HarnessHeldInput,
+  HarnessInputCellSpec,
+} from "./contracts/input-cells.ts";
 import { snapshotHarnessImageAttachment } from "./image-attachments.ts";
 import { assertValidHarnessHandleTable } from "./handle-table.ts";
 import { harnessResumeRefusal } from "./control-errors.ts";
@@ -240,8 +243,8 @@ export interface PrepareNextHarnessRunOptions {
   imageSnapshotDir?: string;
   inputCells?: readonly HarnessInputCellSpec[];
 
-  /** Names retained by a session whose history spans multiple runs. */
-  heldInputNames?: readonly string[];
+  /** Holds retained by a session whose history spans multiple runs. */
+  heldInputs?: readonly HarnessHeldInput[];
   runId?: string;
   artifactRoot?: string;
   structuredResult?: HarnessRunState["structuredResult"];
@@ -251,17 +254,38 @@ export interface PrepareNextHarnessRunOptions {
   ) => HarnessNextRunContext | Promise<HarnessNextRunContext>;
 }
 
-/** Attachment, assignment, and grant names already bound to held handles. */
-export const inputNamesHeldByHarnessRun = (
+/**
+ * Attachment, assignment, and grant names a run has bound to held handles,
+ * each with the cell it names.
+ */
+export const inputsHeldByHarnessRun = (
   state: Pick<
     HarnessRunState,
     "inputCells" | "assignedPieces" | "wellKnownGrants"
   >,
-): string[] => [
-  ...(state.inputCells ?? []).map((cell) => cell.name),
-  ...(state.assignedPieces ?? []).map((piece) => piece.slug),
-  ...(state.wellKnownGrants ?? []).map((grant) => grant.name),
+): HarnessHeldInput[] => [
+  ...(state.inputCells ?? []).map(({ name, ref }) => ({ name, ref })),
+  ...(state.assignedPieces ?? []).map(({ slug, ref }) => ({ name: slug, ref })),
+  ...(state.wellKnownGrants ?? []).map(({ name, ref }) => ({ name, ref })),
 ];
+
+/**
+ * Joins lists of holds into one, in order, keeping one of any that pair the
+ * same name with the same reference.
+ */
+export const joinHeldInputs = (
+  ...lists: readonly (readonly HarnessHeldInput[])[]
+): HarnessHeldInput[] => {
+  const joined: HarnessHeldInput[] = [];
+  for (const hold of lists.flat()) {
+    if (
+      !joined.some((kept) => kept.name === hold.name && kept.ref === hold.ref)
+    ) {
+      joined.push(hold);
+    }
+  }
+  return joined;
+};
 
 /**
  * Cuts history to its complete checkpoint, retains explicitly classified
@@ -280,8 +304,8 @@ export const prepareNextHarnessRun = async (
     assertValidHarnessHandleTable(prior.handleTable);
   }
   assertInputCellNamesAvailable(options.inputCells ?? [], [
-    ...inputNamesHeldByHarnessRun(prior),
-    ...(options.heldInputNames ?? []),
+    ...inputsHeldByHarnessRun(prior),
+    ...(options.heldInputs ?? []),
   ]);
   const source = options.transcript ?? [];
   const boundary = inspectHarnessTranscriptPairing(source).safeBoundary;

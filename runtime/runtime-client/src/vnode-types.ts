@@ -4,7 +4,7 @@
  * and `RenderNode`.
  */
 
-import { UI } from "@commonfabric/runner/shared";
+import type { UI } from "@commonfabric/runner/shared";
 import type { CellHandle } from "./cell-handle.ts";
 
 export type Props = {

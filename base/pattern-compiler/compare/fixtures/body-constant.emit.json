@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/body-constant.tsx",
-              "source": "const { \"computed\": computed, \"Default\": Default, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst List = pattern(\"unhashed:pattern/compare/fixtures/body-constant.tsx#List\");\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/body-constant.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { hide, mark, show, words } = $a; return (() => {\n    let text = mark;\n    if (show.get() && !hide.get()) text = words.join(\",\");\n    return text;\n  })(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ shown: $h.output(0) })));\n});"
+              "source": "const { \"computed\": computed, \"Default\": Default, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst List = pattern(\"sha256:e53e25aca790341be0cc02f7e7d1e989ae72e42210afcb5c3da8c0d5b4d1eb9f\");\nconst $default = (pattern(\"sha256:659b4bc975b55fd199e5bd0fc36feb1cfc30ac0026f2d867f84c615b39f4630f\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { hide, mark, show, words } = $a; return (() => {\n    let text = mark;\n    if (show.get() && !hide.get()) text = words.join(\",\");\n    return text;\n  })(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ shown: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -179,7 +179,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/body-constant.tsx#List"
+            "sha256:e53e25aca790341be0cc02f7e7d1e989ae72e42210afcb5c3da8c0d5b4d1eb9f"
           ],
           "picks": [],
           "selectors": [],
@@ -336,7 +336,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/body-constant.tsx",
-              "source": "const { \"computed\": computed, \"Default\": Default, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst List = pattern(\"unhashed:pattern/compare/fixtures/body-constant.tsx#List\");\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/body-constant.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { hide, mark, show, words } = $a; return (() => {\n    let text = mark;\n    if (show.get() && !hide.get()) text = words.join(\",\");\n    return text;\n  })(); });\n$rt.setup(1, function ($arg, $h) {\nconst show = $rt.or($rt.at($arg, [\"show\"], $h), () => (true));\nconst hide = $rt.or($rt.at($arg, [\"hide\"], $h), () => (false));\nconst mark = $rt.at($arg, [\"mark\"], $h);\n$rt.value(0, ($h) => ($h.invoke(0, { \"hide\": $h.constant(hide), \"mark\": mark, \"show\": $h.constant(show) })));\nreturn $rt.thunk(($h) => (({ shown: $h.output(0) })));\n});\n$rt.body(1, ($a) => { const { hide, mark, show, words } = $a; return (() => {\n    let text = mark;\n    if (show.get() && !hide.get()) text = words.join(\",\");\n    return text;\n  })(); });\n$rt.setup(2, function ($arg, $h) {\nconst show = $rt.or($rt.at($arg, [\"show\"], $h), () => (true));\nconst hide = $rt.or($rt.at($arg, [\"hide\"], $h), () => (false));\nconst mark = $rt.at($arg, [\"mark\"], $h);\n$rt.value(1, ($h) => ($h.invoke(1, { \"hide\": $h.constant(hide), \"mark\": mark, \"show\": $h.constant(show) })));\nreturn $rt.thunk(($h) => (({ shown: $h.output(1) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({ \"mark\": (\"?\") }, $h);\nconst open = $rt.thunk(($h) => ($rt.force($s1, $h)));\nconst $s2 = $rt.setups[2]({ \"mark\": (\"-\"), \"hide\": (true) }, $h);\nconst closed = $rt.thunk(($h) => ($rt.force($s2, $h)));\nreturn $rt.thunk(($h) => (({ open: $h.output(0), closed: $h.output(1) })));\n});"
+              "source": "const { \"computed\": computed, \"Default\": Default, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst List = pattern(\"sha256:e53e25aca790341be0cc02f7e7d1e989ae72e42210afcb5c3da8c0d5b4d1eb9f\");\nconst $default = (pattern(\"sha256:659b4bc975b55fd199e5bd0fc36feb1cfc30ac0026f2d867f84c615b39f4630f\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { hide, mark, show, words } = $a; return (() => {\n    let text = mark;\n    if (show.get() && !hide.get()) text = words.join(\",\");\n    return text;\n  })(); });\n$rt.setup(1, function ($arg, $h) {\nconst show = $rt.or($rt.at($arg, [\"show\"], $h), () => (true));\nconst hide = $rt.or($rt.at($arg, [\"hide\"], $h), () => (false));\nconst mark = $rt.at($arg, [\"mark\"], $h);\n$rt.value(0, ($h) => ($h.invoke(0, { \"hide\": $h.constant(hide), \"mark\": mark, \"show\": $h.constant(show) })));\nreturn $rt.thunk(($h) => (({ shown: $h.output(0) })));\n});\n$rt.body(1, ($a) => { const { hide, mark, show, words } = $a; return (() => {\n    let text = mark;\n    if (show.get() && !hide.get()) text = words.join(\",\");\n    return text;\n  })(); });\n$rt.setup(2, function ($arg, $h) {\nconst show = $rt.or($rt.at($arg, [\"show\"], $h), () => (true));\nconst hide = $rt.or($rt.at($arg, [\"hide\"], $h), () => (false));\nconst mark = $rt.at($arg, [\"mark\"], $h);\n$rt.value(1, ($h) => ($h.invoke(1, { \"hide\": $h.constant(hide), \"mark\": mark, \"show\": $h.constant(show) })));\nreturn $rt.thunk(($h) => (({ shown: $h.output(1) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({ \"mark\": (\"?\") }, $h);\nconst open = $rt.thunk(($h) => ($rt.force($s1, $h)));\nconst $s2 = $rt.setups[2]({ \"mark\": (\"-\"), \"hide\": (true) }, $h);\nconst closed = $rt.thunk(($h) => ($rt.force($s2, $h)));\nreturn $rt.thunk(($h) => (({ open: $h.output(0), closed: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -531,8 +531,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/body-constant.tsx#default",
-            "unhashed:pattern/compare/fixtures/body-constant.tsx#List"
+            "sha256:659b4bc975b55fd199e5bd0fc36feb1cfc30ac0026f2d867f84c615b39f4630f",
+            "sha256:e53e25aca790341be0cc02f7e7d1e989ae72e42210afcb5c3da8c0d5b4d1eb9f"
           ],
           "picks": [],
           "selectors": [],

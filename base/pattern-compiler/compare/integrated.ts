@@ -15,7 +15,15 @@
  * - `labeled`: the same, with each input a cell of its own whose schema
  *   declares a clause, as today's harness writes an input, and the
  *   argument a link to each. A transaction that reads one is relevant to
- *   Contextual Flow Control, and its commit runs the preparation.
+ *   Contextual Flow Control, and its commit runs the preparation. The
+ *   runtime serves the space and has the experimental option
+ *   `compiledPatterns` on, so the paths the executor's write records cover
+ *   store the labels of their templates.
+ *
+ * A module that has a `wish` runs in the seeded home of `wish-home.ts`, in
+ * each of the three: the two runs in storage write the home into their
+ * storage, so a read of the profile is a read of a labeled document of
+ * another space.
  *
  * The storage is the runtime's emulated storage, as in every run of today's
  * runtime this comparison makes. A figure of `plain` and `labeled` is from
@@ -48,12 +56,21 @@ import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../exec/executor.ts";
 import { identifierOf, isLink, nameText } from "../exec/store.ts";
-import { artifactsOf, corpusModules, mainPattern } from "./corpus.ts";
+import {
+  artifactsOf,
+  corpusModules,
+  mainPattern,
+  wishStubs,
+} from "./corpus.ts";
 import { generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
 import { drawing, eventSeed, restoreRandom, seedRandom } from "./random.ts";
-import { RuntimeTransactions } from "./runtime-transactions.ts";
+import {
+  type RecordedPlanWrite,
+  RuntimeTransactions,
+} from "./runtime-transactions.ts";
 import { compareValues, outOfFileForm, type Values } from "./values.ts";
+import { hasWish, homeStubs, seedHome } from "./wish-home.ts";
 
 /** The timing counters of the runtime a figure counts, by their key. */
 const COUNTED = {
@@ -61,10 +78,13 @@ const COUNTED = {
   preparations: "extended-storage-transaction/prepareCfc",
 } as const;
 
-type Counted = Record<keyof typeof COUNTED, number>;
+type Counted = Record<keyof typeof COUNTED, number> & {
+  /** Milliseconds the commit preparations took in total. */
+  prepareMs: number;
+};
 
 /** One figure: the wall time, and what the runtime counted in it. */
-type Figure = Counted & {
+export type Figure = Counted & {
   /** Milliseconds from the start of the work to its last commit. */
   local: number;
   /** Milliseconds from the start of the work to every commit settled. */
@@ -75,10 +95,26 @@ type Figure = Counted & {
   writes: number;
   /** Commits the storage refused, each with its reason. */
   refused: string[];
+  /**
+   * Selections, picks and reads of a `dynamic` node whose label the
+   * preparation took as its bound, because the write record did not
+   * report them (the runtime's `planLabelBounds`).
+   */
+  planLabelBounds: number;
+  /**
+   * Write records recorded for a write that left the value at its target
+   * as it was (`RuntimeCounts.unchangedRecords`).
+   */
+  unchangedRecords: number;
+  /**
+   * The paths whose label entries changed in a document for which such a
+   * write record was recorded (`RuntimeCounts.labelEntriesChanged`).
+   */
+  labelEntriesChanged: number;
 };
 
 /** A run of a module one way. */
-type Arm = { settle: Figure; events: Figure[] };
+export type Arm = { settle: Figure; events: Figure[] };
 
 /** The results of one module, as the results file holds them. */
 type ModuleTimes = {
@@ -99,16 +135,49 @@ type ModuleTimes = {
   today?: { compared: number; equal: number };
 };
 
-const counted = (): Counted => {
+export const counted = (): Counted => {
   const breakdown = getTimingStatsBreakdown();
   const count = (key: string) => {
     const [logger, ...rest] = key.split("/");
     return breakdown[logger]?.[rest.join("/")]?.count ?? 0;
   };
+  const [logger, ...rest] = COUNTED.preparations.split("/");
   return {
     commits: count(COUNTED.commits),
     preparations: count(COUNTED.preparations),
+    prepareMs: breakdown[logger]?.[rest.join("/")]?.totalTime ?? 0,
   };
+};
+
+/**
+ * What a caller of `inStorage` is told while the run goes on, to read the
+ * labels the runtime stored for the executor's documents.
+ */
+export type Inspect = {
+  /** The write records of each commit that settled, as it settles. */
+  committed?(
+    runtime: Runtime,
+    hooks: RuntimeTransactions,
+    writes: readonly RecordedPlanWrite[],
+  ): void;
+  /** The reasons of the commits refused at each settle, as it settles. */
+  refused?(reasons: readonly string[]): void;
+  /**
+   * The instance and its storage once the event at `position` of the
+   * events given was handled.
+   */
+  sent?(
+    runtime: Runtime,
+    hooks: RuntimeTransactions,
+    instance: Instance,
+    position: number,
+  ): void;
+  /** The instance and its storage once every event was handled. */
+  end?(
+    runtime: Runtime,
+    hooks: RuntimeTransactions,
+    instance: Instance,
+  ): void;
 };
 
 /** What an instance shows of its values: the result and its state cells. */
@@ -142,7 +211,12 @@ const withoutSchemas = (value: unknown): unknown => {
 const signer = () => Identity.fromPassphrase("pattern-compiler-compare");
 
 /** The committed events of a run, each with the elements it was sent at. */
-type Sent = { index: number; binding: number; event: unknown; at: number[] };
+export type Sent = {
+  index: number;
+  binding: number;
+  event: unknown;
+  at: number[];
+};
 
 const committedEvents = (
   runtime: NonNullable<RecordedModule["runtime"]>,
@@ -174,7 +248,7 @@ type RecordedModule = {
 };
 
 /** The options every run of an instance of a module takes. */
-const instanceOptions = (
+export const instanceOptions = (
   module: string,
   space: string,
   artifacts: (id: string) => Artifact | undefined,
@@ -258,15 +332,21 @@ export const labeledInputs = async (
 
 /**
  * Runs a module with its documents in the runtime's storage, and returns
- * the figures and what differs from the run in memory.
+ * the figures and what differs from the run in memory. The labeled arm
+ * runs in a runtime that serves the space, with the experimental option
+ * `compiledPatterns` as `compiledPatterns` says, so that with it on the
+ * paths the executor's write records cover store the labels of their
+ * templates.
  */
-const inStorage = async (
+export const inStorage = async (
   artifact: Artifact,
   argument: Record<string, unknown>,
   events: Sent[],
   options: ReturnType<typeof instanceOptions>,
-  memory: string[],
+  memory: string[] | undefined,
   labeled: boolean,
+  compiledPatterns = labeled,
+  inspect: Inspect = {},
 ): Promise<{ arm: Arm; differs: string[] }> => {
   const identity = await signer();
   const space = identity.did();
@@ -275,15 +355,28 @@ const inStorage = async (
     apiUrl: new URL(import.meta.url),
     storageManager,
     cfcFlowLabels: "persist",
+    ...(labeled
+      ? { experimental: { compiledPatterns }, servingPosture: true }
+      : {}),
   });
   const differs: string[] = [];
   const hooks = new RuntimeTransactions(runtime, space, {
     owner: options.id,
+    artifact,
   });
+  const committed = inspect.committed;
+  if (committed !== undefined) {
+    hooks.onCommitted((writes) => committed(runtime, hooks, writes));
+  }
   try {
     // The inputs as cells of their own, each under a schema with a clause.
     let given = argument;
-    let documents: { id: string; kind: string; value: unknown }[] = [];
+    let documents: {
+      id: string;
+      kind: string;
+      value: unknown;
+      space?: string;
+    }[] = [];
     if (labeled) {
       const inputs = generateInputs(
         artifact.plan as Parameters<typeof generateInputs>[0],
@@ -298,12 +391,24 @@ const inStorage = async (
         hooks,
       ));
     }
+    // The home a `wish` of the pattern resolves in, which the executor is
+    // handed as documents it did not make (`wish-home.ts`).
+    const home = hasWish(artifact.plan)
+      ? homeStubs(await seedHome(runtime, space))
+      : undefined;
+    for (const { id, space: other } of home?.documents ?? []) {
+      hooks.external(id, other as MemorySpace | undefined);
+    }
+    documents = [...documents, ...home?.documents ?? []];
     const measure = async (work: () => void): Promise<Figure> => {
       const before = hooks.counts;
+      const bounds = runtime.getCfcStats().planLabelBounds;
+      resetAllTimingStats();
       const began = performance.now();
       work();
       const local = performance.now() - began;
       const refused = await hooks.settled();
+      inspect.refused?.(refused);
       const settled = performance.now() - began;
       const after = hooks.counts;
       return {
@@ -313,6 +418,10 @@ const inStorage = async (
         reads: after.reads - before.reads,
         writes: after.writes - before.writes,
         refused,
+        planLabelBounds: runtime.getCfcStats().planLabelBounds - bounds,
+        unchangedRecords: after.unchangedRecords - before.unchangedRecords,
+        labelEntriesChanged: after.labelEntriesChanged -
+          before.labelEntriesChanged,
       };
     };
     resetAllTimingStats();
@@ -322,13 +431,15 @@ const inStorage = async (
         ...options,
         transactions: hooks,
         documents,
+        ...(home === undefined ? {} : { wishes: home.wishes }),
       });
     });
     if (instance === undefined) throw new Error("no instance");
     const compare = (point: string, expected: string | undefined) => {
+      if (memory === undefined) return;
       if (snapshot(instance!) !== expected) differs.push(`values ${point}`);
     };
-    compare("settled", memory[0]);
+    compare("settled", memory?.[0]);
     const figures: Figure[] = [];
     for (const [position, { index, binding, event, at }] of events.entries()) {
       seedRandom(eventSeed(index));
@@ -341,8 +452,10 @@ const inStorage = async (
       } finally {
         restoreRandom();
       }
-      compare(`after event ${index}`, memory[position + 1]);
+      compare(`after event ${index}`, memory?.[position + 1]);
+      inspect.sent?.(runtime, hooks, instance, position);
     }
+    inspect.end?.(runtime, hooks, instance);
     const stored = hooks.stored();
     for (const [doc, held] of instance.store.docs) {
       if (documents.some(({ id }) => id === doc)) continue;
@@ -400,7 +513,15 @@ const run = async (from: string, to: string, only: string | undefined) => {
     } else {
       console.error(earlier.module);
       const events = committedEvents(earlier.runtime);
-      const options = instanceOptions(earlier.module, space, artifacts);
+      const stubs = await wishStubs(artifact.plan);
+      const options = {
+        ...instanceOptions(earlier.module, space, artifacts),
+        // The home of the run in memory. A run in storage seeds its own.
+        ...(stubs?.home === undefined ? {} : {
+          documents: stubs.home.documents,
+          wishes: stubs.home.wishes,
+        }),
+      };
       const { argument } = earlier.runtime;
       try {
         const memory = inMemory(artifact, argument, events, options);
@@ -431,6 +552,7 @@ const run = async (from: string, to: string, only: string | undefined) => {
           earlier.runtime.outcomes as Parameters<typeof compareValues>[3],
           outOfFileForm(earlier.runtime.values) as Values,
           artifacts,
+          await wishStubs(artifact.plan),
         );
         result.today = {
           compared: comparison.compared,

@@ -81,6 +81,7 @@ import {
   WORKFLOW_FILE,
   type WorkflowRun,
 } from "./ci-check-lib.ts";
+import { type Git, git as gitHere } from "./repository-files.ts";
 import { claimsFor, loadTopology } from "./test-topology.ts";
 import type { LocatableRecord, Suite } from "./test-topology/suite.ts";
 import { gainedSince, planOver, requestedRun } from "./ci-lane.ts";
@@ -454,28 +455,13 @@ export async function firstCoverageAt(
  */
 export interface ReportDeps {
   /** Runs git in the checkout. */
-  git?: (...args: string[]) => Promise<string>;
+  git?: Git;
 
   /** The suites the working tree declares. */
   topology?: () => Promise<Suite[]>;
 
   /** The manifest the store holds at a moment. */
   manifest?: (options: { at: string }) => Promise<ManifestFetch>;
-}
-
-/** Runs git in the checkout and returns what it printed. */
-export async function runGit(...args: string[]): Promise<string> {
-  const { code, stdout, stderr } = await new Deno.Command("git", {
-    args,
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (code !== 0) {
-    throw new Error(
-      `git ${args.join(" ")} failed: ${new TextDecoder().decode(stderr)}`,
-    );
-  }
-  return new TextDecoder().decode(stdout);
 }
 
 /** What the report reads of one pull request. */
@@ -674,7 +660,7 @@ export function manifestView(
 async function flakeCountsAt(
   commit: string,
   keys: Iterable<string>,
-  git: (...args: string[]) => Promise<string>,
+  git: Git,
   resolve: (options: { at: string }) => Promise<ManifestFetch>,
 ): Promise<Map<string, FlakeEvidence | undefined>> {
   const counts = new Map<string, FlakeEvidence | undefined>(
@@ -776,7 +762,7 @@ export async function main(
   dryRun = false,
   deps: ReportDeps = {},
 ): Promise<void> {
-  const git = deps.git ?? runGit;
+  const git = deps.git ?? gitHere;
   const run = await runUnderReport();
   if (run === undefined || !isReportable(run)) {
     console.log(
@@ -828,7 +814,7 @@ export async function main(
   }
 
   const changed = new Set(
-    (await git("diff", "--name-only", parent, commit))
+    (await git("diff", "--name-only", "--no-renames", parent, commit))
       .split("\n").map((line) => line.trim()).filter((line) => line.length > 0),
   );
 
@@ -945,19 +931,31 @@ export async function main(
   await postReport(pullRequest, body);
 }
 
-if (import.meta.main) {
-  if (!TOKEN) {
+/**
+ * Runs the reporter for a command line with the token it writes under, and
+ * returns the exit status: 1 without a token, and 0 otherwise.
+ *
+ * Reporting is best-effort, exactly as the coverage comment is: a comment
+ * nobody gates on must never turn a run red, and least of all a run on the
+ * default branch that has already passed. A reporter that stops says so in
+ * an annotation rather than a line in the log, so that it is visible on the
+ * run rather than only to whoever opens it.
+ */
+export async function runReporter(
+  args: readonly string[],
+  token: string | undefined = TOKEN,
+  deps: ReportDeps = {},
+): Promise<number> {
+  if (!token) {
     console.error("GITHUB_TOKEN is required.");
-    Deno.exit(1);
+    return 1;
   }
-  // Best-effort, exactly as the coverage comment is: a comment nobody
-  // gates on must never turn a run red, and least of all a run on the
-  // default branch that has already passed.
   try {
-    await main(Deno.args.includes("--dry-run"));
+    await main(args.includes("--dry-run"), deps);
   } catch (error) {
-    // An annotation rather than a line in the log, so a reporter that
-    // stopped is visible on the run rather than only to whoever opens it.
     console.log(`::warning title=Run report::${error}`);
   }
+  return 0;
 }
+
+if (import.meta.main) Deno.exit(await runReporter(Deno.args));

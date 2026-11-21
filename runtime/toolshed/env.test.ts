@@ -11,7 +11,9 @@
 
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { EnvSchema } from "@/env.ts";
+import { describe, it } from "@std/testing/bdd";
+import { EnvSchema, loadEnv } from "@/env.ts";
+import { Exited } from "@/test/support/exited.ts";
 
 Deno.test("MEMORY_ACL_DELEGATIONS parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
   const admits = (v: string | undefined) =>
@@ -356,4 +358,69 @@ Deno.test("EXPOSE_GC parses strictly, and only on a development or test server",
     );
     assertEquals(expose({ EXPOSE_GC: "false", ENV }), false);
   }
+});
+
+Deno.test("MEMORY_DUMP_ENABLED is on, off, or left to the default", () => {
+  const dump = (v: string | undefined) =>
+    EnvSchema.parse(v === undefined ? {} : { MEMORY_DUMP_ENABLED: v })
+      .MEMORY_DUMP_ENABLED;
+
+  assertEquals(dump(undefined), undefined);
+  assertEquals(dump("default"), undefined);
+  assertEquals(dump("false"), false);
+  assertEquals(dump("true"), true);
+  assertEquals(dump("yes"), true);
+});
+
+describe("loadEnv()", () => {
+  const exit = (code: number): never => {
+    throw new Exited(code);
+  };
+
+  it("returns the parsed environment, with a `--port=` argument overriding PORT", () => {
+    const env = loadEnv(
+      { PORT: "9000", HOST: "127.0.0.1" },
+      ["--watch", "--port=8123"],
+      exit,
+    );
+
+    expect(env.PORT).toBe(8123);
+    expect(env.HOST).toBe("127.0.0.1");
+  });
+
+  it("keeps PORT from the environment when no argument names a port", () => {
+    expect(loadEnv({ PORT: "9000" }, ["--watch"], exit).PORT).toBe(9000);
+  });
+
+  it("reports each invalid field and exits with status 1", () => {
+    const reported: unknown[][] = [];
+
+    expect(() =>
+      loadEnv(
+        { MEMORY_ACL_MODE: "sometimes" },
+        [],
+        exit,
+        (...data) => reported.push(data),
+      )
+    ).toThrow(new Exited(1));
+
+    expect(reported[0]).toEqual(["❌ Invalid env:"]);
+    expect(Object.keys(JSON.parse(String(reported[1][0])))).toEqual([
+      "MEMORY_ACL_MODE",
+    ]);
+  });
+});
+
+describe("PLAID_ENV", () => {
+  it("returns the Plaid environments the SDK has an address for, `sandbox` by default", () => {
+    expect(EnvSchema.parse({}).PLAID_ENV).toBe("sandbox");
+    expect(EnvSchema.parse({ PLAID_ENV: "sandbox" }).PLAID_ENV).toBe("sandbox");
+    expect(EnvSchema.parse({ PLAID_ENV: "production" }).PLAID_ENV).toBe(
+      "production",
+    );
+  });
+
+  it("refuses `development`, which the Plaid SDK has no address for", () => {
+    expect(() => EnvSchema.parse({ PLAID_ENV: "development" })).toThrow();
+  });
 });

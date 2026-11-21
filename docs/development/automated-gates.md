@@ -118,7 +118,7 @@ Each of these gates fails CI on its own, and none of them run as part of
   file that does not exist, a `§` citation in
   the CFC sources (`CITATION_SOURCE`, the runner's and the memory package's)
   naming a section the specification has not, or more
-  than forty `SPEC-PENDING` markers in the files it governs (`GOVERNED_SOURCE`
+  than eighty `SPEC-PENDING` markers in the files it governs (`GOVERNED_SOURCE`
   in `tasks/check-cfc-correspondence.ts`), or one naming no specs pull request. The specification is private and the snapshot is what crosses:
   `deno task cfc-spec-snapshot` regenerates it from a specs checkout, and labs
   CI never reads the specification itself. A citation written on purpose to
@@ -179,7 +179,13 @@ Each of these gates fails CI on its own, and none of them run as part of
   so; a helper module, which exports no pattern on either side, is not one. A
   run that compares no patterns fails, whatever the cause, because it has
   checked nothing, so a change that moves or edits every pattern lands apart
-  from a change to what numbers them. The gate
+  from a change to what numbers them. Continuous integration runs the gate in
+  `CAUSE_ASSIGNMENT_PARTS` parts, each a gate of its own named
+  `check-cause-assignments K of N`, so that each fits in a lane: `--part K/N`
+  compares every Nth pattern of the sorted list starting from the Kth, and
+  judges the accepted moves naming its own patterns, the first part also those
+  naming no pattern the tree holds. The rule about comparing no patterns holds
+  for each part. The gate
   compiles only for a change touching what a pattern's numbering is built by,
   which is `base/js-compiler/`, `runtime/runner/src/builder/`,
   `runtime/runner/src/builtins/`, `runtime/runner/src/harness/`,

@@ -428,7 +428,7 @@ stay in the parallel group.
 Among the serial CLI tests, and why each is serial:
 
 - `test/completion-output.serial.test.ts`,
-  `test/completion-providers.serial.test.ts`, `test/fuse.serial.test.ts`,
+  `test/completion-providers.serial.test.ts`,
   `test/inspect-remote.serial.test.ts`, `test/log-level.serial.test.ts`,
   `test/main-command.serial.test.ts`,
   `test/test-runner-compile-byte-cache.serial.test.ts`,

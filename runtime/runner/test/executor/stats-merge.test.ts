@@ -256,6 +256,7 @@ describe("stats-merge", () => {
       open.workers.spare = 13;
       open.workers.parked = 14;
       open.workers.heapUsed = 15;
+      open.workers.heapStopped = 16;
 
       expect(closedHostServingLoopStats(open)).toEqual(
         emptyServingLoopStats(),

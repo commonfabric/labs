@@ -33,10 +33,11 @@ function selfNamedPatterns(root: string): string[] {
 
 describe("Compile all patterns", () => {
   const skippedPatterns = [
-    // Utility handlers, not a standalone pattern.
-    "system/link-tool/link-tool.tsx",
     // The router library; the pattern built on it is `examples/router/main.tsx`.
     "examples/router/router.tsx",
+    // The pattern catalog's contract, a library its callers import; the
+    // pattern beside it is `system/pattern-catalog/fake-catalog.tsx`.
+    "system/pattern-catalog/pattern-catalog.tsx",
   ];
 
   const patterns = selfNamedPatterns(join(import.meta.dirname!, ".."))

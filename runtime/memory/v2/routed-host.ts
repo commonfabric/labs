@@ -156,9 +156,10 @@ export class RoutedControlDiagnostics {
     if (this.#active++ === 0) {
       const opportunity = { scheduledAt: this.#now() };
       this.#opportunity = opportunity;
+      // `close()` and the last `finish()` clear the immediate, so it runs
+      // only while the diagnostics are open.
       this.#turn = setImmediate(() => {
         this.#turn = undefined;
-        if (this.#closed) return;
         const executedAt = this.#now();
         this.#opportunity = {
           ...opportunity,
@@ -513,7 +514,7 @@ type OutputSizeBreakdown = {
  * Standalone encodings include their own format prefix, so these are not additive
  * wire sizes.
  */
-function outputSizeBreakdown(
+export function outputSizeBreakdown(
   message: ServerMessage | MemoryCompressionControlMessage,
   frameBytes: number,
   frameSlots: number | null,
@@ -574,8 +575,7 @@ function outputSizeBreakdown(
       };
     }
     const record: FabricPlainObject = result;
-    for (const key in record) {
-      if (!Object.hasOwn(record, key)) continue;
+    for (const key of Object.keys(record)) {
       if (!available()) break;
       scannedEntries++;
       measure(fields, `${path}.${key}`, record[key]);
@@ -599,8 +599,7 @@ function outputSizeBreakdown(
         }
       }
       if (isFabricPlainObject(sync.schemaTable)) {
-        for (const key in sync.schemaTable) {
-          if (!Object.hasOwn(sync.schemaTable, key)) continue;
+        for (const key of Object.keys(sync.schemaTable)) {
           if (!available()) break;
           scannedEntries++;
           measure(
@@ -648,13 +647,16 @@ class RoutedOutputDiagnostics {
     }
     const bytes = this.#sender.bufferedBytes;
     if (this.#episode === undefined && bytes >= ROUTED_QUEUE_LIMIT / 2) {
-      const episode = { startedAt: performance.now(), executedAt: undefined };
+      const episode: { startedAt: number; executedAt?: number } = {
+        startedAt: performance.now(),
+      };
       this.#episode = episode;
       this.#record("high-water");
+      // Only `#cancel()` ends an episode, and it clears the immediate, so
+      // the immediate runs during its own episode.
       this.#immediate = setImmediate(() => {
         this.#immediate = undefined;
-        if (this.#episode !== episode) return;
-        this.#episode.executedAt = performance.now();
+        episode.executedAt = performance.now();
         this.#record("event-loop");
       });
       this.#immediate.unref();
@@ -3240,7 +3242,7 @@ export function validatedRoutedEncodingFlags(
 }
 
 /** Starts closure and permits a paused socket to receive the peer's reply. */
-function safeClose(socket: WebSocket): void {
+export function safeClose(socket: WebSocket): void {
   dataSocketLifecycles.get(socket)?.cancel();
   controlSocketDiagnostics.get(socket)?.close();
   try {
@@ -3259,7 +3261,7 @@ function safeClose(socket: WebSocket): void {
 }
 
 /** Marks output failures before closing, so close callbacks retain the cause. */
-function sendBounded(
+export function sendBounded(
   socket: WebSocket,
   bytes: string | Uint8Array,
   queueLimit: number | null,

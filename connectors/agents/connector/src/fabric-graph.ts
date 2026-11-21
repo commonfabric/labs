@@ -127,16 +127,6 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function commitErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object") {
-    const message = (error as Record<string, unknown>).message;
-    if (typeof message === "string" && message.length > 0) return message;
-  }
-  return "Fabric transaction commit failed";
-}
-
 export function stableCellId(cell: Cell<unknown>): string {
   const id = cell.getAsNormalizedFullLink().id!;
   return id.startsWith("of:") ? id.slice(3) : id;
@@ -253,7 +243,7 @@ export async function pushStableCellGraph(
   tx.prepareCfc();
   const result = await tx.commit().settled;
   if (result.error) {
-    throw new Error(commitErrorMessage(result.error), { cause: result.error });
+    throw new Error(result.error.message, { cause: result.error });
   }
 }
 

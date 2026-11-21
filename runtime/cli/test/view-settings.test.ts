@@ -15,9 +15,25 @@ import { cellOf, drawnRows, mouseKey, parseDocument } from "./view-helpers.ts";
 
 const RELAY = "github-webhooks.example.test:8081";
 
-const OFF: ViewSettings = { quitOnPullRequest: false, webhookRelay: "" };
+const OFF: ViewSettings = {
+  pullRequestTool: "browser",
+  touchGateToken: "",
+  quitOnPullRequest: false,
+  webhookRelay: "",
+};
 
-const ON: ViewSettings = { quitOnPullRequest: true, webhookRelay: RELAY };
+const ON: ViewSettings = {
+  pullRequestTool: "touch-gate",
+  touchGateToken: "mine",
+  quitOnPullRequest: true,
+  webhookRelay: RELAY,
+};
+
+/** The index of each of the settings dialog's fields. */
+const TOOL = 0;
+const TOKEN = 1;
+const QUIT = 2;
+const RELAY_LINE = 3;
 
 const decoder = new TextDecoder();
 
@@ -41,9 +57,15 @@ function repository() {
     clearEnv: true,
   }).outputSync();
   Deno.mkdirSync(join(work, "sub"));
-  const git = realPushIo({ cwd: work, env, write() {} }).query;
+  const git =
+    realPushIo({ cwd: work, env, write() {}, step: () => () => {} }).query;
   /** The query that runs git in a directory inside the work tree. */
-  const gitInSub = realPushIo({ cwd: join(work, "sub"), env, write() {} })
+  const gitInSub = realPushIo({
+    cwd: join(work, "sub"),
+    env,
+    write() {},
+    step: () => () => {},
+  })
     .query;
   /** What the configuration file of `scope` sets, one `name=value` a line. */
   const file = (scope: "global" | "local") =>
@@ -82,7 +104,7 @@ function typed(char: string): Key {
 
 describe("settings", () => {
   describe("readSettings()", () => {
-    it("returns everything off and empty when git's configuration sets nothing", () => {
+    it("returns the browser as the pull request tool, and everything else off and empty, when git's configuration sets nothing", () => {
       const { root, git } = repository();
       try {
         expect(readSettings(git)).toEqual(OFF);
@@ -94,6 +116,8 @@ describe("settings", () => {
     it("reads any spelling git accepts for true", () => {
       const { root, git } = repository();
       try {
+        git(["config", "--global", "cf-view.pullRequestTool", "touch-gate"]);
+        git(["config", "--global", "cf-view.touchGateToken", " mine "]);
         git(["config", "--global", "cf-view.quitOnPullRequest", "yes"]);
         git(["config", "--global", "cf-view.webhookRelay", ` ${RELAY} `]);
 
@@ -101,6 +125,22 @@ describe("settings", () => {
       } finally {
         Deno.removeSync(root, { recursive: true });
       }
+    });
+
+    it("reads each pull request tool, and one it does not know as the browser", () => {
+      const read = (tool: string) =>
+        readSettings((args) =>
+          args.at(-1) === "cf-view.pullRequestTool" ? `${tool}\n` : null
+        ).pullRequestTool;
+
+      expect(["link", "api", "browser", "touch-gate"].map(read)).toEqual([
+        "link",
+        "api",
+        "browser",
+        "touch-gate",
+      ]);
+      expect(read("API")).toBe("browser");
+      expect(read("ssh")).toBe("browser");
     });
   });
 
@@ -112,7 +152,8 @@ describe("settings", () => {
 
         expect(readSettings(git)).toEqual(ON);
         expect(file("global")).toBe(
-          `cf-view.quitonpullrequest=true\ncf-view.webhookrelay=${RELAY}\n`,
+          "cf-view.pullrequesttool=touch-gate\ncf-view.touchgatetoken=mine\n" +
+            `cf-view.quitonpullrequest=true\ncf-view.webhookrelay=${RELAY}\n`,
         );
       } finally {
         Deno.removeSync(root, { recursive: true });
@@ -127,7 +168,10 @@ describe("settings", () => {
         expect(saveSettings(git, OFF, ON)).toBe(true);
 
         expect(file("local")).toContain(`cf-view.webhookrelay=${RELAY}\n`);
-        expect(file("global")).toBe("cf-view.quitonpullrequest=true\n");
+        expect(file("global")).toBe(
+          "cf-view.pullrequesttool=touch-gate\ncf-view.touchgatetoken=mine\n" +
+            "cf-view.quitonpullrequest=true\n",
+        );
       } finally {
         Deno.removeSync(root, { recursive: true });
       }
@@ -213,6 +257,8 @@ describe("settings", () => {
       expect(saveSettings(git, OFF, ON)).toBe(false);
       expect(ran.filter((command) => command.startsWith("config --global")))
         .toEqual([
+          "config --global cf-view.pullRequestTool touch-gate",
+          "config --global cf-view.touchGateToken mine",
           "config --global cf-view.quitOnPullRequest true",
           `config --global cf-view.webhookRelay ${RELAY}`,
         ]);
@@ -229,15 +275,36 @@ describe("settings", () => {
       expect(s.view().dialog).toBeNull();
     });
 
-    it("shows the settings as a check box and an input line, with the check box focused", () => {
+    it("shows the settings as radio buttons, an input line, a check box, and an input line, with the radio buttons focused", () => {
       const s = settingsSession(ON);
 
       const dialog = s.view().dialog!;
       expect(dialog.title).toBe("Settings");
       expect(dialog.fields).toEqual([
         {
+          kind: "radioButtons",
+          label: "Pull requests",
+          hotkey: "p",
+          buttons: [
+            { label: "Just push, and link to them", hotkey: "l" },
+            { label: "Use the GitHub API", hotkey: "a" },
+            { label: "Show them in the browser", hotkey: "s" },
+            { label: "Use touch-gate and a security key", hotkey: "t" },
+          ],
+          selected: 3,
+        },
+        {
+          kind: "inputLine",
+          label: "Name of the touch-gate token",
+          hotkey: "n",
+          value: "mine",
+          cursor: 4,
+          scroll: 0,
+          selected: false,
+        },
+        {
           kind: "checkBox",
-          label: "Quit when the pushed branch's pull request opens",
+          label: "Quit when the pull request opens or merges",
           hotkey: "q",
           checked: true,
         },
@@ -251,15 +318,34 @@ describe("settings", () => {
           selected: false,
         },
       ]);
-      expect(dialog.fieldFocus).toBe(0);
+      expect(dialog.fieldFocus).toBe(TOOL);
       expect(dialog.buttons.map((b) => b.label)).toEqual(["OK", "Cancel"]);
       expect(dialog.focus).toBe(0);
+    });
+
+    it("draws the radio buttons as Turbo Vision does, a row each under their label", () => {
+      const s = settingsSession(OFF);
+      const rows = drawnRows(s);
+      s.handleKey({ name: "down" });
+      const moved = drawnRows(s);
+
+      const label = cellOf(rows, "Pull requests");
+      expect(cellOf(rows, "( ) Just push")).toEqual({
+        x: label.x,
+        y: label.y + 1,
+      });
+      expect(cellOf(rows, "( ) Use the GitHub API").y).toBe(label.y + 2);
+      expect(cellOf(rows, "(•) Show them in the browser").y).toBe(label.y + 3);
+      expect(cellOf(rows, "( ) Use touch-gate").y).toBe(label.y + 4);
+      expect(cellOf(rows, "Name of the touch-gate token").y).toBe(label.y + 6);
+      expect(cellOf(moved, "( ) Show them in the browser").y).toBe(label.y + 3);
+      expect(cellOf(moved, "(•) Use touch-gate").y).toBe(label.y + 4);
     });
 
     it("draws the check box as Turbo Vision does, and the input line under its label", () => {
       const s = settingsSession(OFF);
       const unchecked = drawnRows(s);
-      s.handleKey({ name: "space", char: " " });
+      s.handleKey(typed("q"));
       const checked = drawnRows(s);
 
       const box = cellOf(unchecked, "[ ] Quit when");
@@ -269,14 +355,99 @@ describe("settings", () => {
       expect(cellOf(unchecked, " OK ").y).toBe(label.y + 3);
     });
 
-    it("toggles the check box with Space, and with its letter", () => {
+    it("selects the radio button before or after the selected one with the arrow keys, going round from either end, and saves it", () => {
+      const s = settingsSession(OFF);
+      const selected = () =>
+        (s.view().dialog!.fields![TOOL] as { selected: number }).selected;
+
+      const seen = [selected()];
+      for (const name of ["down", "down", "up", "left", "right", "right"]) {
+        s.handleKey({ name });
+        seen.push(selected());
+      }
+      s.handleKey({ name: "enter" });
+
+      expect(seen).toEqual([2, 3, 0, 3, 2, 3, 0]);
+      expect(s.view().dialog).toBeNull();
+      expect(s.settingsToSave?.settings).toEqual({
+        ...OFF,
+        pullRequestTool: "link",
+      });
+    });
+
+    it("selects a radio button with its letter from another field, moving the focus to the radio buttons, and focuses them unchanged with their label's letter", () => {
+      const s = settingsSession(OFF);
+      s.handleKey(typed("q"));
+
+      s.handleKey(typed("A"));
+      expect(s.view().dialog!.fieldFocus).toBe(TOOL);
+      expect(s.view().dialog!.fields![TOOL]).toMatchObject({ selected: 1 });
+      s.handleKey(typed("w"));
+      s.handleKey({ name: "t", alt: true });
+      expect(s.view().dialog!.fields![TOOL]).toMatchObject({ selected: 3 });
+      s.handleKey(typed("q"));
+      s.handleKey(typed("p"));
+      expect(s.view().dialog!.fieldFocus).toBe(TOOL);
+      s.handleKey({ name: "enter" });
+
+      expect(s.settingsToSave?.settings).toEqual({
+        ...OFF,
+        pullRequestTool: "touch-gate",
+      });
+    });
+
+    it("ignores Space on the radio buttons, rather than pressing a button", () => {
       const s = settingsSession(OFF);
 
       s.handleKey({ name: "space", char: " " });
-      expect(s.view().dialog!.fields![0]).toMatchObject({ checked: true });
-      s.handleKey(typed("Q"));
-      expect(s.view().dialog!.fields![0]).toMatchObject({ checked: false });
+
+      expect(s.view().dialog!.fields![TOOL]).toMatchObject({ selected: 2 });
+      expect(s.settingsToSave).toBeNull();
+    });
+
+    it("selects the radio button the mouse comes up on, and nothing on its label", () => {
+      const s = settingsSession(OFF);
+      const api = cellOf(drawnRows(s), "( ) Use the GitHub API");
+      const label = cellOf(drawnRows(s), "Pull requests");
+
       s.handleKey(typed("q"));
+      s.handleKey(mouseKey(true, { ...api, x: api.x + 6 }));
+      expect(s.view().dialog!.fieldFocus).toBe(TOOL);
+      s.handleKey(mouseKey(false, { ...api, x: api.x + 6 }));
+      expect(s.view().dialog!.fields![TOOL]).toMatchObject({ selected: 1 });
+      s.handleKey(mouseKey(true, label));
+      s.handleKey(mouseKey(false, label));
+      expect(s.view().dialog!.fields![TOOL]).toMatchObject({ selected: 1 });
+      s.handleKey(mouseKey(true, api));
+      s.handleKey(mouseKey(false, { ...api, y: api.y + 2 }));
+
+      expect(s.view().dialog!.fields![TOOL]).toMatchObject({ selected: 3 });
+    });
+
+    it("saves the touch-gate token typed in, trimmed", () => {
+      const s = settingsSession(OFF);
+
+      s.handleKey(typed("n"));
+      expect(s.view().dialog!.fieldFocus).toBe(TOKEN);
+      for (const char of " mine ") {
+        s.handleKey(char === " " ? { name: "space", char } : typed(char));
+      }
+      s.handleKey({ name: "enter" });
+
+      expect(s.settingsToSave?.settings).toEqual({
+        ...OFF,
+        touchGateToken: "mine",
+      });
+    });
+
+    it("toggles the check box with its letter, and with Space once it is focused", () => {
+      const s = settingsSession(OFF);
+
+      s.handleKey(typed("q"));
+      expect(s.view().dialog!.fields![QUIT]).toMatchObject({ checked: true });
+      s.handleKey({ name: "space", char: " " });
+      expect(s.view().dialog!.fields![QUIT]).toMatchObject({ checked: false });
+      s.handleKey(typed("Q"));
 
       s.handleKey({ name: "enter" });
       expect(s.settingsToSave).toEqual({
@@ -294,7 +465,7 @@ describe("settings", () => {
       };
 
       const seen = [focus()];
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 6; i++) {
         s.handleKey({ name: "tab" });
         seen.push(focus());
       }
@@ -304,6 +475,8 @@ describe("settings", () => {
       expect(seen).toEqual([
         [0, 0],
         [1, 0],
+        [2, 0],
+        [3, 0],
         [-1, 0],
         [-1, 1],
         [0, 0],
@@ -314,10 +487,14 @@ describe("settings", () => {
     it("selects the input line's text when the focus moves to it, so that typing replaces it", () => {
       const s = settingsSession({ ...OFF, webhookRelay: "old.test:1" });
 
+      s.handleKey(typed("w"));
+      expect(s.view().dialog!.fields![RELAY_LINE]).toMatchObject({
+        selected: true,
+      });
       s.handleKey({ name: "tab" });
-      expect(s.view().dialog!.fields![1]).toMatchObject({ selected: true });
-      s.handleKey({ name: "tab" });
-      expect(s.view().dialog!.fields![1]).toMatchObject({ selected: false });
+      expect(s.view().dialog!.fields![RELAY_LINE]).toMatchObject({
+        selected: false,
+      });
       s.handleKey({ name: "shift-tab" });
       for (const char of RELAY) s.handleKey(typed(char));
       s.handleKey({ name: "enter" });
@@ -330,7 +507,7 @@ describe("settings", () => {
 
     it("types into the focused input line, letters and navigation keys included, and saves what it holds, trimmed", () => {
       const s = settingsSession({ ...OFF, webhookRelay: "x" });
-      s.handleKey({ name: "tab" });
+      s.handleKey(typed("w"));
 
       s.handleKey({ name: "end" });
       s.handleKey({ name: "backspace" });
@@ -351,14 +528,14 @@ describe("settings", () => {
 
     it("keeps the focus on the input line for keys that move it elsewhere in other dialogs", () => {
       const s = settingsSession({ ...OFF, webhookRelay: RELAY });
-      s.handleKey({ name: "tab" });
+      s.handleKey(typed("w"));
       s.handleKey({ name: "end" });
 
       for (
         const name of ["up", "down", "pagedown", "pageup", "ctrl-u", "ctrl-n"]
       ) {
         s.handleKey({ name });
-        expect(s.view().dialog!.fieldFocus).toBe(1);
+        expect(s.view().dialog!.fieldFocus).toBe(RELAY_LINE);
       }
       s.handleKey({ name: "enter" });
 
@@ -368,12 +545,14 @@ describe("settings", () => {
       });
     });
 
-    it("focuses the input line with its letter from the check box, and activates a button with Alt and its letter from the input line", () => {
+    it("focuses the input line with its letter, and activates a button with Alt and its letter from the input line", () => {
       const s = settingsSession(OFF);
 
       s.handleKey(typed("w"));
-      expect(s.view().dialog!.fieldFocus).toBe(1);
-      expect(s.view().dialog!.fields![1]).toMatchObject({ selected: true });
+      expect(s.view().dialog!.fieldFocus).toBe(RELAY_LINE);
+      expect(s.view().dialog!.fields![RELAY_LINE]).toMatchObject({
+        selected: true,
+      });
       s.handleKey(typed("c"));
       s.handleKey({ name: "c", alt: true });
 
@@ -381,9 +560,47 @@ describe("settings", () => {
       expect(s.settingsToSave).toBeNull();
     });
 
+    it("activates a button with Alt and its letter while the radio buttons have the focus", () => {
+      const s = settingsSession(OFF);
+
+      s.handleKey({ name: "c", alt: true });
+
+      expect(s.view().dialog).toBeNull();
+      expect(s.settingsToSave).toBeNull();
+    });
+
+    it("leaves the focus and the fields as they are on Alt with a letter that is no shortcut", () => {
+      const s = settingsSession(OFF);
+
+      s.handleKey({ name: "j", alt: true });
+      expect(s.view().dialog!.fieldFocus).toBe(TOOL);
+      s.handleKey(typed("w"));
+      s.handleKey({ name: "j", alt: true });
+
+      expect(s.view().dialog!.fieldFocus).toBe(RELAY_LINE);
+      expect(s.view().dialog!.fields![RELAY_LINE]).toMatchObject({
+        value: "",
+        selected: true,
+      });
+    });
+
+    it("types into the focused input line the character Alt with a letter types when the letter is no shortcut, and presses the shortcut when it is one", () => {
+      const s = settingsSession(OFF);
+
+      s.handleKey(typed("w"));
+      s.handleKey({ name: "z", alt: true, char: "Ω" });
+      s.handleKey({ name: "l", alt: true, char: "¬" });
+
+      expect(s.view().dialog!.fieldFocus).toBe(TOOL);
+      expect(s.view().dialog!.fields![TOOL]).toMatchObject({ selected: 0 });
+      expect(s.view().dialog!.fields![RELAY_LINE]).toMatchObject({
+        value: "Ω",
+      });
+    });
+
     it("closes without saving on Escape", () => {
       const s = settingsSession(OFF);
-      s.handleKey({ name: "space", char: " " });
+      s.handleKey(typed("q"));
 
       s.handleKey({ name: "escape" });
 
@@ -398,10 +615,10 @@ describe("settings", () => {
 
       s.handleKey(mouseKey(true, box));
       s.handleKey(mouseKey(false, label));
-      expect(s.view().dialog!.fields![0]).toMatchObject({ checked: false });
+      expect(s.view().dialog!.fields![QUIT]).toMatchObject({ checked: false });
       s.handleKey(mouseKey(true, box));
       s.handleKey(mouseKey(false, { ...box, x: box.x + 10 }));
-      expect(s.view().dialog!.fields![0]).toMatchObject({ checked: true });
+      expect(s.view().dialog!.fields![QUIT]).toMatchObject({ checked: true });
     });
 
     it("focuses the input line on a click on it, puts its cursor where the click lands, and saves on a click on OK", () => {
@@ -410,7 +627,7 @@ describe("settings", () => {
 
       s.handleKey(mouseKey(true, { ...text, x: text.x + 1 }));
       s.handleKey(mouseKey(false, { ...text, x: text.x + 1 }));
-      expect(s.view().dialog!.fieldFocus).toBe(1);
+      expect(s.view().dialog!.fieldFocus).toBe(RELAY_LINE);
       s.handleKey(typed("r"));
       s.handleKey(mouseKey(true, { ...text, x: text.x - 2 }));
       s.handleKey(typed("<"));
@@ -434,8 +651,10 @@ describe("settings", () => {
       s.handleKey(mouseKey(true, label));
       s.handleKey(mouseKey(false, label));
 
-      expect(s.view().dialog!.fieldFocus).toBe(1);
-      expect(s.view().dialog!.fields![1]).toMatchObject({ selected: true });
+      expect(s.view().dialog!.fieldFocus).toBe(RELAY_LINE);
+      expect(s.view().dialog!.fields![RELAY_LINE]).toMatchObject({
+        selected: true,
+      });
     });
 
     it("keeps text under the pointer on a click in an input line narrowed to fit the terminal", () => {
@@ -443,7 +662,7 @@ describe("settings", () => {
       const s = session();
       s.resize(40, 24);
       s.openSettings({ ...OFF, webhookRelay: long });
-      s.handleKey({ name: "tab" });
+      s.handleKey(typed("w"));
       const before = drawnRows(s);
       const at = cellOf(before, "abcde");
 
@@ -458,31 +677,53 @@ describe("settings", () => {
       );
     });
 
-    it("does nothing on a click below a dialog too short to draw its fields and buttons", () => {
+    it("keeps its buttons on a screen too short for its fields, scrolling the fields to show the focused one", () => {
+      const s = session();
+      s.resize(80, 12);
+      s.openSettings({ ...OFF, webhookRelay: "old.test:1" });
+
+      const top = drawnRows(s).join("\n");
+      expect(top).toContain("Pull requests");
+      expect(top).toContain(" OK ");
+      expect(top).toContain(" Cancel ");
+      expect(top).not.toContain("Webhook relay");
+      s.handleKey(typed("w"));
+      const scrolled = drawnRows(s);
+      expect(scrolled.join("\n")).toContain("Webhook relay");
+      expect(scrolled.join("\n")).not.toContain("Pull requests");
+      expect(cursorScreenPos(s.displayDoc(), s.view())).not.toBeNull();
+      const ok = cellOf(scrolled, " OK ");
+      s.handleKey(mouseKey(true, ok));
+      s.handleKey(mouseKey(false, ok));
+
+      expect(s.settingsToSave?.settings).toEqual({
+        ...OFF,
+        webhookRelay: "old.test:1",
+      });
+    });
+
+    it("shows its buttons and none of its fields on a screen too short for any field", () => {
       const s = session();
       s.resize(80, 7);
       s.openSettings(OFF);
-      const rows = drawnRows(s);
 
-      for (let y = 0; y < rows.length; y++) {
-        s.handleKey(mouseKey(true, { x: 40, y }));
-        s.handleKey(mouseKey(false, { x: 40, y }));
-      }
-
-      expect(s.view().dialog!.fieldFocus).not.toBe(1);
-      expect(rows.join("\n")).not.toContain("Webhook relay");
+      const rows = drawnRows(s).join("\n");
+      expect(rows).toContain(" OK ");
+      expect(rows).not.toContain("Pull requests");
       expect(cursorScreenPos(s.displayDoc(), s.view())).toBeNull();
     });
 
-    it("puts the terminal's cursor in the focused input line, and nowhere while the check box is focused", () => {
+    it("puts the terminal's cursor in the focused input line, and nowhere while the radio buttons are focused", () => {
       const s = settingsSession({ ...OFF, webhookRelay: "abc" });
       expect(cursorScreenPos(s.displayDoc(), s.view())).toBeNull();
 
-      s.handleKey({ name: "tab" });
+      s.handleKey(typed("w"));
       s.handleKey({ name: "left" });
 
       const text = cellOf(drawnRows(s), "abc");
-      expect(s.view().dialog!.fields![1]).toMatchObject({ selected: false });
+      expect(s.view().dialog!.fields![RELAY_LINE]).toMatchObject({
+        selected: false,
+      });
       expect(cursorScreenPos(s.displayDoc(), s.view())).toEqual({
         row: text.y + 1,
         col: text.x + 3,
@@ -492,7 +733,7 @@ describe("settings", () => {
     it("shows the end of text wider than the input line, with an arrow saying more precedes it", () => {
       const long = `${"x".repeat(60)}:8081`;
       const s = settingsSession({ ...OFF, webhookRelay: long });
-      s.handleKey({ name: "tab" });
+      s.handleKey(typed("w"));
 
       const rows = drawnRows(s);
       const shown = cellOf(rows, ":8081");
@@ -505,13 +746,13 @@ describe("settings", () => {
 
       s.handleKey({ name: "home" });
       const start = drawnRows(s);
-      expect(start[shown.y]).toMatch(/ x{50}►/);
+      expect(start[shown.y]).toMatch(/ x{44}►/);
     });
 
     it("lists `O` in the help", () => {
       expect(helpOverlay(false).info.map((line) => line.text)).toContain(
         "  O".padEnd(22) +
-          " settings: quit when the pushed branch's pull request opens",
+          " settings: how P and L handle pull requests, and more",
       );
     });
   });

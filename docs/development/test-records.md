@@ -621,11 +621,12 @@ step of the lane job in `.github/workflows/deno.yml` that runs in every lane
 whatever the lane holds, as the cache restores are, because the steps of the
 lane job do not vary with what a lane runs.
 
-The packer charges a batch's tests the larger of what the suite's correction
-makes of them and the sum, over its passes, of each pass's longest unit. A pass
-takes no longer than that sum only when its longest unit starts first, since one
-that starts after the others adds its time to theirs. So a suite whose runner
-runs several units side by side is handed each unit's expected cost as `cost` on
-its `UnitRequest`, in `tasks/test-topology/suite.ts`, and starts the costliest
-first. `tasks/integration.ts` does this for the pattern test runner, and starts
-a file with no cost ahead of every file with one.
+Test selection charges a lane from the times its units record, so a unit's
+recorded time has to be close to what it takes in whichever lane holds it. The
+pattern test runner in `tasks/integration.ts` therefore runs its files one at a
+time. A pattern test with several participants runs each of them in a worker of
+its own, so it keeps several processors busy, and files run beside it slow it
+down. Over the week to 2026-11-10,
+`patterns/system/fabrichat/add-member-offers.test.tsx` took 30 seconds in the
+lanes where it ran alone, and 280 seconds at the median beside four other files
+on a four-processor runner.

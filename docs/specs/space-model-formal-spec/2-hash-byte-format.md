@@ -59,7 +59,8 @@ The tags are organized into four categories by high nibble:
 | `TAG_OBJECT`      | `0x11` | 17      | plain objects                   |
 | `TAG_INSTANCE`    | `0x12` | 18      | `FabricInstance` (general)    |
 
-**Primitive tags (`0x2N`)** — leaf value types:
+**Primitive tags (`0x2N`, continued at `0x3N`)** — leaf value types. The
+`0x2N` range is full, so the leaf tags continue at `0x3N`:
 
 | Tag               | Hex    | Decimal | Used for                          |
 |:------------------|:-------|:--------|:----------------------------------|
@@ -74,11 +75,12 @@ The tags are organized into four categories by high nibble:
 | `TAG_EPOCH_DAY`   | `0x28` | 40      | `FabricEpochDay`                  |
 | `TAG_HASH`        | `0x29` | 41      | `FabricHash`                      |
 | `TAG_SYMBOL`      | `0x2A` | 42      | `symbol` (registry-interned only) |
-| `TAG_REGEXP`      | `0x2B` | 43      | `FabricRegExp`                    |
-| `TAG_KEY_PAIR`    | `0x2C` | 44      | `FabricKeyPair` (holding material) |
-| `TAG_UNAVAILABLE` | `0x2D` | 45      | `FabricUnavailable`               |
+| _(retired)_       | `0x2B` | 43      | nothing; never to be reassigned   |
+| _(retired)_       | `0x2C` | 44      | nothing; never to be reassigned   |
+| _(retired)_       | `0x2D` | 45      | nothing; never to be reassigned   |
 | `TAG_DURATION_NSEC` | `0x2E` | 46    | `FabricDurationNsec`              |
 | `TAG_DURATION_DAY` | `0x2F` | 47     | `FabricDurationDay`               |
+| `TAG_QUANT`       | `0x30` | 48      | unit-and-number value (reserved; see Section 4.22); not produced by this implementation |
 
 **Optimized tags (`0xFN`)** — hash-level substitutes that replace the raw
 payload of a primitive type with a digest, when doing so shortens the byte
@@ -251,9 +253,8 @@ threshold when deciding which form to emit.
 The hashed form applies everywhere this spec encodes a string via the
 `TAG_STRING` layout: standalone strings (this section), `symbol` keys (Section
 4.6), object keys (Section 4.13), `FabricInstance` type tags (Section 4.14),
-`FabricHash` algorithm tags (Section 4.11), `FabricRegExp` source/flags/flavor
-strings (Section 4.16), `FabricKeyPair` algorithm names (Section 4.17), and
-`FabricUnavailable` reasons, kinds, and messages (Section 4.18).
+`FabricHash` algorithm tags (Section 4.11), and the units of unit-and-number
+values (Section 4.22).
 
 ### 4.5 `bigint`
 
@@ -340,7 +341,7 @@ Bytes: TAG_EPOCH_NSEC  LENGTH_LEB128  TWO_COMP_BYTES
 Total: 1 + len(LEB128) + N bytes, where N is the minimal encoding length.
 
 `FabricEpochNsec` represents a nanosecond-precision Unix epoch timestamp. It
-is a `FabricPrimitive` subclass and has a dedicated type tag.
+is a leaf type with a dedicated type tag.
 
 - **Length**: The number of bytes in the two's-complement representation of the
   wrapped `bigint` value, encoded as unsigned LEB128.
@@ -361,7 +362,7 @@ Bytes: TAG_EPOCH_DAY   LENGTH_LEB128  TWO_COMP_BYTES
 Total: 1 + len(LEB128) + N bytes, where N is the minimal encoding length.
 
 `FabricEpochDay` represents a day-precision Unix epoch timestamp. It is a
-`FabricPrimitive` subclass and has a dedicated type tag.
+leaf type with a dedicated type tag.
 
 - **Length**: The number of bytes in the two's-complement representation of the
   wrapped `bigint` value, encoded as unsigned LEB128.
@@ -381,7 +382,7 @@ Bytes: TAG_HASH  ALG_TAG_STRING   HASH_LEN_LEB128  HASH_BYTES
 ```
 
 `FabricHash` represents a content identifier — a hash with an algorithm
-tag. It is a `FabricPrimitive` subclass and has a dedicated type tag.
+tag. It is a leaf type with a dedicated type tag.
 
 - **Algorithm tag**: The algorithm tag string (e.g., `"fid1"`) encoded as a
   complete tagged string value per Section 4.4. Concretely, this emits either
@@ -456,13 +457,13 @@ Bytes: TAG_INSTANCE  TYPE_TAG_STRING  STATE
   recursively as a complete tagged value.
 
 > **Note on types with dedicated tags.** `FabricBytes`, `FabricEpochNsec`,
-> `FabricEpochDay`, `FabricHash`, `FabricRegExp`, `FabricKeyPair`,
-> `FabricUnavailable`, `FabricDurationNsec`, and `FabricDurationDay` are
-> **not** hashed via `TAG_INSTANCE`. Each has a dedicated type tag and is
-> encoded directly (see Sections 4.8, 4.9, 4.10, 4.11, 4.16, 4.17, 4.18, 4.20
-> and 4.21 respectively). These are all `FabricPrimitive` subclasses — at this
-> layer they are hashed from their own stored values, not via their wire
-> codecs.
+> `FabricEpochDay`, `FabricHash`, `FabricDurationNsec`, and `FabricDurationDay`
+> are **not** hashed via `TAG_INSTANCE`. Each has a dedicated type tag and is
+> encoded directly (see Sections 4.8, 4.9, 4.10, 4.11, 4.20 and 4.21
+> respectively). These are the format's leaf types: they are hashed from their
+> own stored values, not via their wire codecs, and none is a container
+> (Section 4.19). `FabricKeyPair` and `FabricUnavailable` have no dedicated
+> tag: each is an instance, hashed in this layout (Sections 4.17 and 4.18).
 
 ### 4.15 Holes (sparse array elements)
 
@@ -488,53 +489,21 @@ Holes appear only within array encodings (Section 4.12). Consecutive holes are
 > (`0x20`) are all distinct. The arrays `[1, , 3]`, `[1, undefined, 3]`, and
 > `[1, null, 3]` produce three different hashes.
 
-### 4.16 `FabricRegExp`
+### 4.16 (Removed)
 
-```
-Bytes: TAG_REGEXP  SOURCE_STRING   FLAGS_STRING    FLAVOR_STRING
-       0x2B        <string, §4.4>  <string, §4.4>  <string, §4.4>
-```
-
-`FabricRegExp` represents a regular-expression value. It is a
-`FabricPrimitive` subclass and has a dedicated type tag; it is hashed from
-its own stored strings (below) and is **not** hashed via `TAG_INSTANCE`.
-
-- **Source**: The pattern source string (`regex.source`), encoded as a
-  complete tagged string value per Section 4.4 (direct form for sources of 64
-  UTF-8 bytes or fewer, hashed form for longer).
-- **Flags**: The flag string (e.g. `"gi"`), encoded as a complete tagged
-  string value per Section 4.4.
-- **Flavor**: The regex dialect identifier (e.g. `"es2025"`), encoded as a
-  complete tagged string value per Section 4.4.
-
-The three strings are fed in order — source, then flags, then flavor — with no
-enclosing container and no `TAG_END` terminator, since the field count is
-fixed. Distinct regex dialects with identical source and flags therefore
-produce distinct hashes (the `flavor` field disambiguates them).
+This section was removed. Its number is kept so that later sections keep
+theirs.
 
 ### 4.17 `FabricKeyPair`
 
-```
-Bytes: TAG_KEY_PAIR  ALGORITHM_STRING  PUBLIC_KEY      PRIVATE_KEY
-       0x2C          <string, §4.4>    <bytes, §4.8>   <bytes, §4.8>
-```
-
-`FabricKeyPair` represents an asymmetric key pair. It is a `FabricPrimitive`
-subclass and has a dedicated type tag; it is hashed from its own stored values
-(below) and is **not** hashed via `TAG_INSTANCE`.
-
-- **Algorithm**: The algorithm name (e.g. `"Ed25519"`), encoded as a complete
-  tagged string value per Section 4.4.
-- **Public key**: The public key's bytes, encoded as a complete tagged
-  `FabricBytes` value per Section 4.8 — `TAG_BYTES`, a LEB128 length, then the
-  raw bytes.
-- **Private key**: The private key's bytes, in the same form.
-
-The three fields are fed in order — algorithm, then public key, then private
-key — with no enclosing container and no `TAG_END` terminator, since the field
-count is fixed. The two keys are self-delimiting through their own length
-prefixes, so a pair holding the two keys the other way round hashes
-differently.
+A `FabricKeyPair` holding key material is hashed exactly as a `FabricInstance`
+(Section 4.14) whose type tag is `KeyPair@1` and whose encoded state is its
+state record (`1-fabric-values.md` Section 1.4.11): a plain object holding
+`algorithm`, `privateKey`, and `publicKey`, hashed per Section 4.13, each key
+a `FabricBytes` per Section 4.8. It therefore hashes alike with an
+`UnknownValue` carrying the same tag and state. The two keys are fed under
+their own names, so a pair holding them the other way round hashes
+differently. Section 7.13 works an example.
 
 **Only a pair holding key material has a hash.** A `FabricKeyPair` holding
 `CryptoKey` handles has no hash at all, and computing one throws: its material
@@ -544,36 +513,15 @@ See `1-fabric-values.md` Section 1.4.11.
 
 ### 4.18 `FabricUnavailable`
 
-```
-Bytes: TAG_UNAVAILABLE  REASON_STRING   ERROR_KIND       ERROR_MESSAGE
-       0x2D             <string, §4.4>  <string or null>  <string or null>
-```
-
-A string field is a complete tagged string value per Section 4.4; a `null`
-field is a complete tagged `null` per Section 4.1, the single byte `TAG_NULL`.
-
-`FabricUnavailable` represents a marker for data that is not available. It is
-a `FabricPrimitive` subclass and has a dedicated type tag; it is hashed from
-its own stored values (below) and is **not** hashed via `TAG_INSTANCE`.
-
-- **Reason**: The reason string (`pending`, `syncing`, or `error`), encoded as
-  a complete tagged string value per Section 4.4.
-- **Error kind**: For reason `error`, the kind string (`general`,
-  `schemaMismatch`, `invalidInput`, `network`, `decode`, `compile`,
-  `provider`, or `sync`), encoded as a complete tagged string value per
-  Section 4.4. For a transient reason, a complete tagged `null` per Section
-  4.1 — the single byte `TAG_NULL` — standing where the kind would be.
-- **Error message**: The message as stored (`rawErrorMessage`), encoded as a
-  complete tagged string value per Section 4.4, when there is one. When there
-  is none — for a transient reason, and for an `error` whose message was never
-  given or was given as its kind's default — a complete tagged `null`.
-
-The three fields are fed in order — reason, kind, message — with no enclosing
-container and no `TAG_END` terminator, since the field count is fixed. Every
-position is always fed, so the stream for a transient reason is the reason
-followed by two `TAG_NULL` bytes. The default message a kind supplies is not
-hashed: an `error` whose message is its kind's default hashes as one with no
-message. See `1-fabric-values.md` Section 1.4.12.
+A `FabricUnavailable` is hashed exactly as a `FabricInstance` (Section 4.14)
+whose type tag is `Unavailable@1` and whose encoded state is its state record
+(`1-fabric-values.md` Section 1.4.12): a plain object holding `reason`, then
+for reason `error` also `errorKind`, and `message` when one is stored, hashed
+per Section 4.13. It therefore hashes alike with an `UnknownValue` carrying
+the same tag and state. The hash covers the state record as it stands: a
+default message the class supplies when none is stored is not part of that
+record, and a stored message is, whatever its text. Section 7.20 works an
+example.
 
 ### 4.19 Cycles
 
@@ -587,7 +535,8 @@ Total: 1 + len(LEB128) bytes (typically 2).
 A value may hold a cycle (`1-fabric-values.md` Section 1.6). At any point in the
 traversal, the **path** is the sequence of containers whose encodings enclose
 that point, outermost first. The containers are arrays (Section 4.12), plain
-objects (Section 4.13), and `FabricInstance`s (Section 4.14). An instance
+objects (Section 4.13), and `FabricInstance`s (Section 4.14), a `FabricKeyPair`
+and a `FabricUnavailable` among them (Sections 4.17 and 4.18). An instance
 encloses its encoded state, so when that state is an array or an object, the
 instance and the state are two entries on the path.
 
@@ -620,7 +569,7 @@ Bytes: TAG_DURATION_NSEC  LENGTH_LEB128  TWO_COMP_BYTES
 Total: 1 + len(LEB128) + N bytes, where N is the minimal encoding length.
 
 `FabricDurationNsec` represents a span of time in nanoseconds. It is a
-`FabricPrimitive` subclass and has a dedicated type tag.
+leaf type with a dedicated type tag.
 
 - **Length**: The number of bytes in the two's-complement representation of the
   wrapped `bigint` value, encoded as unsigned LEB128.
@@ -642,8 +591,8 @@ Bytes: TAG_DURATION_DAY  LENGTH_LEB128  TWO_COMP_BYTES
 
 Total: 1 + len(LEB128) + N bytes, where N is the minimal encoding length.
 
-`FabricDurationDay` represents a span of time in days. It is a
-`FabricPrimitive` subclass and has a dedicated type tag.
+`FabricDurationDay` represents a span of time in days. It is a leaf type
+with a dedicated type tag.
 
 - **Length**: The number of bytes in the two's-complement representation of the
   wrapped `bigint` value, encoded as unsigned LEB128.
@@ -656,6 +605,53 @@ produce distinct hashes. It also differs from `FabricEpochDay` (`0x28`), so a
 span and a day holding the same `bigint` are always distinguishable, and from
 `FabricDurationNsec` (`0x2E`), so are spans counted in the two units. See
 `1-fabric-values.md` Section 1.4.14.
+
+### 4.22 Unit-and-number values (reserved)
+
+A unit-and-number value pairs a **unit**, which is a string, with a **value**,
+which is either an integer (a `bigint`) or an IEEE 754 binary64 `number`. This
+implementation produces no such value. This section reserves `TAG_QUANT` and
+fixes the byte stream such a value hashes to, so that neither is ever
+contradicted.
+
+**Units with a dedicated type.** When the unit is exactly one of the four
+strings below and the value is a `bigint`, the value hashes exactly as the
+corresponding type, with that `bigint` as the type's wrapped value:
+
+| Unit           | Hashed as            | Tag                          | Section |
+|:---------------|:---------------------|:-----------------------------|:--------|
+| `epochNsec`    | `FabricEpochNsec`    | `TAG_EPOCH_NSEC` (`0x27`)    | 4.9     |
+| `epochDay`     | `FabricEpochDay`     | `TAG_EPOCH_DAY` (`0x28`)     | 4.10    |
+| `durationNsec` | `FabricDurationNsec` | `TAG_DURATION_NSEC` (`0x2E`) | 4.20    |
+| `durationDay`  | `FabricDurationDay`  | `TAG_DURATION_DAY` (`0x2F`)  | 4.21    |
+
+A value of one of those four types therefore has one hash, whether it is held
+as that type or as a unit-and-number value.
+
+**All other unit-and-number values.** Any other unit, and a `number` value with
+any unit, hash as:
+
+```
+Bytes: TAG_QUANT  UNIT_STRING     VALUE
+       0x30       <string, §4.4>  <bigint, §4.5, or number, §4.3>
+```
+
+- **Unit**: The unit string, encoded as a complete tagged string value per
+  Section 4.4, exactly as a `FabricHash` algorithm tag is (Section 4.11): the
+  direct form for a unit of 64 UTF-8 bytes or fewer, and the hashed form for
+  a longer one.
+- **Value**: The value, fed exactly as it is when it stands alone: a `bigint`
+  per Section 4.5, starting with `TAG_BIGINT`, or a `number` per Section 4.3,
+  starting with `TAG_NUMBER`.
+
+The set of four units with a dedicated type is fixed permanently. Every other
+unit, and every `number` value, always hashes with `TAG_QUANT`, even if a later
+version of the data model gives that unit a type of its own, so that a value's
+hash never changes.
+
+The stream is unambiguous. Each part delimits itself: the unit is
+length-prefixed or a fixed-length digest, and the value carries its own type
+tag. No other value's stream starts with `0x30`.
 
 ---
 
@@ -818,54 +814,45 @@ payload is 4 bytes: `0xDE`, `0xAD`, `0xBE`, `0xEF`.
 - Hash byte length 4 (`0x04`)
 - Hash bytes: `DE AD BE EF`
 
-### 7.12 `FabricRegExp(/abc/gi)`
+### 7.12 (Removed)
 
-`FabricRegExp` is a `FabricPrimitive` with the dedicated tag `TAG_REGEXP`
-(`0x2B`); it is hashed by feeding its three component strings — source, flags,
-flavor — in that order (Section 4.16). A `FabricRegExp` built from `/abc/gi`
-has source `"abc"`, flags `"gi"`, and flavor `"es2025"`, the dialect of a JS
-`RegExp`. All three strings are under the 64-byte threshold, so each uses the
-direct string form.
-
-- RegExp tag: `2B`
-- Source `"abc"` (3 bytes UTF-8): `24 03 61 62 63`
-- Flags `"gi"` (2 bytes UTF-8): `24 02 67 69`
-- Flavor `"es2025"` (6 bytes UTF-8): `24 06 65 73 32 30 32 35`
-
-There is no enclosing object and no `TAG_END` terminator — the three fields are
-fed positionally.
-
-Full byte stream:
-```
-2B
-24 03 61 62 63
-24 02 67 69
-24 06 65 73 32 30 32 35
-```
+This section was removed. Its number is kept so that later sections keep
+theirs.
 
 ### 7.13 `FabricKeyPair("Ed25519", [DE AD], [BE EF 01])`
 
-`FabricKeyPair` is a `FabricPrimitive` with the dedicated tag `TAG_KEY_PAIR`
-(`0x2C`); it is hashed by feeding its algorithm name and then its two keys —
-public first, then private — in that order (Section 4.17). The algorithm name
-is under the 64-byte threshold, so it uses the direct string form; each key is
-a complete tagged `FabricBytes` value.
+`FabricKeyPair` is hashed in the `FabricInstance` layout (Section 4.17):
+`TAG_INSTANCE`, the type tag `KeyPair@1`, then its state record as an object
+with sorted keys, each key of the pair a complete tagged `FabricBytes` value.
+All strings here are under the 64-byte threshold, so each uses the direct
+string form.
 
-- KeyPair tag: `2C`
-- Algorithm `"Ed25519"` (7 bytes UTF-8): `24 07 45 64 32 35 35 31 39`
-- Public key (2 bytes): `25 02 DE AD`
-- Private key (3 bytes): `25 03 BE EF 01`
+The state is `{ algorithm: "Ed25519", publicKey: <DE AD>, privateKey:
+<BE EF 01> }`:
 
-There is no enclosing object and no `TAG_END` terminator — the three fields are
-fed positionally. The two keys carry their own length prefixes, so a pair
-holding them the other way round produces a different byte stream.
+- Instance tag: `12`
+- Type tag `"KeyPair@1"` (9 bytes UTF-8): `24 09 4B 65 79 50 61 69 72 40 31`
+- Object tag: `11`
+- Key `"algorithm"` (9 bytes UTF-8): `24 09 61 6C 67 6F 72 69 74 68 6D`
+- Value `"Ed25519"` (7 bytes UTF-8): `24 07 45 64 32 35 35 31 39`
+- Key `"privateKey"` (10 bytes UTF-8): `24 0A 70 72 69 76 61 74 65 4B 65 79`
+- Value, the private key (3 bytes): `25 03 BE EF 01`
+- Key `"publicKey"` (9 bytes UTF-8): `24 09 70 75 62 6C 69 63 4B 65 79`
+- Value, the public key (2 bytes): `25 02 DE AD`
+- End: `00`
 
 Full byte stream:
 ```
-2C
+12
+24 09 4B 65 79 50 61 69 72 40 31
+11
+24 09 61 6C 67 6F 72 69 74 68 6D
 24 07 45 64 32 35 35 31 39
-25 02 DE AD
+24 0A 70 72 69 76 61 74 65 4B 65 79
 25 03 BE EF 01
+24 09 70 75 62 6C 69 63 4B 65 79
+25 02 DE AD
+00
 ```
 
 ### 7.14 `[1, , 3]` (sparse array)
@@ -952,53 +939,65 @@ hashed form.
 
 This rule applies to every string the hasher feeds, including standalone strings
 (Section 4.4), `symbol` keys (Section 4.6), object keys (Section 4.13),
-`FabricInstance` type tags (Section 4.14), `FabricHash` algorithm tags (Section
-4.11), `FabricRegExp` source/flags/flavor strings (Section 4.16),
-`FabricKeyPair` algorithm names (Section 4.17), and `FabricUnavailable`
-reasons, kinds, and messages (Section 4.18). The threshold is evaluated
-per-string independently: an object may mix short keys (direct form) and long
-keys (hashed form) in the same key-value sequence.
+`FabricInstance` type tags (Section 4.14), `FabricHash` algorithm tags
+(Section 4.11), and the units of unit-and-number values (Section 4.22). The
+threshold is evaluated per-string independently: an object may mix short keys
+(direct form) and long keys (hashed form) in the same key-value sequence.
 
 ### 7.20 `FabricUnavailable("error", "network", "boom")` and `FabricUnavailable("pending")`
 
-`FabricUnavailable` is a `FabricPrimitive` with the dedicated tag
-`TAG_UNAVAILABLE` (`0x2D`); it is hashed by feeding its reason, its kind, and
-its stored message, the last two as tagged strings when present and as
-`TAG_NULL` when absent (Section 4.18). All strings here are under the 64-byte
-threshold, so each uses the direct string form.
+`FabricUnavailable` is hashed in the `FabricInstance` layout (Section 4.18):
+`TAG_INSTANCE`, the type tag `Unavailable@1`, then its state record as an
+object with sorted keys. All strings here are under the 64-byte threshold, so
+each uses the direct string form.
 
-For `FabricUnavailable("error", "network", "boom")`:
+For `FabricUnavailable("error", "network", "boom")`, whose state is
+`{ reason: "error", errorKind: "network", message: "boom" }`:
 
-- Unavailable tag: `2D`
-- Reason `"error"` (5 bytes UTF-8): `24 05 65 72 72 6F 72`
-- Kind `"network"` (7 bytes UTF-8): `24 07 6E 65 74 77 6F 72 6B`
-- Message `"boom"` (4 bytes UTF-8): `24 04 62 6F 6F 6D`
+- Instance tag: `12`
+- Type tag `"Unavailable@1"` (13 bytes UTF-8):
+  `24 0D 55 6E 61 76 61 69 6C 61 62 6C 65 40 31`
+- Object tag: `11`
+- Key `"errorKind"` (9 bytes UTF-8): `24 09 65 72 72 6F 72 4B 69 6E 64`
+- Value `"network"` (7 bytes UTF-8): `24 07 6E 65 74 77 6F 72 6B`
+- Key `"message"` (7 bytes UTF-8): `24 07 6D 65 73 73 61 67 65`
+- Value `"boom"` (4 bytes UTF-8): `24 04 62 6F 6F 6D`
+- Key `"reason"` (6 bytes UTF-8): `24 06 72 65 61 73 6F 6E`
+- Value `"error"` (5 bytes UTF-8): `24 05 65 72 72 6F 72`
+- End: `00`
 
 Full byte stream:
 ```
-2D
-24 05 65 72 72 6F 72
+12
+24 0D 55 6E 61 76 61 69 6C 61 62 6C 65 40 31
+11
+24 09 65 72 72 6F 72 4B 69 6E 64
 24 07 6E 65 74 77 6F 72 6B
+24 07 6D 65 73 73 61 67 65
 24 04 62 6F 6F 6D
+24 06 72 65 61 73 6F 6E
+24 05 65 72 72 6F 72
+00
 ```
 
-For `FabricUnavailable("pending")`, which carries neither kind nor message:
+For `FabricUnavailable("pending")`, whose state is `{ reason: "pending" }`:
 
-- Unavailable tag: `2D`
-- Reason `"pending"` (7 bytes UTF-8): `24 07 70 65 6E 64 69 6E 67`
-- Kind, absent: `20`
-- Message, absent: `20`
+- Instance tag: `12`
+- Type tag `"Unavailable@1"`: `24 0D 55 6E 61 76 61 69 6C 61 62 6C 65 40 31`
+- Object tag: `11`
+- Key `"reason"`: `24 06 72 65 61 73 6F 6E`
+- Value `"pending"` (7 bytes UTF-8): `24 07 70 65 6E 64 69 6E 67`
+- End: `00`
 
 Full byte stream:
 ```
-2D
+12
+24 0D 55 6E 61 76 61 69 6C 61 62 6C 65 40 31
+11
+24 06 72 65 61 73 6F 6E
 24 07 70 65 6E 64 69 6E 67
-20
-20
+00
 ```
-
-There is no enclosing object and no `TAG_END` terminator — the three fields are
-fed positionally.
 
 ### 7.21 `a`, where `a = { self: a }` (cycle)
 
@@ -1036,6 +1035,32 @@ Full byte stream:
 
 `TAG_DURATION_DAY` (`0x2F`), length 1 (`0x01`), payload `0x07`.
 
+### 7.24 Unit-and-number values
+
+Unit `"m"` with value `3n` is not one of the four units with a dedicated type,
+so it hashes with `TAG_QUANT` (Section 4.22):
+
+```
+30  24 01 6D  26 01 03
+```
+
+- `TAG_QUANT` (`0x30`)
+- Unit (string, §4.4 direct form): `TAG_STRING` (`0x24`), length 1 (`0x01`),
+  UTF-8 byte `6D`
+- Value (`bigint`, §4.5): `TAG_BIGINT` (`0x26`), length 1 (`0x01`), payload
+  `0x03`
+
+Unit `"epochDay"` with the `number` value `42` hashes with `TAG_QUANT` too,
+because its value is a `number`. `"epochDay"` is 8 bytes in UTF-8, and the
+`number` `42` is as in Section 7.4.
+
+```
+30  24 08 65 70 6F 63 68 44 61 79  23 40 45 00 00 00 00 00 00
+```
+
+Unit `"durationDay"` with value `7n` hashes as `FabricDurationDay(7n)`, whose
+stream is `2F 01 07` (Section 7.23).
+
 ---
 
 ## 8. Rejected Values
@@ -1069,6 +1094,7 @@ rejected; they have well-defined byte encodings — see Section 4.3.)
 | `FabricHash` algorithm tag        | string (§4.4)   | Emitted as a complete tagged string value (direct or hashed form) |
 | `FabricHash` hash bytes           | unsigned LEB128 | Byte count of raw hash payload   |
 | `FabricInstance` type tag         | string (§4.4)   | Emitted as a complete tagged string value (direct or hashed form) |
+| Unit-and-number unit              | string (§4.4)   | Emitted as a complete tagged string value (direct or hashed form), prefixed by `TAG_QUANT` |
 | `symbol` registry key             | string (§4.4)   | Emitted as a complete tagged string value (direct or hashed form), prefixed by `TAG_SYMBOL` |
 | Object keys                       | string (§4.4)   | Emitted as complete tagged string values (direct or hashed form per key) |
 | Hole run count                    | unsigned LEB128 | Number of consecutive holes      |

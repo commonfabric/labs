@@ -28,6 +28,9 @@ describe("PiecesController.getPieceCell", () => {
     };
     const runtime = {
       userIdentityDID: "did:key:home",
+      // A client under server execution, whose open starts the piece alone.
+      experimental: { serverExecution: true },
+      servingPosture: false,
       getSpaceCell: () => ({
         sync: () => Promise.resolve(),
       }),

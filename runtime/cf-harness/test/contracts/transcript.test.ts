@@ -202,7 +202,6 @@ describe("harness transcript pairing", () => {
       transcript.slice(0, safeBoundary),
       "gpt-5",
       "openai",
-      "gateway Responses",
     );
     const calls = input.filter((item) => item.type === "function_call").map((
       item,

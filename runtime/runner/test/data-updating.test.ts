@@ -2808,9 +2808,9 @@ describe("data-updating", () => {
 
       const written = [...cell.get()];
       written[7] = { label: "changed", nested: { id: "changed" } };
-      const before = tx.getReactivityLog!().reads.length;
+      const before = tx.getReactivityLog().reads.length;
       cell.set(written);
-      const reads = tx.getReactivityLog!().reads.length - before;
+      const reads = tx.getReactivityLog().reads.length - before;
 
       return { reads, value: cell.get() };
     };

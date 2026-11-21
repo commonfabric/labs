@@ -33,7 +33,7 @@ Required only if you're running the toolshed.
 | `LOG_LEVEL` | `info` | One of `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent`. |
 | `DISABLE_LOG_REQ_RES` | `false` | Suppress per-request log lines. |
 | `CACHE_DIR` | `./cache` | Local disk cache root. |
-| `EXPOSE_GC` | `false` | `true` turns on `/api/health/collected-memory`, which runs a full garbage collection of each thread it measures, pausing it, for any caller, and reports the memory each still holds. Off, the route answers 404. `scripts/start-local-dev.sh` and the servers CI starts set it, for leak tests. With `ENV` other than `development` or `test`, a server set to `true` refuses to start. |
+| `EXPOSE_GC` | `false` | `true` turns on `/api/health/collected-memory`, which runs a full garbage collection of each thread it measures, pausing it, for any caller, and reports the memory each still holds. Off, the route answers 404; the server still exposes V8's collector at startup, for the serving-worker pool to collect a worker before it ends one for its heap. `scripts/start-local-dev.sh` and the servers CI starts set it, for leak tests. With `ENV` other than `development` or `test`, a server set to `true` refuses to start. |
 | `API_URL` | `http://localhost:8000` | The toolshed's public origin: the audience authority every first-party proof on the signed invitation and inbox routes is checked against, the base of the webhook and ingest URLs the server returns, and the fallback for `SANDBOX_TOOLSHED_URL`. Set it to the public origin clients dial, or those routes refuse every correctly signed request; the server prints it at startup as its configured first-party authority. The server's own runtimes also address their pattern-source loads, compiles and HTTP API calls to it, and record it as a space's host; `API_INTERNAL_URL` changes where those requests are sent, not what they are addressed to. |
 | `API_INTERNAL_URL` | _(unset)_ | Where this process's own runtimes send the requests they address to `API_URL`: the serving runtimes' and the webhook runtime's pattern-source loads, compiles and HTTP API calls. Unset, they go to `API_URL`, which on a deployment leaves through the public path (`tailscale serve`, nginx) and comes back in, once for each of the many fetches a pattern load makes. `self` names this process's own listener, `HOST` and `PORT`, so the one `.env` a multi-instance host shares names each instance to itself; a wildcard or loopback bind is reached on `127.0.0.1` (`[::1]` for an IPv6 bind), and a bound address on itself. An HTTP or HTTPS origin names a specific listener of this same process, such as a private address it is bound to; an `https://` origin with a certificate Deno does not trust fails the check below. The value decides whose bytes this server compiles, so it is checked rather than taken: once the listener is bound, and before any runtime exists, the server sends `GET /api/meta` to the origin carrying a one-time token and refuses to run unless that request arrives at its own listener, naming what happened instead (nothing answered, with the connection failure's cause; an error status; an answer that did not come through this process, as from another toolshed or nginx in front of several). Until the check passes, the public listener answers 503 to every request but that probe; a routed Mode A private listener is separate and not gated. The check does not cover a proxy that forwards the probe and alters later responses; `self` names a port this process has bound, where none can sit, and an explicit origin is the operator's statement that none does. Only the transport changes: `API_URL` stays what is recorded as a space's host, compared against source origins, published on `/api/meta`, checked as the invite audience, and returned in webhook and ingest URLs, and sandbox `CF_API_URL` stays `SANDBOX_TOOLSHED_URL` or `API_URL`. The LLM client reads `API_URL` once at module load and keeps calling it. Anything but `self`, an origin or unset refuses startup. Local development needs none of this: a second toolshed on another port sets `API_URL` and `MEMORY_URL` to that port (see [LOCAL_DEV_SERVERS.md](LOCAL_DEV_SERVERS.md)), and a loopback `API_URL` is already the shortest path. |
 | `SHELL_URL` | _(unset)_ | When set, toolshed proxies non-API paths to this upstream — used by local dev to route to the Shell dev server on `:5173`. |
@@ -71,8 +71,8 @@ explains why it lives in the toolshed rather than in `@commonfabric/llm`.
 2. `gateway:gpt-5.6-luna`
 3. `gateway:gemini-3.5-flash`
 
-The first available candidate becomes the `default` alias and the value used
-for `TASK_MODELS.coding` / `TASK_MODELS.json`. Only these candidates can become
+The first available candidate becomes the `default` alias and the model the
+registry names for the `coding` and `json` tasks. Only these candidates can become
 the default. If none is registered, the alias remains unavailable even when
 other language models are registered. A request naming an unavailable `default`
 or an unknown model is rejected.
@@ -109,7 +109,7 @@ All blank by default. Each integration is gated on its `_CLIENT_ID` /
 | Var | Default | Notes |
 |---|---|---|
 | `PLAID_CLIENT_ID` / `PLAID_SECRET` | _(unset)_ | |
-| `PLAID_ENV` | `sandbox` | `sandbox` \| `development` \| `production`. |
+| `PLAID_ENV` | `sandbox` | `sandbox` \| `production`. |
 | `PLAID_PRODUCTS` | `transactions` | Comma-separated. |
 | `PLAID_COUNTRY_CODES` | `US` | |
 | `PLAID_REDIRECT_URI` | _(unset)_ | Optional. |
@@ -367,7 +367,6 @@ the labs checkout and dispatches to `runtime/cli/mod.ts`.
 | `CF_SPACE` | _(none)_ | The space a command acts on, when `--space` is absent. Read by `cell`, `piece`, `space recreate-root`, `wish`, `acl` and `deps`. `check`, `fuse` and `ingest` take a space and do not read it. `--space` overrides it, and a written `--space` beside `--url` is still refused where an ambient one yields to the space the URL carries. A command that writes names the space it wrote to on stderr, which is what makes an ambient default safe to leave set. |
 | `CF_INVOCATION_SESSION` | _(none)_ | Invocation session `cf piece call` scopes an invocation id to. Mint one per agent run with `cf invocation-session new`. Carried here rather than as `--invocation-session <id>` because the session is what makes a call's outcome unguessable, and an argument is readable in a process listing. |
 | `CF_LOG_LEVEL` | `error` | `debug` \| `info` \| `warn` \| `error` \| `silent`. Also settable per-invocation with `--log-level`. |
-| `CF_CLI_NAME` | `cf` | Override the displayed CLI name (for branded builds). |
 | `CF_CLI_TRACE_TIMINGS` | `0` | Set to `1` for detailed timing traces. |
 | `CF_SKIP_VERSION_CHECK` | _(unset)_ | Set to any non-empty value to skip the cf ↔ server version check. By default, server-touching commands compare this cf's commit (baked build metadata, or the checkout's HEAD for source runs) with the server's self-reported commit — the `gitSha` riding the `/_health` response the health check already fetches (same value as `/api/meta`) — and warn on stderr when they differ. Source runs grade the warning by git ancestry: cf newer than the server is the normal local-dev case and stays silent unless the command fails, where its note prints as neutral version context. Commit distance alone does not establish incompatibility or explain a failure. `cf piece call` suppresses the held note for confirmed unknown verbs, rejected payloads, and argument validation failures before dispatch; cf **older** than the server gets the loud OUTDATED warning immediately; diverged or unorderable pairs (including all compiled binaries, which carry no history) get the undirected wording immediately. |
 | `CF_ADOPT_SERVER_FLAGS` | `true` | Set to `false` to keep this process on its own `EXPERIMENTAL_*` posture instead of adopting the one the toolshed publishes on `/api/meta`. A cf binary is installed independently of the server it talks to, so by default it takes the deployment's experimental flags and lets an explicit `EXPERIMENTAL_*` override them per flag; this turns the mechanism off wholesale when a deployment publishes something this client cannot run. The client still reads `/api/meta` for the memory URL it may name (`MEMORY_PUBLIC_URL`). Read by every client that is not built alongside its server — cf, the pieces controller behind a FUSE mount, the agents host. See [the flag registry](./EXPERIMENTAL_OPTIONS.md#clients-that-are-not-built-alongside-their-server). |
@@ -470,7 +469,7 @@ shell expansion to forward extra `deno test` flags (e.g. `--filter`).
 | Task | What it does |
 |---|---|
 | `check` | Type-check all packages (`./tasks/check.sh`). |
-| `test` | Run all package tests (`./tasks/test.ts`). |
+| `test` | Run all package tests (`./tasks/workspace-tests.ts`). |
 | `integration` | Run integration tests (`./tasks/integration.ts`). |
 | `build-binaries` | Build all standalone binaries, build only the named targets passed after the task (`toolshed` or `cf`), or use the legacy `deno task build-binaries --cli-only` alias to build only `cf`. |
 | `cf` | Run the CLI via the launcher. |
@@ -518,9 +517,10 @@ shell expansion to forward extra `deno test` flags (e.g. `--filter`).
   - `SANDBOX_SERVICE_URL` → `https://sandbox.stage.commontools.dev`.
   Both fall back gracefully when unreachable, but expect logs warning about
   the failed probes if you're off the corporate network.
-- **`"implicit trust"`** appears as the identity-passphrase default in two
-  places (toolshed `IDENTITY_PASSPHRASE` and the CLI dev recipe). They must
-  match for toolshed and the CLI to share an identity in local dev.
+- **`"implicit trust"`** appears as the development identity passphrase in two
+  places (the identity a toolshed with `ENV=development` signs as when neither
+  `IDENTITY` nor `IDENTITY_PASSPHRASE` is set, and the CLI dev recipe). They
+  must match for toolshed and the CLI to share an identity in local dev.
 
 ---
 

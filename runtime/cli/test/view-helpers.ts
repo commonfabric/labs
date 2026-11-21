@@ -147,6 +147,19 @@ export function raw(...nums: number[]): Uint8Array {
   return new Uint8Array(nums);
 }
 
+/** Returns the frame in which the relay sends the delivery of `payload` as
+ * the GitHub event `event`. */
+export function relayFrame(event: string, payload: unknown): Uint8Array {
+  const request = new TextEncoder().encode(
+    `POST /webhook HTTP/1.1\r\nX-GitHub-Event: ${event}\r\n\r\n` +
+      JSON.stringify(payload),
+  );
+  const frame = new Uint8Array(4 + request.length);
+  new DataView(frame.buffer).setUint32(0, request.length);
+  frame.set(request, 4);
+  return frame;
+}
+
 /**
  * A stand-in for the GitHub webhook relay. `connect` opens a connection to it,
  * `deliver` writes a delivery to the connection opened last as the relay
@@ -156,7 +169,6 @@ export function raw(...nums: number[]): Uint8Array {
  * connection opened last.
  */
 export function fakeRelay() {
-  const encoder = new TextEncoder();
   const opened: Array<{
     writer: WritableStreamDefaultWriter<Uint8Array>;
     closed: PromiseWithResolvers<void>;
@@ -175,15 +187,8 @@ export function fakeRelay() {
     return Promise.resolve({ readable, close: () => closed.resolve() });
   };
   const deliver = (event: string, payload: unknown) => {
-    const request = encoder.encode(
-      `POST /webhook HTTP/1.1\r\nX-GitHub-Event: ${event}\r\n\r\n` +
-        JSON.stringify(payload),
-    );
-    const frame = new Uint8Array(4 + request.length);
-    new DataView(frame.buffer).setUint32(0, request.length);
-    frame.set(request, 4);
     // A subscriber that has stopped reading receives nothing.
-    last().writer.write(frame).catch(() => {});
+    last().writer.write(relayFrame(event, payload)).catch(() => {});
   };
   return {
     connect,
@@ -193,6 +198,30 @@ export function fakeRelay() {
     closed: () => last().closed.promise,
     get connections() {
       return opened.length;
+    },
+  };
+}
+
+/**
+ * The payload of the `pull_request` event GitHub sends when a pull request
+ * closes: by default, pull request 7 of `commonfabric/labs`, merged.
+ */
+export function mergedPayload(
+  {
+    action = "closed",
+    merged = true,
+    number = 7,
+    repository = "commonfabric/labs",
+    url = "https://github.com/commonfabric/labs/pull/7",
+  } = {},
+) {
+  return {
+    action,
+    pull_request: {
+      html_url: url,
+      number,
+      merged,
+      base: { repo: { full_name: repository } },
     },
   };
 }

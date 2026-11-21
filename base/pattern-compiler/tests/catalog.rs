@@ -107,9 +107,11 @@ fn provisional_identifiers_are_not_yet_in_the_specification() {
     }
 }
 
-/// The three rows that the catalog of `language-subset.md` has on the
-/// branch of the documents and not in this tree, in the order of that
-/// table, each with its severity and with what the front end does for it.
+/// The rows that the catalog of `language-subset.md` does not have in
+/// this tree, each with its severity and with what the front end does for
+/// it: one that the document has on the branch of the documents, and the
+/// warning of the interim acceptance of `patternTool`, which the document
+/// does not describe yet.
 #[test]
 fn provisional_holds_the_rows_that_the_document_in_this_tree_lacks() {
     let entries: Vec<(&str, &str, &str)> = pattern_compiler::catalog::PROVISIONAL
@@ -128,14 +130,12 @@ fn provisional_holds_the_rows_that_the_document_in_this_tree_lacks() {
         entries,
         [
             (
-                "element-body:result-stored-outside",
-                "error",
-                "needs footprint analysis"
-            ),
-            ("array-by-key:declaration", "error", "implemented in part"),
-            ("array-by-key:mismatch", "error", "implemented in part"),
-            (
                 "array-by-key:state-without-key",
+                "warning",
+                "implemented in part"
+            ),
+            (
+                "removed-form:pattern-tool-interim",
                 "warning",
                 "implemented in part"
             ),

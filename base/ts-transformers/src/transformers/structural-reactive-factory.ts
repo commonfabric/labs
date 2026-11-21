@@ -8,42 +8,26 @@ export function isPatternFactoryCalleeExpression(
   expression: ts.Expression,
   checker: ts.TypeChecker,
 ): boolean {
-  const target = unwrapExpression(expression);
-
-  try {
-    const type = checker.getTypeAtLocation(target);
-    const signatures = checker.getSignaturesOfType(type, ts.SignatureKind.Call);
-    if (signatures.length === 0) {
-      return false;
-    }
-
-    const propertyNames = new Set(
-      type.getProperties().map((property) => property.getName()),
-    );
-    if (
-      !propertyNames.has("argumentSchema") ||
-      !propertyNames.has("resultSchema") ||
-      propertyNames.has("with")
-    ) {
-      return false;
-    }
-
-    return true;
-  } catch {
+  const type = checker.getTypeAtLocation(unwrapExpression(expression));
+  if (
+    checker.getSignaturesOfType(type, ts.SignatureKind.Call).length === 0
+  ) {
     return false;
   }
+
+  const propertyNames = new Set(
+    type.getProperties().map((property) => property.getName()),
+  );
+  return propertyNames.has("argumentSchema") &&
+    propertyNames.has("resultSchema") &&
+    !propertyNames.has("with");
 }
 
 export function returnsReactiveResult(
   expression: ts.CallExpression,
   checker: ts.TypeChecker,
 ): boolean {
-  try {
-    const type = checker.getTypeAtLocation(expression);
-    return isBrandedCellType(type, checker);
-  } catch {
-    return false;
-  }
+  return isBrandedCellType(checker.getTypeAtLocation(expression), checker);
 }
 
 export function isPatternFactoryHelperExpression(
@@ -174,15 +158,9 @@ function getAliasedSymbol(
   symbol: ts.Symbol,
   checker: ts.TypeChecker,
 ): ts.Symbol {
-  if (!(symbol.flags & ts.SymbolFlags.Alias)) {
-    return symbol;
-  }
-
-  try {
-    return checker.getAliasedSymbol(symbol);
-  } catch {
-    return symbol;
-  }
+  return symbol.flags & ts.SymbolFlags.Alias
+    ? checker.getAliasedSymbol(symbol)
+    : symbol;
 }
 
 function getReturnedExpression(

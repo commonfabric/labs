@@ -418,6 +418,66 @@ const artifactOf = async (name: string) => {
   };
 };
 
+/** One scenario of a fixture, with the artifact it runs. */
+export type FixtureScenario = {
+  fixture: string;
+  scenario: string;
+  artifact: Artifact & { schemas: Schemas };
+  artifacts: (id: string) => Artifact | undefined;
+  /** The argument, each input in place. */
+  argument: Record<string, unknown>;
+  events: { binding: number; event: unknown }[];
+};
+
+/**
+ * The scenarios `compareFixtures` runs, or those of the named fixture: the
+ * written ones, and for a fixture that has none, the generated one.
+ */
+export const fixtureScenarios = async (
+  only?: string,
+): Promise<FixtureScenario[]> => {
+  const scenarios: FixtureScenario[] = [];
+  const names = [...Object.keys(WRITTEN), ...GENERATED].sort();
+  for (const fixture of names) {
+    if (only !== undefined && fixture !== only) continue;
+    const { artifact, artifacts } = await artifactOf(fixture);
+    const plan = artifact.plan as unknown as Plan;
+    const written = WRITTEN[fixture];
+    if (written !== undefined) {
+      for (const [index, { argument, events }] of written.entries()) {
+        scenarios.push({
+          fixture,
+          scenario: written.length > 1 ? `written ${index}` : "written",
+          artifact,
+          artifacts,
+          argument,
+          events: events ?? [],
+        });
+      }
+      continue;
+    }
+    const inputs = generateInputs(plan, artifact.schemas);
+    scenarios.push({
+      fixture,
+      scenario: "generated",
+      artifact,
+      artifacts,
+      argument: Object.fromEntries(
+        Object.entries(inputs).map(([name, input]) => [name, input.value]),
+      ),
+      events: (plan.bindings ?? []).flatMap((binding, index) =>
+        binding.handler?.body !== undefined
+          ? [{
+            binding: index,
+            event: generateEvent(plan, artifact.schemas, index),
+          }]
+          : []
+      ),
+    });
+  }
+  return scenarios;
+};
+
 /** One compared run of a fixture. */
 export type FixtureRow = {
   fixture: string;

@@ -395,9 +395,83 @@ Within the apply steps of §7.7.1:
    submission integrated (§7.5), in order. A submission that integrates
    nothing maps nothing.
 3. Where an anchor moved, the engine replaces the document's value with the
-   mapped anchors, under the same ids, as a `patch` of the value alone. Whatever else the document's envelope holds, a CFC label among
-   it, is left as its writer wrote it. Where no anchor moved, the document is
-   not written.
+   mapped anchors, under the same ids, as a `patch`.
+4. The same `patch` labels every anchor of the field with the field's
+   confidentiality, moved or not. A moved offset is computed from the field's
+   edits, so it is as confidential as the field, regardless of who wrote the
+   anchor, and which anchors an edit moves says where it fell, so labeling
+   only the moved ones would tell a reader that. That the anchors take the
+   field's confidentiality is a rule of Contextual Flow Control; what follows
+   is how the engine arranges it. The engine reads the
+   stored CFC envelope of the field's document in the field's own scope
+   instance, and takes the confidentiality of every label
+   entry whose path is the field's path, a prefix of it, or beneath it, a `*`
+   segment standing for any key. A label-metadata template entry is keyed
+   against the stored document rather than the value, so it is never one of
+   these: not for a field that is the whole value, whose path is a prefix of
+   every path, and not for a field named `cfc`. For a field in a user or
+   session instance, the engine also reads the envelope of each broader
+   instance of the document, and takes the confidentiality of the entries at
+   those paths that a reader of a narrower instance's content answers to, by
+   the rule the runner's read ceiling holds to (`broaderEntriesForReader()`
+   in `cfc-scoped-instance-labels.ts`): those a read of the value consumes. A
+   broader instance can hold a label the field's own does not, such as the
+   stamp of a whole value a writer set there. A label of the pointer the
+   broader slot holds is not one of these entries, since it speaks for
+   whichever user's write stored the redirect. A label an entry names by
+   document is read from that document. It also takes the field's
+   integrity, what a read of the whole field carries: in the field's own
+   scope instance and no broader one, since whoever wrote a broader instance
+   did not write this one, and for each component, the deepest entry at the
+   field's path or above it
+   that a read of the field's value consumes, by the runner's rule
+   (`readConsumesEntry()` in `cfc-observation-classes.ts`), and every atom
+   those hold. That excludes a link entry with no class, which labels the
+   pointer rather than the value. For each
+   anchor, the engine joins the field's label into the entry at the anchor's
+   path of origin `derived` and class `value`, so that the path holds one
+   such entry. The join keeps every clause either label held, since the
+   moved offset is computed from the old one, and its integrity is the
+   class-aware meet of the entry's and the field's, which keeps a hereditary
+   atom both hold. Where the envelope holds no such entry, the anchor's
+   writer vouched for nothing, so the engine makes one holding the field's
+   confidentiality, and none where that is empty. A `derived` entry of no
+   class at that path is consumed by a read of the offset too, so its
+   integrity is met with the field's as well, and its confidentiality
+   stays. A
+   label one of these entries names by document is read from that
+   document. Where the envelope already holds every label this would write, it
+   is not written. Where no anchor moved and the envelope is not written, the
+   document is not written. An anchors document with no envelope gets one, naming the
+   schema document of the schema that declares nothing, which the engine stores
+   in the same commit where the store does not hold it. Whatever else the
+   envelope holds is left as its writer wrote it.
+
+The engine refuses the operation, and so the commit, where the field has
+anchors and it cannot read the field's envelope, or, where the field holds a
+confidentiality to add, the anchors document's. Where the field holds none,
+an anchors envelope the engine cannot read is left as it is: there is no
+clause to add, and no reader honors integrity in an envelope it cannot read.
+It checks an envelope with the checks the runner uses,
+so that an envelope the runner would not produce labels from is one the
+engine does not copy a label out of: it refuses one of a version other than
+1 and 2, one with no `schemaHash`, one with no label map, an entry with no
+path of strings, a label holding anything but `confidentiality` and
+`integrity` arrays, a label held by reference in a version-1 envelope, and a
+label-metadata template entry keyed outside `["cfc", "labels"]` or classed
+as anything but `labelMetadata`. It resolves the labels of the entries that
+bear on the field and no others, and refuses a reference among them that no
+stored document backs or whose document does not hold a label. It does not
+compare a label document with its id, since the store installs a `cid:`
+document only when its content hashes to its id. It also refuses a reference
+in an entry at an anchor's path that no stored document backs. An edit to a
+field with no anchors reads no envelope and is not refused for one.
+
+The label is a record of the field at the edit, and it is the document's
+writers that end it. A writer's CFC pass drops a derived `value` entry at a
+path the writer replaces, so an anchor written again carries its writer's
+label alone, and the engine labels it again when the next edit integrates.
+A change to the field's label, with no edit, changes no anchor's label.
 
 Anchors are not operations: they enter no submitted or integrated row and
 advance no version. A commit that writes the anchors document and also applies
@@ -521,10 +595,11 @@ anchors. The engine does not check an offset against the field's value, which
 it cannot find; the codec takes an offset past the end as the end (§7.5).
 
 The engine itself writes the document only to map its anchors through an
-integrated operation (§7.7.4), and never deletes it. Releasing a field leaves
-the document as it is, and so does deleting the field's entity, which
-releases its fields: a writer that deletes the entity and wants the anchors
-gone deletes their documents in the same commit. The
+integrated operation and to label the ones it moved (§7.7.4), and never
+deletes it. Releasing a field leaves the document as it is, and so does
+deleting the field's entity, which releases its fields: a writer that deletes
+the entity and wants the anchors gone deletes their documents in the same
+commit. The
 released value still holds the text the anchors refer to, and an ordinary
 write may replace it from then on, as it may the value of a field that was
 never active. Such a write moves no anchor, so the writer that replaces the
@@ -784,14 +859,6 @@ range-level provenance (§7.14) can reference the history they name.
 ## 7.17 Deferred Decisions
 
 - The representation and algebra for range-level CFC side-data.
-- The CFC label of what the engine derives into a field's anchors document.
-  The engine rewrites the offsets from the field's edits and leaves the
-  document's label as its writers left it. Anchors written by a transaction
-  that read the field carry the field's confidentiality by ordinary flow;
-  anchors written by one that did not carry none of it, though their offsets
-  then follow the field's edits, and a reader of them learns where the field
-  was edited without the field's taint. §7.14's label mapper is where the
-  label covering the field's path would be joined onto the document.
 - Collaborative branch merge semantics.
 - Retention durations for submitted audit payloads.
 - Whether mature deployments move codec execution into a more isolated

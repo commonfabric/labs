@@ -6,6 +6,9 @@
  */
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import {
   CI_FAILURE_FRESH_HOURS,
   CI_WORKFLOW,
@@ -1885,4 +1888,41 @@ Deno.test("ci: a failing build's workflow history is read again only once its re
       assertEquals(histories(), 2);
     },
   );
+});
+
+describe("ci-health", () => {
+  describe("createCiHealth()", () => {
+    it("starts another sweep once the one under way ends when a run is delivered during it", async () => {
+      await withGitHub(standingOrg(green, green, [pond(green)]), async () => {
+        const relay = new FakeRelay();
+        await relay.open();
+        const tile = createCiHealth(
+          new RunLists(undefined, relay.webhooks),
+          relay.webhooks,
+        );
+        let asked = 0;
+        const context: Ctx = { ...ctx(), collectAgain: () => asked++ };
+        // The sweep waits at its read of the organization's repositories
+        // until the delivery has been taken in.
+        const inventory = Promise.withResolvers<void>();
+        const answer = globalThis.fetch;
+        using _fetch = stub(globalThis, "fetch", async (input, init) => {
+          if (String(input).includes(`/orgs/${ORG}/repos`)) {
+            await inventory.promise;
+          }
+          return answer(input, init);
+        });
+
+        await tile.collect(context);
+        await relay.deliver("workflow_run", pondRun(1));
+        inventory.resolve();
+        await tile.sweeping();
+        await tile.sweeping();
+
+        expect(asked).toBe(2);
+        await tile.sweeping();
+        expect(asked).toBe(2);
+      });
+    });
+  });
 });

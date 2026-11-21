@@ -268,7 +268,8 @@ describe("topics-browser-measurement", () => {
           ]),
         ).toEqual([
           ["crossrefTable", "({ sources })"],
-          ["backlinksOf", "({ table, self })"],
+          ["crossrefIndexOf", "({ rows })"],
+          ["backlinksOf", "({ table, index, self, shortName })"],
         ]);
         expect(
           sample.lifts.filter((lift) =>
@@ -324,7 +325,9 @@ describe("topics-browser-measurement", () => {
 
       checkSample(sample, () => {
         expect(sample.mayRunNothing).toBe(true);
-        expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0]);
+        expect(sample.lifts.map((lift) => lift.runs)).toEqual(
+          program.lifts.map(() => 0),
+        );
         expect(sample.remaining.runs).toBe(sample.runsWithoutSource);
         expect(sample.graph.after.nodes).toBeGreaterThan(0);
       });
@@ -418,7 +421,9 @@ describe("topics-browser-measurement", () => {
           // Counted apart for reporting, and still part of `remaining`, which
           // is every run the sample could not place against a named lift.
           expect(sample.remaining.runs).toBe(1);
-          expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0]);
+          expect(sample.lifts.map((lift) => lift.runs)).toEqual(
+            program.lifts.map(() => 0),
+          );
         });
       }
 
@@ -584,7 +589,7 @@ describe("topics-browser-measurement", () => {
 
       const fresh = await openFreshSession();
       try {
-        await fresh.page.evaluate(async (served: boolean) => {
+        const setupRuns = await fresh.page.evaluate(async (served: boolean) => {
           const scope = globalThis as typeof globalThis & {
             commonfabric?: { rt?: RuntimeClient };
             __cfLeftOnRuns?: { count: number; stop: () => void };
@@ -602,11 +607,27 @@ describe("topics-browser-measurement", () => {
           await rt.setTelemetryEnabled(true);
           await rt.setReadStatsEnabled(true);
           if (served) await rt.setActionRunTraceEnabled(true);
+          // Exercise telemetry delivered before the timed interval.
+          rt.emit("telemetry", {
+            type: "scheduler.run.complete",
+            actionId: "setup",
+            durationMs: 1,
+            timeStamp: 0,
+          });
+          return counter.count;
         }, { args: [servedViews] });
+        expect(setupRuns).toBeGreaterThan(0);
         const sample = await timeTopicsOperation(fresh.page, {
           label: "open topic and return, timed",
           posture,
           operation: async () => {
+            // The sampler has disabled telemetry before the operation starts.
+            await fresh.page.evaluate(() => {
+              const scope = globalThis as typeof globalThis & {
+                __cfLeftOnRuns?: { count: number };
+              };
+              scope.__cfLeftOnRuns!.count = 0;
+            });
             await openNewestTopic(fresh);
             await returnToBoard(fresh);
           },

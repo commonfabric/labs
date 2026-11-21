@@ -21,6 +21,7 @@ import {
   decomposeSchema,
   recomposeSchema,
   SchemaNotDecomposableError,
+  SchemaNotRecomposableError,
 } from "./schema-decompose.ts";
 import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import {
@@ -234,8 +235,9 @@ export function externalizeSchema(schema: JSONSchemaObj): JSONSchema {
  * document, which no space stores, is held by the space in the address
  * naming that document, or by the registry alone for a document minted
  * from a value no space has stored. An incomplete declaration selects
- * nothing until its missing documents arrive. A declaration rejected by the
- * decomposer logs a warning and selects nothing.
+ * nothing until its missing documents arrive. A declaration the decomposer
+ * rejects, or one whose documents do not fit the references to them, logs a
+ * warning and selects nothing; any other error propagates.
  */
 export function schemaForSpaceCrossing(
   tx: IExtendedStorageTransaction,
@@ -255,7 +257,12 @@ export function schemaForSpaceCrossing(
     recomposedLinkSchemaCache.set(interned, result);
     return result;
   } catch (error) {
-    if (!(error instanceof SchemaNotDecomposableError)) throw error;
+    if (
+      !(error instanceof SchemaNotDecomposableError ||
+        error instanceof SchemaNotRecomposableError)
+    ) {
+      throw error;
+    }
     schemaClosureLogger.warn("schema-closure", () => [
       "Link schema cannot be recomposed; it selects nothing:",
       sourceSpace,

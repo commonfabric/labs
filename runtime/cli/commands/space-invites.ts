@@ -239,17 +239,18 @@ const defaultInviteStorageDeps: InviteStorageDeps = {
  * Returns the default `InviteStorageOpener`, over a storage manager of its
  * own at the memory host the deployment's metadata names, as `loadPieces()`
  * opens one. Its sessions declare the naming mode a runtime given the
- * deployment's settings would.
+ * deployment's settings would. An effect `deps` leaves out is the default.
  */
 export function inviteStorageOpener(
-  deps: InviteStorageDeps = defaultInviteStorageDeps,
+  deps: Partial<InviteStorageDeps> = {},
 ): InviteStorageOpener {
+  const { settings, open } = { ...defaultInviteStorageDeps, ...deps };
   return async ({ as, apiUrl, space }) => {
-    const { experimental, memoryHost } = await deps.settings({
+    const { experimental, memoryHost } = await settings({
       apiUrl,
       env: Deno.env.get,
     });
-    const manager = deps.open({ as, memoryHost });
+    const manager = open({ as, memoryHost });
     // The server admits a session by the naming mode it declares (INV-16),
     // and no runtime is here to declare one.
     manager.setInstanceNames(namesInstancesByDefault(experimental));

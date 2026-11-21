@@ -41,7 +41,7 @@ import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { setResultCell } from "../result-utils.ts";
-import { readRuntimeSecret, runtimeSecretLink } from "../runtime-secret.ts";
+import { runtimeSecretLink } from "../runtime-secret.ts";
 import { schemaHasIfc } from "../schema-ifc.ts";
 import { isCellScope, narrowestScope } from "../scope.ts";
 import { computeInputHashFromValue } from "./fetch-utils.ts";
@@ -1424,12 +1424,14 @@ export function sqliteQuery(
       runtime.trackAsyncWork(
         settleAbandonedRequest(
           runtime,
-          "sqliteQuery",
-          effectKey,
+          {
+            builtinId: "sqliteQuery",
+            effectKey,
+            identity: runIdentity,
+            scope,
+            attributeToBuiltin: true,
+          },
           (settleTx) => {
-            if (runIdentity !== undefined) {
-              settleTx.tx.scopeKeyIdentity = runIdentity;
-            }
             // The cancellation is asked again here, not only where this was
             // scheduled: `editWithRetry` runs this callback once per attempt,
             // and a retry is where the time passes in which a node can go
@@ -1878,19 +1880,11 @@ export function sqliteQuery(
                 // own. Nothing that varies between runs over unchanged data
                 // may reach a key, or an unchanged result would mint a
                 // document per row per run.
-                wtx.ensureRuntimeSecret(
+                const salt = wtx.ensureRuntimeSecret(
                   base.space,
                   SQLITE_ROW_SALT,
                   runtimeWritePolicyAuthorization,
                 );
-                const salt = readRuntimeSecret(
-                  wtx,
-                  base.space,
-                  SQLITE_ROW_SALT,
-                );
-                if (salt === undefined) {
-                  throw new Error("sqlite: the space's row salt is unreadable");
-                }
                 const rowKeys = resultRowKeys({
                   salt,
                   rows: resultRows,

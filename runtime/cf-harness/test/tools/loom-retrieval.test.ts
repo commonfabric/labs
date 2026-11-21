@@ -27,7 +27,6 @@ import type {
 import {
   LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
   LOOM_RETRIEVAL_MAX_STRING_CHARS,
-  LOOM_RETRIEVAL_TOOLS,
   LOOM_RETRIEVAL_UNTRUSTED_NOTICE,
   loomCalendarListTool,
   loomContextTool,
@@ -271,7 +270,20 @@ describe("loom-retrieval tools", () => {
         expect(tool?.descriptor.effectClass).toBe("read");
         expect(tool?.descriptor.tags).toContain("loom");
       }
-      expect(LOOM_RETRIEVAL_TOOLS.map((tool) => tool.descriptor.toolId).sort())
+      const tools = [
+        loomSearchTool,
+        loomPageDiscoverTool,
+        loomPageInspectTool,
+        loomPageReadTool,
+        loomPeopleTool,
+        loomCalendarListTool,
+        loomContextTool,
+        loomProfileTool,
+      ];
+      for (const tool of tools) {
+        expect(getBuiltinTool(tool.descriptor.toolId)).toBe(tool);
+      }
+      expect(tools.map((tool) => tool.descriptor.toolId).sort())
         .toEqual([...LOOM_RETRIEVAL_TOOL_IDS].sort());
     });
 
