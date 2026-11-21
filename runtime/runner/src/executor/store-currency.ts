@@ -348,6 +348,32 @@ export class StoreCurrency {
   }
 
   /**
+   * Gives up on what is upstream of every piece the last judgment named a
+   * read of, and holds no root and no running piece for it any longer: the
+   * loop came to rest with nothing under way that would bring the judgment
+   * that clears them.
+   *
+   * @returns The demand keys that are no longer held.
+   */
+  abandonAllUpstream(): string[] {
+    const released: string[] = [];
+    for (const reader of [...this.upstreamProducers.keys()]) {
+      released.push(...this.abandonUpstream(reader));
+    }
+    // What is held or stale with no read named for it has nothing to wait
+    // on either.
+    released.push(...this.#held.keys());
+    this.#held.clear();
+    this.#staleRunning.clear();
+    return released;
+  }
+
+  /** Has the next call of `judge()` ask the memory server again. */
+  oweJudgment(): void {
+    this.#judgmentOwed = true;
+  }
+
+  /**
    * The time, in milliseconds since the epoch, at which a fresh judgment is
    * owed because a slice's record expires then, or `undefined` where no
    * slice expires or nothing rests on a record: no root is left unloaded,
@@ -604,7 +630,9 @@ export class StoreCurrency {
    * structure load that are not warm demand. A root whose piece is running
    * here is not judged. `demandChanged` says whether any session's rows
    * changed since the last call. The pieces that run here and are stale
-   * upstream are asked about with them, and alone where no root is.
+   * upstream are asked about with them, and alone where no root is. So are
+   * the pieces that run here and read the output of one that does not,
+   * where a judgment of them is owed (`runningOwed`).
    *
    * @returns The keys the store can serve, which the caller leaves unloaded
    * under `skip` and loads anyway under `record`; the keys held because what

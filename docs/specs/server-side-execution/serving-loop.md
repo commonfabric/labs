@@ -460,9 +460,14 @@ that follows finds the root servable or finds its own piece behind and loads
 it. The loop gives up on what is upstream of a root or a running piece when
 none of the pieces named for it can change that: one whose load ended without
 a start, one that ran and was recorded with the reader stale still, and one
-that ran in a cycle that ended where no record could be taken. A root is
-loaded as a refused one is once the loop has given up on what is upstream of
-each piece whose slices hold it. Impl: `judgeCurrencyRoots()` and
+that ran in a cycle that ended where no record could be taken. Once the loop
+has given up on what is upstream of each piece whose slices hold a root, that
+root is loaded, as a refused one is. A hold ends at a judgment, which follows
+a change in demand, a stored record or a mark, so the loop checks before it
+rests: with something stale upstream and no judgment, load, commit, run or
+record under way, the first such rest has the next cycle judge again, and the
+second in a row gives up on everything stale upstream
+(`#releaseStalledUpstream()`). Impl: `judgeCurrencyRoots()` and
 `upstreamReadsOf()` in `runtime/memory/v2/currency-index.ts`,
 `StoreCurrency.judge()` in `runtime/runner/src/executor/store-currency.ts`,
 `#releaseStuckUpstream()` in `runtime/runner/src/executor/space-server.ts`;

@@ -2219,7 +2219,11 @@ export type CurrencyRefusal =
  * decides, or one a recorded piece writes and none vouches for.
  */
 export type CurrencyUpstreamRead = {
-  /** The piece the judgment was asked about: a root, or a running piece. */
+  /**
+   * The piece whose slice the read keeps stale: a root's piece, a piece
+   * beneath a root that a demanded instance is resolved under, or a running
+   * piece the judgment was asked about.
+   */
   reader: string;
 
   /**

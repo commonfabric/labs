@@ -333,11 +333,18 @@ of the held watermark.
 The loop gives up on what is upstream of a root or a running piece when none
 of the pieces named for it can change the judgment: one whose load ended
 without a start, one that ran and was recorded with the reader stale still,
-and one that ran in a cycle that ended where no record could be taken. A root
-is loaded as a refused one is once the loop has given up on what is upstream
-of each piece whose slices hold it, and is not held again while the same
-pieces are named for them. `currency.upstreamAbandoned` counts the pieces
-given up on.
+and one that ran in a cycle that ended where no record could be taken. Once
+the loop has given up on what is upstream of each piece whose slices hold a
+root, that root is loaded, as a refused one is, and is not held again while
+the same pieces are named for them. `currency.upstreamAbandoned` counts the
+pieces given up on.
+
+A hold ends at a judgment, and a judgment follows a change in demand, a
+stored record or a mark. So that a hold cannot outlast the work that could
+clear it, the loop checks before it rests: with something stale upstream and
+no judgment, load, commit, run or record under way, the first such rest has
+the next cycle judge again, and the second in a row gives up on everything
+stale upstream.
 
 The demanded rows are withdrawn once nothing is stale upstream, so a piece
 started this way stays running and is no longer demanded for the reader's

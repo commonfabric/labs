@@ -480,6 +480,37 @@ describe("StoreCurrency", () => {
         expect(currency.staleUpstream).toBe(false);
       });
 
+      it("holds nothing once everything upstream was given up on, and holds the root no more while the same piece is named", async () => {
+        const currency = loop("skip");
+        reads = [UPSTREAM, NESTED];
+        await judge(currency);
+
+        expect(currency.abandonAllUpstream()).toEqual(["key"]);
+
+        expect(currency.staleUpstream).toBe(false);
+        expect(currency.upstreamReads).toEqual([]);
+        expect((await judge(currency)).held).toEqual([]);
+        expect(currency.staleUpstream).toBe(false);
+      });
+
+      it("asks the memory server again at the next judgment once one is owed", async () => {
+        const currency = loop("skip");
+        const settled = () =>
+          currency.judge(
+            runtime,
+            new Map([["key", { id: "of:reader", scope: "space" }]]),
+            () => true,
+            false,
+          );
+        await settled();
+        stale = false;
+        expect((await settled()).held).toEqual(["key"]);
+
+        currency.oweJudgment();
+
+        expect((await settled()).servable).toEqual(["key"]);
+      });
+
       it("holds the root until what is upstream of each piece whose read holds it was given up on", async () => {
         const currency = loop("skip");
         reads = [UPSTREAM, NESTED];

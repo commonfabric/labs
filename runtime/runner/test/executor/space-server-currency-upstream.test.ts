@@ -334,6 +334,7 @@ describe("SpaceServer", () => {
           true,
           true,
         ]);
+        expect(host!.stats().currency.upstreamAbandoned).toBe(0);
       });
 
       it("starts the first piece alone, and leaves the last unstarted, when the first derives the value it held, under `skip`", async () => {

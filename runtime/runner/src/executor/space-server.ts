@@ -1300,6 +1300,13 @@ export class SpaceServer implements TransactionSealDestination {
   #unproducedReadsSeen = 0;
 
   /**
+   * How many times in a row the loop came to rest with something stale
+   * upstream and nothing under way, since the reads that keep it stale last
+   * changed (`#releaseStalledUpstream()`).
+   */
+  #upstreamStalledRests = 0;
+
+  /**
    * Whether the last cycle ended where no currency record could be taken
    * while a root or a running piece was stale upstream: a piece started
    * upstream of it is then not waited on for its record.
@@ -4619,6 +4626,9 @@ export class SpaceServer implements TransactionSealDestination {
       this.#pendingShadowFlipWake = false;
       return;
     }
+    // A rest with something stale upstream and nothing under way would
+    // hold the watermark until an input that may never come.
+    if (this.#releaseStalledUpstream()) return;
     this.#feedArrived = Promise.withResolvers<void>();
     this.#options.onLoopRest?.();
     this.#nextRest.resolve();
@@ -6315,6 +6325,7 @@ export class SpaceServer implements TransactionSealDestination {
       // pieces that write them start. The next pass reads the rows that
       // stand for them.
       if (this.#currency.takeUpstreamChanged()) {
+        this.#upstreamStalledRests = 0;
         this.#syncCarriedDemand();
         await this.#carriedDemand?.settled;
         if (!this.#active || this.#runtime !== runtime) return;
@@ -7540,6 +7551,52 @@ export class SpaceServer implements TransactionSealDestination {
       ]);
     }
     return released;
+  }
+
+  /**
+   * Helper for `#waitForInput()`, which keeps a root held, or a running
+   * piece stale, upstream from outlasting the work that could clear it
+   * (serving-loop.md §1, "A root stale upstream"). The hold ends at a
+   * judgment, and a judgment follows a change in demand, a stored record or
+   * a mark. Where the loop is about to rest with none of those under way,
+   * the first such rest has the next cycle judge again, and the second in a
+   * row, with the reads that keep it stale unchanged, gives up on all of it:
+   * the held roots are loaded as refused ones are, and the watermark moves.
+   *
+   * @returns Whether a cycle is to run now in place of the rest.
+   */
+  #releaseStalledUpstream(): boolean {
+    const currency = this.#currency;
+    const runtime = this.#runtime;
+    if (
+      currency === undefined || runtime === undefined ||
+      !currency.staleUpstream
+    ) {
+      this.#upstreamStalledRests = 0;
+      return false;
+    }
+    if (
+      currency.storing || this.#feed.length > 0 || !this.#nothingOwed() ||
+      !runtime.scheduler.isIdleWithPendingCommits() ||
+      runtime.hasAsyncWorkPending
+    ) {
+      // Something is under way, and what it brings may clear the hold.
+      this.#upstreamStalledRests = 0;
+      return false;
+    }
+    this.#upstreamStalledRests += 1;
+    if (this.#upstreamStalledRests === 1) {
+      currency.oweJudgment();
+      return true;
+    }
+    this.#upstreamStalledRests = 0;
+    const released = currency.abandonAllUpstream();
+    logger.info?.("currency-upstream-stalled", () => [
+      `space ${this.#options.space}: came to rest with something stale ` +
+      "upstream and nothing under way; gave up on it, releasing " +
+      `${released.length} held root(s)`,
+    ]);
+    return true;
   }
 
   /**
@@ -9380,6 +9437,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#pendingStructureRetryWake = false;
     this.#currency = undefined;
     this.#unproducedReadsSeen = 0;
+    this.#upstreamStalledRests = 0;
     this.#upstreamRecordBlocked = false;
     this.#pendingCurrencyWake = false;
     clearTimeout(this.#currencyExpiryTimer);
