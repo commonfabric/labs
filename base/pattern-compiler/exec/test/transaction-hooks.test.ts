@@ -1105,6 +1105,25 @@ describe("the records of the elements of the result of a `map`", () => {
       ),
     ).toEqual([]);
   });
+
+  it("gives the record of the first element alone again when the label of what that element read changed, among 10 elements and among 1,000", async () => {
+    for (const count of [10, 1_000]) {
+      const { instance, recorder, labels } = await over(
+        "Plain",
+        "references",
+        count,
+      );
+      labels.set(0, "secret");
+      recorder.labelsChanged?.([{ doc: "item-0", paths: [[]] }], true);
+      instance.dispatch();
+
+      expect(
+        recorder.left.flatMap(({ writes }) => writes).filter(({ target }) =>
+          target.path[0] === "rows"
+        ).map(({ target }) => target.path.join("/")),
+      ).toEqual(["rows/0/label"]);
+    }
+  });
 });
 
 // `fixtures/whole-after-push.tsx`: `all` is a text of everything the list

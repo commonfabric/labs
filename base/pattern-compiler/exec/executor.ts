@@ -7361,11 +7361,13 @@ export class Instance {
       }
       for (const inputs of Object.values(place.outputs ?? {})) visit(inputs);
     };
-    visit(write.inputs);
     // A record that names the inputs of another element read its own
-    // element's positions.
-    for (const address of this.#ownReads.get(key) ?? []) read(address);
+    // element's positions, and none of that element's: a change of a label
+    // there changes the label of that element's record alone.
+    const own = this.#ownReads.get(key);
     this.#ownReads.delete(key);
+    if (own === undefined) visit(write.inputs);
+    else for (const address of own) read(address);
     this.#recordReads.set(key, positions);
     for (const { doc, path } of positions) {
       const root: LabelReaders = this.#recordReaders.get(doc) ??
@@ -9555,25 +9557,26 @@ export class Instance {
     };
     const visited = new Set<ConeInputs>();
     const outputsSeen = new Set<string>();
+    const readBound = (bound: Bound, pairs: readonly [number, string][]) => {
+      if ("constant" in bound || "place" in bound) return;
+      if ("output" in bound) {
+        readOutput(bound.output, pairs);
+      } else if ("upstream" in bound) {
+        const { collection, keys } = bound.upstream;
+        for (const each of this.#elementCones(collection)) {
+          readInputs(this.#inputsOf(each, this.#keysFor(each, keys)), keys);
+        }
+      } else {
+        for (const at of this.#addressesOf(bound.at)) once(at);
+      }
+    };
     const readInputs = (
       inputs: ConeInputs | undefined,
       pairs: readonly [number, string][],
     ) => {
       if (inputs === undefined || visited.has(inputs)) return;
       visited.add(inputs);
-      for (const bound of inputs.slots.values()) {
-        if ("constant" in bound || "place" in bound) continue;
-        if ("output" in bound) {
-          readOutput(bound.output, pairs);
-        } else if ("upstream" in bound) {
-          const { collection, keys } = bound.upstream;
-          for (const each of this.#elementCones(collection)) {
-            readInputs(this.#inputsOf(each, this.#keysFor(each, keys)), keys);
-          }
-        } else {
-          for (const at of this.#addressesOf(bound.at)) once(at);
-        }
-      }
+      for (const bound of inputs.slots.values()) readBound(bound, pairs);
     };
     const readOutput = (
       index: number,
@@ -9584,11 +9587,20 @@ export class Instance {
       outputsSeen.add(name);
       const byCollection = new Map(pairs);
       const { cone, passesCollection, template } = this.plan.outputs[index];
-      readInputs(this.#inputsOf(cone, this.#keysFor(cone, pairs)), pairs);
+      const inputs = this.#inputsOf(cone, this.#keysFor(cone, pairs));
+      readInputs(inputs, pairs);
+      const reached = reachedBy(template, this.plan.templates ?? []);
+      // A slot of the template that the cone instance did not bind is one
+      // the result's own evaluation bound.
+      const result = this.#inputs.get(RESULT_INPUTS);
+      for (const slot of reached.slots) {
+        const bound = inputs?.slots.has(slot)
+          ? undefined
+          : result?.slots.get(slot);
+        if (bound !== undefined) readBound(bound, pairs);
+      }
       // The outputs the computation read by name bind no slot of its cone.
-      for (
-        const named of reachedBy(template, this.plan.templates ?? []).outputs
-      ) readOutput(named, pairs);
+      for (const named of reached.outputs) readOutput(named, pairs);
       if (!passed || passesCollection === undefined) return;
       const around = this.#outerOf(passesCollection).map((step) =>
         byCollection.get(step) ?? "?"
