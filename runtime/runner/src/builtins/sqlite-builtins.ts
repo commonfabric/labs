@@ -45,6 +45,7 @@ import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { CellScope, JSONSchema } from "../builder/types.ts";
+import { createSigilLinkFromParsedLink, isCellLink } from "../link-utils.ts";
 import { setResultCell } from "../result-utils.ts";
 import { runtimeSecretLink } from "../runtime-secret.ts";
 import { schemaHasIfc } from "../schema-ifc.ts";
@@ -802,6 +803,15 @@ export function sqliteDatabase(
       const options = inputsCell.withTx(tx).get() as
         | { tables?: SqliteDbRef["tables"]; index?: unknown }
         | undefined;
+      // The cell a collection has every one of its writers write as well,
+      // carried on the handle as a reference so that whoever holds the handle
+      // writes the same one.
+      const guardInput = inputsCell.withTx(tx).key("guard");
+      const guard = isCellLink(guardInput.getRaw())
+        ? createSigilLinkFromParsedLink(
+          guardInput.resolveAsCell().getAsNormalizedFullLink(),
+        )
+        : undefined;
       // An indexed collection is a database whose handle also carries the
       // descriptor its tables were derived from.
       const index = indexedCollectionDescriptorOf(
@@ -879,6 +889,7 @@ export function sqliteDatabase(
             scope,
             ...(owner !== undefined && { owner }),
             ...(index !== undefined && { index }),
+            ...(guard !== undefined && { guard }),
             // Carry db.exec's write revision forward — dropping it would make
             // this re-derivation look like "new inputs" to every handle hasher.
             ...(typeof prior?.rev === "number" && { rev: prior.rev }),
