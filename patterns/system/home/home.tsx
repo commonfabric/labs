@@ -674,6 +674,7 @@ const Home = pattern(
     const socialSpaceCollection = SharedSpaceCollection({
       catalog,
       view: sharedSpaces.view,
+      shown: computed(() => activeTab.get() === "social-spaces"),
     });
 
     return {

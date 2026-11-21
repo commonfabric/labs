@@ -2,6 +2,7 @@
 
 import {
   computed,
+  type Default,
   eventKey,
   handler,
   NAME,
@@ -58,6 +59,13 @@ export const chooseCollectionMembership = handler<
 export interface SharedSpaceCollectionInput {
   catalog: Writable<SharedSpaceCatalogStorage>;
   view: SharedSpaceCollectionView;
+
+  /**
+   * Whether the list is on screen. While it is not, the browser derives no
+   * rows, so a host that keeps it in a panel it hides, as Home's tabs do, runs
+   * nothing for each entry until the panel is shown.
+   */
+  shown: Default<boolean, true>;
 }
 
 /** The browser's UI and session-local controls. */
@@ -78,7 +86,7 @@ const kindLabel = (kind: string): string =>
 const SharedSpaceCollection = pattern<
   SharedSpaceCollectionInput,
   SharedSpaceCollectionOutput
->(({ catalog, view }) => {
+>(({ catalog, view, shown }) => {
   const search = new Writable.perSession("");
   const kind = new Writable.perSession("");
   const membership = new Writable.perSession("saved");
@@ -100,7 +108,7 @@ const SharedSpaceCollection = pattern<
       : []),
   ]);
   const rows = computed(() => {
-    if (view.status !== "ready") return [];
+    if (!shown || view.status !== "ready") return [];
     const state = membership.get();
     const entries = state === "saved"
       ? view.saved
@@ -119,7 +127,9 @@ const SharedSpaceCollection = pattern<
         ))
     );
   });
-  const empty = computed(() => view.status === "ready" && rows.length === 0);
+  const empty = computed(() =>
+    shown && view.status === "ready" && rows.length === 0
+  );
   const conflictText = computed(() =>
     conflict.get() === "revision"
       ? "The collection changed after this choice was shown. Review it and choose again."
