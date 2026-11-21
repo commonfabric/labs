@@ -20,6 +20,17 @@ const table = lift(
     Object.entries(byName).map(([name, member]) => ({ member, name })),
 );
 
-export default pattern<{ byName: Record<string, unknown> }>(({ byName }) => ({
+// A value the body observes the presence of and reads nothing of: the read
+// of `held` stops at a link that a member of it holds.
+const text = lift(({ held }: { held: Record<string, unknown> }): string =>
+  typeof held === "object" ? "some" : "none"
+);
+
+export default pattern<
+  { byName: Record<string, unknown>; held: Record<string, unknown> }
+>((
+  { byName, held },
+) => ({
   rows: table({ byName }),
+  text: text({ held }),
 }));

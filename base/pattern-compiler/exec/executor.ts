@@ -8618,12 +8618,16 @@ export class Instance {
       if (canonical([root, path]) !== above) continue;
       const bound = boundOf(other);
       if (bound === undefined || !("at" in bound)) continue;
-      // The collection is at the last position the read observed. A link
-      // of a member at which the read stopped is below it, and `*` covers
-      // it.
-      const reached = bound.at.filter((position) =>
-        position instanceof Ref || position.stopped !== true
-      );
+      // An `enumeration` slot of one container observes the container,
+      // whatever the value code read below it (`#enumerated`).
+      const container = this.#enumerated(other, bound)?.chain;
+      // Otherwise the collection is at the last position the read
+      // observed. A link of a member at which the read stopped is below
+      // it, and `*` covers it.
+      const reached = container ??
+        bound.at.filter((position) =>
+          position instanceof Ref || position.stopped !== true
+        );
       const last = reached[reached.length - 1];
       if (last === undefined || last instanceof Ref) continue;
       return this.#derivedBound(bound, `elements ${slot}`, () => ({
@@ -9556,6 +9560,10 @@ export class Instance {
     const { root } = this.plan.slots[slot];
     const wish = root.kind === "operation" &&
       this.plan.operations[root.operation ?? -1]?.kind === "wish";
+    if (!wish) {
+      const container = this.#enumerated(slot, bound);
+      if (container !== undefined) return container;
+    }
     // What the read covered is found once for the bound positions, while
     // the documents of the positions outside the covered containers and
     // the sets of members of those containers stay as they are.
@@ -9598,6 +9606,34 @@ export class Instance {
       });
     }
     return this.#chainsOver(cover, bound.observes);
+  }
+
+  /**
+   * The binding of an `enumeration` slot of one container, one whose path
+   * holds no `*`: the links the read crossed on the way to the container
+   * and the container, the first position it observed. The value code
+   * reads the container as a value, through the references it holds, which
+   * is a wider read than the slot's: a slot of this class consumes nothing
+   * below its bound address and has no further binding (PL §2.5). Nothing
+   * where the positions do not begin so.
+   */
+  #enumerated(
+    slot: number,
+    bound: Extract<Bound, { at: unknown }>,
+  ): { chain: Address[]; observes: string } | undefined {
+    if (
+      bound.observes !== "enumeration" ||
+      this.plan.slots[slot].path.includes("*")
+    ) return undefined;
+    const chain: Address[] = [];
+    for (const position of bound.at) {
+      if (position instanceof Ref || position.keyed !== undefined) break;
+      chain.push({ doc: position.doc, path: [...position.path] });
+      if (!isLink(this.store.peek(position.doc, position.path))) {
+        return { chain, observes: bound.observes };
+      }
+    }
+    return undefined;
   }
 
   /**

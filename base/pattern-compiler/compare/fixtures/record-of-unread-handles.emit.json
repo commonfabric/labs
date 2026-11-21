@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/record-of-unread-handles.tsx",
-              "source": "const { \"Default\": Default, \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst table = lift(\n  (\n    { byName },\n  ) =>\n    Object.entries(byName).map(([name, member]) => ({ member, name })),\n);\nconst $default = (pattern(\"sha256:9000e3f0f2e356f3418507ac3d1cc7f716781abb809ee4d51901ada508f7cdb7\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((\n    { byName },\n  ) =>\n    Object.entries(byName).map(([name, member]) => ({ member, name })))($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ byName: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ rows: $h.output(0) })));\n});"
+              "source": "const { \"Default\": Default, \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst table = lift(\n  (\n    { byName },\n  ) =>\n    Object.entries(byName).map(([name, member]) => ({ member, name })),\n);\nconst text = lift(({ held }) =>\n  typeof held === \"object\" ? \"some\" : \"none\"\n);\nconst $default = (pattern(\"sha256:8d8d18ae060c28a03e597bea32e4d73864d72a202ef794c10ee82ef6e943fbc6\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((\n    { byName },\n  ) =>\n    Object.entries(byName).map(([name, member]) => ({ member, name })))($a));\n$rt.body(1, ($a) => (({ held }) =>\n  typeof held === \"object\" ? \"some\" : \"none\")($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ byName: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ held: $h.slot(2) }))));\nreturn $rt.thunk(($h) => (({ rows: $h.output(0), text: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -25,11 +25,16 @@
               "cone": 0,
               "function": true,
               "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
             }
           ],
           "valuesWithoutOutput": []
         },
-        "line": 23,
+        "line": 29,
         "name": "default",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -61,6 +66,26 @@
               "widenings": [],
               "within": [],
               "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "text",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "held"
+                  ],
+                  "slot": 2
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
             }
           ],
           "children": [],
@@ -70,7 +95,7 @@
             {
               "at": {
                 "file": "compare/fixtures/record-of-unread-handles.tsx",
-                "start": 747
+                "start": 1049
               },
               "bodies": [
                 0
@@ -81,6 +106,23 @@
               "slots": [
                 0,
                 1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/record-of-unread-handles.tsx",
+                "start": 1076
+              },
+              "bodies": [
+                1
+              ],
+              "entry": "text",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
               ],
               "within": [],
               "writes": []
@@ -114,10 +156,30 @@
                 ],
                 "op": "derive"
               }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "text"
+              ],
+              "template": {
+                "by": {
+                  "body": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "op": "derive"
+              }
             }
           ],
           "patterns": [
-            "sha256:9000e3f0f2e356f3418507ac3d1cc7f716781abb809ee4d51901ada508f7cdb7"
+            "sha256:8d8d18ae060c28a03e597bea32e4d73864d72a202ef794c10ee82ef6e943fbc6"
           ],
           "picks": [],
           "selectors": [],
@@ -142,6 +204,16 @@
                 "kind": "argument"
               },
               "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "shape",
+              "path": [
+                "held"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
             }
           ],
           "stateCells": [],
@@ -152,8 +224,8 @@
           {
             "id": "unhashed:schema/0",
             "schema": {
-              "properties": {
-                "byName": {
+              "$defs": {
+                "t0": {
                   "additionalProperties": {
                     "type": "unknown"
                   },
@@ -161,8 +233,17 @@
                   "type": "object"
                 }
               },
+              "properties": {
+                "byName": {
+                  "$ref": "#/$defs/t0"
+                },
+                "held": {
+                  "$ref": "#/$defs/t0"
+                }
+              },
               "required": [
-                "byName"
+                "byName",
+                "held"
               ],
               "type": "object"
             }

@@ -1560,8 +1560,10 @@ describe("TransactionHooks for a write that leaves the value as it was", () => {
 // further chain of the slot's binding.
 describe("the chains of a read of a value that holds links", () => {
   /**
-   * The most further chains a slot binding has, after `count` additions
-   * and a write of the whole list.
+   * The most further chains a slot binding has, after `count` records were
+   * appended to a list whose first member is a plain value in place. Each
+   * appended record is a document of its own that the list holds a link
+   * to, and `all` of `whole-after-push.tsx` reads the list as a value.
    */
   const chainsThroughLinks = async (
     count: number,
@@ -1569,15 +1571,13 @@ describe("the chains of a read of a value that holds links", () => {
   ): Promise<number> => {
     const recorder = new Recorder(label);
     const instance = new Instance(
-      await artifactOf("list-records"),
-      { note: "n" },
+      await artifactOf("whole-after-push"),
+      { items: [{ note: "a", amount: 1 }] },
       { transactions: recorder },
     );
     for (let index = 0; index < count; index++) {
-      instance.send(bindingOf(instance, "add"), { title: `t${index}` });
+      instance.send(bindingOf(instance, "append"), {});
     }
-    // `append` reads the whole list and writes it with one record more.
-    instance.send(bindingOf(instance, "append"), { title: "last" });
     let most = 0;
     for (const { writes } of recorder.changed) {
       for (const write of writes ?? []) {
@@ -1621,6 +1621,7 @@ describe("a read that stops at the links of a record of handles", () => {
     count = 3,
     label = (doc: string, path: string[], observes: string) =>
       `${doc}/${path.join("/")}/${observes}`,
+    output = "rows",
   ) => {
     const recorder = new Recorder(label);
     const documents = Array.from({ length: count }, (_, index) => ({
@@ -1637,11 +1638,12 @@ describe("a read that stops at the links of a record of handles", () => {
             index,
           ) => [`k${index}`, { $link: { doc: id, path: [] } }]),
         ),
+        held: { member: { $link: { doc: "item-0", path: [] } }, name: "h" },
       },
       { transactions: recorder, documents },
     );
     const [write] = recorder.changed.flatMap(({ writes }) => writes ?? [])
-      .filter(({ target }) => target.path.join("/") === "rows");
+      .filter(({ target }) => target.path.join("/") === output);
     // Each position the record names, with whether the runtime observes it
     // as a reference: every position of an `identity` slot, and every
     // position of a chain but its last.
@@ -1676,9 +1678,9 @@ describe("a read that stops at the links of a record of handles", () => {
         reference && doc === instance.argument
       ).map(({ path }) => path),
     );
-    for (const key of ["k0", "k1", "k2"]) {
-      expect(references.has(`byName/${key}`)).toBe(true);
-    }
+    // The `identity` slot at `byName/*` observes each, at `*` below the
+    // record.
+    expect([...references]).toEqual(["byName/*"]);
   });
 
   it("names as many positions for 30 members as for 3 where the links hold one label as references", async () => {
@@ -1691,6 +1693,15 @@ describe("a read that stops at the links of a record of handles", () => {
     );
   });
 
+  it("binds a slot of the class `shape` whose read stopped at a link of a member to that link as a reference and to its own position, and to nothing of what the link leads to", async () => {
+    const { instance, positions } = await record(3, undefined, "text");
+
+    expect(positions).toEqual([
+      { doc: instance.argument, path: "held/member", reference: true },
+      { doc: instance.argument, path: "held", reference: false },
+    ]);
+  });
+
   it("names no position below the link of a member", async () => {
     const { instance, positions } = await record();
 
@@ -1699,5 +1710,35 @@ describe("a read that stops at the links of a record of handles", () => {
         doc === instance.argument && path.split("/").length > 2
       ),
     ).toEqual([]);
+  });
+});
+
+describe("the slot of a count of an array of references", () => {
+  // `items.length` of `length-of-labeled.tsx` observes which members the
+  // list has. The value code reads the list as a value, through each
+  // reference, which is a wider read than the slot's: a slot of the class
+  // `enumeration` consumes nothing below its bound address and has no
+  // further binding (PL §2.5).
+  it("is bound to the list alone, and to no position of a member's document", async () => {
+    const recorder = new Recorder((doc, path, observes) =>
+      `${doc}/${path.join("/")}/${observes}`
+    );
+    const documents = [0, 1, 2].map((index) => ({
+      id: `item-${index}`,
+      kind: "input",
+      value: { note: `n${index}`, amount: index },
+    }));
+    const instance = new Instance(
+      await artifactOf("length-of-labeled"),
+      { items: documents.map(({ id }) => ({ $link: { doc: id, path: [] } })) },
+      { transactions: recorder, documents },
+    );
+
+    const [write] = recorder.changed.flatMap(({ writes }) => writes ?? [])
+      .filter(({ target }) => target.path.join("/") === "count");
+    expect(Object.values(write.slots)).toEqual([{
+      chain: [{ doc: instance.argument, path: ["items"] }],
+      observes: "enumeration",
+    }]);
   });
 });
