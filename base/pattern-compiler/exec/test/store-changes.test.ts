@@ -147,4 +147,57 @@ describe("Store", () => {
       expect(store.appendedFrom(list)).toBeUndefined();
     });
   });
+
+  describe("changedSince()", () => {
+    const written = () => {
+      const store = new Store({ parts: false });
+      store.create("doc", "state", { a: { b: { c: 0 } }, list: ["x"] });
+      store.create("other", "state", { a: 0 });
+      return store;
+    };
+    const at = (doc: string, ...path: string[]) => [{ doc, path }];
+
+    it("is true for a position a later write is at, above or below", () => {
+      const store = written();
+      const since = store.clock;
+      store.write(new Ref("doc", ["a", "b"]), { c: 1 });
+
+      expect(store.changedSince(since, at("doc", "a", "b"))).toBe(true);
+      expect(store.changedSince(since, at("doc", "a", "b", "c"))).toBe(true);
+      expect(store.changedSince(since, at("doc", "a"))).toBe(true);
+      expect(store.changedSince(since, at("doc"))).toBe(true);
+    });
+
+    it("is false for a position beside a later write, in another document, or written no later than the time given", () => {
+      const store = written();
+      const before = store.clock;
+      store.write(new Ref("doc", ["a", "b", "c"]), 1);
+      const since = store.clock;
+
+      expect(store.changedSince(before, at("doc", "list"))).toBe(false);
+      expect(store.changedSince(before, at("other", "a"))).toBe(false);
+      expect(store.changedSince(since, at("doc", "a", "b", "c"))).toBe(false);
+    });
+
+    it("is true for a position of a list after a splice of the list", () => {
+      const store = written();
+      const since = store.clock;
+      store.splice(new Ref("doc", ["list"]), 1, 0, ["y"]);
+
+      expect(store.changedSince(since, at("doc", "list", "0"))).toBe(true);
+      expect(store.changedSince(since, at("doc", "a"))).toBe(false);
+    });
+
+    it("visits no earlier change to answer for a position: the work is the length of the path", () => {
+      const store = written();
+      const since = store.clock;
+      for (let index = 0; index < 1_000; index++) {
+        store.write(new Ref("doc", ["a", "b", "c"]), index + 1);
+      }
+      const visited = store.changeNodesVisited;
+
+      expect(store.changedSince(since, at("doc", "list", "0"))).toBe(false);
+      expect(store.changeNodesVisited - visited).toBeLessThanOrEqual(3);
+    });
+  });
 });

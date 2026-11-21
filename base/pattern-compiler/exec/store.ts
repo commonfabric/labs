@@ -283,6 +283,15 @@ export const recordOfKey = (key: string): Record<string, FabricValue> => {
   return parts;
 };
 
+/** A path of a document in `Store.#changes`. */
+type ChangeNode = {
+  /** The time of the last change at the path itself. */
+  at: number;
+  /** The time of the last change at the path or below it. */
+  below: number;
+  children?: Map<string, ChangeNode>;
+};
+
 /**
  * The text `Store.appended` holds a stored array under. The text of a path
  * starts with that of each path above it.
@@ -1054,6 +1063,7 @@ export class Store {
   ): void {
     this.clock += 1;
     this.log.push({ doc, path, at: this.clock });
+    this.#noteChange(doc, path);
     if (this.appended !== undefined) {
       this.#noteAppended(this.appended, doc, path, old, splice);
     }
@@ -2445,10 +2455,40 @@ export class Store {
     return textOf(this.addressOf(named));
   }
 
+  /**
+   * The time of the last change at each path of each document, and of the
+   * last change at or below it: what `changedSince` reads, so that its work
+   * is the length of a path and not the number of changes made.
+   */
+  readonly #changes = new Map<string, ChangeNode>();
+
+  /** The nodes `changedSince` visited, in all its calls. */
+  changeNodesVisited = 0;
+
+  /** Notes a change at a path in `#changes`. */
+  #noteChange(doc: string, path: readonly string[]): void {
+    let node = this.#changes.get(doc);
+    if (node === undefined) {
+      node = { at: 0, below: 0 };
+      this.#changes.set(doc, node);
+    }
+    node.below = this.clock;
+    for (const segment of path) {
+      node.children ??= new Map();
+      let child = node.children.get(segment);
+      if (child === undefined) {
+        child = { at: 0, below: 0 };
+        node.children.set(segment, child);
+      }
+      child.below = this.clock;
+      node = child;
+    }
+    node.at = this.clock;
+  }
+
   /** Whether a write after `since` is at, above, or below a position. */
   changedSince(since: number, positions: readonly Position[]): boolean {
-    const last = this.log[this.log.length - 1];
-    if (last === undefined || last.at <= since) return false;
+    if (this.clock <= since) return false;
     for (const { keyed } of positions) {
       if (
         keyed !== undefined && canonical(this.read(keyed.ref)) !== keyed.seen
@@ -2456,17 +2496,20 @@ export class Store {
         return true;
       }
     }
-    for (let index = this.log.length - 1; index >= 0; index--) {
-      const entry = this.log[index];
-      if (entry.at <= since) return false;
-      for (const position of positions) {
-        if (
-          position.keyed === undefined && position.doc === entry.doc &&
-          (isPrefix(position.path, entry.path) ||
-            isPrefix(entry.path, position.path))
-        ) {
-          return true;
+    for (const position of positions) {
+      if (position.keyed !== undefined) continue;
+      let node = this.#changes.get(position.doc);
+      let depth = 0;
+      // A change at a path above the position, and then one at or below it.
+      while (node !== undefined) {
+        this.changeNodesVisited += 1;
+        if (depth === position.path.length) {
+          if (node.below > since) return true;
+          break;
         }
+        if (node.at > since) return true;
+        node = node.children?.get(position.path[depth]);
+        depth += 1;
       }
     }
     return false;

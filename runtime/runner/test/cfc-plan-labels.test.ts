@@ -1260,6 +1260,42 @@ describe("cfc-plan-labels", () => {
       expect(JSON.stringify(atLink)).toContain(CFC_ATOM_TYPE.TransformedBy);
     });
 
+    it("stores that atom on the entry of the link, and on no value entry, where the document that holds the link is written whole", async () => {
+      const kept: CompiledPlan = {
+        ...plan,
+        outputs: [{ template: { op: "slot", slot: 0 }, kept: true }],
+      };
+      const { error, derived } = await commitWrites(
+        true,
+        (tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            {
+              kind: "plan-write",
+              target: { ...target, path: ["a"] },
+              compiledPattern: identity,
+              record: { output: 0 },
+              instance: target.id,
+              keys: [],
+              slots: {
+                0: { chain: [address("of:src-a")], observes: "followRef" },
+              },
+            },
+            runtimeWritePolicyAuthorization,
+          );
+        },
+        {
+          a: { "/": { "link@1": { id: "of:src-a", path: [], space } } },
+          b: "y",
+        } as unknown as FabricValue,
+        { plan: kept },
+      );
+      expect(error).toBeUndefined();
+      expect(JSON.stringify(derived["followRef /a"])).toContain(
+        CFC_ATOM_TYPE.TransformedBy,
+      );
+      expect(derived["value /a"]).toBeUndefined();
+    });
+
     it("stores the label of a kept output written by a transaction whose join is empty", async () => {
       // Every commit of a compiled pattern is prepared (PL §3.2, "Every
       // commit is prepared"), so every kept output it writes carries the
