@@ -108,8 +108,13 @@ the membership takes where it differs, so the user's own messages keep their
 entry current while reading no room. The member who retitles a room tells
 their manager at once; another member's entry follows on their manager's next
 event for that room other than a message or a reaction: their own retitle, an
-acceptance, or a client's `joinRoom` when they open it. Another member's
-message reaches it the same way, or with the user's own next message.
+acceptance, a client's `joinRoom` when they open it, or the `joinRoom` their
+host sends for a notice in their share inbox that the room changed. Another
+member's message reaches it the same way, or with the user's own next
+message. A join naming such a `notice` marks it acted on in the catalog's
+`notices`, in the same transaction, and does nothing at all for a room the
+user's chats do not list as saved, so it never restores a forgotten room or
+records a membership.
 
 ### Adopting the catalog's rooms
 

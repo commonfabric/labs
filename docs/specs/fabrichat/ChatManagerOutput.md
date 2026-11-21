@@ -87,6 +87,7 @@ interface ChatManagerOutput {
     container?: Cell<{ chatRoom?: Cell<ChatRoomOutput> }>;
     messageAct?: boolean;
     activity?: { count: number; newestAt?: FabricEpochNsec };
+    notice?: { from: string; id: string; sharedAt: number };
   }>;
   forget: Stream<{
     requestId: string;
@@ -607,6 +608,10 @@ matching declaration is refused with `space-own-chat`.
   conversation stands once a message the user sent is recorded: the length of
   the room's message list, and the message's `sentAt`. A room sends it on the
   `joinRoom` it sends for a message, and on no other.
+- `notice?: { from: string; id: string; sharedAt: number }` — The notice that
+  the room changed which the join is sent for, as the user's host read it from
+  their share inbox: its sender, its `id` and its `sharedAt`
+  ([`private-inbox.md`](../../features/private-inbox.md#a-notice-that-a-room-changed)).
 
 Makes a room this user has joined one of their chats. The caller says what
 happened, that the user entered the room, and the manager decides what that
@@ -638,7 +643,12 @@ opening the room's page.
   room this user created, which `accept` refuses, is listed again, and its entry
   in `direct` stays as it is. Sending it again changes nothing, so a caller MAY
   send it each time the user enters the room, without first reading whether
-  their chats list it.
+  their chats list it. A join naming a `notice` is for a room this user's
+  chats list as saved, and does for it what a join with no `messageAct` does,
+  and also marks the notice acted on in the catalog's `notices`
+  ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#notice-marks)),
+  in the same transaction. For any other room it does nothing: it restores no
+  forgotten room, records no membership, and writes no mark.
 - **Outcome:** `done` with the entry, or `refused` for the reasons `accept`
   gives, other than that this user created a direct room. Without a
   `requestId`, a join of a room this user's chats list already records no

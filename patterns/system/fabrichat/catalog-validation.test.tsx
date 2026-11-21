@@ -1,6 +1,8 @@
 /**
  * Catalog validation gates the rooms a membership lists. Changes to optional
- * fields and offer receipts invalidate the whole catalog; future states and
+ * fields, offer receipts and notice marks invalidate the whole catalog; a
+ * notice mark that is a nonnegative integer, filed under the key of its
+ * sender and `id`, keeps it valid; future states and
  * revisions retain the catalog's forward-compatible meaning. A manager sharing
  * the catalog with no membership of its own lists none of its rooms.
  */
@@ -78,6 +80,19 @@ export default pattern(() => {
   );
   const malformedOffer = action(() => catalog.key("offers").set({ bad: {} }));
   const repairOffers = action(() => catalog.key("offers").set({}));
+  const malformedNotice = action(() =>
+    catalog.key("notices").set({
+      '["did:key:z6MkBob","changed:room"]': -1,
+    })
+  );
+  const misfiledNotice = action(() =>
+    catalog.key("notices").set({ "a notice": 1_700_000_000_000 })
+  );
+  const repairNotices = action(() =>
+    catalog.key("notices").set({
+      '["did:key:z6MkBob","changed:room"]': 1_700_000_000_000,
+    })
+  );
   const futureState = action(() =>
     catalog.key("entries", space.get(), "state").set("future-state")
   );
@@ -118,6 +133,12 @@ export default pattern(() => {
       { action: malformedOffer },
       { assertion: absent },
       { action: repairOffers },
+      { assertion: listed },
+      { action: malformedNotice },
+      { assertion: absent },
+      { action: misfiledNotice },
+      { assertion: absent },
+      { action: repairNotices },
       { assertion: listed },
       { action: futureState },
       { assertion: absent },

@@ -82,11 +82,14 @@ import type { ShareInboxPiece } from "../profile-home/profile-home.tsx";
 import {
   changeSharedSpaceMembershipIn,
   isSharedSpaceCatalog,
+  isSharedSpaceNoticeMark,
+  markSharedSpaceNoticeIn,
   readSharedSpaceCatalog,
   registerSharedSpaceIn,
   retitleSharedSpaceIn,
   type SharedSpaceCatalogStorage,
   type SharedSpaceEntry,
+  type SharedSpaceNoticeMark,
 } from "../shared-space/shared-space-catalog.ts";
 import { shortDid } from "../social-space/short-did.ts";
 import { sameNameMarks } from "./logic.ts";
@@ -287,6 +290,15 @@ export interface ManagerStreamEvent {
    * a reaction.
    */
   activity?: ChatRoomActivity;
+
+  /**
+   * The notice that the room changed which a `joinRoom` is sent for, as the
+   * user's host read it from their share inbox. Such a join brings the title
+   * the catalog lists the room under up to the room's own, and marks the
+   * notice acted on in the catalog, for a room the user's chats list as saved,
+   * and does nothing for any other room.
+   */
+  notice?: SharedSpaceNoticeMark;
 
   /**
    * Whether accepting a room leaves its entry archived, when it is; absent,
@@ -1491,6 +1503,11 @@ const performManagerAct = (
   const declared = container?.key("chatRoom").get();
   const hasDeclaration = declared !== undefined && equals(declared, room);
 
+  // A notice that a room changed tells of a room the user keeps, and joins
+  // them to no other.
+  const notice = act === "joinRoom" ? event?.notice : undefined;
+  if (notice !== undefined && membership?.state !== "saved") return;
+
   // A room this user's chats list already is one they have joined, so
   // joining it again changes nothing, and a join that names no request
   // records nothing either: a caller may send one each time the person
@@ -1515,11 +1532,16 @@ const performManagerAct = (
     // listed only through a container has no catalog entry, and gets no
     // write there. A room this user holds a notice of has its roster read
     // too, so that a notice whose recipient has joined since is dropped.
+    // A notice that the room changed is marked acted on as the title is
+    // brought up, so the user's host acts on it once.
     dropJoinedNotices(state, room);
     const known = state.roomMembership.get() ?? [];
     if (isWellFormedDID(joinedSpace) && event?.messageAct !== true) {
       const title = room.key("about").get()?.title;
       refreshListedTitle(catalog, joinedSpace, title);
+      if (isSharedSpaceNoticeMark(notice)) {
+        markSharedSpaceNoticeIn(catalog, notice);
+      }
       noteHeard(state.roomMembership, known, room, {
         title,
         activity: activityOf(room),
