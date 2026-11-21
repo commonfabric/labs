@@ -1,6 +1,6 @@
 ---
 name: weaver-patterns
-description: Make and change patterns for someone's own Weaver from Claude Code, in plain words. Use when someone asks to set up or make patterns for their Weaver, or works in a labs clone's my-patterns/ folder. Not for developing patterns in labs itself (pattern-dev, pattern-deploy, cf).
+description: Make and change patterns for someone's own Weaver from Claude Code, in plain words, including one pattern built on another. Use when someone asks to set up or make patterns for their Weaver, or works in a labs clone's my-patterns/ folder. Not for developing patterns in labs itself (pattern-dev, pattern-deploy, cf).
 ---
 
 # Patterns for your Weaver
@@ -22,14 +22,24 @@ relying on a detail here.
 - **Each pattern's piece is found by its slug**, `my-<name>`: the first save
   creates it with `--slug`, every later command names it with `--cell`. Never
   ask the person for a piece id.
-- **`my-patterns/.claude/settings.json`** carries `CF_API_URL`, `CF_SPACE`,
-  `CF_IDENTITY` and `CF_SERVICE_URL` (their Common Fabric service) as `env`, so
-  no command needs those flags, and lists labs' own `CLAUDE.md` and
-  `.claude/rules/` in `claudeMdExcludes`, so a session here does not take on
-  labs' developer instructions. Claude Code applies both only to a session
-  started in `my-patterns/`, and only once the person trusts the folder. The
-  values are a copy: the person's service is the authority, and setup refreshes
-  them.
+- **A pattern lives in the space of the loom it is placed on**, where Weaver
+  puts the patterns it makes there, so patterns on one loom can build on each
+  other. That is their private **Making** loom unless they name another. A slug
+  is found only in its own space.
+- **`my-patterns/<name>/loom.json`** says which loom: `{"loom_id": "…"}`. Before
+  any `cf` command for that pattern, run `loom.ensure-space` with `{}` and that
+  `loom_id` as context, and pass its `space` and `host` as
+  `--space <space> --api-url <host>`. Ask every time rather than keeping the
+  answer: the service decides, and asking again changes nothing. A pattern whose
+  `loom.json` also says `"home": true` is one saved before this (**save**,
+  below): its flags are `/config`'s `homeSpace` `space` and `host` instead.
+- **`my-patterns/.claude/settings.json`** carries `CF_IDENTITY` and
+  `CF_SERVICE_URL` (their Common Fabric service) as `env`, so no command needs
+  those flags, and lists labs' own `CLAUDE.md` and `.claude/rules/` in
+  `claudeMdExcludes`, so a session here does not take on labs' developer
+  instructions. Claude Code applies both only to a session started in
+  `my-patterns/`, and only once the person trusts the folder. The values are a
+  copy: the person's service is the authority, and setup refreshes them.
 - **`my-patterns/CLAUDE.md`** says what the folder is for.
 
 Both files come from this skill's `templates/`.
@@ -72,8 +82,10 @@ command names the service and the key itself: `<key>` is
    one yet.) `cf id pair` never replaces a keyfile holding someone else.
 4. **Where their pieces go.** `cf fetch -i <key> <service>/config`: its
    `identityDid` must equal `cf id did <key>`, or stop and say this Mac holds
-   someone else's key. `homeSpace` gives the space and the host their panes
-   mount it from. If it is missing, stop and say so; never guess a host or a
+   someone else's key. Then find their Making loom (**Which loom**, below) and
+   run `loom.ensure-space` on it: it must answer a `space` and a `host`. If it
+   answers `unknown-command`, their service is older than this skill: say they
+   need to update it. If it is refused, stop and say so; never guess a host or a
    space.
 5. **The person is in the index**, as the same member their service is. If
    `cf index whoami -i <key>` says this machine has not joined, hand the
@@ -86,13 +98,22 @@ command names the service and the key itself: `<key>` is
    copy their invite link and run `pbpaste | cf index join -i <key>`.
 6. **Settings remembered.** Write `my-patterns/CLAUDE.md` and
    `my-patterns/.claude/settings.json` from `templates/`, replacing every `<…>`
-   placeholder with the value steps 2 to 4 found and the labs root's absolute
-   path, and keeping any other settings already there.
+   placeholder with the value steps 2 and 3 found and the labs root's absolute
+   path, and keeping any other settings already there except `CF_SPACE` and
+   `CF_API_URL`, which older setups wrote and which now come from the pattern's
+   loom.
 7. **Hand over.** New pattern sessions start in `my-patterns/`, and the person
    accepts Claude Code's prompt to trust that folder.
 
 ## The loop
 
+- **Which loom**: a pattern goes on their private **Making** loom, never the
+  loom they have open, which may be shared, unless they name one. Run
+  `loom.find` with `{"name": "Making"}`: use the loom titled exactly Making, the
+  most recently used if there are several; if there is none, `loom.create` with
+  `{"title": "Making"}`. For a loom they name, `loom.find` with its name, and
+  ask which one when several match. Write its `loom_id` to `<name>/loom.json`
+  before the first save.
 - **save** keeps the person's Weaver up to date and nothing else. Check it
   compiles first (`cf check <entry>`). Which save it is depends on what exists,
   not on what this session remembers: if `cf piece inspect --cell my-<name>`
@@ -102,26 +123,56 @@ command names the service and the key itself: `<key>` is
   `cf piece new <entry> --slug my-<name>
   --no-index-version`. Never pass
   `--force` to take a slug: that strands the piece already on their Making loom.
-  Without `--no-index-version` every save becomes a version in the index, which
-  floods undo and can be shared on its own. When `setsrc` refuses because the
-  new version does not fit the piece's data, offer a fresh piece or keeping the
-  old version; nothing carries data over yet.
+  A pattern with no `<name>/loom.json` was first saved before patterns lived in
+  their loom's space, into `/config`'s `homeSpace`: inspect there (its `space`
+  and `host` as the flags), and if the piece is there, write
+  `{"loom_id": "<Making's>", "home": true}` and keep saving into `homeSpace`
+  rather than making a second piece; if it is not there, the pattern is new, and
+  **Which loom** comes first. Such a pattern cannot be built on, or build on
+  another, until it is in their loom's space; say so when they ask, as moving it
+  is not built yet. Without `--no-index-version` every save becomes a version in
+  the index, which floods undo and can be shared on its own. When `setsrc`
+  refuses because the new version does not fit the piece's data, offer a fresh
+  piece or keeping the old version; nothing carries data over yet.
 - **When a save fails with cf's version note** ("cf is newer than the server"),
   their service runs an older Common Fabric than this copy of labs. Say so in
   those words, check out the commit the note names (or the newest release tag at
   or before it) in this clone, and save again; do not set
   `CF_SKIP_VERSION_CHECK`.
-- **Into their Weaver**, after the first save, and again whenever their Making
-  loom does not hold the piece: their service places it on their private
-  **Making** loom, never the loom they have open, which may be shared. Run
-  `loom.find` with `{"name": "Making"}`: use the loom titled exactly Making, the
-  most recently used if there are several; if there is none, `loom.create` with
-  `{"title": "Making"}`. Then `loom.add` with
-  `{"ref": "pattern:<space>/<pieceId>", "focus": true}` and that loom's
-  `loom_id` as context; `cf piece inspect --cell my-<name>` names the `pieceId`.
-  Adding a piece the loom already holds brings it forward rather than adding it
-  twice. Later saves update it in place. Tell them it is on their Making loom,
-  on any device their Weaver runs on.
+- **Into their Weaver**, right after the first save: `loom.add` with
+  `{"ref": "pattern:<space>/<pieceId>", "focus": true, "made_in_space": true}`
+  and the pattern's `loom_id` as context; `<space>` is the one the piece was
+  saved into, and `cf piece inspect --cell my-<name>` names the `pieceId`.
+  `made_in_space` tells the loom the save already put the piece in its space, so
+  it shows once, even after the loom is shared; leave it out for a pattern saved
+  into `homeSpace`, and when adding again later because the loom no longer holds
+  it. Adding a piece the loom already holds brings it forward rather than adding
+  it twice. Later saves update it in place. Tell them which loom it is on, on
+  any device their Weaver runs on.
+- **build on** ("feed my digest from the triage pattern", "make this read what
+  that one finds"): one pattern takes another's output as its input. First give
+  the new pattern an input type with only the fields it reads, not the other
+  pattern's whole output, so a change to the rest cannot break it. Then:
+  - **This one** (a particular pattern of theirs): both must live in one space,
+    so the new one goes on the loom the other is on; if the other is in a
+    different space, say linking across looms is not built yet. Save the new
+    pattern, then
+    `cf piece link my-<other>/<output field> my-<name>/<input field>`.
+  - **Whichever one** (a pattern meant for other people, each of whom has their
+    own copy of the other): put a `#tag` in the doc comment on the other
+    pattern's output type (`/** The emails a #triage pattern kept. */`), and in
+    the new pattern read it with `wish({ query: "#triage" })`, with no `scope`.
+    That searches the person's favorites, in any space, by the tags a piece had
+    when it was favorited, so the other piece is found once it is one of their
+    favorites: tell them to open it in Weaver and choose Add to Favorites from
+    its menu (Weaver on the web has it). Favoriting from Claude Code is not
+    built yet. Do not use `scope: ["."]`: it searches what the loom's own
+    pattern lists, which is not the pieces saved onto it.
+
+  Never read again a source another pattern already reads (their mail, their
+  calendar): build on that pattern. Never copy its data into the new one, write
+  a piece id into source, or save its real output as a test fixture; a fixture
+  is made-up data in the shape of the input type.
 - **checkpoint** right after the save that finishes something they asked for:
   `cf pattern checkpoint --cell my-<name> <entry>`. It keeps a version, the
   point undo goes back to: one per request, never one per save. Like any
@@ -145,11 +196,12 @@ command names the service and the key itself: `<key>` is
   the newest shared version what search and the catalog show. Nothing new is
   exposed. To go back to an older shared version: rollback, save, share, then
   stable; numbers only move forward.
-- **link** ("a link for Ana"): `cf pattern link <entry>` gives stable, or beta
-  when nothing is stable yet; `--beta` when they ask for beta. It names the
-  pattern, not them, unless they published it under their name. Someone with
-  Claude Code opens a link as below (**open**, from a link); opening one in
-  Weaver is not built yet, so say so.
+- **link** ("a link for Ana", a share link for another person; not **build
+  on**): `cf pattern link <entry>` gives stable, or beta when nothing is stable
+  yet; `--beta` when they ask for beta. It names the pattern, not them, unless
+  they published it under their name. Someone with Claude Code opens a link as
+  below (**open**, from a link); opening one in Weaver is not built yet, so say
+  so.
 - **open**: getting a pattern into a folder, with commands that already exist.
   `cf` reads paths from the folder the session started in, `my-patterns/`, so a
   pattern's folder is `<name>/`.
@@ -175,5 +227,6 @@ command names the service and the key itself: `<key>` is
   they share, and how many people use it).
 
 When nothing here does what they ask, say it is not built yet rather than
-improvising links, copies or Weaver deep links. Not built yet, e.g.: bringing
-the Making loom forward in Weaver by itself, opening a link in Weaver.
+improvising links, copies or Weaver deep links; the links **build on** makes are
+the one exception. Not built yet, e.g.: bringing the Making loom forward in
+Weaver by itself, opening a link in Weaver.
