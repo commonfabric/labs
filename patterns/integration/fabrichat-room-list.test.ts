@@ -37,10 +37,12 @@ import {
   CHAT_START,
   closeMember,
   directRoomLabel,
+  enterRoom,
   type MemberSession,
   MemberWaits,
   openMember,
   sendTrusted,
+  writeAs,
 } from "./fabrichat-room-fixture.ts";
 import {
   type ListeningServingMemoryServer,
@@ -65,6 +67,12 @@ import {
 /** How many rooms the person keeps, besides the two that are gone. */
 const ROOMS = 3;
 
+/**
+ * How many messages the person sends in each room they keep, by its place
+ * among them; a room past the end of the list holds none.
+ */
+const SENT = [1, 2];
+
 /** A room link as a list reads it: a handle that declares nothing of it. */
 const HANDLE = { type: "unknown", asCell: ["cell"] } as const;
 
@@ -77,6 +85,10 @@ const ROW = {
     counterpart: { type: "string" },
     since: {},
     title: { type: "string" },
+    activity: {
+      type: "object",
+      properties: { count: { type: "number" }, newestAt: {} },
+    },
   },
 } as const;
 
@@ -117,6 +129,7 @@ interface Row {
   kind: string;
   counterpart?: string;
   title?: string;
+  activity?: { count: number; newestAt?: unknown };
 }
 
 /** The chats view, as it arrives. */
@@ -352,6 +365,25 @@ describe("fabrichat-room-list", () => {
       for (let index = 0; index < ROOMS; index++) {
         kept.push(await createGroup(ada, `kept-${index}`, `Room ${index}`));
       }
+      // The person writes in some of the rooms, and their manager hears where
+      // each conversation stands from each message.
+      for (const [index, count] of SENT.entries()) {
+        const link = await ada.home.key("chatManager").key("requests")
+          .key(`kept-${index}`).key("entry").key("room")
+          .asSchema<Cell<unknown>>({ asCell: ["cell"] }).pull();
+        const room = await enterRoom(ada, link);
+        await ada.waits.until(
+          `the person's leave to write in Room ${index}`,
+          room.key("canSend") as Cell<boolean | undefined>,
+          (value) => value === true,
+        );
+        for (let sent = 1; sent <= count; sent++) {
+          await writeAs(ada, `message ${sent} in Room ${index}`, {
+            target: { value: `Message ${sent}` },
+          }, sent);
+        }
+        await settle(ada.controller);
+      }
       deleted = await createGroup(ada, "deleted", "Deleted room");
       revoked = await createGroup(ada, "revoked", "Revoked room", [bob.did()]);
       await new ACLManager(ada.controller.runtime, deleted).delete(owner.did());
@@ -407,6 +439,17 @@ describe("fabrichat-room-list", () => {
         rows.filter((row) => row.title !== "Later room")
           .map((row) => row.room.space).sort(),
       ).toEqual([...kept, deleted, revoked].sort());
+    });
+
+    it("lists each room with the message count its manager last heard", () => {
+      const counts = kept.map((space) =>
+        rows.find((row) => row.room.space === space)?.activity?.count
+      );
+      expect(counts).toEqual(kept.map((_, index) => SENT[index]));
+      expect(
+        rows.filter((row) => row.activity !== undefined)
+          .every((row) => row.activity?.newestAt !== undefined),
+      ).toBe(true);
     });
 
     it("receives no document from any room's space, from bring-up on", () => {

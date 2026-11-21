@@ -92,16 +92,20 @@ but their entries, so it opens no room's space and no profile's (see the
 catalog entry holds its title too, as a display hint for readers of the
 catalog. Registration takes the room's title, whatever its kind. Whenever the
 manager handles `accept` or `joinRoom` for a room, it reads the room's `about`,
-and brings the title the room's membership holds, and the catalog entry's
-(`retitleSharedSpaceIn()`), up to the room's where they differ, moving neither
-its revision nor its membership. That is all a join of an already-listed room
-reads of the room, and it writes only on a mismatch. The one exception is a
-`joinRoom` marked `messageAct`, which a room sends with every message and
-reaction: none of those changes the title, so the manager reads nothing of the
-room's `about` for one. The member who retitles a room tells their manager at
-once; another member's entry follows on their manager's next event for that
-room other than a message or a reaction: their own retitle, an acceptance, or a
-client's `joinRoom` when they open it.
+and its `messages.count` and `messages.newestAt`, and brings the title the
+room's membership holds, and the catalog entry's (`retitleSharedSpaceIn()`),
+and the membership's `activity`, up to the room's where they differ, moving
+neither its revision nor its membership. That is all a join of an
+already-listed room reads of the room, and it writes only on a mismatch. The
+one exception is a `joinRoom` marked `messageAct`, which a room sends with
+every message and reaction: none of those changes the title, so the manager
+reads nothing of the room for one. A message's carries its `activity`, which
+the membership takes where it differs, so the user's own messages keep their
+entry current while reading no room. The member who retitles a room tells
+their manager at once; another member's entry follows on their manager's next
+event for that room other than a message or a reaction: their own retitle, an
+acceptance, or a client's `joinRoom` when they open it. Another member's
+message reaches it the same way, or with the user's own next message.
 
 ### Adopting the catalog's rooms
 
