@@ -83,8 +83,8 @@ describe("stored-labels", () => {
       // label of the member's own record, which holds nothing of what
       // decided which member stands there. An addition at the end stores
       // no membership at the position (ruling Z74), also after a removal.
-      // TODO: once a member added after a removal stores at its position
-      // what decided the membership, expect none.
+      // TODO(seefeld): once a member added after a removal stores at its
+      // position what decided the membership, expect none.
       expect(found).toEqual([
         "key-returns (written): output labels/1/memo depends on words",
       ]);
