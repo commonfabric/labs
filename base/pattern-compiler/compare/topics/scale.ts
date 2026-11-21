@@ -61,8 +61,13 @@
  * the flag the field is absent. Run one size per process, since a process
  * that has run a larger board may keep more heap than one that has not.
  *
- * Both arms run the program of the repository, which the crate emits for
+ * Every arm runs the program of the repository, which the crate emits for
  * the executor and today's runtime compiles.
+ *
+ * With `SCALE_MESSAGE_SLOTS` set to a number, the memory server of the arms
+ * that use the runtime's storage takes client messages that stand for up
+ * to that many array slots and record members, in place of its default of
+ * 1,000,000 (`MAX_UNTRUSTED_MESSAGE_SLOTS` of `runtime/memory/v2.ts`).
  */
 import { Identity } from "@commonfabric/identity";
 import { fromFileUrl } from "@std/path";
@@ -88,7 +93,11 @@ import { resolveLocalProgram } from "../../../../runtime/runner/src/harness/loca
 import type { NormalizedFullLink } from "../../../../runtime/runner/src/link-types.ts";
 import { createSigilLinkFromParsedLink } from "../../../../runtime/runner/src/link-utils.ts";
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
-import { StorageManager } from "../../../../runtime/runner/src/storage/cache.deno.ts";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "../../../../runtime/runner/src/storage/cache.deno.ts";
 import {
   type Artifact,
   Instance,
@@ -212,6 +221,39 @@ export type Baseline = {
 
 const round = (milliseconds: number) => Math.round(milliseconds * 100) / 100;
 
+/** Adds a step to those of a run and prints it, so a run that stops leaves what it measured. */
+const record = <T>(steps: T[], step: T): void => {
+  steps.push(step);
+  console.log(JSON.stringify(step));
+};
+
+/**
+ * The emulated storage of a run as `as`, and what closes it. With
+ * `SCALE_MESSAGE_SLOTS` set, its memory server has the limit on the slots
+ * of one client message raised to that number.
+ */
+const storageAs = (
+  as: Identity,
+): { storageManager: StorageManager; close: () => Promise<void> } => {
+  const slots = Deno.env.get("SCALE_MESSAGE_SLOTS");
+  if (slots === undefined) {
+    const storageManager = StorageManager.emulate({ as });
+    return { storageManager, close: () => storageManager.close() };
+  }
+  const server = newLoopbackServer({
+    subscriptionRefreshDelayMs: 0,
+    untrustedMessageSlots: Number(slots),
+  });
+  const storageManager = EmulatedStorageManager.connectTo(server, { as });
+  return {
+    storageManager,
+    close: async () => {
+      await storageManager.close();
+      await server.close();
+    },
+  };
+};
+
 /** The steps after which `SCALE_HEAP_SNAPSHOTS` asks for a heap snapshot. */
 const SNAPSHOT_STEPS = new Set(["baseline", "load", "create 2"]);
 
@@ -322,7 +364,8 @@ const runExecutor = async (
     JSON.stringify(name).includes("addTopic")
   );
   if (binding < 0) throw new Error("the board has no binding `addTopic`");
-  const steps: (Baseline | Step)[] = [baseline];
+  const steps: (Baseline | Step)[] = [];
+  record(steps, baseline);
   let instance: Instance | undefined;
   const measure = (step: string, change: () => void) => {
     const before = instance === undefined
@@ -345,7 +388,7 @@ const runExecutor = async (
     ) as Record<string, unknown>;
     const read = performance.now();
     const transactions = instance!.transactions.slice(before.transactions);
-    steps.push({
+    record(steps, {
       arm: "executor",
       size,
       step,
@@ -518,7 +561,7 @@ const runStorage = async (
   const { board, artifacts } = await emitted();
   const identity = await labeledSigner();
   const space = identity.did() as MemorySpace;
-  const storageManager = StorageManager.emulate({ as: identity });
+  const { storageManager, close } = storageAs(identity);
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
     storageManager,
@@ -608,12 +651,13 @@ const runStorage = async (
     ),
     end: within("end", (ended) => storage.end(ended)),
   };
-  const steps: (Baseline | StorageStep)[] = [{
+  const steps: (Baseline | StorageStep)[] = [];
+  record(steps, {
     arm: "storage",
     size,
     step: "baseline",
     heap: heapAfterCollection("storage", size, "baseline"),
-  }];
+  });
   try {
     const audience = await scenarioAudience();
     const address = (doc: string, path: string[] = []): NormalizedFullLink => ({
@@ -855,7 +899,7 @@ const runStorage = async (
         0,
       );
       const preparations = timed("extended-storage-transaction/prepareCfc");
-      steps.push({
+      record(steps, {
         arm: "storage",
         size,
         step,
@@ -896,6 +940,12 @@ const runStorage = async (
           ? {}
           : { checked: check(snapshot, outside!.doc, outside!.clause) }),
       });
+      // Every later step would run on documents the storage does not hold.
+      if (refused.length > 0) {
+        throw new Error(
+          `The storage refused a commit of the step \`${step}\`.`,
+        );
+      }
     };
     await measure("load", () => {
       instance = new Instance(board, given, {
@@ -945,7 +995,7 @@ const runStorage = async (
   } finally {
     storage.close();
     await runtime.dispose();
-    await storageManager.close();
+    await close();
   }
   return steps;
 };
@@ -987,7 +1037,7 @@ const runToday = async (
     : await Identity.fromPassphrase(`topics-scale ${size}`);
   const space = signer.did();
   const audience = labeled ? await scenarioAudience() : undefined;
-  const storageManager = StorageManager.emulate({ as: signer });
+  const { storageManager, close } = storageAs(signer);
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
     storageManager,
@@ -1016,7 +1066,7 @@ const runToday = async (
     const compiled = await runtime.patternManager.compilePattern(program, {
       space,
     });
-    steps.push({
+    record(steps, {
       arm,
       size,
       step: "baseline",
@@ -1130,7 +1180,7 @@ const runToday = async (
       read();
       const done = performance.now();
       const preparations = timed("extended-storage-transaction/prepareCfc");
-      steps.push({
+      record(steps, {
         arm,
         size,
         step,
@@ -1172,7 +1222,7 @@ const runToday = async (
     }
   } finally {
     await runtime.dispose();
-    await storageManager.close();
+    await close();
   }
   return steps;
 };
@@ -1198,6 +1248,5 @@ if (import.meta.main) {
       );
       Deno.exit(2);
     }
-    for (const step of steps) console.log(JSON.stringify(step));
   }
 }
