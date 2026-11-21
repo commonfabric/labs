@@ -2037,10 +2037,11 @@ describe("RuntimeInternals", () => {
           await runtime.restoreSpace(space, 3).catch(() => {});
 
           expect(transport.sent.slice(1)).toEqual([
-            { type: "space:history:list", space, before: 7 },
             // A history is listed together with the space's pieces, whose
-            // source revisions it is joined with.
+            // source revisions it is joined with, and the reading of those
+            // begins first.
             { type: "piece:synced", space },
+            { type: "space:history:list", space, before: 7 },
             { type: "piece:getAll", space },
             { type: "space:restore", space, seq: 3 },
           ]);
@@ -2691,8 +2692,8 @@ describe("RuntimeInternals", () => {
         // The list is synced before it is read, and each source is asked for
         // by piece and then space.
         expect(calls).toEqual([
-          ["spaceHistory", [{ space }]],
           ["synced", [space]],
+          ["spaceHistory", [{ space }]],
           ["getPiecesListCell", [space]],
           ["sync", []],
           ["getPieceSource", ["fid1:a", space, undefined]],
@@ -2708,7 +2709,10 @@ describe("RuntimeInternals", () => {
       try {
         await runtime.spaceHistory(space, 7);
 
-        expect(calls[0]).toEqual(["spaceHistory", [{ space, before: 7 }]]);
+        expect(calls.find(([name]) => name === "spaceHistory")).toEqual([
+          "spaceHistory",
+          [{ space, before: 7 }],
+        ]);
       } finally {
         await runtime.dispose();
       }
@@ -3009,8 +3013,8 @@ describe("RuntimeInternals", () => {
 
         expect(steps).toEqual([{ ...step, patternChanges: [] }]);
         expect(calls.map(([name]) => name)).toEqual([
-          "spaceHistory",
           "synced",
+          "spaceHistory",
           "getPiecesListCell",
           "sync",
         ]);
@@ -3085,6 +3089,79 @@ describe("RuntimeInternals", () => {
       });
     });
 
+    describe("with `reuseSources`", () => {
+      /** How many piece sources `calls` asked for. */
+      const sourceReads = (calls: Array<[string, unknown[]]>) =>
+        calls.filter(([name]) => name === "getPieceSource").length;
+
+      it("reuses the sources the previous listing of the space read for the same named pieces", async () => {
+        const { calls, runtime } = historyClient([pieceHandle("fid1:a")]);
+        try {
+          await runtime.spaceHistory(space, undefined, [{ id: "fid1:extra" }]);
+          const read = calls.length;
+
+          const { steps } = await runtime.spaceHistory(space, undefined, [
+            { id: "fid1:extra" },
+          ], { reuseSources: true });
+
+          expect(calls.slice(read)).toEqual([["spaceHistory", [{ space }]]]);
+          expect(steps[0].patternChanges.map((change) => change.pieceId))
+            .toEqual(["fid1:a", "fid1:extra"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads the sources when no listing of the space read them before", async () => {
+        const { calls, runtime } = historyClient([pieceHandle("fid1:a")]);
+        try {
+          await runtime.spaceHistory(space, undefined, [], {
+            reuseSources: true,
+          });
+
+          expect(sourceReads(calls)).toBe(1);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads the sources again for named pieces that differ by id or by scope, and reuses what that read", async () => {
+        const { calls, runtime } = historyClient([pieceHandle("fid1:a")]);
+        try {
+          await runtime.spaceHistory(space, undefined, [{ id: "fid1:x" }]);
+          await runtime.spaceHistory(space, undefined, [{ id: "fid1:y" }], {
+            reuseSources: true,
+          });
+          await runtime.spaceHistory(space, undefined, [
+            { id: "fid1:y", scope: "user" },
+          ], { reuseSources: true });
+          const read = sourceReads(calls);
+
+          await runtime.spaceHistory(space, undefined, [
+            { id: "fid1:y", scope: "user" },
+          ], { reuseSources: true });
+
+          expect(read).toBe(6);
+          expect(sourceReads(calls)).toBe(read);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads the sources again without it", async () => {
+        const { calls, runtime } = historyClient([pieceHandle("fid1:a")]);
+        try {
+          await runtime.spaceHistory(space);
+
+          await runtime.spaceHistory(space);
+
+          expect(sourceReads(calls)).toBe(2);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    });
+
     it("rejects with the client's failure to list the history", async () => {
       const { runtime } = historyClient([], { request: "spaceHistory" });
       try {
@@ -3104,6 +3181,154 @@ describe("RuntimeInternals", () => {
         "RuntimeInternals disposed.",
       );
       expect(calls).toEqual([]);
+    });
+  });
+
+  describe("watchSpaceHistory()", () => {
+    const space = "did:key:z6Mk-lib-shell-watch-history" as DID;
+    const otherSpace = "did:key:z6Mk-lib-shell-watch-other" as DID;
+
+    /**
+     * A client that records each watch the runtime asks of it, and refuses
+     * every one when `refuse` is given.
+     */
+    function watchClient(refuse?: Error) {
+      const asked: Array<[DID, boolean]> = [];
+      const client = Object.assign(new MockRuntimeClient(), {
+        watchSpaceHistory: (of: DID, watch: boolean) => {
+          asked.push([of, watch]);
+          return refuse === undefined
+            ? Promise.resolve()
+            : Promise.reject(refuse);
+        },
+      });
+      return {
+        asked,
+        client,
+        runtime: new RuntimeInternals(asRuntimeClient(client)),
+      };
+    }
+
+    it("asks the worker to watch a space on the first watch of it, and to stop on the last stop", async () => {
+      const { asked, runtime } = watchClient();
+      try {
+        const first = runtime.watchSpaceHistory(space, () => {});
+        const second = runtime.watchSpaceHistory(space, () => {});
+        expect(asked).toEqual([[space, true]]);
+
+        first();
+        expect(asked).toEqual([[space, true]]);
+
+        second();
+        expect(asked).toEqual([[space, true], [space, false]]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("asks the worker to watch each space watched", async () => {
+      const { asked, runtime } = watchClient();
+      try {
+        runtime.watchSpaceHistory(space, () => {});
+        runtime.watchSpaceHistory(otherSpace, () => {});
+
+        expect(asked).toEqual([[space, true], [otherSpace, true]]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("calls back with each seq reported for the watched space, and not for another", async () => {
+      const { client, runtime } = watchClient();
+      try {
+        const seen: number[] = [];
+        runtime.watchSpaceHistory(space, (seq) => seen.push(seq));
+
+        client.emit("spaceseqadvanced", { space, seq: 3 });
+        client.emit("spaceseqadvanced", { space: otherSpace, seq: 4 });
+        client.emit("spaceseqadvanced", { space, seq: 5 });
+
+        expect(seen).toEqual([3, 5]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("returns a stop that ends the calls back, and that a repeat leaves the other watches of the space alone", async () => {
+      const { asked, client, runtime } = watchClient();
+      try {
+        const stopped: number[] = [];
+        const kept: number[] = [];
+        const stop = runtime.watchSpaceHistory(
+          space,
+          (seq) => stopped.push(seq),
+        );
+        runtime.watchSpaceHistory(space, (seq) => kept.push(seq));
+
+        stop();
+        stop();
+        client.emit("spaceseqadvanced", { space, seq: 6 });
+
+        expect(stopped).toEqual([]);
+        expect(kept).toEqual([6]);
+        expect(asked).toEqual([[space, true]]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("asks the worker nothing for a stop after the runtime is disposed", async () => {
+      const { asked, runtime } = watchClient();
+      const stop = runtime.watchSpaceHistory(space, () => {});
+      await runtime.dispose();
+
+      stop();
+
+      expect(asked).toEqual([[space, true]]);
+    });
+
+    it("throws once disposed, asking the worker nothing", async () => {
+      const { asked, runtime } = watchClient();
+      await runtime.dispose();
+
+      expect(() => runtime.watchSpaceHistory(space, () => {})).toThrow(
+        "RuntimeInternals disposed.",
+      );
+      expect(asked).toEqual([]);
+    });
+
+    it("warns with the space and the failure when the worker refuses, on a logger that is switched on", async () => {
+      const refusal = new Error("the space's storage serves no history");
+      const { asked, runtime } = watchClient(refusal);
+      // The module's logger is off unless a developer switches it on, and a
+      // message it is given is composed only then.
+      const logger = getLogger("lib-shell.runtime");
+      const { disabled, level } = logger;
+      logger.disabled = false;
+      logger.level = "warn";
+      const warned = Promise.withResolvers<void>();
+      let warnings = 0;
+      using warn = stub(console, "warn", () => {
+        if (++warnings === 2) warned.resolve();
+      });
+      try {
+        const stop = runtime.watchSpaceHistory(space, () => {});
+        stop();
+        await warned.promise;
+
+        expect(asked).toEqual([[space, true], [space, false]]);
+        const printed = warn.calls.map((call) =>
+          call.args.map(String).join(" ")
+        );
+        expect(printed).toHaveLength(2);
+        expect(printed[0]).toContain(`following the history of ${space}:`);
+        expect(printed[1]).toContain(`unfollowing the history of ${space}:`);
+        expect(printed[0]).toContain(refusal.message);
+      } finally {
+        logger.disabled = disabled;
+        logger.level = level;
+        await runtime.dispose();
+      }
     });
   });
 

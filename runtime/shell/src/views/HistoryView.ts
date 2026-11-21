@@ -315,12 +315,23 @@ export class XHistoryView extends BaseView {
         this._steps = page.steps;
         this._next = page.next;
       }
-      // The space moved on again while this listing was made.
-      if (this.#reportedSeq > this.#coveredSeq) {
-        queueMicrotask(() => this.#refresh());
-      }
     },
+    // A listing that ends, well or not, is followed by another when the space
+    // moved on again while it was made. The task calls these just before it
+    // leaves `PENDING`, so the refresh is asked for a microtask later.
+    onComplete: () => this.#refreshAfterListing(),
+    onError: () => this.#refreshAfterListing(),
   });
+
+  /**
+   * Helper for `#list`, which lists once more after a listing that ended
+   * with a seq reported during it.
+   */
+  #refreshAfterListing(): void {
+    if (this.#reportedSeq > this.#coveredSeq) {
+      queueMicrotask(() => this.#refresh());
+    }
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();

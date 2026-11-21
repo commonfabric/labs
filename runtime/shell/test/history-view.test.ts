@@ -21,6 +21,13 @@ describe("XHistoryView", () => {
   /** A piece a listing names beside those the space lists. */
   type NamedPiece = { id: string; scope?: PatternChange["scope"] };
 
+  /** One following of a space's history the view asked the runtime for. */
+  type Follow = {
+    space: DID;
+    onAdvance: (seq: number) => void;
+    stopped: boolean;
+  };
+
   /** A view under test, and what it has asked of the world around it. */
   interface Mounted {
     view: XHistoryView;
@@ -30,6 +37,12 @@ describe("XHistoryView", () => {
 
     /** The pieces each listing named to the runtime, beside `before`. */
     pieces: (readonly NamedPiece[] | undefined)[];
+
+    /** Whether each listing asked the runtime to reuse the sources read. */
+    reuses: (boolean | undefined)[];
+
+    /** Each time the view asked the runtime to follow a space's history. */
+    follows: Follow[];
 
     /** The commands the view sent. */
     commands: Command[];
@@ -117,6 +130,8 @@ describe("XHistoryView", () => {
   function mount(list: (before?: number) => Promise<Page>): Mounted {
     const listings: (number | undefined)[] = [];
     const pieces: (readonly NamedPiece[] | undefined)[] = [];
+    const reuses: (boolean | undefined)[] = [];
+    const follows: Follow[] = [];
     let moved = () => {};
     class Observed extends HistoryView {
       override requestUpdate(...args: unknown[]): void {
@@ -125,16 +140,25 @@ describe("XHistoryView", () => {
       }
     }
     const view = new Observed();
-    // A history is all these cases ask of the runtime.
+    // A history, and following it, is all these cases ask of the runtime.
     view.rt = {
       spaceHistory: (
         _space: DID,
         before?: number,
         ids?: readonly NamedPiece[],
+        options?: { reuseSources?: boolean },
       ) => {
         listings.push(before);
         pieces.push(ids);
+        reuses.push(options?.reuseSources);
         return list(before);
+      },
+      watchSpaceHistory: (followed: DID, onAdvance: (seq: number) => void) => {
+        const follow = { space: followed, onAdvance, stopped: false };
+        follows.push(follow);
+        return () => {
+          follow.stopped = true;
+        };
       },
     } as XHistoryView["rt"];
     view.space = space;
@@ -158,6 +182,8 @@ describe("XHistoryView", () => {
       view,
       listings,
       pieces,
+      reuses,
+      follows,
       commands,
       markup,
       until,
@@ -1108,6 +1134,267 @@ describe("XHistoryView", () => {
 
       expect(listings).toEqual([undefined]);
       expect(markup()).toContain('data-seq="4"');
+    });
+  });
+
+  describe("following the space", () => {
+    const otherSpace = "did:key:z6Mk-shell-history-view-other" as DID;
+
+    /**
+     * Connects `view` as a page does, except that an update does nothing,
+     * since there is no DOM to render into: a case calls `willUpdate()`
+     * itself, as the rest of this file does.
+     */
+    function connect(view: XHistoryView): void {
+      Object.defineProperty(view, "performUpdate", { value: () => {} });
+      Object.defineProperty(view, "renderRoot", { value: {} });
+      Object.defineProperty(view, "isConnected", {
+        configurable: true,
+        value: true,
+      });
+      view.connectedCallback();
+    }
+
+    /** Takes `view` out of the page. */
+    function disconnect(view: XHistoryView): void {
+      Object.defineProperty(view, "isConnected", {
+        configurable: true,
+        value: false,
+      });
+      view.disconnectedCallback();
+    }
+
+    /**
+     * Resolves once every microtask queued before the call has run, which is
+     * when a listing that a report during an earlier one queued has begun.
+     */
+    const queuedTurns = () => Promise.resolve();
+
+    /** Mounts a view that lists `pages` in turn, lists it, and connects it. */
+    async function following(pages: Page[]): Promise<Mounted> {
+      const mounted = mount(() => Promise.resolve(pages.shift()!));
+      await mounted.update(
+        ["rt", "space"],
+        (markup) => markup.includes("data-seq"),
+      );
+      connect(mounted.view);
+      return mounted;
+    }
+
+    describe("the following", () => {
+      it("asks the runtime to follow its space once connected, and stops once disconnected", async () => {
+        const { view, follows } = await listed([step(4)]);
+        expect(follows).toEqual([]);
+
+        connect(view);
+        expect(follows.map(({ space, stopped }) => [space, stopped]))
+          .toEqual([[space, false]]);
+
+        disconnect(view);
+        expect(follows.map(({ stopped }) => stopped)).toEqual([true]);
+      });
+
+      it("follows nothing while connected with no space", () => {
+        const { view, follows } = mount(() => Promise.resolve({ steps: [] }));
+        view.space = undefined;
+
+        connect(view);
+
+        expect(follows).toEqual([]);
+      });
+
+      it("follows the new space, having stopped the old one, when its space changes while connected", async () => {
+        const { view, follows } = await listed([step(4)]);
+        connect(view);
+
+        view.space = otherSpace;
+        (view as unknown as {
+          willUpdate(changed: Map<string, unknown>): void;
+        }).willUpdate(new Map([["space", undefined]]));
+
+        expect(follows.map(({ space, stopped }) => [space, stopped]))
+          .toEqual([[space, true], [otherSpace, false]]);
+      });
+    });
+
+    describe("a reported seq", () => {
+      it("lists the newest stretch again, reusing the sources read, for a seq past the newest step listed", async () => {
+        const { follows, listings, reuses, until } = await following([
+          { steps: [step(4)] },
+          { steps: [step(5), step(4)] },
+        ]);
+
+        const relisted = await until(
+          () => follows[0].onAdvance(5),
+          (markup) => markup.includes('data-seq="5"'),
+        );
+
+        expect(listings).toEqual([undefined, undefined]);
+        expect(reuses).toEqual([false, true]);
+        expect(relisted.split('data-seq="4"')).toHaveLength(2);
+      });
+
+      it("lists nothing for a seq no newer than the newest step listed", async () => {
+        const { follows, listings } = await following([{ steps: [step(5)] }]);
+
+        follows[0].onAdvance(5);
+        follows[0].onAdvance(3);
+        await queuedTurns();
+
+        expect(listings).toEqual([undefined]);
+      });
+
+      it("lists nothing while a fork is open", async () => {
+        const { view, follows, listings } = await following([
+          { steps: [step(5)] },
+        ]);
+        view.open = { seq: 5, busy: false };
+
+        follows[0].onAdvance(9);
+        await queuedTurns();
+
+        expect(listings).toEqual([undefined]);
+      });
+
+      it("lists nothing once disconnected", async () => {
+        const { view, follows, listings } = await following([
+          { steps: [step(5)] },
+        ]);
+        disconnect(view);
+
+        expect(follows[0].stopped).toBe(true);
+        expect(listings).toEqual([undefined]);
+      });
+
+      it("asks for no listing while one is under way", async () => {
+        const first = Promise.withResolvers<Page>();
+        const { view, follows, listings, until } = mount(() => first.promise);
+        connect(view);
+        view.changes = 1;
+        (view as unknown as {
+          willUpdate(changed: Map<string, unknown>): void;
+        }).willUpdate(new Map([["changes", undefined]]));
+
+        follows[0].onAdvance(5);
+        follows[0].onAdvance(7);
+        expect(listings).toEqual([undefined]);
+
+        await until(
+          () => first.resolve({ steps: [step(5), step(4)] }),
+          (markup) => markup.includes('data-seq="5"'),
+        );
+      });
+
+      it("lists once more after a listing under way, for a seq reported during it", async () => {
+        const first = Promise.withResolvers<Page>();
+        const answers = [
+          first.promise,
+          Promise.resolve<Page>({ steps: [step(7), step(6), step(5)] }),
+        ];
+        const { view, follows, listings, reuses, until } = mount(
+          () => answers.shift()!,
+        );
+        connect(view);
+        view.changes = 1;
+        (view as unknown as {
+          willUpdate(changed: Map<string, unknown>): void;
+        }).willUpdate(new Map([["changes", undefined]]));
+        follows[0].onAdvance(7);
+
+        const relisted = await until(
+          () => first.resolve({ steps: [step(5), step(4)] }),
+          (markup) => markup.includes('data-seq="7"'),
+        );
+
+        expect(listings).toEqual([undefined, undefined]);
+        expect(reuses).toEqual([false, true]);
+        const seqs = [...relisted.matchAll(/data-seq="(\d+)"/g)].map((
+          [, seq],
+        ) => Number(seq));
+        expect(seqs).toEqual([7, 6, 5, 4]);
+      });
+
+      it("lists once for a seq the history does not list, such as another branch's, and not again until a later one", async () => {
+        const { follows, listings, until } = await following([
+          { steps: [step(4)] },
+          { steps: [{ ...step(4), kind: "event", events: 2 }] },
+          { steps: [step(10), step(4)] },
+        ]);
+
+        await until(
+          () => follows[0].onAdvance(9),
+          (markup) => markup.includes("2 events"),
+        );
+        await queuedTurns();
+        expect(listings).toEqual([undefined, undefined]);
+
+        follows[0].onAdvance(9);
+        await queuedTurns();
+        expect(listings).toEqual([undefined, undefined]);
+
+        await until(
+          () => follows[0].onAdvance(10),
+          (markup) => markup.includes('data-seq="10"'),
+        );
+        expect(listings).toEqual([undefined, undefined, undefined]);
+      });
+    });
+
+    describe("the steps a refresh lists", () => {
+      it("keeps the listed steps older than the oldest it lists, and the way to older steps", async () => {
+        const { view, follows, listings, markup, until } = await following([
+          { steps: [step(6), step(5)], next: 5 },
+          { steps: [step(7), step(6)], next: 6 },
+        ]);
+
+        await until(
+          () => follows[0].onAdvance(7),
+          (rendered) => rendered.includes('data-seq="7"'),
+        );
+
+        const relisted = markup();
+        const seqs = [...relisted.matchAll(/data-seq="(\d+)"/g)].map((
+          [, seq],
+        ) => Number(seq));
+        expect(seqs).toEqual([7, 6, 5]);
+        const [older] = templateListeners(view.render(), "click", view).filter((
+          { text },
+        ) => text === "Show older steps");
+        older.dispatch(new Event("click"));
+        expect(listings.at(-1)).toBe(5);
+      });
+
+      it("takes the way to older steps from what it lists when it reaches past every listed step", async () => {
+        const { follows, markup, until } = await following([
+          { steps: [step(5)] },
+          { steps: [step(7), step(6), step(5)], next: 5 },
+        ]);
+        expect(markup()).not.toContain("Show older steps");
+
+        await until(
+          () => follows[0].onAdvance(7),
+          (rendered) => rendered.includes('data-seq="7"'),
+        );
+
+        // The way to older steps is set just after the steps are.
+        expect(markup()).toContain("Show older steps");
+      });
+
+      it("lists no step for a refresh that returns none", async () => {
+        const { follows, markup, until } = await following([
+          { steps: [step(5)], next: 5 },
+          { steps: [] },
+        ]);
+        expect(markup()).toContain("Show older steps");
+
+        await until(
+          () => follows[0].onAdvance(7),
+          (rendered) => !rendered.includes("data-seq"),
+        );
+
+        // The way to older steps is set just after the steps are.
+        expect(markup()).not.toContain("Show older steps");
+      });
     });
   });
 });
