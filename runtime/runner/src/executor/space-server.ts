@@ -6594,12 +6594,14 @@ export class SpaceServer implements TransactionSealDestination {
       }
       for (const [pairKey, identity] of demanders) {
         const seedKey = `${rootScope}\0${pairKey}`;
-        if (seeded.has(seedKey) && !reopened.get(rootId)?.has(pairKey)) {
-          continue;
-        }
+        const reopening = reopened.get(rootId)?.has(pairKey) === true;
+        if (seeded.has(seedKey) && !reopening) continue;
         const passKey = `${rootId}\0${seedKey}`;
         if (seededThisPass.has(passKey)) continue;
         seededThisPass.add(passKey);
+        // A seeding run again forgets the pair's earlier one first, so if
+        // it is incomplete it is asked again, as a first seeding is.
+        if (reopening) seeded.delete(seedKey);
         const root = runtime.getCellFromLink({
           space: this.#options.space,
           id: rootId as never,
@@ -6893,8 +6895,7 @@ export class SpaceServer implements TransactionSealDestination {
       keys.delete(key);
       if (keys.size === 0) {
         this.#keysByRootId.delete(id);
-        this.#seededDemanders.delete(id);
-        this.#forgetPassedOver(id);
+        this.#retireSeedingIfUnnamed(id);
       }
     }
     const resolvedRoots = [
@@ -6909,11 +6910,25 @@ export class SpaceServer implements TransactionSealDestination {
         rkeys.delete(key);
         if (rkeys.size === 0) {
           this.#keysByResolvedRoot.delete(resolved);
-          this.#seededDemanders.delete(resolved);
-          this.#forgetPassedOver(resolved);
+          this.#retireSeedingIfUnnamed(resolved);
         }
       }
     }
+  }
+
+  /**
+   * Retires what the arrival seed holds for the piece at `rootId`, the pairs
+   * it seeded and the cells it passed over, once no demand key names the
+   * piece, either directly or through a key that resolves to it. While one
+   * key still names it, a demander whose view reaches a passed-over cell is
+   * still owed that cell's seed.
+   */
+  #retireSeedingIfUnnamed(rootId: string): void {
+    if (
+      this.#keysByRootId.has(rootId) || this.#keysByResolvedRoot.has(rootId)
+    ) return;
+    this.#seededDemanders.delete(rootId);
+    this.#forgetPassedOver(rootId);
   }
 
   /**

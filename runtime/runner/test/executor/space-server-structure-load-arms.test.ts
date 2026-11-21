@@ -735,6 +735,108 @@ describe("SpaceServer", () => {
         expect(fixture.stats.demand.ownedDefaultSeeds).toBe(2);
       });
 
+      it("still seeds a viewer whose demand reaches a passed-over cell after one of the two keys naming the piece is dropped", async () => {
+        // The piece is named by its own key and by its argument's. The
+        // viewer drops the argument watch and keeps the piece's, so a key
+        // still names the piece, and what its first seeding passed over is
+        // still owed when the viewer's view reaches the draft.
+        const piece = "of:arms-drop-piece";
+        const argument = "of:arms-drop-argument";
+        const draft = "of:arms-drop-draft";
+        const fixture = await openFixture([piece, argument]);
+        fixture.loadable = true;
+        fixture.commit({
+          [piece]: { value: {}, patternIdentity: pointer },
+          [argument]: { value: {}, result: fixture.link(piece) },
+        });
+        const draftReached: boolean[] = [];
+        fixture.hooks.onSeed = (_id, reached) => {
+          draftReached.push(
+            reached?.({
+              space,
+              id: draft,
+              path: [],
+              scope: "session",
+              type: "application/json",
+            } as NormalizedFullLink) ?? false,
+          );
+          return Promise.resolve(true);
+        };
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        expect(draftReached).toEqual([false]);
+
+        fixture.setDemand([piece]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([`${piece} for viewer`]);
+
+        fixture.setDemand([piece, {
+          id: draft,
+          principal: owner.did(),
+          sessionId: "viewer",
+          scope: "session",
+        }]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+        ]);
+        expect(draftReached).toEqual([false, true]);
+      });
+
+      it("asks again for a viewer whose seeding after its demand reached a passed-over cell was incomplete, beside a viewer who arrives", async () => {
+        const piece = "of:arms-retry-piece";
+        const draft = "of:arms-retry-draft";
+        const fixture = await openFixture([piece]);
+        fixture.loadable = true;
+        fixture.commit({ [piece]: { value: {}, patternIdentity: pointer } });
+        const draftReached: boolean[] = [];
+        const outcomes = [true, false];
+        fixture.hooks.onSeed = (_id, reached) => {
+          draftReached.push(
+            reached?.({
+              space,
+              id: draft,
+              path: [],
+              scope: "session",
+              type: "application/json",
+            } as NormalizedFullLink) ?? false,
+          );
+          return Promise.resolve(outcomes.shift() ?? true);
+        };
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        expect(fixture.stats.demand.ownedDefaultSeeds).toBe(1);
+
+        const draftRow = {
+          id: draft,
+          principal: owner.did(),
+          sessionId: "viewer",
+          scope: "session" as const,
+        };
+        fixture.setDemand([piece, draftRow]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(draftReached).toEqual([false, true]);
+        expect(fixture.stats.demand.ownedDefaultSeeds).toBe(1);
+
+        fixture.setDemand([piece, draftRow, {
+          id: piece,
+          principal: owner.did(),
+          sessionId: "second-viewer",
+        }]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+          `${piece} for second-viewer`,
+        ]);
+        expect(draftReached).toEqual([false, true, true, false]);
+        expect(fixture.stats.demand.ownedDefaultSeeds).toBe(3);
+      });
+
       it("seeds the defaults a piece in its own space owes, and leaves a piece in another space to that space", async () => {
         const local = "of:arms-local-piece";
         const localArgument = "of:arms-local-argument";
