@@ -265,9 +265,12 @@ refuses it too, and a branch restore leaves it as it is. A memory server whose
 service writes it advertises `spaceInvitesRevision` in its handshake
 ([protocol](../../docs/specs/memory-v2/04-protocol.md#411-websocket)), so a
 client reads the flag on the connection its session is on, from the process that
-tells that session of the move (`ISpaceReplica.invitesRevisionWatchable()`,
-which also requires a session that asked for the default branch). A server
-without the flag writes no such document.
+tells that session of the move. `ISpaceReplica.invitesRevisionWatchable()`
+answers `true` only for a session that asked for the default branch, which is
+narrower than the sessions that see the document move: a server that refuses a
+principal the fork it asked for opens its session on the default branch, and
+`session.open` does not say so, so the client errs toward reading the ledger. A
+server without the flag writes no such document.
 
 Over HTTP, every invitation operation is a signed JSON POST under
 `/api/spaces/:space/invites/`: `create`, `redeem`, `preview`, `list`, `revoke`,
