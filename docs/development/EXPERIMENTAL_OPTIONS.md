@@ -2509,8 +2509,8 @@ the per-epic implementation notes).
   demands the instances that keep it stale, which starts the pieces that
   write them, and holds the watermark until the root is judged again.
   `currency.heldUpstream` counts the roots `skip` left unloaded for that,
-  and `currency.upstreamAbandoned` the ones the loop gave up waiting for
-  and loaded.
+  and `currency.upstreamAbandoned` the pieces the loop gave up waiting on
+  what is upstream of, which loads a root that was held for them.
   `skip` acts on the judgment: a root
   whose piece vouches for every demanded instance of it, in slices that are
   clean, is neither loaded nor started, until an input marks a slice a

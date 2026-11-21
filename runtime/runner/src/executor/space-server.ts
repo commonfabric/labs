@@ -2600,9 +2600,10 @@ export class SpaceServer implements TransactionSealDestination {
 
   /**
    * Has the next cycle judge again each root left unloaded because the
-   * store could serve it (serving-loop.md §3b): the space's currency index
-   * changed from outside this loop. A loop that left no root unloaded, and
-   * has no judgment under way that may leave one, does nothing.
+   * store could serve it, and each piece that runs and rests on what the
+   * index holds (serving-loop.md §3b): the space's currency index changed
+   * from outside this loop. A loop with neither, and with no judgment
+   * under way that may leave a root unloaded, does nothing.
    */
   noteCurrencyChanged(): void {
     if (this.#currency?.noteIndexChanged() !== true) return;
@@ -2614,10 +2615,11 @@ export class SpaceServer implements TransactionSealDestination {
   /**
    * Helper for `#loadDemandedStructure()`, which sets the timer that wakes
    * the loop when the record of a slice expires, for as long as a root is
-   * left unloaded (serving-loop.md §3b). A slice that read a clock goes
-   * stale at the clock's next tick with no commit to report it, so the
-   * loop asks for a judgment then. The judgment that follows sets the timer
-   * again, for the next such time.
+   * left unloaded, or a piece that runs is stale upstream or reads the
+   * output of one that does not run (serving-loop.md §3b). A slice that
+   * read a clock goes stale at the clock's next tick with no commit to
+   * report it, so the loop asks for a judgment then. The judgment that
+   * follows sets the timer again, for the next such time.
    */
   #armCurrencyExpiry(): void {
     const at = this.#currency?.nextExpiry;
@@ -6272,7 +6274,8 @@ export class SpaceServer implements TransactionSealDestination {
     // judged with them, for the pieces to start upstream.
     if (
       this.#currency !== undefined &&
-      (rootKeys.size > 0 || this.#currency.staleUpstream)
+      (rootKeys.size > 0 || this.#currency.staleUpstream ||
+        this.#currency.runningOwed)
     ) {
       const judged = await this.#currency.judge(
         runtime,
@@ -7407,8 +7410,10 @@ export class SpaceServer implements TransactionSealDestination {
    * Helper for `#serveWave()`, which takes the currency records of the pieces
    * that ran, as the scheduler holds them at this instant
    * (serving-loop.md §3b). `blocked` says the cycle cannot vouch for what it
-   * derived, and `asOf` is the visible input head the settle covered, which
-   * the records are taken at where the watermark is not above it. Returns
+   * derived, and `asOf` is the input head the settle covered, which is above
+   * the visible head while the watermark is held for what is stale upstream,
+   * and which the records are taken at where the watermark is not above it.
+   * Returns
    * `undefined` where the index is not kept, the cycle is blocked, a run or
    * a seal is still under way, an effect is outstanding, or no piece is due
    * a record.

@@ -294,9 +294,12 @@ vouches for, as a viewer's own instance is before that piece has run for the
 viewer. A slice kept stale by anything else is not: a derived document no
 recorded piece writes, an instance of another space, a read that names no one
 instance. A root that would pass but for slices stale only upstream is
-**held**. Under `skip` it is left unloaded, as a root the store can serve is.
-Under `record` it is loaded, and its piece is then one that runs and is stale
-upstream.
+**held**, whether those are slices of its own piece or of a piece beneath it
+that a demanded instance is resolved under, and the judgment names the pieces
+whose slices hold it. Under `skip` it is left unloaded, as a root the store
+can serve is, and is judged again when a slice's record expires as such a
+root is. Under `record` it is loaded, and each of those pieces is then one
+that runs and is stale upstream.
 
 The loop demands the instances those reads name, for the pairs the reads were
 made for. It does so as demand carried into its own space: the rows stand in
@@ -313,9 +316,12 @@ C starting.
 A piece that runs and reads the output of one that does not is found stale the
 same way. The loop advances the cursor on each cycle that drained input while
 such a piece runs, and each piece a commit or a stored record marked, that
-runs, is asked about in the next judgment. A run withdrawn for a scoped
-instance its writer has not produced for the run's viewer demands that
-instance the same way.
+runs, is asked about in the next judgment. A change no input of the space
+reports reaches such a piece through a judgment too: when another space tells
+this one of a change, or a slice's record expires, the loop asks about each
+piece that runs and reads the output of one that does not. A run withdrawn
+for a scoped instance its writer has not produced for the run's viewer
+demands that instance the same way.
 
 While a root is held, or a running piece is stale upstream, the watermark does
 not advance. The pieces upstream run, their records are stored, and the
@@ -328,8 +334,10 @@ The loop gives up on what is upstream of a root or a running piece when none
 of the pieces named for it can change the judgment: one whose load ended
 without a start, one that ran and was recorded with the reader stale still,
 and one that ran in a cycle that ended where no record could be taken. A root
-given up on is loaded as a refused one is, and is not held again while the
-same pieces are named for it (`currency.upstreamAbandoned`).
+is loaded as a refused one is once the loop has given up on what is upstream
+of each piece whose slices hold it, and is not held again while the same
+pieces are named for them. `currency.upstreamAbandoned` counts the pieces
+given up on.
 
 The demanded rows are withdrawn once nothing is stale upstream, so a piece
 started this way stays running and is no longer demanded for the reader's

@@ -388,15 +388,16 @@ export type ServingLoopStats = {
      * piece does not vouch for. */
     rearmed: number;
 
-    /** Times the loop was woken to judge a root it had left unloaded
-     * because the index changed from outside it: a space a slice read told
-     * this one of a change, or a request made for another space marked a
-     * slice here. */
+    /** Times the loop was woken to judge a root it had left unloaded, or a
+     * piece that runs and rests on what the index holds, because the index
+     * changed from outside it: a space a slice read told this one of a
+     * change, or a request made for another space marked a slice here. */
     indexWakes: number;
 
-    /** Times the loop was woken to judge a root it had left unloaded
-     * because the record of a slice expired: the next tick of a clock the
-     * slice read came, which no commit reports. */
+    /** Times the loop was woken to judge a root it had left unloaded, or a
+     * piece that runs and rests on what the index holds, because the record
+     * of a slice expired: the next tick of a clock the slice read came,
+     * which no commit reports. */
     expiryWakes: number;
 
     /** Pieces the index held clean that wrote an instance they vouched for
@@ -420,10 +421,11 @@ export type ServingLoopStats = {
      * pieces upstream instead (serving-loop.md §1). */
     heldUpstream: number;
 
-    /** Roots and running pieces the loop gave up waiting on what is
-     * upstream of them for: no piece named for them could be started, or
-     * each ran and was recorded and they were stale still. A root given up
-     * on is loaded as a refused one is. */
+    /** Pieces, each one whose slices hold a root or one that runs, that
+     * the loop gave up waiting on what is upstream of: no piece named for
+     * one could be started, or each ran and was recorded and it was stale
+     * still. A root is loaded as a refused one is once every piece that
+     * holds it was given up on. */
     upstreamAbandoned: number;
   };
 

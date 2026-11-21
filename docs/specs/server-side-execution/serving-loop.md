@@ -448,8 +448,11 @@ demanded one, and its runs are supplied the reader's demanders. A piece that
 runs here and reads the output of one that does not is found stale the same
 way: the loop brings the index's marks up to the store's head on each cycle
 that drained input while one does, and asks about each such piece a commit or
-a stored record marked. A run withdrawn for a scoped instance its writer has
-not produced for the run's viewer (§3d) demands that instance the same way.
+a stored record marked. Where the index changed from outside the loop, or a
+slice's record expired, it asks about each such piece in the judgment that
+follows, with or without a root to judge. A run withdrawn for a scoped
+instance its writer has not produced for the run's viewer (§3d) demands that
+instance the same way.
 While a root is held, or a running piece is stale, upstream, W does not
 advance: what a session reads of it is not derived through the inputs above W
 until the pieces upstream have run, their records are stored, and the judgment
@@ -2878,14 +2881,15 @@ instance it does not vouch for; `falseClean` the pieces the index held
 clean that wrote an instance they vouched for again, to a value other than
 the one it held, with no input of theirs changed, each one a judgment that
 would have served a stale value; `indexWakes` and `expiryWakes` the times
-the loop was woken to judge a root it had left unloaded, because the index
-changed from outside the loop or a slice's record expired; `carried` the
+the loop was woken to judge a root it had left unloaded, or a piece that
+runs and rests on what the index holds, because the index changed from
+outside the loop or a slice's record expired; `carried` the
 rows of demand the loops offer to carry into other spaces now, and
 `carriedRefused` the rows a space they were sent to refused (§3b);
 `heldUpstream` the roots a `skip` loop left unloaded because what the store
 held of them was stale only upstream, once each time a root is first held,
-and `upstreamAbandoned` the roots and running pieces the loop gave up
-waiting on what is upstream of them for (§1).
+and `upstreamAbandoned` the pieces, each one whose slices hold a root or
+one that runs, that the loop gave up waiting on what is upstream of (§1).
 `ownedDefaultSeeds` the (piece root, demanding pair) seedings the passes
 completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
 scope narrower than its result (scoped-cell-instances.md, "A pattern-owned

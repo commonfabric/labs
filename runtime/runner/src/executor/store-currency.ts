@@ -98,6 +98,13 @@ export class StoreCurrency {
    */
   readonly #readsUnstarted = new Set<string>();
 
+  /**
+   * Whether the pieces of `#readsUnstarted` are owed a judgment: one joined
+   * them, or the index changed from outside this loop, which no input of
+   * this space brings the marks up for.
+   */
+  #runningOwed = false;
+
   /** Whether `#upstream` changed since `takeUpstreamChanged()`. */
   #upstreamChanged = false;
 
@@ -255,6 +262,15 @@ export class StoreCurrency {
   }
 
   /**
+   * Whether a judgment is owed with no root to ask about: a piece that
+   * runs here and reads the output of one that does not is to be asked
+   * about, for a change no input of this space reports.
+   */
+  get runningOwed(): boolean {
+    return this.#runningOwed && this.#readsUnstarted.size > 0;
+  }
+
+  /**
    * The instances of this space that keep a held root or a stale running
    * piece from being current, which the loop demands so that the pieces
    * that write them run.
@@ -332,13 +348,15 @@ export class StoreCurrency {
   }
 
   /**
-   * The time, in milliseconds since the epoch, at which a root left
-   * unloaded is owed a fresh judgment because a slice's record expires
-   * then, or `undefined` where no root is left unloaded or no slice expires.
-   * No commit marks such a slice, so the loop has to ask at that time.
+   * The time, in milliseconds since the epoch, at which a fresh judgment is
+   * owed because a slice's record expires then, or `undefined` where no
+   * slice expires or nothing rests on a record: no root is left unloaded,
+   * and no piece that runs here is stale upstream or reads the output of
+   * one that does not run. No commit marks such a slice, so the loop has to
+   * ask at that time.
    */
   get nextExpiry(): number | undefined {
-    return this.servesFromStore ? this.#nextExpiry : undefined;
+    return this.#restsOnRecords ? this.#nextExpiry : undefined;
   }
 
   /**
@@ -400,11 +418,16 @@ export class StoreCurrency {
       this.#behindAt.delete(piece);
       // A piece that is gone, or reads no other space any longer, has none.
       if (this.#foreignReads.delete(piece)) this.#foreignReadsChanged = true;
-      this.#readsUnstarted.delete(piece);
+      const readUnstarted = this.#readsUnstarted.delete(piece);
       if (!isDocumentId(piece)) continue;
       const taken = runtime.scheduler.pieceCurrencySnapshot(this.#space, piece);
       if (taken === undefined) continue;
-      if (taken.readsUnstarted) this.#readsUnstarted.add(piece);
+      if (taken.readsUnstarted) {
+        this.#readsUnstarted.add(piece);
+        // The time the record of what it reads expires at is not known
+        // before a judgment has asked.
+        if (!readUnstarted) this.#runningOwed = true;
+      }
       const foreign = taken.slices.flatMap((slice) =>
         slice.reads.filter((read) =>
           read.space !== this.#space && read.scopeKey !== ANY_INSTANCE
@@ -544,7 +567,7 @@ export class StoreCurrency {
         ]);
         // A stored record is what clears a held root or a stale running
         // piece, or shows that it stays stale, so either is judged again.
-        if (this.staleUpstream) {
+        if (this.staleUpstream || this.runningOwed) {
           this.#judgmentOwed = true;
           owed = true;
         }
@@ -631,15 +654,20 @@ export class StoreCurrency {
       held: [...candidates.keys()].filter((key) => this.#held.has(key)),
       rearm: [],
     });
-    if (candidates.size === 0 && this.#staleRunning.size === 0) {
-      return unloaded();
+    // The pieces that run here whose slices the judgment is asked about.
+    const asked = new Set(this.#staleRunning);
+    if (this.#runningOwed) {
+      for (const piece of this.#readsUnstarted) asked.add(piece);
     }
-    const settled = !this.#judgmentOwed && !demandChanged &&
+    if (candidates.size === 0 && asked.size === 0) return unloaded();
+    const settled = !this.#judgmentOwed && !this.#runningOwed &&
+      !demandChanged &&
       [...candidates.keys()].every((key) =>
         this.#served.has(key) || this.#held.has(key)
       );
     if (settled) return unloaded();
     this.#judgmentOwed = false;
+    this.#runningOwed = false;
     this.#stats.currency.judged += candidates.size;
     this.#judging += 1;
     const judged = await this.#server.judgeCurrencyRoots(
@@ -648,8 +676,7 @@ export class StoreCurrency {
       {
         excludePrincipal: this.#serviceIdentity,
         epoch: this.#epoch,
-        ...(this.#staleRunning.size > 0 &&
-          { running: [...this.#staleRunning] }),
+        ...(asked.size > 0 && { running: [...asked] }),
       },
     ).finally(() => {
       this.#judging -= 1;
@@ -659,8 +686,16 @@ export class StoreCurrency {
       const counts = this.#stats.currency.refused;
       counts[reason] = (counts[reason] ?? 0) + count;
     }
-    this.#noteStale(upstreamMarked(judged.marked));
     const upstream = this.#takeUpstream(judged.upstream);
+    // A piece asked about that a read keeps stale runs here and is stale
+    // upstream. One a slice of which this judgment found marked, and that
+    // was not asked about, is asked about by the next.
+    for (const piece of asked) {
+      if (upstream.has(piece)) this.#staleRunning.add(piece);
+    }
+    this.#noteStale(
+      upstreamMarked(judged.marked).filter((piece) => !asked.has(piece)),
+    );
     const pieces = new Map(
       judged.servable.map(({ root, piece }) => [root, piece]),
     );
@@ -819,13 +854,24 @@ export class StoreCurrency {
    * read told this one of a change, or a request made for another space
    * marked a slice here.
    *
-   * @returns Whether a root is left unloaded, or a judgment that may leave
-   * one is under way: a further judgment is then owed.
+   * @returns Whether anything here rests on what the index holds, or a
+   * judgment that may leave a root unloaded is under way: a further
+   * judgment is then owed.
    */
   noteIndexChanged(): boolean {
     this.#judgmentOwed = true;
+    this.#runningOwed = true;
+    return this.#restsOnRecords || this.#judging > 0;
+  }
+
+  /**
+   * Whether anything here rests on what the index holds: a root is left
+   * unloaded, or a piece that runs here is stale upstream or reads the
+   * output of one that does not run.
+   */
+  get #restsOnRecords(): boolean {
     return this.servesFromStore || this.#staleRunning.size > 0 ||
-      this.#judging > 0;
+      this.#readsUnstarted.size > 0;
   }
 
   /** Forgets the demand key `key`, which no session demands any longer. */
