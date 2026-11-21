@@ -162,7 +162,10 @@ describe("SpaceServer", () => {
       onStart?: (id: string) => Promise<void> | void;
       onSeed?: (
         id: string,
-        reached?: (link: NormalizedFullLink) => boolean,
+        options?: {
+          reached?: (link: NormalizedFullLink) => boolean;
+          onLost?: () => void;
+        },
       ) => Promise<boolean>;
       onReconcile?: (id: string) => Promise<void>;
     } = {};
@@ -201,13 +204,13 @@ describe("SpaceServer", () => {
       return true;
     };
     const seeds: string[] = [];
-    runtime.runner.seedOwedDefaultsFor = (cell, identity, reached) => {
+    runtime.runner.seedOwedDefaultsFor = (cell, identity, options) => {
       const { space: target, id } = cell.getAsNormalizedFullLink();
       seeds.push(
         `${target === space ? "" : `${target} `}${id} for ` +
           identity.sessionId,
       );
-      return hooks.onSeed?.(id, reached) ?? Promise.resolve(true);
+      return hooks.onSeed?.(id, options) ?? Promise.resolve(true);
     };
     const reconciles: string[] = [];
     runtime.sourceReconciler.reconcile = async (cell) => {
@@ -620,6 +623,70 @@ describe("SpaceServer", () => {
         expect(fixture.starts).toEqual([piece]);
       });
 
+      it("asks again for the defaults a piece owes a viewer whose seed the wave lost after it came back as done, beside a viewer who arrives", async () => {
+        // A seed returns once its write seals into the wave, and a wave can
+        // still drop it, and drop its retry. The pair is then unseeded
+        // again, though its first seeding came back as done.
+        const piece = "of:arms-lost-seed-piece";
+        const fixture = await openFixture([piece]);
+        fixture.loadable = true;
+        fixture.commit({ [piece]: { value: {}, patternIdentity: pointer } });
+        const lost: (() => void)[] = [];
+        fixture.hooks.onSeed = (_id, options) => {
+          if (options?.onLost !== undefined) lost.push(options.onLost);
+          return Promise.resolve(true);
+        };
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        expect(fixture.seeds).toEqual([`${piece} for viewer`]);
+        expect(lost.length).toBe(1);
+        lost[0]();
+
+        fixture.setDemand([piece, {
+          id: piece,
+          principal: owner.did(),
+          sessionId: "second-viewer",
+        }]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+          `${piece} for second-viewer`,
+        ]);
+      });
+
+      it("asks again for the defaults a piece owes a viewer whose seed the wave lost before the seeding returned", async () => {
+        // One seeding seeds several instances, each sealing into a wave that
+        // can settle, and lose it, before the seeding returns.
+        const piece = "of:arms-early-lost-piece";
+        const fixture = await openFixture([piece]);
+        fixture.loadable = true;
+        fixture.commit({ [piece]: { value: {}, patternIdentity: pointer } });
+        let first = true;
+        fixture.hooks.onSeed = (_id, options) => {
+          if (first) {
+            first = false;
+            options?.onLost?.();
+          }
+          return Promise.resolve(true);
+        };
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        expect(fixture.seeds).toEqual([`${piece} for viewer`]);
+
+        fixture.setDemand([piece, {
+          id: piece,
+          principal: owner.did(),
+          sessionId: "second-viewer",
+        }]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+          `${piece} for second-viewer`,
+        ]);
+      });
+
       it("asks again for the defaults a piece owes a viewer after seeding them throws, beside a viewer who arrives", async () => {
         const piece = "of:arms-seeded-piece";
         const fixture = await openFixture([piece]);
@@ -703,9 +770,9 @@ describe("SpaceServer", () => {
           [argument]: { value: {}, result: fixture.link(piece) },
         });
         const draftReached: boolean[] = [];
-        fixture.hooks.onSeed = (_id, reached) => {
+        fixture.hooks.onSeed = (_id, options) => {
           draftReached.push(
-            reached?.({
+            options?.reached?.({
               space,
               id: draft,
               path: [],
@@ -750,9 +817,9 @@ describe("SpaceServer", () => {
           [argument]: { value: {}, result: fixture.link(piece) },
         });
         const draftReached: boolean[] = [];
-        fixture.hooks.onSeed = (_id, reached) => {
+        fixture.hooks.onSeed = (_id, options) => {
           draftReached.push(
-            reached?.({
+            options?.reached?.({
               space,
               id: draft,
               path: [],
@@ -793,9 +860,9 @@ describe("SpaceServer", () => {
         fixture.commit({ [piece]: { value: {}, patternIdentity: pointer } });
         const draftReached: boolean[] = [];
         const outcomes = [true, false];
-        fixture.hooks.onSeed = (_id, reached) => {
+        fixture.hooks.onSeed = (_id, options) => {
           draftReached.push(
-            reached?.({
+            options?.reached?.({
               space,
               id: draft,
               path: [],

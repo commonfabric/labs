@@ -24,10 +24,12 @@ a room to anyone its space doesn't admit.
   so that reading the list loads nothing in any room's space; any declaration
   with a shape of its own makes every read of the list load every room's root
   (see [reading the list](ChatManagerOutput.md#reading-the-list)). A row's
-  `title` is a hint, as of the person's last visit to the room; the room's own
-  `about.title` is current. A client MUST NOT read every listed room to fill in
-  a row: what a row lacks, such as where its conversation stands, it reads for
-  the rows it shows.
+  `title` is a hint, as of the person's last visit to the room, and its
+  `activity`, its message count and newest time, as of that visit or the
+  person's own last message there; the room's own `about.title` and
+  `messages` are current. A client MUST NOT read every listed room to fill in
+  a row: what a row lacks it reads for the rows it shows, and it SHOULD show a
+  row's `activity` rather than open each room it lists.
 - **The conversation with one person** is `openDirect` with that person's
   principal. A client MUST use it, and MUST NOT create a direct room any other
   way. It is what keeps one person's conversation from splitting. A client
@@ -83,8 +85,8 @@ opening, and MUST NOT wait on the room's contents instead. The runtime that hear
 Home's catalog, and the room then moves to `deletedRooms`.
 
 A client that opens a room sends `joinRoom` for it (see [`ChatManagerOutput`](ChatManagerOutput.md#joinroomrequestid-string-room-cellchatroomoutput)),
-as a host does for a visit, which brings the row's `title` hint up to the
-room's, and lists a room the catalog holds with no membership.
+as a host does for a visit, which brings the row's `title` and `activity`
+hints up to the room's, and lists a room the catalog holds with no membership.
 
 ## Showing a room
 

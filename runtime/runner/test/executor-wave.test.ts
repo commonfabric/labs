@@ -1349,6 +1349,218 @@ describe("stage D seal-into-wave", () => {
     });
   });
 
+  it("runs a seed the wave dropped again for the one draft the viewer reached, keeping the viewer's first write and leaving the draft it has not reached absent", async () => {
+    // The arrival seed seeds only the drafts a viewer's demand reaches. Its
+    // create of one races the viewer's first keystroke and is dropped, and
+    // the retry that fills the default under the keystroke must keep to the
+    // same drafts: a dropped seed of the draft the viewer sees must not seed
+    // the one it does not.
+    // The serving runtime holds the space's lease under its own principal,
+    // which is what lets its session read a viewer's instance by name, as
+    // the serving loop's does.
+    const holder = executionLeaseHolder(signer.did());
+    const lease = new ExecutionLeaseCycle({
+      leases: engine.executionLeases,
+      space,
+      holder,
+    });
+    expect(await lease.acquire()).toBe(true);
+    const ownSink = () =>
+      new EngineWaveCommitSink({ engineFor: () => engine, sessionId: holder });
+    const servingManager = EmulatedStorageManager.connectTo(server, {
+      as: signer,
+    });
+    const servingRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: servingManager,
+      servingPosture: true,
+      experimental: { serverExecution: true },
+    });
+    const cleanups: (() => Promise<void>)[] = [];
+    try {
+      const compiled = await servingRuntime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `/// <cts-enable />
+            import { pattern, Writable } from "commonfabric";
+            interface Draft { title: string; members: string }
+            export default pattern<Record<string, never>>(() => ({
+              seen: Writable.perSession.of<Draft>({ title: "", members: "" }),
+              hidden: Writable.perSession.of<Draft>({ title: "", members: "" }),
+            }));`,
+        }],
+      }, { space });
+      const piece = servingRuntime.getCell(space, "seed-retry-piece");
+      await servingRuntime.runSynced(piece, compiled, {});
+      await servingRuntime.idle();
+      const seenId = piece.key("seen").resolveAsCell().getAsNormalizedFullLink()
+        .id;
+      const hiddenId = piece.key("hidden").resolveAsCell()
+        .getAsNormalizedFullLink().id;
+      // The viewer: a client of its own, whose page watches the piece and
+      // writes its own instance of a draft. Its runtime runs none of the
+      // pattern.
+      const viewerManager = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const viewerRuntime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: viewerManager,
+        experimental: { serverExecution: true },
+      });
+      cleanups.push(async () => {
+        await viewerRuntime.dispose();
+        await viewerManager.close();
+      });
+      const viewer = viewerRuntime.scopeKeyIdentity;
+      const viewerKey = resolveScopeKey("session", viewer);
+
+      const waveAt = () =>
+        new WaveAccumulator({
+          space,
+          basisSeq: Engine.serverSeq(engine),
+          scopeKeyIdentity: {
+            principal: signer.did(),
+            sessionId: "seed-retry-wave",
+          },
+          replicaFor: (s) => servingManager.open(s).replica,
+          lease,
+        });
+      // The serving loop stamps each run with its context; the seed's names
+      // the viewer it seeds for, which keys its writes.
+      const stamped = {
+        runStamper: (
+          tx: Parameters<typeof stampWaveRunContext>[0],
+          info: {
+            actionId?: string;
+            kind?: "derivation" | "event-handler" | "bookkeeping";
+            scopeKeyIdentity?: { principal?: string; sessionId?: string };
+          },
+        ) =>
+          stampWaveRunContext(
+            tx,
+            {
+              actionId: info.actionId,
+              kind: info.kind,
+              ...(info.scopeKeyIdentity === undefined
+                ? {}
+                : { scopeKeyIdentity: info.scopeKeyIdentity }),
+            } as Parameters<typeof stampWaveRunContext>[1],
+          ),
+      };
+      // The seed seals its create of the viewer's instance, found absent,
+      // into the first wave. The viewer's first keystroke lands before that
+      // wave commits.
+      const first = waveAt();
+      servingRuntime.installSealDestination(first, stamped);
+      expect(
+        await servingRuntime.runner.seedOwedDefaultsFor(piece, viewer, {
+          reached: (link) => link.id === seenId,
+        }),
+      ).toBe(true);
+      servingRuntime.clearSealDestination();
+      const typed = viewerRuntime.edit();
+      viewerRuntime.getCellFromLink({
+        space,
+        id: seenId as never,
+        path: [],
+        scope: "session",
+      }).withTx(typed).setRawUntyped({ title: "B" });
+      expect((await typed.commit().settled).error).toBeUndefined();
+      // The keystroke reaches the serving replica, as its frame does in a
+      // running server.
+      await server.flushSessions([space]);
+      await servingManager.open(space).pullToServerHead?.();
+      const retry = waveAt();
+      servingRuntime.installSealDestination(retry, stamped);
+      const dropped = await first.commitWave(ownSink());
+      await first.settled();
+      expect(dropped.dispositions).toEqual([{ kind: "dropped" }]);
+
+      for (let i = 0; i < 50 && retry.contributionCount === 0; i++) {
+        await clock.settle();
+      }
+      expect(retry.contributionCount).toBe(1);
+      servingRuntime.clearSealDestination();
+      const landed = await retry.commitWave(ownSink());
+      await retry.settled();
+      expect(landed.dispositions).toEqual([{ kind: "committed" }]);
+
+      expect(
+        Engine.readState(engine, { id: seenId, scopeKey: viewerKey })
+          ?.document?.value,
+      ).toEqual({ title: "B", members: "" });
+      expect(
+        Engine.readState(engine, { id: hiddenId, scopeKey: viewerKey })
+          ?.document,
+      ).toBeUndefined();
+    } finally {
+      servingRuntime.clearSealDestination();
+      for (const cleanup of cleanups) await cleanup();
+      await servingRuntime.dispose();
+      await servingManager.close();
+    }
+  });
+
+  it("drops a bookkeeping write over an intrusion the sealing replica had not taken, though the wave's basis covers it — a seed never lands over the write it raced", async () => {
+    // The loop's own writes read the same lagging view. A seed that found a
+    // viewer's instance absent, sealing into a wave opened after the
+    // viewer's first write was admitted, would otherwise create the
+    // instance over that write.
+
+    const w = runtime.getCell<{ value: number }>(
+      space,
+      "wave-stale-bookkeeping",
+      undefined,
+    );
+    await w.sync();
+    const wLink = w.getAsNormalizedFullLink();
+    Engine.applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: wLink.id,
+          value: { value: { value: 99 } },
+        }],
+      },
+    });
+    const lease = await liveLease();
+    const wave = newWave({ lease });
+    expect(
+      Engine.selectDocHead(engine, { id: wLink.id, scopeKey: "space" }),
+    ).toBeLessThanOrEqual(wave.basisSeq);
+    runtime.installSealDestination(wave);
+
+    const tx = runtime.edit();
+    stampWaveRunContext(tx, { actionId: "seed-w", kind: "bookkeeping" });
+    expect(w.withTx(tx).get()).toBeUndefined();
+    w.withTx(tx).set({ value: 1 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const settlement = waveSettlementOf(tx);
+    expect(settlement).toBeDefined();
+
+    runtime.clearSealDestination();
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+
+    expect(outcome.aborted).toBeUndefined();
+    expect(outcome.dispositions[0]).toEqual({ kind: "dropped" });
+    expect(
+      ((await settlement!).error as
+        | { waveWithdrawalCause?: unknown }
+        | undefined)?.waveWithdrawalCause,
+    ).toBe("contribution-dropped");
+    expect(outcome.seq).toBeUndefined();
+    expect(Engine.readState(engine, { id: wLink.id })?.document).toEqual({
+      value: { value: 99 },
+    });
+  });
+
   it("commits a derived write over a move the sealing replica had not taken when the move was this tenure's OWN derived commit — not every older view is an intrusion", async () => {
     // The control for the drop above. A serving tenure advances its own
     // output documents under runs still in flight, so a view older than

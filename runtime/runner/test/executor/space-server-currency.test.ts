@@ -452,6 +452,9 @@ describe("SpaceServer", () => {
           servedFromStore: 0,
           rearmed: 0,
           indexWakes: 0,
+          expiryWakes: 0,
+          carried: 0,
+          carriedRefused: 0,
           falseClean: 0,
         });
       });

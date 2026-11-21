@@ -147,7 +147,7 @@ import { FLATMAP_INPUT_SCHEMA } from "./builtins/flatmap.ts";
 import {
   listCoordinatorPlan,
   listElementResultCell,
-  listSlotResolutions,
+  listMembershipRead,
 } from "./builtins/list-coordinator-plan.ts";
 import { MAP_INPUT_SCHEMA } from "./builtins/map.ts";
 import {
@@ -1481,6 +1481,33 @@ function samePatternRef(
   b: { identity: string; symbol: string },
 ): boolean {
   return a.identity === b.identity && a.symbol === b.symbol;
+}
+
+/**
+ * The fields of an object default that `held`, an instance's stored value,
+ * lacks, at any depth: each as its path from the instance's value and the
+ * default it takes. A field `held` holds is kept whole where it is not an
+ * object the default also describes as one; only an object can hold some of
+ * a default's fields and not others.
+ */
+function missingDefaultFields(
+  held: FabricValue,
+  schemaDefault: JSONValue,
+  at: readonly string[] = [],
+  missing: { path: string[]; value: JSONValue }[] = [],
+): { path: string[]; value: JSONValue }[] {
+  if (!isPlainObject(held) || !isPlainObject(schemaDefault)) return missing;
+  const fields = held as Record<string, FabricValue>;
+  for (
+    const [field, value] of Object.entries(
+      schemaDefault as Record<string, JSONValue>,
+    )
+  ) {
+    const path = [...at, field];
+    if (fields[field] === undefined) missing.push({ path, value });
+    else missingDefaultFields(fields[field], value, path, missing);
+  }
+  return missing;
 }
 
 /**
@@ -9029,6 +9056,31 @@ export class Runner {
   }
 
   /**
+   * Whether the instance `link` names, read through `readTx`, holds its
+   * default: it is present and carries its owner link, which every setup or
+   * seed that initializes an instance writes. An instance a session's first
+   * write created before any seed reached it carries no owner link, so it is
+   * still owed its initialization: the link, and the fields of an object
+   * default the write left out (`#seedOwedDefaults`). Recording the link even
+   * when nothing is missing is what lets a later removal of a default field
+   * stand. One that carries the link was initialized, and a field missing
+   * from it is one its writers removed.
+   */
+  #instanceHoldsDefault(
+    readTx: IExtendedStorageTransaction,
+    link: NormalizedFullLink,
+  ): boolean {
+    if (!this.#documentPresent(readTx, link)) return false;
+    if (ContextualFlowControl.declaresStream(link.schema)) return true;
+    return readTx.readOrThrow({
+      space: link.space,
+      id: link.id,
+      path: ["result"],
+      ...(link.scope !== undefined && { scope: link.scope }),
+    }, { meta: PRESENCE_PROBE_READ }) !== undefined;
+  }
+
+  /**
    * Whether a swap of `resultCell` to `pattern` would read a document this
    * replica lacks: the argument document `argumentLink` names, which the
    * swap's setup reads whole, or an owned cell the stored manifest lists —
@@ -11364,10 +11416,12 @@ export class Runner {
   }
 
   /**
-   * Fills the absent actor instances of the defaults `instances` declare at
-   * a scope narrower than that of the instance's result, each in a
-   * transaction of its own (`#prepareCellsForRunningPattern` says why),
-   * under `identity` and while `isCurrent` holds. With `options.only`,
+   * Fills the actor instances of the defaults `instances` declare at a scope
+   * narrower than that of the instance's result, each in a transaction of
+   * its own (`#prepareCellsForRunningPattern` says why), under `identity`
+   * and while `isCurrent` holds: an absent instance takes the whole default,
+   * and one a first write created, carrying no owner link and holding only
+   * some fields of an object default, takes the rest. With `options.only`,
    * fills only the cells whose doc ids it holds. Returns whether every one
    * was verified or seeded.
    *
@@ -11379,6 +11433,16 @@ export class Runner {
    * identity from their own session"), and a demander's instances come from
    * the arrival seed (scopes.md). Readers of an unseeded instance see the
    * schema default.
+   *
+   * On a serving runtime a seed seals into the open wave, which can still
+   * drop it: a viewer's first write that the replica had not taken when the
+   * seed probed is admitted first, and the seed's create of the instance
+   * would land over it (`conflictsFor` in wave.ts). A dropped seed runs
+   * once more against the viewer's instances loaded fresh, and fills the
+   * default under what the viewer wrote (`#seedAgainIfDropped`). With
+   * `options.retryDropped` false, a drop is reported and not retried. A seed
+   * that is lost for good, which this method already reported as done, calls
+   * `options.onLost`.
    */
   async #seedOwedDefaults(
     instances: readonly ResumePatternInstance[],
@@ -11387,12 +11451,14 @@ export class Runner {
     options: {
       allowReadOnly?: boolean;
       only?: ReadonlySet<string>;
+      retryDropped?: boolean;
+      onLost?: () => void;
     } = {},
   ): Promise<boolean> {
+    const { allowReadOnly, only, retryDropped = true, onLost } = options;
     if (this.#runtime.servingPosture && this.#isServingOwnIdentity(identity)) {
       return true;
     }
-    const { allowReadOnly, only } = options;
     let defaultsPrepared = true;
     const readOnlySpaces = new Map<MemorySpace, boolean>();
     for (const instance of instances) {
@@ -11446,7 +11512,11 @@ export class Runner {
       }
       if (owed.length === 0) continue;
       const owedIds = owed.map(({ derivedLink }) => derivedLink.id);
+      // The attempt that committed, whose wave settlement says whether the
+      // seed landed.
+      let attempt: IExtendedStorageTransaction | undefined;
       const outcome = await this.#runtime.editWithRetry((tx) => {
+        attempt = tx;
         if (!isCurrent()) {
           defaultsPrepared = false;
           return;
@@ -11519,11 +11589,28 @@ export class Runner {
           // constant default derives nothing from a value it was seeded
           // beside. Kept out of scheduling and out of CFC taint, as the
           // write-elision probe in pattern-binding.ts is.
+          const held = derived.getRawUntyped({
+            meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+          });
+          // An instance that is present can still owe its initialization. A
+          // session's first write can create its instance before any seed
+          // reaches it, holding only the fields written and no owner link.
+          // The seed then writes the link and fills the default's other
+          // fields under it, at any depth, changing none it holds; it writes
+          // the link even when no field is missing, so that a later removal
+          // of a default field stands. An instance carrying its owner link
+          // was initialized by a setup or a seed, and a field missing from
+          // it is one its writers removed, so it is left as it is. Which
+          // fields are missing decides only what is written into this same
+          // instance, so the probes stay out of CFC taint.
           if (
-            derived.getRawUntyped({
-              meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
-            }) !== undefined
+            held !== undefined &&
+            derived.getMetaRaw("result", { meta: PRESENCE_PROBE_READ }) !==
+              undefined
           ) continue;
+          const missing = held === undefined
+            ? undefined
+            : missingDefaultFields(held, schemaDefault);
           // A default belongs to its owning piece, so it carries the label on
           // the piece's root. The pattern pointer and the manifest read above
           // are members of the piece's document, and reading a member
@@ -11540,9 +11627,26 @@ export class Runner {
             rootRead = true;
           }
           // The graph has not enrolled its stores yet. This lazy seed keeps
-          // the generic ownership claim and its declaration behavior.
+          // the generic ownership claim and its declaration behavior. The
+          // owner link marks the instance initialized, the repaired one
+          // included.
           recordRuntimeOwnedStore(tx, owner, derivedLink);
           setResultCell(derived, owner.asSchema(instance.pattern.resultSchema));
+          if (missing !== undefined) {
+            for (const { path, value: fieldDefault } of missing) {
+              const value = fabricFromConvertibleJsValue(fieldDefault);
+              let field: Cell<any> = derived;
+              for (const key of path) field = field.key(key);
+              field.setRawUntyped(value);
+              tx.recordCfcWritePolicyInput({
+                kind: "initialization",
+                mode: "seed",
+                target: { ...derivedLink, path },
+                value,
+              }, runtimeWritePolicyAuthorization);
+            }
+            continue;
+          }
           const value = fabricFromConvertibleJsValue(schemaDefault);
           derived.setRawUntyped(value);
           tx.recordCfcWritePolicyInput({
@@ -11560,8 +11664,94 @@ export class Runner {
           }: ${outcome.error.message}`,
         );
       }
+      const settlement = attempt === undefined
+        ? undefined
+        : waveSettlementOf(attempt);
+      if (settlement !== undefined) {
+        void this.#seedAgainIfDropped(
+          settlement,
+          instance,
+          owed.map(({ derivedLink }) => derivedLink),
+          identity,
+          isCurrent,
+          { retry: retryDropped, onLost, only },
+        );
+      }
     }
     return defaultsPrepared;
+  }
+
+  /**
+   * Seeds `instance`'s defaults for `identity` once more when the wave the
+   * seed sealed into dropped it, after loading each owed instance in
+   * `owed` fresh, so that the seed reads what a viewer's first write put
+   * there and fills the default under it. A seed that is itself the retry
+   * reports a second drop rather than trying again. A seed lost for good, by
+   * a second drop, a retry that fails or comes back incomplete, or a failed
+   * settlement that is no conflict drop, calls `onLost`, so a caller that
+   * took the first seal as done can ask again. The retry seeds only the cells
+   * in `only` when the first seed was limited to them: a dropped seed of one
+   * draft a viewer reached does not seed the drafts it has not.
+   */
+  async #seedAgainIfDropped(
+    settlement: NonNullable<ReturnType<typeof waveSettlementOf>>,
+    instance: ResumePatternInstance,
+    owed: readonly NormalizedFullLink[],
+    identity: ScopeKeyIdentity | undefined,
+    isCurrent: () => boolean,
+    { retry, onLost, only }: {
+      retry: boolean;
+      onLost?: () => void;
+      only?: ReadonlySet<string>;
+    },
+  ): Promise<void> {
+    const settled = await settlement;
+    if (settled.error === undefined) return;
+    // Only a conflict drop is worth the one immediate retry, which reads
+    // what the conflicting write left. Any other failed settlement, a
+    // rejected wave commit among them, still loses the seed.
+    if (settled.error.waveWithdrawalCause !== "contribution-dropped") {
+      onLost?.();
+      return;
+    }
+    const resultId = instance.resultCell.getAsNormalizedFullLink().id;
+    if (!retry) {
+      logger.warn("scoped-default-seed-dropped", () => [
+        `the retried seed of the defaults the piece at ${resultId} owes was ` +
+        "dropped again; its instances read the schema default until a " +
+        "later seed",
+      ]);
+      onLost?.();
+      return;
+    }
+    try {
+      for (const link of owed) {
+        if (!isCurrent()) return;
+        await this.#syncFamilyCell(
+          this.#runtime.getCellFromLink(link),
+          identity,
+        );
+      }
+      if (!isCurrent()) return;
+      const complete = await this.#seedOwedDefaults(
+        [instance],
+        identity,
+        isCurrent,
+        {
+          retryDropped: false,
+          onLost,
+          ...(only === undefined ? {} : { only }),
+        },
+      );
+      if (!complete) onLost?.();
+    } catch (error) {
+      logger.warn("scoped-default-seed-dropped", () => [
+        `seeding again the defaults the piece at ${resultId} owes, after ` +
+        "the wave dropped the first seed, failed",
+        error,
+      ]);
+      onLost?.();
+    }
   }
 
   /**
@@ -12254,13 +12444,14 @@ export class Runner {
   }
 
   /**
-   * Pull what the list coordinators' slot resolutions end on, to their
-   * ends. Each round resolves every slot the way the plan does and syncs
-   * the documents those resolutions end on; a round that ends where the
-   * previous one did is the fixpoint, which every finite chain reaches: a
-   * document is synced once, so each round either exposes a document no
-   * round has synced or is the last. A list whose entity is not yet local
-   * is synced as such, so the next round can read its slots.
+   * Pull the list documents the list coordinators read, to the end of each
+   * list input's chain. An element's key is the link its slot holds
+   * (`listSlotLinks`), so the list document alone decides it, and nothing a
+   * slot links to is pulled here: a child pulls its own element when it
+   * reads it. Each round reads every coordinator's list the way the plan
+   * does and syncs each list that is not yet local, so the next round can
+   * read past it; a round that syncs nothing is the fixpoint, which every
+   * finite chain reaches, since a document is synced once.
    *
    * The resolver bounds a chain at `MAX_PATH_RESOLUTION_LENGTH` hops, and
    * so does this walk: a chain still moving at that depth is one the
@@ -12269,7 +12460,7 @@ export class Runner {
    * returned keys are the instance's result cell key and the node's index,
    * joined by `#`.
    */
-  async #syncListSlotResolutions(
+  async #syncListDocuments(
     instances: readonly ResumePatternInstance[],
     identity: ScopeKeyIdentity | undefined,
   ): Promise<Set<string>> {
@@ -12292,7 +12483,7 @@ export class Runner {
             if (!isModule(module) || module.type !== "ref") continue;
             const op = module.implementation;
             if (op !== "map" && op !== "filter" && op !== "flatMap") continue;
-            let links: NormalizedFullLink[];
+            let link: NormalizedFullLink | undefined;
             try {
               const resolved = this.#runtime.moduleRegistry.getModule(
                 op,
@@ -12306,37 +12497,35 @@ export class Runner {
                 pattern,
                 op,
               );
-              const { listCell, rawList, slots } = listSlotResolutions(
-                this.#runtime,
+              const { listCell, rawList } = listMembershipRead(
                 planTx,
                 inputsCell,
               );
-              links = rawList === undefined
-                ? [listCell.getAsNormalizedFullLink()]
-                : slots;
+              link = rawList === undefined
+                ? listCell.getAsNormalizedFullLink()
+                : undefined;
             } catch (error) {
               logger.debug("resume-list-children", () => [
-                "skipping a list node whose slots could not be resolved",
+                "skipping a list node whose list could not be read",
                 error,
               ]);
               continue;
             }
-            for (const link of links) {
-              const key = `${link.space}\0${link.id}\0${link.scope ?? "space"}`;
-              if (synced.has(key)) continue;
-              synced.add(key);
-              fresh.push(this.#runtime.getCellFromLink(link));
-              moving.add(`${instanceKey}#${nodeIndex}`);
-            }
+            if (link === undefined) continue;
+            const key = `${link.space}\0${link.id}\0${link.scope ?? "space"}`;
+            if (synced.has(key)) continue;
+            synced.add(key);
+            fresh.push(this.#runtime.getCellFromLink(link));
+            moving.add(`${instanceKey}#${nodeIndex}`);
           }
         }
       } finally {
-        planTx.abort("resume list slots: read-only resolution");
+        planTx.abort("resume list documents: read-only resolution");
       }
       if (fresh.length === 0) return new Set();
       if (round >= MAX_PATH_RESOLUTION_LENGTH) {
         logger.warn("resume-list-children", () => [
-          "list slot chains still unresolved at the resolver's bound; " +
+          "list chains still unresolved at the resolver's bound; " +
           "their coordinators' children are not derived",
           { rounds: round, nodes: moving.size },
         ]);
@@ -12348,7 +12537,7 @@ export class Runner {
         return this.#syncFamilyCell(cell, identity)
           .catch((error) => {
             logger.warn("resume-list-children", () => [
-              "list slot resolution sync failed; resuming without it",
+              "list document sync failed; resuming without it",
               error,
             ]);
           })
@@ -12359,7 +12548,7 @@ export class Runner {
       logger.time(
         syncWaveStart,
         "start",
-        "resumeListSlotResolutionSyncWave",
+        "resumeListDocumentSyncWave",
       );
     }
   }
@@ -12383,14 +12572,11 @@ export class Runner {
    * coordinator derives it (`listCoordinatorPlan`, shared with its
    * reconcile) — from inputs that are LOCAL to the same depth the
    * coordinator's own derivation will read them. An element's key is the
-   * value resolution of its slot (`listSlotResolutions`), and that chase
-   * ends wherever the replica goes cold: a slot holding a cell whose stored
-   * value redirects to a piece keys the element on the piece when warm and
-   * on the cell when cold, and a child keyed on the cold chase is one the
-   * warm coordinator never mints. So each round first pulls what every
-   * coordinator's slot resolutions end on, until a round ends where the
-   * last one did — the cells the coordinator's reconcile reads as well, so
-   * it reads them warm rather than at seq 0. Each child is then
+   * link its slot holds (`listSlotLinks`), which the list document alone
+   * decides, so each round first pulls every coordinator's list document
+   * (`#syncListDocuments`) — which the coordinator's reconcile reads as
+   * well, so it reads it warm rather than at seq 0 — and nothing the slots
+   * link to. Each child is then
    * a resumed instance like any other: the cells it owns — its derived
    * internal cells, and those of the sub-patterns nested in it — are
    * collected the way the owned-cell walk collects them for the root, so
@@ -12419,7 +12605,7 @@ export class Runner {
     }
     let frontier = [...instances];
     while (frontier.length > 0) {
-      const unsettled = await this.#syncListSlotResolutions(frontier, identity);
+      const unsettled = await this.#syncListDocuments(frontier, identity);
       const next: ResumePatternInstance[] = [];
       const promises: Promise<unknown>[] = [];
       const planTx = this.#runtime.edit();
@@ -12765,18 +12951,25 @@ export class Runner {
    * defaults rather than standing in for the whole value. Each owed cell is
    * probed in the instance `identity` resolves it to, and loaded first when
    * neither the replica nor the store read-through can say whether it holds
-   * a value; the cells found absent are seeded, one transaction per piece
-   * instance (`#seedOwedDefaults`). With `reached`, only the owed cells it
-   * accepts are probed and seeded: the arrival seed passes the cells the
-   * viewer's demand reaches. Returns whether every owed default it was asked
-   * for was verified or seeded. A piece not running here, or whose pattern
-   * pointer this runtime cannot read, seeds nothing and returns `false`.
+   * a value; the cells found absent, or created by a first write that left
+   * some fields of an object default unwritten, are seeded, one transaction
+   * per piece instance (`#seedOwedDefaults`). With `options.reached`, only
+   * the owed cells it accepts are probed and seeded: the arrival seed passes
+   * the cells the viewer's demand reaches. Returns whether every owed default
+   * it was asked for was verified or seeded. A piece not running here, or
+   * whose pattern pointer this runtime cannot read, seeds nothing and returns
+   * `false`. A seed returned as done that the serving loop's wave later loses
+   * for good calls `options.onLost`.
    */
   async seedOwedDefaultsFor(
     resultCell: Cell<any>,
     identity: ScopeKeyIdentity,
-    reached?: (derivedLink: NormalizedFullLink) => boolean,
+    options: {
+      reached?: (derivedLink: NormalizedFullLink) => boolean;
+      onLost?: () => void;
+    } = {},
   ): Promise<boolean> {
+    const { reached } = options;
     const isCurrent = this.#currentWithinLifecycle();
     const link = resultCell.getAsNormalizedFullLink();
     const rootCell = link.path.length > 0
@@ -12837,26 +13030,27 @@ export class Runner {
           if (!reached(derivedLink)) continue;
           accepted.add(derivedLink.id);
         }
-        if (this.#documentPresent(readTx, derivedLink)) continue;
-        if (!this.#storeReportedAbsent(derivedLink, identity)) {
+        if (this.#instanceHoldsDefault(readTx, derivedLink)) continue;
+        if (
+          !this.#documentPresent(readTx, derivedLink) &&
+          !this.#storeReportedAbsent(derivedLink, identity)
+        ) {
           // The store may hold a value the replica has not loaded; the
           // probe after the load reads what arrived.
           await this.#syncFamilyCell(derived, identity);
           if (!isCurrent()) return false;
           readTx = this.#familyReadTx(identity);
-          if (this.#documentPresent(readTx, derivedLink)) continue;
+          if (this.#instanceHoldsDefault(readTx, derivedLink)) continue;
         }
         owesSeed = true;
       }
       if (owesSeed) seeds.push(instance);
     }
     if (seeds.length === 0) return true;
-    return await this.#seedOwedDefaults(
-      seeds,
-      identity,
-      isCurrent,
-      reached === undefined ? {} : { only: accepted },
-    );
+    return await this.#seedOwedDefaults(seeds, identity, isCurrent, {
+      ...(reached === undefined ? {} : { only: accepted }),
+      onLost: options.onLost,
+    });
   }
 
   /**

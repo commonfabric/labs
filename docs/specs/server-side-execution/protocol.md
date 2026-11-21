@@ -112,7 +112,12 @@ path. (ii) `system` commits carry no user attribution in the commit
 ledger — the envelope is the server's own session — which is
 deliberately accepted; per-user attribution for blob writes is a
 named future hardening, out of v2 scope, in the same family as §2's
-grant-scoped foreign reads.
+grant-scoped foreign reads. The runtime client's own uploads do not
+take that path: `handleUploadBlob()`
+(`runtime/runtime-client/src/backends/runtime-processor.ts`) commits
+the record on the uploader's session, so those writes are `authored`
+and carry the uploader's attribution, and only the route's writes are
+`system`.
 
 **Both arms carry a class; only the ON arm enforces one.** `class`
 metadata is WRITTEN in every arm from stage A onward and ENFORCED
@@ -541,10 +546,12 @@ refused: a foreign scoped read naming no actor's instance, and one
 whose actor the list does not grant. Resolution against a per-doc
 grant store with `capabilityRef` carriage, the finer design OW13
 names, stays owed and would narrow this grant, never widen it. A
-granted read is a service-session read: it registers no
-identity-bearing demand in the foreign space, so the instance it reads
-is as the foreign space's own loop last derived it for that actor
-(verification-coverage.md OW35). Cross-space serving therefore reads
+granted read is a service-session read, which is not itself demand in
+the foreign space. The reading loop carries the actor's demand there
+apart from the read, where it keeps the currency index and one memory
+server holds both spaces (serving-loop.md §3b; verification-coverage.md
+OW35); elsewhere the instance it reads is as the foreign space's own loop
+last derived it for that actor. Cross-space serving therefore reads
 foreign SPACE-scope state freely (§2b's free-read row) and foreign
 SCOPED state under the actor's grant alone. A refusal is no load for
 served delivery to wait on, and it is never silently empty for the

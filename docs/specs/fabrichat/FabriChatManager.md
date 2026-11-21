@@ -49,6 +49,10 @@ that room's roster, in an instance of its own per room, and each notice's
 instance re-types its notice's room the same way. Each instance's argument
 holds the handle, so no list the manager stores types a room as more than a
 handle; a reader that syncs such a list would walk into every room it names.
+The roster instances each run by their room's link, so a room listed,
+forgotten, listed again or adopted from the catalog starts or stops its own
+instance and leaves every other room's as it was, and telling the rooms apart
+reads nothing behind their links.
 The notices' instances run over the notices in the order the manager stores
 them, so a notice dropped moves the instances of the notices after it.
 
@@ -92,16 +96,25 @@ but their entries, so it opens no room's space and no profile's (see the
 catalog entry holds its title too, as a display hint for readers of the
 catalog. Registration takes the room's title, whatever its kind. Whenever the
 manager handles `accept` or `joinRoom` for a room, it reads the room's `about`,
-and brings the title the room's membership holds, and the catalog entry's
-(`retitleSharedSpaceIn()`), up to the room's where they differ, moving neither
-its revision nor its membership. That is all a join of an already-listed room
-reads of the room, and it writes only on a mismatch. The one exception is a
-`joinRoom` marked `messageAct`, which a room sends with every message and
-reaction: none of those changes the title, so the manager reads nothing of the
-room's `about` for one. The member who retitles a room tells their manager at
-once; another member's entry follows on their manager's next event for that
-room other than a message or a reaction: their own retitle, an acceptance, or a
-client's `joinRoom` when they open it.
+and its `messages.count` and `messages.newestAt`, and brings the title the
+room's membership holds, and the catalog entry's (`retitleSharedSpaceIn()`),
+and the membership's `activity`, up to the room's where they differ, moving
+neither its revision nor its membership. That is all a join of an
+already-listed room reads of the room, and it writes only on a mismatch. The
+one exception is a `joinRoom` marked `messageAct`, which a room sends with
+every message and reaction: none of those changes the title, so the manager
+reads nothing of the room for one. A message's carries its `activity`, which
+the membership takes where it differs, so the user's own messages keep their
+entry current while reading no room. The member who retitles a room tells
+their manager at once; another member's entry follows on their manager's next
+event for that room other than a message or a reaction: their own retitle, an
+acceptance, a client's `joinRoom` when they open it, or the `joinRoom` their
+host sends for a notice in their share inbox that the room changed. Another
+member's message reaches it the same way, or with the user's own next
+message. A join naming such a `notice` marks it acted on in the catalog's
+`notices`, in the same transaction, and does nothing at all for a room the
+user's chats do not list as saved, so it never restores a forgotten room or
+records a membership.
 
 ### Adopting the catalog's rooms
 
