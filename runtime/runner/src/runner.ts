@@ -147,7 +147,7 @@ import { FLATMAP_INPUT_SCHEMA } from "./builtins/flatmap.ts";
 import {
   listCoordinatorPlan,
   listElementResultCell,
-  listSlotResolutions,
+  listMembershipRead,
 } from "./builtins/list-coordinator-plan.ts";
 import { MAP_INPUT_SCHEMA } from "./builtins/map.ts";
 import {
@@ -12227,13 +12227,14 @@ export class Runner {
   }
 
   /**
-   * Pull what the list coordinators' slot resolutions end on, to their
-   * ends. Each round resolves every slot the way the plan does and syncs
-   * the documents those resolutions end on; a round that ends where the
-   * previous one did is the fixpoint, which every finite chain reaches: a
-   * document is synced once, so each round either exposes a document no
-   * round has synced or is the last. A list whose entity is not yet local
-   * is synced as such, so the next round can read its slots.
+   * Pull the list documents the list coordinators read, to the end of each
+   * list input's chain. An element's key is the link its slot holds
+   * (`listSlotLinks`), so the list document alone decides it, and nothing a
+   * slot links to is pulled here: a child pulls its own element when it
+   * reads it. Each round reads every coordinator's list the way the plan
+   * does and syncs each list that is not yet local, so the next round can
+   * read past it; a round that syncs nothing is the fixpoint, which every
+   * finite chain reaches, since a document is synced once.
    *
    * The resolver bounds a chain at `MAX_PATH_RESOLUTION_LENGTH` hops, and
    * so does this walk: a chain still moving at that depth is one the
@@ -12242,7 +12243,7 @@ export class Runner {
    * returned keys are the instance's result cell key and the node's index,
    * joined by `#`.
    */
-  async #syncListSlotResolutions(
+  async #syncListDocuments(
     instances: readonly ResumePatternInstance[],
     identity: ScopeKeyIdentity | undefined,
   ): Promise<Set<string>> {
@@ -12265,7 +12266,7 @@ export class Runner {
             if (!isModule(module) || module.type !== "ref") continue;
             const op = module.implementation;
             if (op !== "map" && op !== "filter" && op !== "flatMap") continue;
-            let links: NormalizedFullLink[];
+            let link: NormalizedFullLink | undefined;
             try {
               const resolved = this.#runtime.moduleRegistry.getModule(
                 op,
@@ -12279,37 +12280,35 @@ export class Runner {
                 pattern,
                 op,
               );
-              const { listCell, rawList, slots } = listSlotResolutions(
-                this.#runtime,
+              const { listCell, rawList } = listMembershipRead(
                 planTx,
                 inputsCell,
               );
-              links = rawList === undefined
-                ? [listCell.getAsNormalizedFullLink()]
-                : slots;
+              link = rawList === undefined
+                ? listCell.getAsNormalizedFullLink()
+                : undefined;
             } catch (error) {
               logger.debug("resume-list-children", () => [
-                "skipping a list node whose slots could not be resolved",
+                "skipping a list node whose list could not be read",
                 error,
               ]);
               continue;
             }
-            for (const link of links) {
-              const key = `${link.space}\0${link.id}\0${link.scope ?? "space"}`;
-              if (synced.has(key)) continue;
-              synced.add(key);
-              fresh.push(this.#runtime.getCellFromLink(link));
-              moving.add(`${instanceKey}#${nodeIndex}`);
-            }
+            if (link === undefined) continue;
+            const key = `${link.space}\0${link.id}\0${link.scope ?? "space"}`;
+            if (synced.has(key)) continue;
+            synced.add(key);
+            fresh.push(this.#runtime.getCellFromLink(link));
+            moving.add(`${instanceKey}#${nodeIndex}`);
           }
         }
       } finally {
-        planTx.abort("resume list slots: read-only resolution");
+        planTx.abort("resume list documents: read-only resolution");
       }
       if (fresh.length === 0) return new Set();
       if (round >= MAX_PATH_RESOLUTION_LENGTH) {
         logger.warn("resume-list-children", () => [
-          "list slot chains still unresolved at the resolver's bound; " +
+          "list chains still unresolved at the resolver's bound; " +
           "their coordinators' children are not derived",
           { rounds: round, nodes: moving.size },
         ]);
@@ -12321,7 +12320,7 @@ export class Runner {
         return this.#syncFamilyCell(cell, identity)
           .catch((error) => {
             logger.warn("resume-list-children", () => [
-              "list slot resolution sync failed; resuming without it",
+              "list document sync failed; resuming without it",
               error,
             ]);
           })
@@ -12332,7 +12331,7 @@ export class Runner {
       logger.time(
         syncWaveStart,
         "start",
-        "resumeListSlotResolutionSyncWave",
+        "resumeListDocumentSyncWave",
       );
     }
   }
@@ -12356,14 +12355,11 @@ export class Runner {
    * coordinator derives it (`listCoordinatorPlan`, shared with its
    * reconcile) — from inputs that are LOCAL to the same depth the
    * coordinator's own derivation will read them. An element's key is the
-   * value resolution of its slot (`listSlotResolutions`), and that chase
-   * ends wherever the replica goes cold: a slot holding a cell whose stored
-   * value redirects to a piece keys the element on the piece when warm and
-   * on the cell when cold, and a child keyed on the cold chase is one the
-   * warm coordinator never mints. So each round first pulls what every
-   * coordinator's slot resolutions end on, until a round ends where the
-   * last one did — the cells the coordinator's reconcile reads as well, so
-   * it reads them warm rather than at seq 0. Each child is then
+   * link its slot holds (`listSlotLinks`), which the list document alone
+   * decides, so each round first pulls every coordinator's list document
+   * (`#syncListDocuments`) — which the coordinator's reconcile reads as
+   * well, so it reads it warm rather than at seq 0 — and nothing the slots
+   * link to. Each child is then
    * a resumed instance like any other: the cells it owns — its derived
    * internal cells, and those of the sub-patterns nested in it — are
    * collected the way the owned-cell walk collects them for the root, so
@@ -12392,7 +12388,7 @@ export class Runner {
     }
     let frontier = [...instances];
     while (frontier.length > 0) {
-      const unsettled = await this.#syncListSlotResolutions(frontier, identity);
+      const unsettled = await this.#syncListDocuments(frontier, identity);
       const next: ResumePatternInstance[] = [];
       const promises: Promise<unknown>[] = [];
       const planTx = this.#runtime.edit();
