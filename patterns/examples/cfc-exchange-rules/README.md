@@ -63,6 +63,37 @@ write carries no stamp, and the second level releases nothing.
 `docs/specs/cfc-transformed-by-input-witnesses.md` says what the witness covers
 and what it does not.
 
+`sealed-state-machine.tsx` is the card game Memory as a state machine nobody can
+read. The other examples each write a store once, or append to one; this one
+reads the state it then writes, move after move. The whole state is confidential
+to the module's policy alone, so no principal reads it, the table's owner
+included. One handler, `move`, is the only code that may write it
+(`WriteAuthorizedBy`), and takes the proposer of a move from
+`currentPrincipal()`, never from the event. One function, `observe`, projects
+what anyone at the table may see, and the policy's one rule releases that to a
+reader of the table's space, when everything confidential `observe` read was
+written by `move`. Three of its choices are forced by what the runtime releases:
+
+- The state is one string, its JSON form, not a record. A record its writer
+  reads and then sets keeps no input witness, so nothing computed from it is
+  released.
+- Every field of the released view is a scalar, and a list is written as one
+  string. The display boundary releases a scalar field read on its own, and
+  refuses a read that covers the record or a list in it.
+- `observe` returns nothing before the first move. A view of the state's default
+  carries no witness, and a field the first move leaves unchanged would keep
+  that view's stamp.
+
+The rule names a `HasRole` fact, which the runtime mints only at a display
+boundary, so `cf test` cannot show it firing: the pattern tests play the game
+and check that no public store takes anything of the table, and
+`runtime/html/test/worker-display-fit-sealed-state-machine.test.ts` fits the
+view against a viewer's ceiling.
+`runtime/runner/test/cfc-transformed-by-input-witness-state-machine.test.ts`
+pins which ways of storing a state keep the witness.
+`SEALED-STATE-MACHINE-FINDINGS.md` records what was run, what was read, and what
+does not work.
+
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
 as the policy subject and requires that exact manifest to be installed in the
@@ -91,4 +122,6 @@ deno task cf test patterns/examples/cfc-exchange-rules/blessed-object.test.tsx
 deno task cf test patterns/examples/cfc-exchange-rules/custody-projector.test.tsx
 deno task cf test patterns/examples/cfc-exchange-rules/custody-answer-room.test.tsx
 deno task cf test patterns/examples/cfc-exchange-rules/witnessed-chain.test.tsx
+deno task cf test patterns/examples/cfc-exchange-rules/sealed-state-machine.test.tsx
+deno task cf test patterns/examples/cfc-exchange-rules/sealed-state-machine-multi-user.test.tsx
 ```

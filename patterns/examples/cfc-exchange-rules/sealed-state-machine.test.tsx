@@ -244,7 +244,6 @@ export default pattern<Rooms>(
       ],
       // Each refused publish, and the refused forgery, logs a CFC refusal.
       allowConsoleWarnings: true,
-      allowConsoleErrors: true,
       table,
       lent,
       peeked,
