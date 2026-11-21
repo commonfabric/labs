@@ -632,6 +632,26 @@ describe("cfc-processed-claim", () => {
       tx.abort();
     });
 
+    it("still counts the claim's own value written at its path under another identity", () => {
+      const tx = claimedHandlerRun("restated-claim", { clearDeferral: false });
+      setCfcImplementationIdentity(tx, {
+        kind: "verified",
+        moduleIdentity: "module:processed-claim-identity",
+        symbol: "other",
+        bindingPath: ["other"],
+      });
+      // Written on the transaction directly: a cell's `set()` of the value
+      // already there writes nothing.
+      tx.writeOrThrow({
+        space,
+        scope: "space",
+        id: entriesId,
+        path: ["value", "entries", "0", "consequenced"],
+      }, true);
+      expect(tx.getCfcState().writeIdentity.multiple).toBe(true);
+      tx.abort();
+    });
+
     it("still counts a write the runtime named a claim on a document no stream's entries are", () => {
       const tx = claimedHandlerRun("misplaced-claim", { clearDeferral: false });
       setCfcImplementationIdentity(tx, undefined);
