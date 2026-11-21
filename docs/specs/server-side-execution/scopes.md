@@ -194,7 +194,8 @@ faced them:
   viewer's first write can create its instance before the seed reaches
   it, holding only the fields written and no owner link; the seed then
   fills the default's other fields under it, at any depth, writes the
-  owner link, and changes none the instance holds. A seed whose create a
+  owner link even when no field is missing, and changes none the
+  instance holds. A seed whose create a
   wave dropped for that write runs once more to do so (serving-loop.md
   §3d), and one lost for good leaves the demander unseeded, asked again
   when its demand next changes. The

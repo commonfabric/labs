@@ -6609,6 +6609,10 @@ export class SpaceServer implements TransactionSealDestination {
           path: [],
           scope: rootScope,
         });
+        // Whether the wave lost this seeding for good, which it can report
+        // before the seeding returns: one call seeds several instances, each
+        // sealing into a wave that may settle first.
+        let lost = false;
         try {
           const complete = await runtime.runner.seedOwedDefaultsFor(
             root,
@@ -6618,6 +6622,7 @@ export class SpaceServer implements TransactionSealDestination {
               // here: the pair is unseeded again, and asked again when the
               // key next changes, as an incomplete seeding is.
               onLost: () => {
+                lost = true;
                 if (this.#active && this.#runtime === runtime) {
                   seeded.delete(seedKey);
                 }
@@ -6627,8 +6632,8 @@ export class SpaceServer implements TransactionSealDestination {
           if (!this.#active || this.#runtime !== runtime) return;
           // An incomplete seeding — the piece stopped, or a declaration
           // the manifest no longer vouches for — is asked again when the
-          // key next changes.
-          if (!complete) continue;
+          // key next changes, as is one the wave has already lost.
+          if (!complete || lost) continue;
           seeded.add(seedKey);
           stats.demand.ownedDefaultSeeds += 1;
         } catch (error) {

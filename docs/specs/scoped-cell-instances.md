@@ -395,8 +395,8 @@ manifest and default together. On a later independently owned start, an accepted
 manifest authorizes filling an absent actor instance in a separate transaction
 for that cell, before execution. An instance a first write created before
 any fill reached it carries no owner link and holds only the fields written:
-it is filled with the object default's fields it lacks, at any depth, keeps
-every field it holds, and gains its owner link. An instance carrying its owner
+it gains its owner link, even when no field is missing, and the object
+default's fields it lacks, at any depth, and keeps every field it holds. An instance carrying its owner
 link was initialized, and a default field missing from it is one its writers
 removed, so it is left as it is. A serving runtime's own start names no actor
 and fills no instance; a demander's instance is filled by the arrival seed

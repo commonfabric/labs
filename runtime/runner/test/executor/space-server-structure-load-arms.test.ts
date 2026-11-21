@@ -641,6 +641,38 @@ describe("SpaceServer", () => {
         ]);
       });
 
+      it("asks again for the defaults a piece owes a viewer whose seed the wave lost before the seeding returned", async () => {
+        // One seeding seeds several instances, each sealing into a wave that
+        // can settle, and lose it, before the seeding returns.
+        const piece = "of:arms-early-lost-piece";
+        const fixture = await openFixture([piece]);
+        fixture.loadable = true;
+        fixture.commit({ [piece]: { value: {}, patternIdentity: pointer } });
+        let first = true;
+        fixture.hooks.onSeed = (_id, options) => {
+          if (first) {
+            first = false;
+            options?.onLost?.();
+          }
+          return Promise.resolve(true);
+        };
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        expect(fixture.seeds).toEqual([`${piece} for viewer`]);
+
+        fixture.setDemand([piece, {
+          id: piece,
+          principal: owner.did(),
+          sessionId: "second-viewer",
+        }]);
+        await clock.tick(300);
+        await clock.settle();
+        expect(fixture.seeds).toEqual([
+          `${piece} for viewer`,
+          `${piece} for viewer`,
+          `${piece} for second-viewer`,
+        ]);
+      });
+
       it("asks again for the defaults a piece owes a viewer after seeding them throws, beside a viewer who arrives", async () => {
         const piece = "of:arms-seeded-piece";
         const fixture = await openFixture([piece]);

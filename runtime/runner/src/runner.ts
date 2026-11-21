@@ -1494,10 +1494,10 @@ function missingDefaultFields(
   held: FabricValue,
   schemaDefault: JSONValue,
   at: readonly string[] = [],
+  missing: { path: string[]; value: JSONValue }[] = [],
 ): { path: string[]; value: JSONValue }[] {
-  if (!isPlainObject(held) || !isPlainObject(schemaDefault)) return [];
+  if (!isPlainObject(held) || !isPlainObject(schemaDefault)) return missing;
   const fields = held as Record<string, FabricValue>;
-  const missing: { path: string[]; value: JSONValue }[] = [];
   for (
     const [field, value] of Object.entries(
       schemaDefault as Record<string, JSONValue>,
@@ -1505,7 +1505,7 @@ function missingDefaultFields(
   ) {
     const path = [...at, field];
     if (fields[field] === undefined) missing.push({ path, value });
-    else missing.push(...missingDefaultFields(fields[field], value, path));
+    else missingDefaultFields(fields[field], value, path, missing);
   }
   return missing;
 }
@@ -9057,38 +9057,27 @@ export class Runner {
 
   /**
    * Whether the instance `link` names, read through `readTx`, holds its
-   * default. It does when it is present and either carries its owner link,
-   * which every setup or seed that initializes an instance writes, or holds
-   * every field of an object `schemaDefault`. An instance a session's first
-   * write created before any seed reached it carries no owner link and holds
-   * only the fields written, so it still owes the rest
-   * (`#seedOwedDefaults`). One that carries the link was initialized, and a
-   * field missing from it is one its writers removed.
+   * default: it is present and carries its owner link, which every setup or
+   * seed that initializes an instance writes. An instance a session's first
+   * write created before any seed reached it carries no owner link, so it is
+   * still owed its initialization: the link, and the fields of an object
+   * default the write left out (`#seedOwedDefaults`). Recording the link even
+   * when nothing is missing is what lets a later removal of a default field
+   * stand. One that carries the link was initialized, and a field missing
+   * from it is one its writers removed.
    */
   #instanceHoldsDefault(
     readTx: IExtendedStorageTransaction,
     link: NormalizedFullLink,
-    schemaDefault: JSONValue | undefined,
   ): boolean {
     if (!this.#documentPresent(readTx, link)) return false;
-    if (
-      !isPlainObject(schemaDefault) ||
-      ContextualFlowControl.declaresStream(link.schema)
-    ) return true;
-    const address = {
+    if (ContextualFlowControl.declaresStream(link.schema)) return true;
+    return readTx.readOrThrow({
       space: link.space,
       id: link.id,
+      path: ["result"],
       ...(link.scope !== undefined && { scope: link.scope }),
-    };
-    if (
-      readTx.readOrThrow({ ...address, path: ["result"] }, {
-        meta: PRESENCE_PROBE_READ,
-      }) !== undefined
-    ) return true;
-    const held = readTx.readOrThrow({ ...address, path: ["value"] }, {
-      meta: PRESENCE_PROBE_READ,
-    });
-    return missingDefaultFields(held, schemaDefault).length === 0;
+    }, { meta: PRESENCE_PROBE_READ }) !== undefined;
   }
 
   /**
@@ -11600,15 +11589,17 @@ export class Runner {
           const held = derived.getRawUntyped({
             meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
           });
-          // An instance that is present can still owe fields. A session's
-          // first write can create its instance before any seed reaches
-          // it, holding only the fields written and no owner link, and the
-          // seed then fills the default's other fields under it, at any
-          // depth, and changes none it holds. An instance carrying its
-          // owner link was initialized by a setup or a seed, and a field
-          // missing from it is one its writers removed, so it is left as
-          // it is. Which fields are missing decides only what is written
-          // into this same instance, so the probes stay out of CFC taint.
+          // An instance that is present can still owe its initialization. A
+          // session's first write can create its instance before any seed
+          // reaches it, holding only the fields written and no owner link.
+          // The seed then writes the link and fills the default's other
+          // fields under it, at any depth, changing none it holds; it writes
+          // the link even when no field is missing, so that a later removal
+          // of a default field stands. An instance carrying its owner link
+          // was initialized by a setup or a seed, and a field missing from
+          // it is one its writers removed, so it is left as it is. Which
+          // fields are missing decides only what is written into this same
+          // instance, so the probes stay out of CFC taint.
           if (
             held !== undefined &&
             derived.getMetaRaw("result", { meta: PRESENCE_PROBE_READ }) !==
@@ -11617,7 +11608,6 @@ export class Runner {
           const missing = held === undefined
             ? undefined
             : missingDefaultFields(held, schemaDefault);
-          if (missing !== undefined && missing.length === 0) continue;
           // A default belongs to its owning piece, so it carries the label on
           // the piece's root. The pattern pointer and the manifest read above
           // are members of the piece's document, and reading a member
@@ -11694,8 +11684,9 @@ export class Runner {
    * `owed` fresh, so that the seed reads what a viewer's first write put
    * there and fills the default under it. A seed that is itself the retry
    * reports a second drop rather than trying again. A seed lost for good, by
-   * a second drop or a retry that fails or comes back incomplete, calls
-   * `onLost`, so a caller that took the first seal as done can ask again.
+   * a second drop, a retry that fails or comes back incomplete, or a failed
+   * settlement that is no conflict drop, calls `onLost`, so a caller that
+   * took the first seal as done can ask again.
    */
   async #seedAgainIfDropped(
     settlement: NonNullable<ReturnType<typeof waveSettlementOf>>,
@@ -11706,7 +11697,14 @@ export class Runner {
     { retry, onLost }: { retry: boolean; onLost?: () => void },
   ): Promise<void> {
     const settled = await settlement;
-    if (settled.error?.waveWithdrawalCause !== "contribution-dropped") return;
+    if (settled.error === undefined) return;
+    // Only a conflict drop is worth the one immediate retry, which reads
+    // what the conflicting write left. Any other failed settlement, a
+    // rejected wave commit among them, still loses the seed.
+    if (settled.error.waveWithdrawalCause !== "contribution-dropped") {
+      onLost?.();
+      return;
+    }
     const resultId = instance.resultCell.getAsNormalizedFullLink().id;
     if (!retry) {
       logger.warn("scoped-default-seed-dropped", () => [
@@ -13007,12 +13005,7 @@ export class Runner {
           !ownedCellOwesSeed(derivedLink, ownerScope) ||
           !canResolveScopeKey(derivedLink.scope, identity)
         ) continue;
-        const schemaDefault = isObjectOrArray(descriptor.schema)
-          ? descriptor.schema.default
-          : undefined;
-        if (this.#instanceHoldsDefault(readTx, derivedLink, schemaDefault)) {
-          continue;
-        }
+        if (this.#instanceHoldsDefault(readTx, derivedLink)) continue;
         if (
           !this.#documentPresent(readTx, derivedLink) &&
           !this.#storeReportedAbsent(derivedLink, identity)
@@ -13022,9 +13015,7 @@ export class Runner {
           await this.#syncFamilyCell(derived, identity);
           if (!isCurrent()) return false;
           readTx = this.#familyReadTx(identity);
-          if (
-            this.#instanceHoldsDefault(readTx, derivedLink, schemaDefault)
-          ) continue;
+          if (this.#instanceHoldsDefault(readTx, derivedLink)) continue;
         }
         owesSeed = true;
       }
