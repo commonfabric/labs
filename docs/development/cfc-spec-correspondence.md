@@ -547,6 +547,21 @@ the `SPEC-PENDING` marker. @danfuzz authorized landing it ahead of the ruling,
 without a flag, on 2026-11-14 and 2026-11-15. The conformance statement's §11
 records it.
 
+The viewer a computation's `TransformedBy` names (§8.9.3) implements a
+proposal no specs pull request holds yet,
+[`MODULE-NAMED-AUDIENCE-PROPOSAL.md`](../../patterns/examples/cfc-exchange-rules/MODULE-NAMED-AUDIENCE-PROPOSAL.md),
+written as a follow-up to
+[specs#59](https://github.com/commonfabric/specs/pull/59), which is the
+request its `SPEC-PENDING` marker names until it has one of its own. A
+reactive computation that asks who it is computed for has that principal
+recorded on its transaction, and the flow stage mints each of the run's
+`TransformedBy` atoms a second time with the principal as `viewer`, which an
+exchange rule can bind a `User` alternative from. It stores a new field and
+releases more than the pin does, so it waits behind the `viewerBoundRelease`
+experimental option, which defaults to off: with it off no transaction records
+a viewer and nothing is minted. That satisfies step 4 above. Its one deciding
+site, the mint in `cfc/prepare.ts`, carries the marker.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's

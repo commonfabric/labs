@@ -131,6 +131,10 @@ export const LABEL_FIELD_CLASSIFICATION:
       ["identity", "moduleIdentity"],
       "public",
     ),
+    // TransformedBy.viewer → commitment, as User.subject: a rule consumes it
+    // by binding the `User` alternative it adds, so the persisted copy is
+    // read only for equality with the acting reader.
+    entry({ type: CFC_ATOM_TYPE.TransformedBy }, ["viewer"], "commitment"),
     // "authored-by / represents-principal .subject → public —
     // product-displayed attribution, minted under the acting principal's own
     // authority."

@@ -56,6 +56,35 @@ past the value it was minted on, and it is what a chain of endorsed transformers
 needs. Hereditary atoms already survive through the meet, and another family
 joins the retained set when a rule needs it.
 
+### The viewer of a computation
+
+A reactive computation that calls `currentPrincipal()` is told who it is
+computed for (`docs/features/current-principal.md`, "In a computation"), and
+the call records that principal on the transaction (`CfcTxState.viewers`,
+under the runtime's authorization). When exactly one principal was recorded,
+the flow stage mints each of the atoms above a second time with that principal
+as `viewer`:
+
+- `TransformedBy{identity, viewer}`; and
+- `TransformedBy{identity, inputWitness: W, viewer}` for each retained `W`.
+
+Each is a complete claim about one attempt: this code wrote this value in a
+run computed for this principal, and every confidential input it read carried
+`W`. A rule that releases a computation's output to whoever it was computed
+for names all three in one pattern and binds the `User` alternative it adds
+from `viewer`. The viewer is in the atom, and not in an atom of its own,
+because a location's integrity can join several stamps, and two atoms from two
+attempts would pair one attempt's code with another's viewer.
+
+A `viewer`-bearing atom is never retained as an input witness. It says who one
+attempt was for, which is no fact about an attempt that reads its output, and
+the same atom without the viewer is retained beside it.
+
+This is behind the `viewerBoundRelease` experimental option and a
+`SPEC-PENDING` marker; the proposal is
+`patterns/examples/cfc-exchange-rules/MODULE-NAMED-AUDIENCE-PROPOSAL.md`. With
+the option off no transaction records a viewer, so nothing here is minted.
+
 A retained witness may itself carry an `inputWitness`, which is how a chain is
 recorded: each endorsed step adds one level of nesting. Nesting stops at
 `INPUT_WITNESS_MAX_DEPTH` (three); a deeper witness is dropped, which

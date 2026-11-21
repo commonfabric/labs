@@ -542,6 +542,32 @@ describe("prepared digest transaction binding", () => {
     ).toBe(atA);
   });
 
+  it("includes the viewers a transaction recorded, whatever their order", () => {
+    // The viewers decide whether the flow stamp names one, so two
+    // transactions that differ only in them must not share a digest.
+
+    const digest = (viewers: readonly string[]) => {
+      const tx = runtime.edit() as ExtendedStorageTransaction;
+      try {
+        tx.writeValueOrThrow({ ...address("output"), path: ["a", "b"] }, 1);
+        for (const viewer of viewers) {
+          tx.recordCfcViewer(viewer, runtimeWritePolicyAuthorization);
+        }
+        return tx.accessForTestingOnly.preparedDigest();
+      } finally {
+        tx.abort();
+      }
+    };
+    const none = digest([]);
+    const alice = digest(["did:key:alice"]);
+    expect(alice).not.toBe(none);
+    expect(digest(["did:key:bob"])).not.toBe(alice);
+    expect(digest(["did:key:alice", "did:key:alice"])).toBe(alice);
+    expect(digest(["did:key:alice", "did:key:bob"])).toBe(
+      digest(["did:key:bob", "did:key:alice"]),
+    );
+  });
+
   it("retires the memo when a whole-value root or structure container is recorded", () => {
     // Both decide where preparation stamps the flow label, so recording one
     // after a digest was taken must not leave the memoized digest standing.

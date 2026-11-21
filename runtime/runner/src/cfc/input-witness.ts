@@ -56,13 +56,16 @@ export const inputWitnessDepth = (atom: CfcAtom): number => {
  * family the default transition never carries forward, so without this it
  * says nothing past the value it was minted on, and it is what a chain of
  * endorsed transformers needs. Hereditary atoms already survive by the meet,
- * and further families can join this set when a rule needs them.
+ * and further families can join this set when a rule needs them. An atom that
+ * names a viewer is left out: it says who one computation was for, which is
+ * no fact about the next one, and the same atom without the viewer is
+ * retained beside it.
  */
 export const retainedInputWitnesses = (
   integrity: readonly CfcAtom[] | undefined,
 ): CfcAtom[] =>
   (integrity ?? []).filter((atom) =>
-    isTransformedBy(atom) &&
+    isTransformedBy(atom) && !Object.hasOwn(atom, "viewer") &&
     inputWitnessDepth(atom) < INPUT_WITNESS_MAX_DEPTH
   );
 
@@ -82,12 +85,23 @@ export const meetInputWitnesses = (
  * the stamped label does not depend on read order. `witnesses` is `undefined`
  * when the transformation consumed no confidential input, which retains
  * nothing: an empty set of inputs witnesses nothing a rule could ask for.
+ *
+ * `viewer`, when given, is the one principal the transformation was computed
+ * for, as the runtime told its code. Each atom is then minted a second time
+ * with that principal as its `viewer`, which is a complete claim on its own:
+ * "`identity` wrote this in a run computed for `viewer`", with the witness
+ * where there is one. A rule that releases a computation's output to whoever
+ * it was computed for matches that atom and no other, so the viewer, the code
+ * and the witness it reads are those of one attempt.
  */
 export const mintTransformedBy = (
   identity: ImplementationIdentity,
   witnesses: readonly CfcAtom[] | undefined,
+  viewer?: string,
 ): CfcAtom[] => {
-  const minted: CfcAtom[] = [{ type: CFC_ATOM_TYPE.TransformedBy, identity }];
+  const minted: Record<string, unknown>[] = [
+    { type: CFC_ATOM_TYPE.TransformedBy, identity },
+  ];
   // The meet keeps its left side's duplicates, so dedup before minting.
   const ordered = uniqueCfcAtoms(witnesses ?? []).sort(compareByCanonicalHash);
   for (const witness of ordered) {
@@ -97,5 +111,9 @@ export const mintTransformedBy = (
       inputWitness: witness,
     });
   }
-  return minted;
+  if (viewer === undefined) return minted as CfcAtom[];
+  return [
+    ...minted,
+    ...minted.map((atom) => ({ ...atom, viewer })),
+  ] as CfcAtom[];
 };

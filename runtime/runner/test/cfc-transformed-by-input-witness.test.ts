@@ -1735,4 +1735,37 @@ describe("mintTransformedBy", () => {
     expect(inputWitnessDepth(atom)).toBe(INPUT_WITNESS_MAX_DEPTH);
     expect(retainedInputWitnesses([atom])).toEqual([]);
   });
+
+  it("mints each atom again with the viewer a transformation was computed for", () => {
+    expect(mintTransformedBy(TALLY, [A], "did:key:viewer")).toEqual([
+      { type: CFC_ATOM_TYPE.TransformedBy, identity: TALLY },
+      { type: CFC_ATOM_TYPE.TransformedBy, identity: TALLY, inputWitness: A },
+      {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: TALLY,
+        viewer: "did:key:viewer",
+      },
+      {
+        type: CFC_ATOM_TYPE.TransformedBy,
+        identity: TALLY,
+        inputWitness: A,
+        viewer: "did:key:viewer",
+      },
+    ]);
+  });
+
+  it("mints no viewer for a transformation that was computed for nobody", () => {
+    expect(mintTransformedBy(TALLY, [A], undefined)).toEqual(
+      mintTransformedBy(TALLY, [A]),
+    );
+  });
+
+  it("retains an atom without its viewer, and not the one that names a viewer", () => {
+    const [plain, forViewer] = mintTransformedBy(
+      COMMIT,
+      undefined,
+      "did:key:viewer",
+    );
+    expect(retainedInputWitnesses([plain, forViewer])).toEqual([plain]);
+  });
 });

@@ -1432,6 +1432,7 @@ describe("deployment-meta", () => {
         "viewScopedReplication",
         "webViewScopedReplication",
         "pieceCreatorRecord",
+        "viewerBoundRelease",
         "sharedMemoryConnection",
         "instanceNames",
       ]);
