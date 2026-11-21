@@ -450,6 +450,32 @@ describe("an instance", () => {
     expect((instance.result() as { count: unknown }).count).toBe(2);
   });
 
+  it("hands a body the members it reads of each element of an array that holds references", async () => {
+    // ES §2.4: the body reads members of each element (`value` entries of
+    // `Body.reads` at `*`), beside an `enumeration` entry at the array.
+    // The handler wrote the board through a handle, so the array holds a
+    // reference to each row.
+    const instance = new Instance(await artifactOf("members-below-set"), {
+      board: { title: "t", rows: [] },
+    });
+    const outcome = instance.send(
+      instance.plan.bindings.findIndex(({ name }) => name === "publish"),
+      {
+        board: {
+          title: "u",
+          rows: [{ id: "a", tags: ["x"] }, { id: "b", tags: [] }],
+        },
+      },
+    );
+
+    expect(outcome.committed).toBe(true);
+    expect(instance.failed).toEqual([]);
+    expect((instance.result() as { summary: unknown }).summary).toEqual([
+      "a:1",
+      "b:0",
+    ]);
+  });
+
   it("hands a body a handle where it declares one at an array that another body computed whole", async () => {
     // FA §6.2, "A handle bound to a value the instance computed": the
     // handle names the document of the output (ruling Z53).

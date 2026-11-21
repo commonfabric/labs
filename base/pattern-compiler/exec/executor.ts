@@ -1732,8 +1732,19 @@ export class Host {
     if (run === undefined) {
       throw new Unsupported("a body that has no function");
     }
+    // What the body reads as a value, of the computed part and of the
+    // slot part: a reference the cone computed that leads to a place a
+    // `value` entry of `Body.reads` is at or below is read as a value too,
+    // since an `enumeration` or a `shape` entry of the slot part gives way
+    // to what the argument holds at its path (`Instance.gives`).
     let argument = this.pass(computed, {
-      entries: instance.plan.bodies[body].computed,
+      entries: [
+        ...instance.plan.bodies[body].computed,
+        ...instance.plan.bodies[body].reads.map(({ slot, at }) => ({
+          at,
+          observes: instance.plan.slots[slot].observes,
+        })),
+      ],
     });
     // An `identity` entry of `Body.computed` is a handle to the reference
     // the cone computed there (ES §2.4, "A handle or a reference from a
