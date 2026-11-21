@@ -4,6 +4,8 @@ import {
   assertGreater,
   assertStringIncludes,
 } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 import { validateSource } from "./utils.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
@@ -37,6 +39,25 @@ async function getEmptyArrayErrorCount(
   });
 
   return getEmptyArrayErrors(diagnostics).length;
+}
+
+/**
+ * Validates a pattern whose body is `body`. The pattern takes one reactive
+ * string named `target` unless `input` and `params` say otherwise.
+ */
+function validatePatternBody(
+  body: string,
+  input = `{ target: string | Default<""> }`,
+  params = `{ target }`,
+) {
+  const source = `
+    import { computed, Default, pattern, Writable } from "commonfabric";
+
+    export default pattern<${input}>((${params}) => {
+      ${body}
+    });
+  `;
+  return validateSource(source, { types: COMMONFABRIC_TYPES });
 }
 
 function assertHasErrorType(
@@ -4009,6 +4030,272 @@ Deno.test("Reactive .get() Validation", async (t) => {
       );
     },
   );
+});
+
+describe("deferred array callbacks", () => {
+  const refused: readonly (readonly [string, string])[] = [
+    [
+      "an async `map()` callback that compares a reactive value after an `await`",
+      `const r = ["a", "b"].map(async (value) => {
+        await Promise.resolve();
+        const matches = value === target;
+        return matches;
+      });
+      return { n: r.length };`,
+    ],
+    [
+      "an async function expression passed to `map()`",
+      `const r = ["a", "b"].map(async function (value) {
+        const matches = value === target;
+        return matches;
+      });
+      return { n: r.length };`,
+    ],
+    [
+      "a generator `map()` callback",
+      `const r = ["a", "b"].map(function* (value) {
+        const matches = value === target;
+        yield matches;
+      });
+      return { n: r.length };`,
+    ],
+    [
+      "an async generator `map()` callback",
+      `const r = ["a", "b"].map(async function* (value) {
+        const matches = value === target;
+        yield matches;
+      });
+      return { n: r.length };`,
+    ],
+    [
+      "an async `map()` callback that returns a reactive value untouched",
+      `const r = ["a", "b"].map(async (value) => {
+        await Promise.resolve(value);
+        return target;
+      });
+      return { n: r.length };`,
+    ],
+    [
+      "an async `map()` callback that interpolates a reactive value",
+      'const r = ["a", "b"].map(async (value) => `${value}-${target}`);\n' +
+      "return { n: r.length };",
+    ],
+    [
+      "an async `map()` callback that renders a reactive value",
+      `return {
+        ui: (
+          <div>
+            {["a", "b"].map(async (value) => (
+              <span>{value === target ? "yes" : "no"}</span>
+            ))}
+          </div>
+        ),
+      };`,
+    ],
+    [
+      "an async `map()` callback that calls `computed()`",
+      `const r = ["a", "b"].map(async (value) => {
+        await Promise.resolve();
+        return computed(() => value === target);
+      });
+      return { n: r.length };`,
+    ],
+    [
+      "an async `map()` callback whose nested `map()` compares a reactive value",
+      `const r = ["a", "b"].map(async (value) => {
+        await Promise.resolve();
+        return ["x", "y"].map((inner) => {
+          const matches = inner + value === target;
+          return matches;
+        });
+      });
+      return { n: r.length };`,
+    ],
+    [
+      "a generator `map()` callback whose nested `map()` compares a reactive value",
+      `const r = ["a", "b"].map(function* (value) {
+        yield ["x", "y"].map((inner) => {
+          const matches = inner + value === target;
+          return matches;
+        });
+      });
+      return { n: r.length };`,
+    ],
+    [
+      "an async `map()` callback passed to `Promise.all()` in the pattern body",
+      `const all = Promise.all(
+        ["a", "b"].map(async (value) => value === target),
+      );
+      return { all };`,
+    ],
+    [
+      "an async `filter()` callback that compares a reactive value",
+      `const r = ["a", "b"].filter(async (value) => value === target);
+      return { n: r.length };`,
+    ],
+  ];
+
+  for (const [shape, body] of refused) {
+    it(`reports one \`pattern-context:deferred-callback\` error for ${shape}`, async () => {
+      const { diagnostics } = await validatePatternBody(body);
+
+      expect(getErrors(diagnostics).map((error) => error.type)).toEqual([
+        "pattern-context:deferred-callback",
+      ]);
+    });
+  }
+
+  it("reports one error for an async `map()` callback that reads a cell with `.get()`", async () => {
+    const { diagnostics } = await validatePatternBody(
+      `const r = ["-", "+"].map(async (sep) => rows.get().join(sep));
+      return { n: r.length };`,
+      `{ rows: Writable<string[]> }`,
+      `{ rows }`,
+    );
+
+    expect(getErrors(diagnostics).map((error) => error.type)).toEqual([
+      "pattern-context:deferred-callback",
+    ]);
+  });
+
+  it("reports one error for an async `map()` callback with a reactive optional access", async () => {
+    const { diagnostics } = await validatePatternBody(
+      `const r = [0, 1].map(async (i) => {
+        const matches = items?.[i] === "x";
+        return matches;
+      });
+      return { n: r.length };`,
+      `{ items: string[] }`,
+      `{ items }`,
+    );
+
+    expect(getErrors(diagnostics).map((error) => error.type)).toEqual([
+      "pattern-context:deferred-callback",
+    ]);
+  });
+
+  it("names the async callback and its method in the message", async () => {
+    const { diagnostics } = await validatePatternBody(
+      `const r = ["a", "b"].filter(async (value) => value === target);
+      return { n: r.length };`,
+    );
+
+    const [error] = getErrors(diagnostics);
+    expect(error?.message).toContain("An async `filter()` callback");
+    expect(error?.message).toContain("`computed(() => ...)`");
+  });
+
+  it("names the generator callback and its method in the message", async () => {
+    const { diagnostics } = await validatePatternBody(
+      `const r = ["a", "b"].map(function* (value) {
+        yield value === target;
+      });
+      return { n: r.length };`,
+    );
+
+    const [error] = getErrors(diagnostics);
+    expect(error?.message).toContain(
+      "`map()` does not run the body of a generator callback",
+    );
+  });
+
+  it("reports the error at the callback", async () => {
+    const { diagnostics } = await validatePatternBody(
+      `const r = ["a", "b"].map(
+async (value) => value === target,
+      );
+      return { n: r.length };`,
+    );
+
+    const [error] = getErrors(diagnostics);
+    expect(error?.column).toBe(1);
+  });
+
+  it("leaves an async `map()` callback with no reactive value as written", async () => {
+    const { diagnostics, output } = await validatePatternBody(
+      `const r = ["a", "b"].map(async (value) => {
+        await Promise.resolve();
+        return value.toUpperCase() + "!";
+      });
+      return { n: r.length, target };`,
+    );
+
+    expect(getErrors(diagnostics)).toEqual([]);
+    expect(output).toContain('return value.toUpperCase() + "!";');
+    expect(output).not.toContain("__cfLift_");
+  });
+
+  it("leaves a generator `map()` callback with no reactive value as written", async () => {
+    const { diagnostics, output } = await validatePatternBody(
+      `const r = ["a", "b"].map(function* (value) {
+        yield value + "!";
+      });
+      return { n: r.length, target };`,
+    );
+
+    expect(getErrors(diagnostics)).toEqual([]);
+    expect(output).toContain('yield value + "!";');
+    expect(output).not.toContain("__cfLift_");
+  });
+
+  it("reports no error for an async `map()` callback inside `computed()`", async () => {
+    const { diagnostics } = await validatePatternBody(
+      `const all = computed(() =>
+        Promise.all(["a", "b"].map(async (value) => {
+          await Promise.resolve();
+          const matches = value === target;
+          return matches;
+        }))
+      );
+      return { all };`,
+    );
+
+    expect(getErrors(diagnostics)).toEqual([]);
+  });
+
+  it("reports no error for an async `map()` callback when only the result's `length` is read", async () => {
+    const { diagnostics, output } = await validatePatternBody(
+      `const n = ["a", "b"].map(async (value) => value === target).length;
+      return { n };`,
+    );
+
+    expect(getErrors(diagnostics)).toEqual([]);
+    expect(output).toContain("const n = __cfLift_1({ target: target })");
+  });
+
+  it("reports no error for an async `map()` callback inside an event handler", async () => {
+    const { diagnostics } = await validatePatternBody(
+      `return {
+        ui: (
+          <button
+            onClick={() => {
+              ["a", "b"].map(async (value) => {
+                await Promise.resolve();
+                console.log(value === target);
+              });
+            }}
+          >
+            go
+          </button>
+        ),
+      };`,
+    );
+
+    expect(getErrors(diagnostics)).toEqual([]);
+  });
+
+  it("reports no error for a synchronous `map()` callback that compares a reactive value", async () => {
+    const { diagnostics, output } = await validatePatternBody(
+      `const r = ["a", "b"].map((value) => {
+        const matches = value === target;
+        return matches;
+      });
+      return { r };`,
+    );
+
+    expect(getErrors(diagnostics)).toEqual([]);
+    expect(output).toContain("__cfLift_");
+  });
 });
 
 Deno.test("Pattern Context Validation - Fallback Array Methods", async (t) => {

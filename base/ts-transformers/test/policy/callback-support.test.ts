@@ -277,6 +277,47 @@ Deno.test(
   },
 );
 
+describe("deferred plain `map()` callbacks", () => {
+  const deferred: readonly (readonly [string, string])[] = [
+    ["an async arrow function", "async (item) => item + 1"],
+    [
+      "an async function expression",
+      "async function (item) { return item + 1; }",
+    ],
+    ["a generator function", "function* (item) { yield item + 1; }"],
+    [
+      "an async generator function",
+      "async function* (item) { yield item + 1; }",
+    ],
+  ];
+
+  for (const [shape, callbackSource] of deferred) {
+    it(`carries no wrapper site when the callback is ${shape}`, () => {
+      const { sourceFile, checker, context } = createProgramAndContext(
+        `
+        const items = [1, 2, 3];
+        const result = items.map(${callbackSource});
+      `,
+        { withDefaultLibrary: true },
+      );
+
+      const callback = findFirstNode(
+        sourceFile,
+        (node): node is ts.ArrowFunction | ts.FunctionExpression =>
+          ts.isArrowFunction(node) || ts.isFunctionExpression(node),
+      );
+      const semantics = getCallbackBoundarySemantics(
+        callback,
+        checker,
+        context,
+      );
+
+      expect(semantics.isPlainArrayValueCallback).toBe(true);
+      expect(semantics.supportsPatternOwnedWrapperCallbackSite).toBe(false);
+    });
+  }
+});
+
 Deno.test(
   "Callback support policy: a sort comparator carries no wrapper site",
   () => {
