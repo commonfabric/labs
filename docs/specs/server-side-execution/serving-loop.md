@@ -1280,10 +1280,11 @@ executing:
   stand is worked out again whenever that index or the arming changes. A
   reading space that offers rows pulls from the space when it is not armed
   with it, and again when the space tells it of a change, so it is armed
-  whenever a row could be proven. With a row for an actor's own instance
-  stands a row for each piece the index records as writing that document,
-  for the same pair, since such an instance may not exist yet and a loop
-  finds the piece behind a document from what the document holds. A row
+  whenever a row could be proven. With a row that stands, stands a row for
+  each piece the index records as writing its document, for the same pair:
+  a loop starts no piece for a demanded document that a computation
+  derives (§1), and an instance that is an actor's own may not exist yet
+  for it to find the piece from. A row
   that stands is a row of the
   space's demand set, a root with the origin session's pair where it has
   one, held under an id of its own among the space's sessions, so the
@@ -1291,7 +1292,9 @@ executing:
   the host activates a parked space that receives one and does not park it
   idle while one stands. It is not a connected session for an intent that
   needs a channel to its actor (builtins.md §4). A pair that reached a
-  space carried is carried on with the origin it came with, and the memory
+  space carried is carried on with the origin it came with, a demand that
+  reached it with no pair is carried on with its origin for the reads made
+  in the `space` slice, and the memory
   server drops every row of an origin session when that session ends. A
   slice that read what a live, clean writer
   that names no piece wrote, such as a wish's shared hashtag resolver, takes

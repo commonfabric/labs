@@ -13663,8 +13663,8 @@ export class Server {
    * current: the reading space registered the instance and is armed with
    * `space` for no limited time, so that it hears of the next change, and
    * the index holds the instance as one no piece here is behind on. With a
-   * row for an actor's own instance stands a row for each piece the index
-   * records as writing that document, for the same pair. Called whenever
+   * row that stands, stands a row for each piece the index records as
+   * writing its document, for the same pair. Called whenever
    * what is offered, the index, or the arming may have changed.
    */
   #refreshCarriedDemand(space: string): void {
@@ -13672,6 +13672,8 @@ export class Server {
     let readers = this.#carriedDemand.get(space);
     if (offered === undefined && readers === undefined) return;
     const engine = this.#resolvedEngines.get(space);
+    /** What to tell the serving host, once the rows below are in place. */
+    const told: Array<() => void> = [];
     for (
       const reader of new Set([
         ...offered?.keys() ?? [],
@@ -13695,13 +13697,13 @@ export class Server {
           ),
         );
         if (rows.size === 0) continue;
-        // An instance that is the actor's own may not exist yet, and a
-        // serving loop finds the piece behind a document from what the
-        // document holds. So the piece the index records as writing it is
-        // demanded with it, for the same pair.
+        // A serving loop starts no piece for a demanded document that a
+        // computation derives, and an instance that is an actor's own may
+        // not exist yet for it to find the piece from. So each piece the
+        // index records as writing a row's document is demanded with it,
+        // for the same pair.
         if (engine !== undefined) {
           for (const row of [...rows.values()]) {
-            if (row.scopeKey === "space") continue;
             for (
               const piece of selectCurrencyWriters(engine, {
                 space,
@@ -13729,8 +13731,10 @@ export class Server {
       for (const [sessionId, session] of [...held]) {
         if (stands.has(sessionId)) continue;
         held.delete(sessionId);
-        this.#notifySessionChanged({ kind: "removed", space, sessionId });
-        this.#notifyCarriedDemandChanged(space, session);
+        told.push(() => {
+          this.#notifySessionChanged({ kind: "removed", space, sessionId });
+          this.#notifyCarriedDemandChanged(space, session);
+        });
       }
       for (const [sessionId, session] of stands) {
         const before = held.get(sessionId);
@@ -13742,17 +13746,19 @@ export class Server {
           )
         ) continue;
         held.set(sessionId, session);
-        if (before === undefined) {
-          this.#notifySessionChanged({
-            kind: "opened",
-            space,
-            sessionId,
-            ...(session.principal !== undefined &&
-              { principal: session.principal }),
-          });
-          this.#notifySessionOpened(space);
-        }
-        this.#notifyCarriedDemandChanged(space, session);
+        told.push(() => {
+          if (before === undefined) {
+            this.#notifySessionChanged({
+              kind: "opened",
+              space,
+              sessionId,
+              ...(session.principal !== undefined &&
+                { principal: session.principal }),
+            });
+            this.#notifySessionOpened(space);
+          }
+          this.#notifyCarriedDemandChanged(space, session);
+        });
       }
       if (held.size === 0) {
         readers?.delete(reader);
@@ -13765,6 +13771,9 @@ export class Server {
       }
     }
     if (readers?.size === 0) this.#carriedDemand.delete(space);
+    // The host asks what stands when it is told, so it is told once every
+    // row is in place.
+    for (const tell of told) tell();
   }
 
   /**

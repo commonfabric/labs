@@ -390,7 +390,9 @@ pair that demands in the reading space; a broad demand by a pair is then
 demand for that pair's instance of whatever narrows beneath it in the
 source, as it is for a client (`scopes.md` §2). A pair that reached the
 reading space as a carried demand is carried on with the origin it came
-with, so a chain of spaces passes one actor's demand along it.
+with, so a chain of spaces passes one actor's demand along it. A demand
+that reached it with no pair, because its actor may not read the space, is
+carried on with its origin too, for the reads made in the `space` slice.
 
 **Which reads are carried.** Those of a started piece, for an instance the
 source's index does not prove current. The reading loop offers every read
@@ -399,11 +401,12 @@ proven: an instance the reader registered, shared or an actor's own, read
 by a space that is armed with the source for no limited time, which the
 source's index holds as one no piece there is behind on. A read the reader
 has not registered always stands, and so does every read of a space the
-reader is not armed with. With a row for an actor's
-own instance stands a row for each piece the source's index records as
-writing that document, for the same pair: the instance may not exist yet,
-and a serving loop finds the piece behind a document from what the
-document holds. What stands is worked out
+reader is not armed with. With a row that stands, stands a row for each
+piece the source's index records as writing its document, for the same
+pair. A serving loop starts no piece for a demanded document that a
+computation derives, and an instance that is an actor's own may not exist
+yet for it to find the piece from, so the piece is what it is given to
+load. What stands is worked out
 again whenever the source's index or the arming changes, and a reading
 space that offers rows pulls from the source when it is not armed with it
 and when the source tells it of a change, so that it is armed whenever a
@@ -693,9 +696,8 @@ A third is ruled:
    access check, their end and the rows the source's index proves current
    left out; the reading loop's set, sent when it changes and withdrawn at
    a park; and activation and parking of the source, which follow from the
-   rows being held among the source's sessions. Still to do: the acceptance
-   tests 11 and 12 below, and a measurement of what a carried demand costs
-   the source.
+   rows being held among the source's sessions. Still to do: a measurement
+   of what a carried demand costs the source.
 6. **Computations that run without demand.** Envelopes among the write
    rows; a computation recorded as unbounded from what it wrote; the
    unsettled space, settled before a judgment in it or a pull from it
@@ -763,7 +765,10 @@ For the serving loop, in `runtime/runner/test/executor/`:
     C alone starts B and A, and C's session reads the value derived from the
     new input.
 12. In that chain, when A's recomputation leaves `a` equal, B's mark clears
-    and B is not started again.
+    and B is not started again. Both exist in
+    `space-server-currency-chain.test.ts`, with a viewer who holds no grant
+    on the first two spaces, and with a demand for C that starts nothing
+    while no input changed.
 13. A piece that reads `#now/N` is served from the store within the
     interval and started after it, and a root a loop holds unstarted is
     loaded when the interval passes. Both exist in

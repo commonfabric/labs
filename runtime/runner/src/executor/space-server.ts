@@ -7363,7 +7363,8 @@ export class SpaceServer implements TransactionSealDestination {
   /**
    * Helper for `#syncCarriedDemand()`, which returns the pairs demanding
    * in this space with the session each is carried for: the pair's own
-   * session here, or the origin of a pair another space carried here.
+   * session here, or the origin of a pair another space carried here. A
+   * demand carried here with no pair is returned with its origin alone.
    */
   #demandingPairs(): CarriedPair[] {
     if (this.#carriedDemandPairs !== undefined) return this.#carriedDemandPairs;
@@ -7371,7 +7372,17 @@ export class SpaceServer implements TransactionSealDestination {
     for (const key of this.#demandMirror.keys()) {
       for (const row of this.#demandMirror.rowsFor(key)?.values() ?? []) {
         const { principal, sessionId } = row.identity ?? {};
-        if (principal === undefined || sessionId === undefined) continue;
+        if (principal === undefined || sessionId === undefined) {
+          // A row another space carried here for an actor who may not read
+          // this space names no pair, and is carried on for its origin: a
+          // read made for everyone was made for it too.
+          if (row.origin === undefined) continue;
+          const originKey = `\0${row.origin.space}\0${row.origin.sessionId}`;
+          if (!pairs.has(originKey)) {
+            pairs.set(originKey, { origin: row.origin });
+          }
+          continue;
+        }
         const identity = { principal, sessionId } as ScopeKeyIdentity;
         const pairKey = demanderPairKey(identity);
         if (pairs.has(pairKey)) continue;

@@ -256,7 +256,7 @@ describe("v2-server-carried-demand", () => {
           expect(demand()).toEqual([]);
         });
 
-        it("adds the row for an instance the pull found stale", async () => {
+        it("adds the row for an instance the pull found stale, and one for the piece that writes it", async () => {
           const alice = await session(ALICE, "alice-one");
           await write(SOURCE, "of:raw");
 
@@ -264,7 +264,10 @@ describe("v2-server-carried-demand", () => {
             shared("computed:far", alice),
           ]);
 
-          expect(demand().map(({ id }) => id)).toEqual(["computed:far"]);
+          expect(demand().map(({ id }) => id)).toEqual([
+            "computed:far",
+            "of:producer",
+          ]);
         });
 
         it("adds an actor's own instance that the reading space has not registered, though it is armed", async () => {
@@ -334,8 +337,9 @@ describe("v2-server-carried-demand", () => {
         });
 
         it("adds, with a row for an actor's own instance, a row for the piece the index records as writing that document, for the same pair", async () => {
-          // The actor's instance may not exist yet, and the piece is what
-          // a serving loop can load.
+          // A serving loop starts no piece for a demanded document that a
+          // computation derives, and the actor's instance may not exist
+          // yet. The piece is what it can load.
 
           const alice = await session(ALICE, "alice-one");
 
@@ -359,7 +363,7 @@ describe("v2-server-carried-demand", () => {
           ]);
         });
 
-        it("adds the row, and tells the serving host, once an input of the piece that computes the instance changed", async () => {
+        it("adds the row and one for the piece that writes it, and tells the serving host, once an input of that piece changed", async () => {
           const alice = await session(ALICE, "alice-one");
           await arm();
           await server.setCarriedDemand(SOURCE, READER, [
@@ -370,7 +374,10 @@ describe("v2-server-carried-demand", () => {
           await server.writeDocument(SOURCE, "of:raw", { n: 99 });
           await server.idle();
 
-          expect(demand().map(({ id }) => id)).toEqual(["computed:far"]);
+          expect(demand().map(({ id }) => id)).toEqual([
+            "computed:far",
+            "of:producer",
+          ]);
           expect(told).toEqual([
             "session opened",
             `opened ${SOURCE}`,
@@ -452,6 +459,27 @@ describe("v2-server-carried-demand", () => {
           `opened ${SOURCE}`,
           `demand ${SOURCE}`,
         ]);
+      });
+
+      it("holds the row already when it tells the serving host that a session opened", async () => {
+        // The host asks whether the space has a live session when it is
+        // told, and wakes a parked space only if it has.
+
+        const alice = await session(ALICE, "alice-one");
+        const live: boolean[] = [];
+        server.setServerExecutionObserver({
+          sessionOpened: (space) => {
+            if (space === SOURCE) {
+              live.push(server.hasLiveSessionsForSpace(SOURCE));
+            }
+          },
+        });
+
+        await server.setCarriedDemand(SOURCE, READER, [
+          shared("of:far", alice),
+        ]);
+
+        expect(live).toEqual([true]);
       });
 
       it("does not make the actor a connected session of the space", async () => {

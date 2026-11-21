@@ -123,6 +123,18 @@ describe("carried-demand", () => {
       );
     });
 
+    it("carries the reads made in the `space` slice, and no other, for a demand that has no pair", () => {
+      const origin = { space: OTHER, sessionId: "alice-elsewhere" };
+      const carried = carriedRowsOf(
+        [shared("of:far"), shared("of:near", sliceOf(ALICE))],
+        [{ origin }],
+      );
+
+      expect(rowsFor(carried)).toEqual([
+        "of:far at space for alice-elsewhere",
+      ]);
+    });
+
     it("names the row's scope after its scope key", () => {
       const [row] = carriedRowsOf([{
         slice: sliceOf(ALICE),
