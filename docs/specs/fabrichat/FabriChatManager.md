@@ -104,8 +104,12 @@ reads of the room, and it writes only on a mismatch. The one exception is a
 reaction: none of those changes the title, so the manager reads nothing of the
 room's `about` for one. The member who retitles a room tells their manager at
 once; another member's entry follows on their manager's next event for that
-room other than a message or a reaction: their own retitle, an acceptance, or a
-client's `joinRoom` when they open it.
+room other than a message or a reaction: their own retitle, an acceptance, a
+client's `joinRoom` when they open it, or the `joinRoom` their host sends for a
+notice in their share inbox that the room changed. A join naming such a
+`notice` marks it acted on in the catalog's `notices`, in the same
+transaction, and does nothing at all for a room the user's chats do not list as
+saved, so it never restores a forgotten room or records a membership.
 
 ### Adopting the catalog's rooms
 

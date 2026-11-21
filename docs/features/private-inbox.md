@@ -1008,9 +1008,61 @@ while it was down is taken up then, or when its inbox next changes or Home's
 profile records do. A lone offer
 is so taken up once what kept it waiting changes, with no other offer, profile
 change or restart. A catalog that cannot be read is taken to hold no receipts,
-since Home's handler refuses a duplicate in any case. The intake removes and marks nothing, so every
-offer stays in its inbox, and another reader, such as a loom daemon, reads them
-all.
+since Home's handler refuses a duplicate in any case, and to list no rooms, so
+every notice that a room changed is ignored. The intake removes and marks
+nothing in an inbox, so every offer stays in its inbox, and another reader,
+such as a loom daemon, reads them all.
+
+### A notice that a room changed
+
+A row carrying `changes` is a notice that a room changed, not an offer: the
+intake never registers one, whatever else it holds, so a notice can add no
+room to the person's list. A notice carries no room data. It says only which
+kinds of thing changed, and the person's host reads what changed from the room
+itself, under the person's own access. The envelope is an offer's: `kind` is
+the room space's kind, `fabrichat-room`, `id` is `changed:` followed by the
+room's space DID, so there is one row per sender and room, `title` is empty,
+and `changes` is a record of the kinds of change, such as `{ title: true }`.
+The intake acts on a title change, and ignores every other key.
+
+The intake acts on a notice when its envelope is well formed and its `host`
+is the intake's own, as an offer's must be, its `kind`, `id` and `changes` are
+as above with `title` set to `true`, Home's catalog lists its space as a saved
+`fabrichat-room`, Home's chat manager has a `joinRoom`, and the space passes
+the vetting a room's space does, the sender included: `from` holds a `WRITE`
+or `OWNER` entry of its own in the space's access list, the owner can open it,
+it declares `fabrichat-room`, and its root is at the reserved address. Acting
+on it sends the space's root to the manager's `joinRoom`, with the notice's
+`from`, `id` and `sharedAt` as `notice`. For a room the person's chats list as
+saved, the manager brings the title the catalog lists the room under up to the
+room's own, where the two differ, and marks the notice acted on in the
+catalog's `notices`, under its sender and `id`, in the same transaction (see
+[`shared-space-catalog.md`](shared-space-catalog.md#notice-marks)). It does
+nothing for any other room, so a notice never restores an archived entry, nor
+records a membership.
+
+The intake reads that mark before it acts: a notice whose `sharedAt` is the
+one the catalog marks is decided as acted on, and its room is not read. So the
+catalog, not the runtime, holds which notices were acted on, and a runtime
+that starts with many notices in the inbox reads only the rooms of those not
+yet marked. A row holding a `sharedAt` other than the marked one, an earlier
+one included, is acted on again. Any other notice is ignored, its room unread,
+for the life of the runtime worker. A row holding the same sender, `id` and
+`sharedAt` as a notice the intake has already sent is decided as acted on,
+since the first one's mark covers it. While Home's catalog cannot be read, a
+notice is left undecided, and taken up when its inbox next changes or a lost
+connection to the host comes back. A notice whose vetting fails other than by
+a refusal waits on its space's state, and one whose send fails is left
+undecided, as an offer is.
+
+Anyone can append to an inbox, so a notice proves nothing about its sender. A
+forged one can make the intake read again the title of a room the person's
+catalog already lists, under the person's own access, and no more: it cannot
+list a room, restore one, reach a room the catalog does not list, or give a
+room a title the room does not hold. A forger naming a `from` that is no
+member of the room costs the intake the read of the room's access list; one
+naming a member's DID costs one read of the room per row, as a forged offer
+costs one vetting of its space.
 
 ## Joining a room the user visits
 
