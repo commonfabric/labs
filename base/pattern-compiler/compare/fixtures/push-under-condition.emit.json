@@ -99,6 +99,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 2
                 }
               ],

@@ -298,6 +298,7 @@
                     "binding",
                     "noted"
                   ],
+                  "handle": true,
                   "slot": 8
                 }
               ],
@@ -344,6 +345,7 @@
                     "binding",
                     "center"
                   ],
+                  "handle": true,
                   "slot": 10
                 },
                 {
@@ -366,6 +368,7 @@
                     "binding",
                     "picked"
                   ],
+                  "handle": true,
                   "slot": 13
                 }
               ],

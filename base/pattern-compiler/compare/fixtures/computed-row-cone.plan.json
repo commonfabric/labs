@@ -54,6 +54,7 @@
                     "binding",
                     "mark"
                   ],
+                  "handle": true,
                   "slot": 6
                 }
               ],

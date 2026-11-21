@@ -68,6 +68,7 @@
                     "binding",
                     "picked"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],
@@ -416,6 +417,7 @@
                     "binding",
                     "chosen"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -489,6 +491,7 @@
                     "binding",
                     "picked"
                   ],
+                  "handle": true,
                   "slot": 8
                 }
               ],

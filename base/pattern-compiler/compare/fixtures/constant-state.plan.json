@@ -66,6 +66,7 @@
                     "binding",
                     "result"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],

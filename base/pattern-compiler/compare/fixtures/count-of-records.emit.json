@@ -119,6 +119,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],
@@ -167,6 +168,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 3
                 },
                 {

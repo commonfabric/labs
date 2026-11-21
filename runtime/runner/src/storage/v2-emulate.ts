@@ -49,6 +49,12 @@ export const newLoopbackServer = (options?: {
    * of that name is.
    */
   namesInstances?: () => boolean;
+
+  /**
+   * The most slots one client message may stand for, as the memory server's
+   * own option of that name is: it may only raise the default.
+   */
+  untrustedMessageSlots?: number;
 }): MemoryV2Server.Server =>
   new MemoryV2Server.Server({
     authorizeSessionOpen: authorizeLoopbackSessionOpen,
@@ -64,6 +70,9 @@ export const newLoopbackServer = (options?: {
       : {}),
     ...(options?.store !== undefined ? { store: options.store } : {}),
     ...(options?.sessions !== undefined ? { sessions: options.sessions } : {}),
+    ...(options?.untrustedMessageSlots !== undefined
+      ? { untrustedMessageSlots: options.untrustedMessageSlots }
+      : {}),
   });
 
 /**

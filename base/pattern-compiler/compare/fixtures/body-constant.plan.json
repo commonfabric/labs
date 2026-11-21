@@ -28,6 +28,7 @@
                   "at": [
                     "hide"
                   ],
+                  "handle": true,
                   "slot": 0
                 },
                 {
@@ -40,6 +41,7 @@
                   "at": [
                     "show"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {

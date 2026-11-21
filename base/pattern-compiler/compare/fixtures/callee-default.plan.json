@@ -230,6 +230,7 @@
                     "binding",
                     "symbol"
                   ],
+                  "handle": true,
                   "slot": 0
                 },
                 {
@@ -537,6 +538,7 @@
                     "binding",
                     "symbol"
                   ],
+                  "handle": true,
                   "slot": 3
                 },
                 {

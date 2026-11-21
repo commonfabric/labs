@@ -133,6 +133,22 @@ fn generic_function_takes_its_type_argument_from_an_argument() {
 }
 
 #[test]
+fn generic_function_takes_its_type_argument_from_an_element_that_may_be_absent() {
+    // LS §7.3: "Inference at a call is first-order unification of the
+    // argument types against the parameter types". The element type
+    // `T | undefined` is unified with the argument's element type with
+    // `undefined` removed.
+    assert_typed(
+        "function present<T extends object>(items: readonly (T | undefined)[]): T[] {\n\
+           return items.length > 0 ? [] : [];\n\
+         }\n\
+         function show(names: ({ name: string } | undefined)[]) {\n\
+           return present(names).map((item) => item.name.trim());\n\
+         }\n",
+    );
+}
+
+#[test]
 fn variable_of_a_for_of_loop_has_the_element_type() {
     assert_typed(
         "function trimmed(names: string[]) {\n\

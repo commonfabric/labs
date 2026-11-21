@@ -72,6 +72,7 @@
                     "binding",
                     "messages"
                   ],
+                  "handle": true,
                   "slot": 0
                 }
               ],

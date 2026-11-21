@@ -348,16 +348,19 @@ impl<'a> Resolver<'_, 'a> {
                     .typed_at(module, expression, 0)
                     .is_ok_and(|ty| self.shape(ty) == Shape::Never)
         };
-        let mut conditions: Vec<(Condition<'_, 'a>, bool, u32)> = Vec::new();
+        let mut conditions: Vec<(Condition<'_, 'a>, bool, u32, Option<Span>)> = Vec::new();
         let mut child = expression.span();
         for kind in nodes.ancestor_kinds(expression.node_id()) {
             match kind {
+                // In the branch where the test fails, an assignment in the
+                // branch where it holds has not run.
                 AstKind::IfStatement(statement) => {
                     if contains(statement.consequent.span(), child) {
                         conditions.push((
                             Condition::Test(&statement.test),
                             true,
                             statement.test.span().end,
+                            None,
                         ));
                     } else if statement
                         .alternate
@@ -368,6 +371,7 @@ impl<'a> Resolver<'_, 'a> {
                             Condition::Test(&statement.test),
                             false,
                             statement.test.span().end,
+                            Some(statement.consequent.span()),
                         ));
                     }
                 }
@@ -377,12 +381,14 @@ impl<'a> Resolver<'_, 'a> {
                             Condition::Test(&conditional.test),
                             true,
                             conditional.test.span().end,
+                            None,
                         ));
                     } else if contains(conditional.alternate.span(), child) {
                         conditions.push((
                             Condition::Test(&conditional.test),
                             false,
                             conditional.test.span().end,
+                            Some(conditional.consequent.span()),
                         ));
                     }
                 }
@@ -394,6 +400,7 @@ impl<'a> Resolver<'_, 'a> {
                                     Condition::Test(&logical.left),
                                     true,
                                     logical.left.span().end,
+                                    None,
                                 ));
                             }
                             LogicalOperator::Or => {
@@ -401,6 +408,7 @@ impl<'a> Resolver<'_, 'a> {
                                     Condition::Test(&logical.left),
                                     false,
                                     logical.left.span().end,
+                                    None,
                                 ));
                             }
                             LogicalOperator::Coalesce => {}
@@ -436,6 +444,7 @@ impl<'a> Resolver<'_, 'a> {
                                 Condition::Equal(&statement.discriminant, test),
                                 true,
                                 statement.discriminant.span().end,
+                                None,
                             ));
                         }
                     }
@@ -450,10 +459,10 @@ impl<'a> Resolver<'_, 'a> {
             child = kind.span();
         }
         let mut narrowed = ty;
-        for (condition, sense, guard) in conditions.into_iter().rev() {
+        for (condition, sense, guard, untaken) in conditions.into_iter().rev() {
             if writes
                 .as_ref()
-                .is_some_and(|writes| writes.follows(guard, at))
+                .is_some_and(|writes| writes.follows(guard, at, untaken))
             {
                 continue;
             }
@@ -1327,14 +1336,16 @@ struct Writes<'a> {
 
 impl Writes<'_> {
     /// Whether an assignment may run after the condition tested at `guard`
-    /// and before the reference at `at`: one is written between the two, or
-    /// a loop that begins after the condition holds the reference and an
-    /// assignment.
-    fn follows(&self, guard: u32, at: u32) -> bool {
+    /// and before the reference at `at`: one is written between the two
+    /// and outside `untaken`, the branch control did not take to reach the
+    /// reference, or a loop that begins after the condition holds the
+    /// reference and an assignment.
+    fn follows(&self, guard: u32, at: u32, untaken: Option<Span>) -> bool {
         let between = self.writes.iter().any(|write| {
             guard <= write.span.start
                 && write.span.start < at
                 && !contains(write.span, Span::new(at, at))
+                && !untaken.is_some_and(|untaken| contains(untaken, write.span))
         });
         let looped = self.loops.iter().any(|around| {
             guard <= around.start
@@ -1389,7 +1400,7 @@ fn same_literal(left: &str, right: &str) -> bool {
 fn earlier<'e, 'a>(
     statements: &'e [Statement<'a>],
     child: Span,
-    conditions: &mut Vec<(Condition<'e, 'a>, bool, u32)>,
+    conditions: &mut Vec<(Condition<'e, 'a>, bool, u32, Option<Span>)>,
     never: &dyn Fn(&Expression<'a>) -> bool,
 ) {
     for statement in statements.iter().rev() {
@@ -1404,16 +1415,19 @@ fn earlier<'e, 'a>(
             .alternate
             .as_ref()
             .is_some_and(|alternate| leaves(alternate, never));
+        // The branch that leaves the block is the one control did not take.
         match (then_leaves, else_leaves) {
             (true, false) => conditions.push((
                 Condition::Test(&statement.test),
                 false,
                 statement.test.span().end,
+                Some(statement.consequent.span()),
             )),
             (false, true) => conditions.push((
                 Condition::Test(&statement.test),
                 true,
                 statement.test.span().end,
+                statement.alternate.as_ref().map(GetSpan::span),
             )),
             _ => {}
         }

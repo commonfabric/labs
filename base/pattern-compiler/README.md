@@ -1001,11 +1001,15 @@ transactions (`Runtime.edit()`): each read is read through the transaction, each
 change is written into it as it is made, and the transaction commits with the
 runtime's commit and its CFC preparation, or is aborted where the executor did
 not commit. A document of the executor is the entity `of:<identifier>`, and a
-link is written as the runtime's link. `RuntimeTransactions.stored()` reads the
-documents back, and `compare/test/runtime-transactions.test.ts` checks that they
-are the executor's, that one runtime transaction commits for each of the
-executor's, and that a handler that reads a labeled input commits labels on what
-it writes.
+link is written as the runtime's link. An instance the executor makes of another
+artifact, one a function body instantiates or one of a pattern compiled alone,
+gives write records of that artifact's plan: the executor names the instance and
+its artifact to the hook `instantiated`, and the adapter registers the artifact
+and records the instance's write records under it, with a table of inputs per
+compiled pattern. `RuntimeTransactions.stored()` reads the documents back, and
+`compare/test/runtime-transactions.test.ts` checks that they are the executor's,
+that one runtime transaction commits for each of the executor's, and that a
+handler that reads a labeled input commits labels on what it writes.
 
 `compare/integrated.ts` runs each module of a values run three ways on the
 argument and the committed events of today's run: in memory, in storage with the
@@ -1020,6 +1024,68 @@ deno run -A --no-check base/pattern-compiler/compare/cost.ts run run.jsonl
 deno run -A --no-check base/pattern-compiler/compare/integrated.ts run values.jsonl integrated.jsonl
 deno run -A --no-check base/pattern-compiler/compare/integrated.ts report integrated.jsonl run.jsonl
 ```
+
+## Topics
+
+Topics (`patterns/apps/topics/`) is the target both tracks of the integration
+work toward. Its program is seven files, rewritten to the subset in the
+repository's own source (notes 550 on of `SPEC-NOTES.md`), so the crate and
+today's runtime run one source. The comparison runs on it like on any module:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts stubbed values.jsonl apps/topics/
+deno run -A --no-check base/pattern-compiler/compare/corpus.ts run labels.jsonl apps/topics/ --stubbed
+```
+
+`compare/topics/scale.ts` runs the board at a size of 100, 1,000 or 2,000
+topics, on one of four arms, in a process of its own: the load, three edits of
+one topic by a writer outside the board, and three creates through `addTopic`,
+each timed until the board is up to date and the read of its result apart, with
+the facts of the result the arms are compared on. The arms are `executor`, the
+executor with its documents in memory; `storage`, the executor with its
+documents in the runtime's storage, the experimental option `compiledPatterns`
+on, and each topic and each input of the board under a schema with a clause;
+`today`, today's runtime with no label stored; and `today-labeled`, today's
+runtime with the same clauses and `cfcFlowLabels` at `persist`. The arm
+`storage` reports per step the commits, the preparations and their time, the
+write records and their size, the label entries of the documents the step
+changed, the bounds, and the time in each hook of the storage apart from the
+executor's own. With `SCALE_TOPIC_LABELS=distinct` each topic has a clause of
+its own; with `SCALE_CHECK` set an edit checks that each stored position it
+changed holds the clause of the topic it wrote; `SCALE_LABEL_PATHS` adds the
+label entries by form of path, and `SCALE_RECORDS` prints each committed write
+record with the size of its members. Each topic is a document that holds what
+the board demands of a topic and references to the two topics before it, and the
+board's argument holds a reference to each. With `--v8-flags=--expose-gc` each
+step also reports the heap in use after a full collection, beside a baseline
+taken before any topic exists. Run one size per process, since a process that
+has run a larger board keeps more heap:
+
+```sh
+deno run -A --no-check --v8-flags=--expose-gc base/pattern-compiler/compare/topics/scale.ts executor 1000
+deno run -A --no-check --v8-flags=--expose-gc base/pattern-compiler/compare/topics/scale.ts today 1000
+deno run -A --no-check base/pattern-compiler/compare/topics/scale.ts storage 1000
+deno run -A --no-check base/pattern-compiler/compare/topics/scale.ts today-labeled 1000
+```
+
+The same steps run on a real board with `--seed`. `compare/topics/board-seed.ts`
+reads a board out of a snapshot of its space, a store file named `<did>.sqlite`,
+without writing to it, and writes a seed: what the board demands of each topic,
+its mentions as indexes of topics, and the namespace. A seed holds the board's
+content, so keep it beside the snapshot and out of the repository:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/topics/board-seed.ts <did>.sqlite of:<board> seed.json
+deno run -A --no-check --v8-flags=--expose-gc,--max-old-space-size=8192 base/pattern-compiler/compare/topics/scale.ts executor --seed seed.json
+```
+
+With `SCALE_HEAP_SNAPSHOTS=<dir>`, `scale.ts` also writes a V8 heap snapshot at
+the baseline, after the load and after the last create, for the heap tools of
+`skills/perf-investigation/scripts/`. `compare/topics/board-load.ts` loads the
+same snapshot in today's runtime as a runner would, reading the board's result
+(`pull`) or starting the stored board piece (`start`), and reports the memory it
+keeps; with `BOARD_LOAD_HOLD` set it waits for `SIGUSR2` at each measuring
+point, so that an inspector snapshot can be taken there.
 
 ## The parser
 

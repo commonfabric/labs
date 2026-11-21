@@ -183,7 +183,9 @@ export type Plan = {
      * body of a pattern compiled in the default the callee declares for
      * the path the call bound to the slot (PL §1.1, `ReadInput`).
      */
-    reads: { slot: number; at: string[]; default?: unknown }[];
+    /** `handle`: the body declares a handle at `at` (provisional
+     * decision P31). */
+    reads: { slot: number; at: string[]; default?: unknown; handle?: true }[];
     computed: { at: string[]; observes: string }[];
     writes: {
       target: { kind: string; slot?: number; cell?: number; path?: string[] };
@@ -999,7 +1001,9 @@ export class Handle {
   ): unknown {
     const { store } = this.instance;
     // A plain value in place that the body reads is a copy (ruling Z25).
-    if (!declaresHandle(schema, depth)) return store.read(ref, reads, true);
+    if (!declaresHandle(schema, depth)) {
+      return store.read(ref, reads, true, schema);
+    }
     const located = store.locate(ref, true, reads);
     const member = (segment: string, at: Ref) => {
       const below = schemaBelow(schema, segment);
@@ -1429,7 +1433,7 @@ export class Host {
       instance.bindSlot(this, index, from, found);
       return found instanceof Ref ? found.withSchema(schema) : found;
     }
-    const value = withDefaults(this.v(found), schema);
+    const value = withDefaults(this.v(found, schema), schema);
     instance.bindSlot(this, index, from, found);
     return value;
   }
@@ -1663,11 +1667,17 @@ export class Host {
     return seen;
   }
 
-  /** A value with every reference in it replaced by what it refers to. */
-  v(value: unknown): unknown {
+  /**
+   * A value with every reference in it replaced by what it refers to.
+   * With `bound`, a stored value is read under that schema
+   * (`Store.read`).
+   */
+  v(value: unknown, bound?: Schema): unknown {
     if (value instanceof Assembled) return this.v(this.settled(value));
     if (value instanceof Ref) {
-      return this.#reading(this.instance.store.read(value, this.reads));
+      return this.#reading(
+        this.instance.store.read(value, this.reads, false, bound),
+      );
     }
     this.#reading(value);
     if (value instanceof StreamRef) return { $stream: true };
@@ -1730,7 +1740,20 @@ export class Host {
     if (run === undefined) {
       throw new Unsupported("a body that has no function");
     }
-    let argument = this.pass(computed);
+    // What the body reads as a value, of the computed part and of the
+    // slot part: a reference the cone computed that leads to a place a
+    // `value` entry of `Body.reads` is at or below is read as a value too,
+    // since an `enumeration` or a `shape` entry of the slot part gives way
+    // to what the argument holds at its path (`Instance.gives`).
+    let argument = this.pass(computed, {
+      entries: [
+        ...instance.plan.bodies[body].computed,
+        ...instance.plan.bodies[body].reads.map(({ slot, at }) => ({
+          at,
+          observes: instance.plan.slots[slot].observes,
+        })),
+      ],
+    });
     // An `identity` entry of `Body.computed` is a handle to the reference
     // the cone computed there (ES §2.4, "A handle or a reference from a
     // computed input").
@@ -1748,6 +1771,24 @@ export class Host {
           at,
           instance.handleOf(reference, this),
         );
+        continue;
+      }
+      // An array that a body returned whole is a handle to its place: the
+      // path of the result where the output is kept, or the document of
+      // the output (FA §6.2, "A handle bound to a value the instance
+      // computed"; ruling Z53).
+      const held = reference instanceof Assembled
+        ? this.settled(reference)
+        : reference;
+      const output = Array.isArray(held)
+        ? instance.placeOfOutput(held)
+        : undefined;
+      if (output !== undefined) {
+        argument = instance.placed(
+          argument,
+          at,
+          instance.handleOf(output, this),
+        );
       }
     }
     // The slot part of the argument: each entry of `Body.reads` at its
@@ -1755,12 +1796,26 @@ export class Host {
     const layout = [...instance.plan.bodies[body].reads].sort((a, b) =>
       a.at.length - b.at.length
     );
-    for (const { slot, at, default: declared } of layout) {
+    // The places where the body reads the value. Where the body declares
+    // no handle at such a place, the `value` entry holds the value with
+    // its address (ES §2.4, "What the argument holds at a path"), and an
+    // `identity` entry there is the slot of the place that another body
+    // declares a handle at.
+    const valued = new Set(
+      layout.filter(({ slot }) =>
+        instance.plan.slots[slot].observes === "value"
+      ).map(({ at }) => JSON.stringify(at)),
+    );
+    for (const { slot, at, default: declared, handle } of layout) {
       const star = at.indexOf("*");
       // A slot at `*` stands for each element: the container is given
       // whole by the slot at its own path, where the body lists one.
       if (star >= 0) continue;
       const { observes } = instance.plan.slots[slot];
+      if (
+        observes === "identity" && handle === undefined &&
+        valued.has(JSON.stringify(at))
+      ) continue;
       // The slot reads the default of its own place first.
       const read = declared === undefined
         ? this.slot(slot)
@@ -1784,6 +1839,36 @@ export class Host {
         continue;
       }
       argument = instance.placed(argument, at, given);
+    }
+    // An entry at `*` where the body declares a handle is placed at each
+    // child the path reaches (ES §2.4): each element of a stored array,
+    // and each member of a stored record, is a handle to its position,
+    // over references and over plain values in place alike.
+    for (const { slot, at, handle } of layout) {
+      const { root, path } = instance.plan.slots[slot];
+      if (
+        handle === undefined || at.indexOf("*") !== at.length - 1 ||
+        path.indexOf("*") !== path.length - 1
+      ) continue;
+      const above = path.slice(0, -1);
+      const container = this.at(instance.rootOf(root, this, above), above);
+      const held = this.at(argument, at.slice(0, -1));
+      if (!(container instanceof Ref)) continue;
+      const child = (key: string) =>
+        instance.handleOf(container.key(key), this, slot);
+      if (Array.isArray(held)) {
+        argument = instance.placed(
+          argument,
+          at.slice(0, -1),
+          held.map((_, index) => child(`${index}`)),
+        );
+      } else if (isRecord(held) && !(held instanceof Handle)) {
+        argument = instance.placed(
+          argument,
+          at.slice(0, -1),
+          Object.fromEntries(Object.keys(held).map((key) => [key, child(key)])),
+        );
+      }
     }
     const keyed = { body, keys: instance.contextKeys(this.context) };
     return instance.returned(
@@ -1846,10 +1931,30 @@ export class Host {
    * it returns holds the reference to the stream, which is stored as a
    * link (ruling Z20).
    */
-  pass(value: unknown): unknown {
-    if (value instanceof Assembled) return this.pass(this.settled(value));
+  pass(
+    value: unknown,
+    /**
+     * The entries of `Body.computed` that the value is narrowed to, and
+     * the path of `value` in the computed value. A stored value at a path
+     * with no `value` entry at or below it is read with the references in
+     * it as stand-ins and not followed (ES §2.4: the computed part is
+     * "narrowed to the entries of `Body.computed`").
+     */
+    narrowed?: { entries: readonly { at: string[]; observes: string }[] },
+    path: readonly string[] = [],
+  ): unknown {
+    if (value instanceof Assembled) {
+      return this.pass(this.settled(value), narrowed, path);
+    }
     if (value instanceof Ref || value instanceof StreamRef) {
-      return this.v(value);
+      const valued = narrowed === undefined ||
+        narrowed.entries.some(({ at, observes }) =>
+          observes === "value" &&
+          at.slice(0, path.length).every((segment, index) =>
+            segment === "*" || segment === path[index]
+          )
+        );
+      return this.v(value, valued ? undefined : SHALLOW);
     }
     // A body that would be handed a value in an error state is not run.
     this.#reading(value);
@@ -1858,17 +1963,28 @@ export class Host {
     }
     // A handle that value code made for a constant stays the handle.
     if (value instanceof Handle) return value;
-    if (Array.isArray(value)) return value.map((member) => this.pass(member));
+    if (Array.isArray(value)) {
+      return value.map((member, index) =>
+        this.pass(member, narrowed, [...path, `${index}`])
+      );
+    }
     if (isRecord(value)) {
       return Object.fromEntries(
         Object.entries(value).map((
           [name, member],
-        ) => [name, this.pass(member)]),
+        ) => [name, this.pass(member, narrowed, [...path, name])]),
       );
     }
     return value;
   }
 }
+
+/**
+ * The schema a stored value is read under where a body observes nothing
+ * of it but its shape or its members' presence: a container whose
+ * references stay references.
+ */
+const SHALLOW: Schema = { type: ["array", "object"], items: {} };
 
 /** A host that holds nothing: for a constant read where no cone runs. */
 class NoHost extends Host {
@@ -2007,6 +2123,15 @@ export type TransactionHooks = {
   begin(cause: Transaction["cause"] | "send" | "watermark"): void;
 
   /**
+   * The executor made an instance of another artifact than the one it was
+   * started with: one a function body instantiates, or one of a pattern
+   * compiled alone. The write records of the instance (`plan-write.ts`,
+   * `NamedOutputInputs.instance`) name the records of that artifact's
+   * plan. Called before the instance writes.
+   */
+  instantiated?(instance: string, artifact: Artifact): void;
+
+  /**
    * The transaction in progress read a position of a document: one a
    * link the read followed was at, or the one the read ended at. `by` is
    * the body and the entry of its `Body.handles` that a read through a
@@ -2031,14 +2156,6 @@ export type TransactionHooks = {
     path: readonly string[],
     observes?: string,
   ): string | undefined;
-
-  /**
-   * The executor made an instance, with the identifier given, that runs the
-   * plan of another artifact than the instance it was started with: the
-   * write records of that instance name records of the other plan.
-   * `pattern` is the identity that plan begins with (`Plan.patterns`).
-   */
-  instantiated?(instance: string, pattern: string | undefined): void;
 
   /**
    * Registers what the store calls when the labels of documents changed
@@ -2908,6 +3025,9 @@ export class Instance {
     this.id = options.id ?? "result";
     this.argument = argumentOf(this.id);
     this.root = options.parent?.root ?? this;
+    if (this.root !== this) {
+      this.root.options.transactions?.instantiated?.(this.id, artifact);
+    }
     this.plan = artifact.plan;
     this.code = artifact.code;
     for (const { id, schema } of artifact.schemas) {
@@ -2919,12 +3039,6 @@ export class Instance {
       }
     });
     this.#documents.add(this.argument).add(this.id);
-    if (this.root !== this && artifact !== this.root.artifact) {
-      this.root.options.transactions?.instantiated?.(
-        this.id,
-        artifact.plan.patterns?.[0],
-      );
-    }
     if (this.root === this) {
       this.store.onWrite = (doc, path) => this.#wrote(doc, path);
       this.store.onChange = (change) => this.#changed(change);
@@ -3764,7 +3878,7 @@ export class Instance {
               return named.path.some(isKeySegment) ? host.v(value) : value;
             }
             if (Array.isArray(value)) {
-              return this.#linkToOutput(value) ?? value.map(given);
+              return this.linkToOutput(value) ?? value.map(given);
             }
             if (isRecord(value)) {
               return Object.fromEntries(
@@ -3867,7 +3981,26 @@ export class Instance {
    * resolves the link learns them (ruling Z52). Nothing for another
    * array.
    */
-  #linkToOutput(array: readonly unknown[]): Ref | undefined {
+  /**
+   * The place of the output that an array is the whole value of: the
+   * path of the result document where an output outside every element
+   * body is kept, and otherwise the document of the output
+   * (`linkToOutput()`). Nothing for another array.
+   */
+  placeOfOutput(array: readonly unknown[]): Ref | undefined {
+    const from = this.returnedWhole.get(array);
+    if (from === undefined) return undefined;
+    const record = this.plan.outputs[from.output];
+    if (
+      record.kept && record.path.length > 0 &&
+      this.plan.cones[record.cone].within.length === 0
+    ) {
+      return new Ref(this.id, record.path);
+    }
+    return this.linkToOutput(array);
+  }
+
+  linkToOutput(array: readonly unknown[]): Ref | undefined {
     const from = this.returnedWhole.get(array);
     if (from === undefined) return undefined;
     const place = this.#generated(from.output, array, from.context);
@@ -4398,6 +4531,32 @@ export class Instance {
   }
 
   /**
+   * What `equals` compares of `value`: the text of the address it resolves
+   * to, or `undefined` for a value with no place in the graph (provisional
+   * decision P41, `equalsKey`).
+   */
+  equalsKey(value: unknown): string | undefined {
+    if (value instanceof Handle && value.target instanceof StreamRef) {
+      const { instance, binding, keys } = value.target;
+      return textOf({
+        stream: { instance, binding, keys: [...keys] },
+      });
+    }
+    const ref = value instanceof Handle
+      ? value.target as Ref
+      : value instanceof Ref
+      ? value
+      : typeof value === "object" && value !== null
+      ? this.store.addresses.get(value)
+      : undefined;
+    // A key that no position holds resolves to no position: the
+    // reference is compared as the key it holds.
+    return ref === undefined
+      ? undefined
+      : this.store.addressText(this.store.locate(ref, true).ref);
+  }
+
+  /**
    * Whether two values a body holds are one: two handles or two values
    * read from one stored address, and otherwise two equal values. Each
    * reference is resolved to the position it names now and the two are
@@ -4407,27 +4566,7 @@ export class Instance {
    * the cell of the element where the position holds a link.
    */
   same(a: unknown, b: unknown): boolean {
-    const address = (value: unknown): string | undefined => {
-      if (value instanceof Handle && value.target instanceof StreamRef) {
-        const { instance, binding, keys } = value.target;
-        return textOf({
-          stream: { instance, binding, keys: [...keys] },
-        });
-      }
-      const ref = value instanceof Handle
-        ? value.target as Ref
-        : value instanceof Ref
-        ? value
-        : typeof value === "object" && value !== null
-        ? this.store.addresses.get(value)
-        : undefined;
-      // A key that no position holds resolves to no position: the
-      // reference is compared as the key it holds.
-      return ref === undefined
-        ? undefined
-        : this.store.addressText(this.store.locate(ref, true).ref);
-    };
-    const [left, right] = [address(a), address(b)];
+    const [left, right] = [this.equalsKey(a), this.equalsKey(b)];
     if (left !== undefined && right !== undefined) return left === right;
     // A value read from a stored address and one that was not are two.
     if (left !== undefined || right !== undefined) return false;
@@ -7614,6 +7753,11 @@ export class Instance {
    * `keyed` is the body and the element keys of the run of a `lift` or
    * a `computed`.
    */
+  /** The cause of the run of a body under way (`during()`). */
+  get runningCause(): FabricValue | undefined {
+    return this.#running?.cause;
+  }
+
   during<T>(cause: FabricValue, run: () => T, keyed?: KeyedRun): T {
     const outer = this.#running;
     this.#running = {
@@ -11499,9 +11643,12 @@ const commonfabric = (instance: Instance): unknown => {
     equals: (a: unknown, b: unknown) => instance.same(a, b),
     of: (value: unknown) => instance.createCell(value),
     // A cell a body makes under a cause is the same cell for the same
-    // cause (PL §1.3).
+    // cause in the same run (PL §1.3). A cause that is a reference is its
+    // identity.
     for: (cause: unknown) => {
-      const key = JSON.stringify(cause) ?? "undefined";
+      const key = `${JSON.stringify(instance.runningCause ?? null)}\n${
+        instance.equalsKey(cause) ?? JSON.stringify(cause) ?? "undefined"
+      }`;
       const made = caused.get(key) ?? instance.createCell(undefined);
       caused.set(key, made);
       return made;
@@ -11577,6 +11724,7 @@ const commonfabric = (instance: Instance): unknown => {
     toCompactDebugString,
     toIndentedDebugString,
     equals: (a: unknown, b: unknown) => instance.same(a, b),
+    equalsKey: (value: unknown) => instance.equalsKey(value),
     // Every cell of an executed instance is in the instance's space.
     spaceOf: () => {
       if (instance.options.space === undefined) {

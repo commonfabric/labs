@@ -118,6 +118,7 @@
                     "binding",
                     "body"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -125,6 +126,7 @@
                     "binding",
                     "loaded"
                   ],
+                  "handle": true,
                   "slot": 3
                 }
               ],
@@ -207,6 +209,7 @@
                     "binding",
                     "loaded"
                   ],
+                  "handle": true,
                   "slot": 7
                 }
               ],
@@ -264,6 +267,7 @@
                     "binding",
                     "body"
                   ],
+                  "handle": true,
                   "slot": 9
                 }
               ],

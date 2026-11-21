@@ -4926,6 +4926,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         // `Body.reads`: each slot with its place in the body's argument
         // (PL §1.1, `ReadInput`).
         let mut reads: Vec<(usize, Vec<String>)> = Vec::new();
+        // The entries of `reads` at a position the body declares as a
+        // handle (provisional decision P40).
+        let mut handle_reads: BTreeSet<(usize, Vec<String>)> = BTreeSet::new();
         let mut computed_inputs: Vec<Value> = Vec::new();
         let mut names: Names = HashMap::new();
         // The `value` entries, for an operand that names a space.
@@ -4983,6 +4986,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                                 }
                                 at_path.extend(slot_path(&[], &entry.path));
                             }
+                        }
+                        let handle =
+                            matches!(entry.class, Class::Identity | Class::Resolved)
+                                && record.detail.handles_at.iter().any(|(input, path)| {
+                                    *input == entry.input && *path == entry.path
+                                });
+                        if handle {
+                            handle_reads.insert((slot, at_path.clone()));
                         }
                         if !reads.contains(&(slot, at_path.clone())) {
                             reads.push((slot, at_path));
@@ -5386,6 +5397,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                     let (root, path, ..) = &self.slots[*slot];
                     if let Some(default) = default_for(&self.bound_defaults, root, path) {
                         entry["default"] = default;
+                    }
+                    // `ReadInput.handle`: the body declares a handle at
+                    // `at`, which the slot's schema, the type of the
+                    // place, does not say (provisional decision P40).
+                    if handle_reads.contains(&(*slot, at.clone())) {
+                        entry["handle"] = json!(true);
                     }
                     entry
                 })
@@ -6016,8 +6033,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         Some(combine(found).unwrap_or(Declared::Produced))
     }
 
-    /// What one returned expression of a function body passes on. `None`
-    /// is a constant, which is no branch of a selection.
+    /// What one returned expression of a function body written in
+    /// `module` passes on. `None` is a constant, which is no branch of a
+    /// selection.
     fn passed_on(
         &self,
         module: usize,

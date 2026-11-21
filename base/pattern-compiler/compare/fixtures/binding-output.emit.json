@@ -101,6 +101,7 @@
                     "binding",
                     "log"
                   ],
+                  "handle": true,
                   "slot": 2
                 }
               ],

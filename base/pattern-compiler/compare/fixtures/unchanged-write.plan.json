@@ -67,6 +67,7 @@
                     "binding",
                     "level"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {

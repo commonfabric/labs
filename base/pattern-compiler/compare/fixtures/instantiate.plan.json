@@ -83,6 +83,7 @@
                     "binding",
                     "count"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {
@@ -464,6 +465,7 @@
                   "at": [
                     "pressed"
                   ],
+                  "handle": true,
                   "slot": 0
                 }
               ],
@@ -492,6 +494,7 @@
                     "binding",
                     "count"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -562,6 +565,7 @@
                     "binding",
                     "rows"
                   ],
+                  "handle": true,
                   "slot": 5
                 },
                 {
@@ -569,6 +573,7 @@
                     "binding",
                     "total"
                   ],
+                  "handle": true,
                   "slot": 6
                 }
               ],

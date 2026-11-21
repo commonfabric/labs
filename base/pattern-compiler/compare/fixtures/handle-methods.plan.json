@@ -326,6 +326,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 3
                 }
               ],
@@ -394,6 +395,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 8
                 }
               ],
@@ -430,6 +432,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 10
                 },
                 {
@@ -465,6 +468,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 13
                 }
               ],
@@ -535,6 +539,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 16
                 }
               ],
@@ -563,6 +568,7 @@
                     "binding",
                     "total"
                   ],
+                  "handle": true,
                   "slot": 18
                 }
               ],
@@ -616,6 +622,7 @@
                     "binding",
                     "total"
                   ],
+                  "handle": true,
                   "slot": 21
                 }
               ],
@@ -677,6 +684,7 @@
                     "binding",
                     "marks"
                   ],
+                  "handle": true,
                   "slot": 23
                 }
               ],
@@ -698,6 +706,7 @@
                     "binding",
                     "marks"
                   ],
+                  "handle": true,
                   "slot": 25
                 },
                 {
@@ -758,6 +767,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 28
                 }
               ],

@@ -81,6 +81,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],

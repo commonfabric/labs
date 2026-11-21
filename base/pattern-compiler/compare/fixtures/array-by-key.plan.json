@@ -54,6 +54,7 @@
                     "binding",
                     "noted"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],
@@ -578,6 +579,7 @@
                     "binding",
                     "noted"
                   ],
+                  "handle": true,
                   "slot": 4
                 }
               ],
@@ -624,6 +626,7 @@
                     "binding",
                     "owner"
                   ],
+                  "handle": true,
                   "slot": 15
                 },
                 {
@@ -631,6 +634,7 @@
                     "binding",
                     "picked"
                   ],
+                  "handle": true,
                   "slot": 16
                 },
                 {

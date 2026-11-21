@@ -97,6 +97,7 @@
                     "binding",
                     "stops"
                   ],
+                  "handle": true,
                   "slot": 2
                 }
               ],
@@ -149,6 +150,7 @@
                     "binding",
                     "stops"
                   ],
+                  "handle": true,
                   "slot": 5
                 },
                 {

@@ -79,6 +79,7 @@
                     "binding",
                     "noted"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],

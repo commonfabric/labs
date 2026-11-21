@@ -964,6 +964,111 @@ describe("write records the runtime instantiates with the option on", () => {
     expect(new Set(minted(within.label)).size).toBe(2);
   });
 
+  it("records the writes of an instance a handler body makes under that instance's pattern, and commits", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const id = identifierOf({ test: "instantiate-labeled" });
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL("../fixtures/instantiate-labeled.emit.json", import.meta.url),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const artifact = patterns.find(({ name }) => name === "default")!;
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    // The compiled pattern each instance's write records were recorded
+    // under.
+    const recordedUnder = new Map<string, Set<string>>();
+    hooks.onCommitted((writes) => {
+      for (const { instance, compiledPattern } of writes) {
+        const patterns = recordedUnder.get(instance) ?? new Set();
+        recordedUnder.set(instance, patterns.add(compiledPattern));
+      }
+    });
+    try {
+      const { given, documents } = await labeledInputs(
+        runtime,
+        space,
+        generateInputs(
+          artifact.plan as Parameters<typeof generateInputs>[0],
+          artifact.schemas as Parameters<typeof generateInputs>[1],
+          await scenarioAudience(),
+        ),
+        { note: "n" },
+        hooks,
+      );
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+        artifacts: (pattern) =>
+          patterns.find(({ plan }) =>
+            (plan as { patterns?: string[] }).patterns?.[0] === pattern
+          ),
+      });
+      expect(await hooks.settled()).toEqual([]);
+      // `add` instantiates `Row`, whose plan is another one than the
+      // plan of the instance the executor was started with.
+      const outcome = instance.send(bindingOf(instance, "add"), {
+        title: "first",
+      });
+      expect(outcome.committed).toBe(true);
+      expect(await hooks.settled()).toEqual([]);
+      expect(
+        (instance.result() as { rows: { shout: string }[] }).rows.map((
+          { shout },
+        ) => shout),
+      ).toEqual(["firstn"]);
+      // The output `shout` of the instance stores the label of its own
+      // template: the clause of `note`, which it reads.
+      const [made] = [...instance.store.docs].filter(([, { value }]) =>
+        (value as { shout?: unknown } | undefined)?.shout === "firstn"
+      ).map(([doc]) => doc);
+      const [ofBoard] = recordedUnder.get(instance.id) ?? [];
+      expect([...recordedUnder.get(instance.id) ?? []]).toHaveLength(1);
+      expect([...recordedUnder.get(made) ?? []]).toHaveLength(1);
+      expect([...recordedUnder.get(made) ?? []]).not.toContain(ofBoard);
+      const read = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(read, {
+          space,
+          id: hooks.entityOf(made),
+          scope: "space",
+        });
+        const label = metadata === undefined
+          ? undefined
+          : labelForConsumedEntries(
+            consumedEntriesForRead(metadata, ["shout"], {
+              nonRecursive: false,
+              consumes: "value",
+            }),
+            ["shout"],
+            false,
+          );
+        expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+          '"input:note"',
+        );
+      } finally {
+        read.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("binds the slot of a literal a handler binding gives its state as a constant, and commits", async () => {
     const { refused } = await commitWithOptionOn(
       "constant-state",
