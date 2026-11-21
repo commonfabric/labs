@@ -1072,6 +1072,38 @@ describe("cfc-plan-labels", () => {
       expect(shape["/b"]).toEqual(["secret-b"]);
     });
 
+    it("stores the label of a write as the `enumerate` entry of the array it writes and of each array inside the value written", async () => {
+      const { error, derived } = await commitWrites(
+        true,
+        recordBoth,
+        false,
+        {
+          a: () => ({ rows: [["x"], ["y", "z"]], names: ["n"], count: 2 }),
+        },
+      );
+      expect(error).toBeUndefined();
+      for (const path of ["/a/rows", "/a/rows/0", "/a/rows/1", "/a/names"]) {
+        expect(derived[`enumerate ${path}`]).toEqual({
+          confidentiality: ["secret-a"],
+        });
+      }
+      expect(derived["enumerate /a"]).toBeUndefined();
+      expect(derived["enumerate /a/count"]).toBeUndefined();
+    });
+
+    it("stores no `enumerate` entry for an array inside a value written with the option off", async () => {
+      const { error, derived } = await commitWrites(
+        false,
+        recordBoth,
+        false,
+        { a: () => ({ rows: [["x"]] }) },
+      );
+      expect(error).toBeUndefined();
+      expect(
+        Object.keys(derived).filter((key) => key.startsWith("enumerate")),
+      ).toEqual([]);
+    });
+
     it("stores each covered path's own label below a path written whole, beside the join there", async () => {
       const { error, value, shape } = await commitWrites(
         true,

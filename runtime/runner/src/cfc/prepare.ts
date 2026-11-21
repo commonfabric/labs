@@ -4739,6 +4739,32 @@ const starEntryHolds = (
 };
 
 /**
+ * The paths of the arrays `value` holds, `path` being its own: that of the
+ * value where it is an array, and that of each array inside it. What a
+ * reference in the value leads to is no part of it.
+ */
+const arrayPathsWithin = (
+  value: unknown,
+  path: readonly string[],
+  found: (readonly string[])[] = [],
+): (readonly string[])[] => {
+  if (
+    value === null || typeof value !== "object" || isPrimitiveCellLink(value)
+  ) return found;
+  if (Array.isArray(value)) {
+    found.push(path);
+    value.forEach((member, index) =>
+      arrayPathsWithin(member, [...path, String(index)], found)
+    );
+    return found;
+  }
+  for (const [name, member] of Object.entries(value)) {
+    arrayPathsWithin(member, [...path, name], found);
+  }
+  return found;
+};
+
+/**
  * The value at `path` of what a transaction wrote, from the values it wrote
  * at each path (`valuesByPath`, by path key), or `undefined` where no
  * written path is at or above it.
@@ -14697,28 +14723,37 @@ export function* prepareBoundaryCommitSteps(
         // (§8.12.8, the `iterate` entries are replaced on overwrite): the
         // label of the write is stored as the `enumerate` entry of the
         // array too, so that a read of its members, their order or their
-        // number consumes it. An array inside the value written, at a path
-        // of its own below the written one, gets none. Behind
-        // `compiledPatterns`, which defaults off.
+        // number consumes it. An array inside the value written has the
+        // same entry at its own path, unless that path stores a label of
+        // its own here. Behind `compiledPatterns`, which defaults off.
         if (
           planLabelsOn &&
           (pathLabel.confidentiality.length > 0 ||
-            pathLabel.integrity.length > 0) &&
-          Array.isArray(writtenValueAt(flowWrittenValues, path))
+            pathLabel.integrity.length > 0)
         ) {
-          persistedLabelEntries.push(markFlowStampEntry({
-            path,
-            label: {
-              ...(pathLabel.confidentiality.length > 0
-                ? { confidentiality: [...pathLabel.confidentiality] }
-                : {}),
-              ...(pathLabel.integrity.length > 0
-                ? { integrity: [...pathLabel.integrity] }
-                : {}),
-            },
-            origin: "derived",
-            observes: "enumerate",
-          }));
+          for (
+            const array of arrayPathsWithin(
+              writtenValueAt(flowWrittenValues, path),
+              path,
+            )
+          ) {
+            if (
+              array.length > path.length && derivedStampKeys.has(pathKey(array))
+            ) continue;
+            persistedLabelEntries.push(markFlowStampEntry({
+              path: array,
+              label: {
+                ...(pathLabel.confidentiality.length > 0
+                  ? { confidentiality: [...pathLabel.confidentiality] }
+                  : {}),
+                ...(pathLabel.integrity.length > 0
+                  ? { integrity: [...pathLabel.integrity] }
+                  : {}),
+              },
+              origin: "derived",
+              observes: "enumerate",
+            }));
+          }
         }
         // Freeze-at-creation: mint the existence entry only when the path
         // has none (creation / legacy migration); a carried frozen entry
