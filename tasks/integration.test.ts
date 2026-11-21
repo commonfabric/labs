@@ -18,6 +18,7 @@ import {
   integrationTestDir,
   offsetPorts,
   type PackageOutcome,
+  PATTERN_TEST_ENVIRONMENT,
   precompilePatternTests,
   readPatternTestList,
   runCommand,
@@ -771,6 +772,38 @@ async function makePatternRoot(): Promise<string> {
   }
   return rootDir;
 }
+
+Deno.test("runPackageIntegration gives a pattern test the environment the table names for it, and the others none of it", async () => {
+  const [flagged] = Object.keys(PATTERN_TEST_ENVIRONMENT);
+  const rootDir = await makePatternRoot();
+  try {
+    await Deno.mkdir(
+      `${rootDir}/${flagged.slice(0, flagged.lastIndexOf("/"))}`,
+      {
+        recursive: true,
+      },
+    );
+    await Deno.writeTextFile(`${rootDir}/${flagged}`, "");
+    const fake = fakeHost();
+    await capturing(() =>
+      runPackage("pattern-tests", rootDir, fake, {
+        only: [flagged, PASSING_PATTERN],
+      })
+    );
+    const environments = new Map(
+      fake.ran.map(({ cmd, options }) => [cmd.at(-1), options.env ?? {}]),
+    );
+    expect(environments.get(flagged)).toMatchObject({
+      ...PATTERN_TEST_ENVIRONMENT[flagged],
+      EXPERIMENTAL_SERVER_EXECUTION: "false",
+    });
+    for (const name of Object.keys(PATTERN_TEST_ENVIRONMENT[flagged])) {
+      expect(environments.get(PASSING_PATTERN)).not.toHaveProperty(name);
+    }
+  } finally {
+    await Deno.remove(rootDir, { recursive: true });
+  }
+});
 
 /** A host on which `FAILING_PATTERN` fails, printing to both streams. */
 function patternHost(env: Record<string, string> = {}): FakeHost {

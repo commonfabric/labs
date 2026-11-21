@@ -326,6 +326,23 @@ export function readPatternTestList(text: string): string[] {
   );
 }
 
+/**
+ * The environment a pattern test needs beyond the lane's, by the test's
+ * path. `cf test` takes experimental options from its environment and from
+ * nowhere else, so a test of a pattern that needs one on names it here, and
+ * a person running the file by hand sets the same variable.
+ */
+export const PATTERN_TEST_ENVIRONMENT: Readonly<
+  Record<string, Readonly<Record<string, string>>>
+> = {
+  "patterns/examples/cfc-exchange-rules/card-table.test.tsx": {
+    EXPERIMENTAL_VIEWER_BOUND_RELEASE: "true",
+  },
+  "patterns/examples/cfc-exchange-rules/card-table-multi-user.test.tsx": {
+    EXPERIMENTAL_VIEWER_BOUND_RELEASE: "true",
+  },
+};
+
 /** How many `cf test --compile-only` processes the precompile runs at once. */
 const PRECOMPILE_PROCESSES = 5;
 
@@ -492,6 +509,7 @@ async function runPatternTests(
             // Pattern tests run the OFF arm in every lane, whatever the
             // lane's own posture.
             EXPERIMENTAL_SERVER_EXECUTION: "false",
+            ...PATTERN_TEST_ENVIRONMENT[testFile],
           },
         },
       );
