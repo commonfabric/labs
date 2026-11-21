@@ -5,8 +5,14 @@ import {
   isIPCClientMessage,
   isIPCClientNotification,
   isIPCClientRequest,
+  isIPCRemoteNotification,
+  isSpaceSeqAdvancedNotification,
 } from "@/protocol/guards.ts";
-import { ClientNotificationType, RequestType } from "@/protocol/types.ts";
+import {
+  ClientNotificationType,
+  NotificationType,
+  RequestType,
+} from "@/protocol/types.ts";
 
 describe("guards", () => {
   describe("isIPCClientRequest()", () => {
@@ -55,6 +61,40 @@ describe("guards", () => {
       expect(isIPCClientNotification([ClientNotificationType.VDomEvent]))
         .toBe(false);
       expect(isIPCClientNotification(undefined)).toBe(false);
+    });
+  });
+
+  describe("isSpaceSeqAdvancedNotification()", () => {
+    const advanced = {
+      type: NotificationType.SpaceSeqAdvanced,
+      space: "did:key:z6Mk-guards-space",
+      seq: 3,
+    };
+
+    it("returns true for a space DID and a non-negative integer seq", () => {
+      expect(isSpaceSeqAdvancedNotification(advanced)).toBe(true);
+      expect(isSpaceSeqAdvancedNotification({ ...advanced, seq: 0 })).toBe(
+        true,
+      );
+    });
+
+    it("returns false for another type, a space that is not a DID, or a seq that is not a non-negative integer", () => {
+      expect(isSpaceSeqAdvancedNotification({
+        ...advanced,
+        type: NotificationType.ConnectionRestored,
+      })).toBe(false);
+      expect(isSpaceSeqAdvancedNotification({ ...advanced, space: "space" }))
+        .toBe(false);
+      for (const seq of [-1, 1.5, "3", undefined]) {
+        expect(isSpaceSeqAdvancedNotification({ ...advanced, seq })).toBe(
+          false,
+        );
+      }
+      expect(isSpaceSeqAdvancedNotification([advanced])).toBe(false);
+    });
+
+    it("is one of the notifications `isIPCRemoteNotification()` recognizes", () => {
+      expect(isIPCRemoteNotification(advanced)).toBe(true);
     });
   });
 });

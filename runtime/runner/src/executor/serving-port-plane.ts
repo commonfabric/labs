@@ -697,6 +697,9 @@ export class ServingPlane {
       this.#viewInterests.noteChanged(space);
       this.#observer?.viewsChanged?.(space, sessionId);
     });
+    endpoint.onNotice("observer.currencyChanged", ({ space }) => {
+      this.#observer?.currencyChanged?.(space);
+    });
     endpoint.onNotice("observer.sessionChanged", ({ event }) => {
       this.#sessions.apply(event);
       this.#viewInterests.noteChanged(event.space);

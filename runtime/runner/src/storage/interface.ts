@@ -1404,6 +1404,14 @@ export interface IStorageProvider {
     options?: { branch?: BranchName; before?: number; limit?: number },
   ): Promise<CommitSummary[]>;
 
+  /**
+   * Observes the newest seq of the space this provider has learned of
+   * moving forward: a commit of its own being accepted, or the server
+   * pushing a commit to a document it watches. Returns the function that
+   * stops observing.
+   */
+  subscribeServerSeq?(observer: (serverSeq: number) => void): () => void;
+
   /** Returns the space's branches, deleted ones included. */
   listBranches?(): Promise<BranchInfo[]>;
 

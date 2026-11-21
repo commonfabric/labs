@@ -180,6 +180,9 @@ deno task cf inspect html     z6Mkqa41 --out /tmp/space.html [--app-url https://
 deno task cf inspect converge      of:fid1:… --all --path value
 deno task cf inspect converge-scan --all --json
 
+# pieces in different spaces that read what each other write (same selectors)
+deno task cf inspect currency-cycles --all
+
 # rehearsal clones — `cf space` WRITES, so it sits outside inspect's read-only
 # contract, but clone.ts + fingerprint.ts live in this package. The operating
 # procedure is docs/development/space-clone-rehearsal.md.
@@ -264,6 +267,36 @@ refusal is belt-and-suspenders. See `runtime/toolshed/routes/storage/memory/`.
 
 A standalone `cli.ts` entry exists for use outside the `cf` CLI (local only;
 `--remote` requires the `cf` CLI for request signing).
+
+## Cycles across spaces (`currency-cycles`)
+
+A serving loop records, for each piece it runs, the documents the piece writes
+and the documents each of its slices read, some of them in other spaces
+(`serving-loop.md` §3b). `currency-cycles` reads those records out of every
+store it is given and builds one graph over them: a piece reads another where a
+slice of it read a document the other writes. It prints which spaces read
+documents of which, and each cycle whose pieces are in more than one space, as
+the pieces in order with the document that carries each step and the slices that
+read it.
+
+- **A cycle is a path a change can take, not proof that one is going round.**
+  Pieces that settle after one pass form the same cycle as pieces that never do.
+  Whether one is spinning is on the running server: `currencyDelivery` on
+  `/api/health/stats` lists the spaces a change keeps coming back to, and how
+  often each was held for it.
+- **Each set of pieces that can all reach each other is printed once**, by a
+  shortest cycle through it that crosses a space boundary. Where the set is
+  larger than that cycle, the line says how many pieces read each other, and
+  breaking the printed cycle may leave another.
+- **A cycle inside one space is left out.** The scheduler of that space bounds
+  it.
+- **It sees only the stores it is given, and only recorded pieces.** A space
+  that was read and not examined is named, since a cycle through it cannot be
+  seen. A piece no serving loop has recorded, and a store from before the index,
+  contribute nothing: the first line says how many of the stores have an index
+  and how many pieces they recorded.
+- **A document no recorded piece writes ends a path.** It is an input, such as
+  something a person typed, and reading it is no step of a cycle.
 
 ## Known characteristics
 

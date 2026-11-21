@@ -1286,7 +1286,9 @@ export class SpaceServer implements TransactionSealDestination {
   #currency: StoreCurrency | undefined;
 
   /** Wake latch: a stored currency record left a piece owed another
-   * snapshot, which the next cycle's settle takes. Consumed by the next
+   * snapshot, which the next cycle's settle takes, or the currency index
+   * changed from outside this loop while a root was left unloaded, which the
+   * next cycle's demand pass judges again. Consumed by the next
    * `#waitForInput()`. */
   #pendingCurrencyWake = false;
 
@@ -2547,6 +2549,19 @@ export class SpaceServer implements TransactionSealDestination {
       this.#options.stats.demand.watchWakes += 1;
     }
     this.#pendingDemandWake = true;
+    this.#feedArrived?.resolve();
+  }
+
+  /**
+   * Has the next cycle judge again each root left unloaded because the
+   * store could serve it (serving-loop.md §3b): the space's currency index
+   * changed from outside this loop. A loop that left no root unloaded, and
+   * has no judgment under way that may leave one, does nothing.
+   */
+  noteCurrencyChanged(): void {
+    if (this.#currency?.noteIndexChanged() !== true) return;
+    this.#options.stats.currency.indexWakes += 1;
+    this.#pendingCurrencyWake = true;
     this.#feedArrived?.resolve();
   }
 
@@ -7224,7 +7239,8 @@ export class SpaceServer implements TransactionSealDestination {
    * Helper for `#serveWave()`, which takes the currency records of the pieces
    * that ran, as the scheduler holds them at this instant
    * (serving-loop.md §3b). `blocked` says the cycle cannot vouch for what it
-   * derived, and `asOf` is the visible input head the settle covered. Returns
+   * derived, and `asOf` is the visible input head the settle covered, which
+   * the records are taken at where the watermark is not above it. Returns
    * `undefined` where the index is not kept, the cycle is blocked, a run or
    * a seal is still under way, an effect is outstanding, or no piece is due
    * a record.
@@ -7244,7 +7260,15 @@ export class SpaceServer implements TransactionSealDestination {
       !runtime.hasAsyncWorkPending && !this.#effectsRetirementOwed &&
       (this.#outbox?.inflightCount ?? 0) === 0;
     if (!settled) return undefined;
-    return currency.snapshot(runtime, asOf, this.#ownDerivedSeqs);
+    // The watermark covers this loop's own commits as well as the inputs
+    // below them, and forgets the own ones it covers. A cycle that no input
+    // woke, as a viewer's arrival does, settles at the input head of the
+    // cycle before it, which may sit below such a commit.
+    return currency.snapshot(
+      runtime,
+      Math.max(asOf, this.#watermark),
+      this.#ownDerivedSeqs,
+    );
   }
 
   /**

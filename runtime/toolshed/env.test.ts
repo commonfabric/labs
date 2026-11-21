@@ -55,6 +55,21 @@ Deno.test("a leftover MEMORY_MARKED_SPLICES is ignored, whatever its spelling", 
   }
 });
 
+Deno.test("MEMORY_RETIRE_BARE_DID_LABELS parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+  const enabled = (v: string | undefined) =>
+    EnvSchema.parse(
+      v === undefined ? {} : { MEMORY_RETIRE_BARE_DID_LABELS: v },
+    ).MEMORY_RETIRE_BARE_DID_LABELS;
+
+  assertEquals(enabled(undefined), true);
+  assertEquals(enabled("false"), false);
+  assertEquals(enabled("0"), false);
+  assertEquals(enabled("true"), true);
+  assertEquals(enabled("1"), true);
+  expect(() => enabled("TRUE")).toThrow();
+  expect(() => enabled("on")).toThrow();
+});
+
 Deno.test("MEMORY_STORE_READS_DIGEST parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
   const enabled = (v: string | undefined) =>
     EnvSchema.parse(v === undefined ? {} : { MEMORY_STORE_READS_DIGEST: v })
