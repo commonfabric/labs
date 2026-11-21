@@ -1,4 +1,9 @@
-import { createTestSpace, env, type Page } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  env,
+  type Page,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
@@ -27,13 +32,15 @@ const waitForCounter = (page: Page, ordinal: string): Promise<void> =>
  */
 async function newestStep(page: Page): Promise<string> {
   await page.evaluate("globalThis.app.setConfig('showHistoryView', true)");
-  const step = await page.waitForSelector(".step[data-start-seq]", {
-    strategy: "pierce",
-  });
-  const seq = await step.evaluate((el: Element) =>
-    el.getAttribute("data-start-seq")
+  const seq = await waitForCondition<[], string>(
+    page,
+    (probe) =>
+      probe.collect(".step[data-start-seq]")[0]?.getAttribute(
+        "data-start-seq",
+      ) ||
+      false,
   );
-  if (seq === null) throw new Error("the newest step names no start");
+  if (seq === undefined) throw new Error("the newest step names no start");
   return seq;
 }
 
