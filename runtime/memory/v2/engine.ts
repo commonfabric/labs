@@ -513,6 +513,23 @@ CREATE TABLE IF NOT EXISTS currency_slice (
 );
 CREATE INDEX IF NOT EXISTS idx_currency_slice_piece
   ON currency_slice (branch, piece);
+-- When a slice stops being current whatever its rows say: the time, in
+-- milliseconds since the epoch, of the next tick of a clock one of its runs
+-- read. No commit marks a slice then, so the index marks it the next time
+-- its marks are brought up to date. A slice with no row holds until a commit
+-- marks it. The time is a REAL: this store's connection reads an INTEGER as
+-- 32 bits, which a time in milliseconds does not fit.
+CREATE TABLE IF NOT EXISTS currency_expiry (
+  branch     TEXT NOT NULL,
+  slice      TEXT NOT NULL,
+  piece      TEXT NOT NULL,
+  expires_at REAL NOT NULL,
+  PRIMARY KEY (branch, slice, piece)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_expiry_time
+  ON currency_expiry (branch, expires_at);
+CREATE INDEX IF NOT EXISTS idx_currency_expiry_piece
+  ON currency_expiry (branch, piece);
 -- The pieces that enclose a recorded piece: a demand for one of theirs is a
 -- demand for it.
 CREATE TABLE IF NOT EXISTS currency_under (

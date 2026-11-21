@@ -361,9 +361,8 @@ export type ServingLoopStats = {
      * in another space that the snapshot cannot name the instance or the seq
      * of), `foreign-write` (another space), `unattributed-writer` (it read a
      * document whose writer names no piece and is not live, not clean, or
-     * runs once for each viewer), `clock-read` (it read a document a clock
-     * writes), `scoped-root`, `source-origin` and `no-pattern`. A record with
-     * two reasons counts under both. */
+     * runs once for each viewer), `scoped-root`, `source-origin` and
+     * `no-pattern`. A record with two reasons counts under both. */
     unvouched: Record<string, number>;
 
     /** Roots put to a judgment, counted at each judgment made. */
@@ -394,6 +393,11 @@ export type ServingLoopStats = {
      * this one of a change, or a request made for another space marked a
      * slice here. */
     indexWakes: number;
+
+    /** Times the loop was woken to judge a root it had left unloaded
+     * because the record of a slice expired: the next tick of a clock the
+     * slice read came, which no commit reports. */
+    expiryWakes: number;
 
     /** Pieces the index held clean that wrote an instance they vouched for
      * again with no input of theirs changed. Each one is a judgment that
@@ -910,6 +914,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     servedFromStore: 0,
     rearmed: 0,
     indexWakes: 0,
+    expiryWakes: 0,
     falseClean: 0,
   },
   settle: { series: [], dropped: 0 },

@@ -83,6 +83,12 @@ export class StoreCurrency {
   /** How many judgments the memory server has not returned yet. */
   #judging = 0;
 
+  /**
+   * The earliest time a slice of the space expires at, as the last judgment
+   * the memory server made found it.
+   */
+  #nextExpiry: number | undefined;
+
   /** The store head the marks were last brought up to from here. */
   #advancedThrough = 0;
 
@@ -144,6 +150,16 @@ export class StoreCurrency {
   /** Whether any root is left unloaded on a judgment. */
   get servesFromStore(): boolean {
     return this.#served.size > 0;
+  }
+
+  /**
+   * The time, in milliseconds since the epoch, at which a root left
+   * unloaded is owed a fresh judgment because a slice's record expires
+   * then, or `undefined` where no root is left unloaded or no slice expires.
+   * No commit marks such a slice, so the loop has to ask at that time.
+   */
+  get nextExpiry(): number | undefined {
+    return this.#served.size > 0 ? this.#nextExpiry : undefined;
   }
 
   /**
@@ -212,6 +228,7 @@ export class StoreCurrency {
           vouched: slice.unvouched.length === 0,
           reads: slice.reads,
           vouches: slice.vouches,
+          ...(slice.expiresAt !== undefined && { expiresAt: slice.expiresAt }),
         })),
       });
     }
@@ -370,6 +387,7 @@ export class StoreCurrency {
     ).finally(() => {
       this.#judging -= 1;
     });
+    this.#nextExpiry = judged.nextExpiry;
     for (const [reason, count] of Object.entries(judged.refused)) {
       const counts = this.#stats.currency.refused;
       counts[reason] = (counts[reason] ?? 0) + count;

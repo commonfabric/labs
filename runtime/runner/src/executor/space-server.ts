@@ -1292,6 +1292,14 @@ export class SpaceServer implements TransactionSealDestination {
    * `#waitForInput()`. */
   #pendingCurrencyWake = false;
 
+  /**
+   * The timer that wakes the loop at the time a slice's record expires,
+   * where a root is left unloaded, and the time it is set for. Both are
+   * `undefined` while none is set.
+   */
+  #currencyExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+  #currencyExpiryAt: number | undefined;
+
   /** Level-converted demand wake (stage B): a session's watch set
    * changed (or a session opened); consumed by the next #waitForInput. */
   #pendingDemandWake = false;
@@ -2563,6 +2571,31 @@ export class SpaceServer implements TransactionSealDestination {
     this.#options.stats.currency.indexWakes += 1;
     this.#pendingCurrencyWake = true;
     this.#feedArrived?.resolve();
+  }
+
+  /**
+   * Helper for `#loadDemandedStructure()`, which sets the timer that wakes
+   * the loop when the record of a slice expires, for as long as a root is
+   * left unloaded (serving-loop.md §3b). A slice that read a clock goes
+   * stale at the clock's next tick with no commit to report it, so the
+   * loop asks for a judgment then. The judgment that follows sets the timer
+   * again, for the next such time.
+   */
+  #armCurrencyExpiry(): void {
+    const at = this.#currency?.nextExpiry;
+    if (at === this.#currencyExpiryAt) return;
+    clearTimeout(this.#currencyExpiryTimer);
+    this.#currencyExpiryAt = at;
+    this.#currencyExpiryTimer = at === undefined
+      ? undefined
+      : setTimeout(() => {
+        this.#currencyExpiryTimer = undefined;
+        this.#currencyExpiryAt = undefined;
+        if (this.#currency?.noteIndexChanged() !== true) return;
+        this.#options.stats.currency.expiryWakes += 1;
+        this.#pendingCurrencyWake = true;
+        this.#feedArrived?.resolve();
+      }, Math.max(0, at - Date.now()));
   }
 
   /**
@@ -6210,6 +6243,7 @@ export class SpaceServer implements TransactionSealDestination {
           this.#rearmSeqsAwaitingFollow.delete(key);
         }
       }
+      this.#armCurrencyExpiry();
     }
     // ONE changed-doc collection for the whole pass, opened BEFORE the pull
     // below rather than per root inside it. The pull is what registers each
@@ -9041,6 +9075,9 @@ export class SpaceServer implements TransactionSealDestination {
     this.#pendingStructureRetryWake = false;
     this.#currency = undefined;
     this.#pendingCurrencyWake = false;
+    clearTimeout(this.#currencyExpiryTimer);
+    this.#currencyExpiryTimer = undefined;
+    this.#currencyExpiryAt = undefined;
     // Phase 5: foreign engine resolutions die with the tenure, since the
     // memory server may close their engines once it has ended.
     this.#foreignEngines.clear();

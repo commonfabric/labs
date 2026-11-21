@@ -1208,10 +1208,15 @@ executing:
   replaces them; a slice it does not name keeps its rows and its mark. A
   slice is stored marked when a live computation that ran at its key is not
   clean, or read a document in another space at an instance narrower than
-  the space or at a seq its replica cannot name, or one a clock writes (the
-  interval cell of a `#now/N` wish), which no commit marks when its interval
-  passes, or one whose writer names no piece and is not live, not clean, or
-  runs once for each viewer. A read of another space's shared instance is
+  the space or at a seq its replica cannot name, or one whose writer names
+  no piece and is not live, not clean, or runs once for each viewer. A
+  slice that read a document a clock writes (the interval cell of a `#now/N`
+  wish) is current until the clock's next tick, which no commit reports:
+  its record names that time, each call that brings the marks up to date
+  marks `2` a slice whose time has come, at a seq above the store's head,
+  and a loop that left a root unstarted asks for a judgment at the earliest
+  such time. What a piece with such a slice writes is reported stale to the
+  spaces that read it. A read of another space's shared instance is
   registered with that space's index when the record is stored, where one
   memory server holds both stores: that index keeps the spaces that read
   each of its instances and what it last told them, the instance's head and
@@ -1272,8 +1277,8 @@ executing:
   writer runs clean again. Nothing is recorded while an effect is outstanding,
   because a start is what re-fires an effect whose result never landed (§6
   step 3). The tables are `currency_slice`, `currency_under`,
-  `currency_read`, `currency_write`, `currency_vouch` and
-  `currency_cursor`, and for reads across spaces `currency_slice_source`,
+  `currency_read`, `currency_write`, `currency_vouch`, `currency_expiry`
+  and `currency_cursor`, and for reads across spaces `currency_slice_source`,
   `currency_import` and `currency_source` on the reading side and
   `currency_reader` and `currency_export` on the side read;
   `runtime/memory/v2/currency-index.ts` is their only writer and reader,

@@ -1,7 +1,7 @@
 # Serving a stored output that depends on another space or on a wish
 
-Status: In progress. Steps 1 to 4 are done; the rest is a design, with the
-steps to build it. It
+Status: In progress. Steps 1 to 4 and step 7 are done; the rest is a
+design, with the steps to build it. It
 continues [`stored-output-currency.md`](stored-output-currency.md), whose
 stages 1 to 4 are built, and its steps 1 to 3 come before that plan's
 stage 5.
@@ -24,10 +24,9 @@ plan takes each:
 - **A computation that names no piece.** No record covers what such a
   computation wrote, and some of what a wish registers with the scheduler
   is one. A slice that read its output takes over what it read.
-- **A clock.** A wish for `#now/N` reads a cell a timer writes. Nothing
+- **A clock.** A wish for `#now/N` reads a cell a timer writes. No commit
   marks the slice that read it when the interval passes while no runtime
-  holds the timer, so such a slice is never vouched for and its piece
-  always starts.
+  holds the timer, so its record has to say when it stops being current.
 
 A fourth matter comes with leaving more pieces unstarted, and with marks
 that travel between spaces: a computation the scheduler runs whether or not
@@ -54,7 +53,7 @@ of those, and the home space the fixture reads holds no profile.
 | Any other hashtag, such as `#note` | The favorites of the home space and what the space's own root lists. Headless wishes for one query over the space's own root share one resolver, which the wish registers with the scheduler under no piece. | The read in another space, for a search of the home space. Nothing for a search of the space's own root: the slice takes over the shared resolver's reads. |
 | `/`, `#default`, `#mentionable`, `#summaryIndex`, `#knowledgeGraph`, `#pieceRegistry` | The root of the piece's own space, or of the home space or a named space where the wish's `scope` says so. | Nothing known for the piece's own space; the read in another space otherwise. |
 | `#now` | A capture of the piece's first load time, written once to a document of the piece's space and read from then on. | Nothing: the value does not move. |
-| `#now/N` | A cell one timer per runtime writes at each interval, for every wish of that interval in the space. | The read of a document a clock writes (`clock-read`). |
+| `#now/N` | A cell one timer per runtime writes at each interval, for every wish of that interval in the space. | Nothing until the clock's next tick, which the slice's record names as the time it expires at. |
 
 For the home-space targets measured, the read in another space is the only
 thing in the way, and the index follows it where one memory server holds
@@ -66,8 +65,8 @@ viewer's `user:` slice.
 The timer of `#now/N` runs in every runtime that holds the wish, a
 browser's included, so a browser session ticks the cell and a session with
 no runtime of its own does not. That second kind of session is why the
-slice is not vouched for: left unstarted, its piece would show such a
-session a clock that had stopped.
+slice's record expires: left unstarted past the next tick, its piece would
+show such a session a clock that had stopped.
 
 ## Across spaces
 
@@ -396,11 +395,25 @@ space. One scoped to the piece's own space reads only that space.
 
 ### The interval clock
 
-A slice that read the cell of `#now/N` is not vouched for today, so its
-piece starts on every demand. It is current until the cell's next tick. Its
-record names that time, a judgment refuses a slice past it, and a loop that
-holds a root unstarted on such a slice loads the root when the time comes.
-The start runs the wish, which holds the timer from then on.
+A slice that read the cell of `#now/N` is current until the cell's next
+tick. The wish tells the scheduler which document its clock writes and at
+what interval, and the snapshot gives a slice that read one the next tick
+as the time it expires at, the earliest where it read several. The index
+keeps that time beside the slice (`currency_expiry`). Each call that brings
+the marks up to date marks `2` every slice whose time has come, with what is
+downstream of it, and reports it at a seq above the store's head, since no
+input the store holds made it stale. So a judgment refuses a root that
+rests on a slice past its time, and starts the piece, which runs the wish
+and holds the timer from then on.
+
+No commit lands at that time, so a loop that left a root unstarted has to
+ask. A judgment returns the earliest time a slice of the space expires at,
+and the loop sets one timer for it while any root is left unstarted. When
+it fires the loop judges again, which marks the slice and loads the root.
+
+Nothing tells another space when a slice here expires, so what a piece
+with an expiring slice writes is reported to other spaces as stale from the
+start. A piece in another space that reads it is started on each demand.
 
 ## Computations that run without demand
 
@@ -564,8 +577,9 @@ One is owed:
 1. **Measure what blocks each kind of wish.** Done, with a serving-loop
    fixture for each row of the table above, read through the reasons a
    slice was not vouched for (`currency.unvouched`). A slice that read the
-   interval clock was vouched for and left a session with no runtime of its
-   own a stopped clock under `skip`; it is no longer vouched for.
+   interval clock was vouched for with no end and left a session with no
+   runtime of its own a stopped clock under `skip`; step 7 gives its record
+   a time it expires at.
 2. **Rows for a read in another space.** Done, for two spaces one memory
    server holds. The snapshot carries the source's sequence number; a
    record's reads are registered with their source; both sides keep their
@@ -588,7 +602,9 @@ One is owed:
    returns; the writer's registration for a declared destination in another
    space; and the counts the open question needs. Built on step 5, which
    starts a producer.
-7. **The interval clock's expiry.**
+7. **The interval clock's expiry.** Done, within one space. A reader in
+   another space of what a piece with an expiring slice writes is started on
+   each demand.
 8. **Measure** a social space whose pieces read each viewer's profile, with
    two viewers and with many, for the starts saved and for what a change to
    one profile costs its readers.
@@ -647,7 +663,9 @@ For the serving loop, in `runtime/runner/test/executor/`:
     and B is not started again.
 13. A piece that reads `#now/N` is served from the store within the
     interval and started after it, and a root a loop holds unstarted is
-    loaded when the interval passes.
+    loaded when the interval passes. Both exist in
+    `space-server-currency-wish.test.ts`, and the index's side in
+    `v2-currency-index.test.ts`.
 14. A piece whose headless wish shares a hashtag resolver is recorded
     clean, with the resolver's read of the space's root among its slice's
     reads. This exists in `space-server-currency-wish.test.ts`; two pieces

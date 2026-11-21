@@ -176,6 +176,7 @@ import {
   judgeCurrencyRoots,
   pullCurrencyExports,
   registerCurrencyReads,
+  selectCurrencyNextExpiry,
   selectCurrencyPiece,
   selectCurrencyReadersMoved,
   selectCurrencySourcePosition,
@@ -13055,8 +13056,10 @@ export class Server {
    * `space` is armed with is not asked, and any other is pulled from.
    *
    * @returns The roots that pass, each with the piece it was judged as, how
-   * many roots each reason refused, and the slices marked since `space`'s
-   * serving loop last asked.
+   * many roots each reason refused, the slices marked since `space`'s
+   * serving loop last asked, and the earliest time a slice of `space`
+   * expires at, where one does: the marks are to be brought up to date then,
+   * since no commit does it.
    */
   async judgeCurrencyRoots(
     space: string,
@@ -13066,13 +13069,23 @@ export class Server {
     servable: Array<{ root: string; piece: string }>;
     refused: Partial<Record<CurrencyRefusal, number>>;
     marked: CurrencyMarked[];
+    nextExpiry?: number;
   }> {
     const engine = await this.#openEngine(space);
     const advanced = advanceCurrencyCursor(engine, { space });
     this.#tellCurrencyReaders(space, engine);
     const marked = this.#takeCurrencyMarks(space, advanced);
     const refused: Partial<Record<CurrencyRefusal, number>> = {};
-    if (roots.length === 0) return { servable: [], refused, marked };
+    /** What every return carries besides the roots that pass. */
+    const found = () => {
+      const nextExpiry = selectCurrencyNextExpiry(engine, { space });
+      return {
+        refused,
+        marked,
+        ...(nextExpiry !== undefined && { nextExpiry }),
+      };
+    };
+    if (roots.length === 0) return { servable: [], ...found() };
 
     /** The recorded piece `root` leads to, if its back-links reach one. */
     const pieceOf = (root: string): string | undefined => {
@@ -13101,7 +13114,7 @@ export class Server {
       if (piece !== undefined) pieces.set(root, piece);
       else refused["no-record"] = (refused["no-record"] ?? 0) + 1;
     }
-    if (pieces.size === 0) return { servable: [], refused, marked };
+    if (pieces.size === 0) return { servable: [], ...found() };
     const demand = this.demandForSpace(
       space,
       options.excludePrincipal === undefined
@@ -13147,7 +13160,7 @@ export class Server {
       const reason = reasons.get(piece);
       if (reason !== undefined) refused[reason] = (refused[reason] ?? 0) + 1;
     }
-    return { servable, refused, marked };
+    return { servable, ...found() };
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a

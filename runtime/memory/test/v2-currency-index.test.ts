@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { type Stub, stub } from "@std/testing/mock";
 import {
   advanceCurrencyCursor,
   ANY_INSTANCE,
@@ -13,6 +14,7 @@ import {
   judgeCurrencyRoots,
   pullCurrencyExports,
   registerCurrencyReads,
+  selectCurrencyNextExpiry,
   selectCurrencyPiece,
   selectCurrencyReadersMoved,
   selectCurrencySourcePosition,
@@ -103,6 +105,8 @@ describe("currency-index", () => {
     owned?: string[];
     vouches?: Array<{ id: string; scopeKey: string }>;
     slices?: CurrencySliceRecord[];
+    /** The time the `space` slice expires at. */
+    expiresAt?: number;
   };
 
   /** A record of `piece`, vouched for, with `parts` over the empty ones. */
@@ -114,6 +118,7 @@ describe("currency-index", () => {
         vouched: boolean;
         reads: CurrencyRead[];
         vouches: string[];
+        expiresAt?: number;
       }
     >();
     const sliceAt = (key: string) => {
@@ -131,6 +136,9 @@ describe("currency-index", () => {
       sliceAt(scopeKey).vouches.push(id);
     }
     for (const id of parts.produces ?? []) sliceAt("space").vouches.push(id);
+    if (parts.expiresAt !== undefined) {
+      sliceAt("space").expiresAt = parts.expiresAt;
+    }
     for (const given of parts.slices ?? []) {
       const merged = sliceAt(given.key);
       merged.vouched &&= given.vouched;
@@ -1514,6 +1522,146 @@ describe("currency-index", () => {
       store(asOf, [record("of:other", { vouched: false })]);
 
       expect(judge(["of:other", "of:piece"], [ROOT_ROW])).toEqual(["of:piece"]);
+    });
+  });
+
+  describe("with a slice whose record expires", () => {
+    /** What `Date.now()` returns in these cases. */
+    let now: number;
+    let clock: Stub<DateConstructor>;
+
+    /** The time the records of these cases expire at. */
+    const EXPIRES = 1_700_000_060_000;
+
+    beforeEach(() => {
+      now = 1_700_000_000_000;
+      clock = stub(Date, "now", () => now);
+    });
+
+    afterEach(() => {
+      clock.restore();
+    });
+
+    /**
+     * Records `of:clock` as computing `computed:tick` until `EXPIRES`, and
+     * `of:reader` as reading it, and returns the store's head.
+     */
+    const storeClock = (): number => {
+      const asOf = write("of:clock", "of:reader", "computed:tick");
+      store(asOf, [
+        record("of:clock", {
+          produces: ["computed:tick"],
+          expiresAt: EXPIRES,
+        }),
+        record("of:reader", { reads: [derived("computed:tick")] }),
+      ]);
+      return asOf;
+    };
+
+    describe("storeCurrencyRecords()", () => {
+      it("stores clean a slice whose record expires later", () => {
+        storeClock();
+
+        expect([markOf("of:clock"), markOf("of:reader")]).toEqual([0, 0]);
+      });
+
+      it("stores marked `2` a slice whose record has expired already", () => {
+        now = EXPIRES;
+
+        storeClock();
+
+        expect([markOf("of:clock"), markOf("of:reader")]).toEqual([2, 1]);
+      });
+
+      it("keeps clean past its old time a slice whose later record does not expire", () => {
+        const asOf = storeClock();
+        store(asOf, [record("of:clock", { produces: ["computed:tick"] })]);
+        now = EXPIRES;
+
+        expect(advance()).toEqual([]);
+        expect(markOf("of:clock")).toBe(0);
+      });
+    });
+
+    describe("advanceCurrencyCursor()", () => {
+      it("marks nothing before the time a slice expires at", () => {
+        storeClock();
+        now = EXPIRES - 1;
+
+        expect(advance()).toEqual([]);
+        expect(markOf("of:clock")).toBe(0);
+      });
+
+      it("marks `2` a slice once the time it expires at has come, and `1` a slice that reads what it writes, each at a seq above the head", () => {
+        const head = storeClock();
+        now = EXPIRES;
+
+        expect(
+          advanceCurrencyCursor(engine, { space: SPACE }).map((
+            { piece, seq },
+          ) => ({ piece, seq })).sort((a, b) => a.piece.localeCompare(b.piece)),
+        ).toEqual([
+          { piece: "of:clock", seq: head + 1 },
+          { piece: "of:reader", seq: head + 1 },
+        ]);
+        expect([markOf("of:clock"), markOf("of:reader")]).toEqual([2, 1]);
+      });
+
+      it("reports an expired slice once", () => {
+        storeClock();
+        now = EXPIRES;
+        advance();
+
+        expect(advance()).toEqual([]);
+      });
+    });
+
+    describe("selectCurrencyNextExpiry()", () => {
+      it("returns `undefined` where no slice expires", () => {
+        store(write("of:piece"), [record("of:piece")]);
+
+        expect(selectCurrencyNextExpiry(engine, { space: SPACE }))
+          .toBeUndefined();
+      });
+
+      it("returns the earliest time a slice expires at", () => {
+        storeClock();
+        store(write("of:later"), [
+          record("of:later", { expiresAt: EXPIRES + 60_000 }),
+        ]);
+
+        expect(selectCurrencyNextExpiry(engine, { space: SPACE })).toBe(
+          EXPIRES,
+        );
+      });
+
+      it("returns `undefined` once the slice has been marked for its expiry", () => {
+        storeClock();
+        now = EXPIRES;
+        advance();
+
+        expect(selectCurrencyNextExpiry(engine, { space: SPACE }))
+          .toBeUndefined();
+      });
+    });
+
+    describe("registerCurrencyReads()", () => {
+      it("reports stale to another space an instance that a piece with an expiring slice writes", () => {
+        const head = storeClock();
+
+        const registered = registerCurrencyReads(engine, {
+          space: SPACE,
+          reader: SOURCE,
+          reads: [{ id: "computed:tick", scopeKey: "space" }],
+        });
+
+        expect(registered.entries).toEqual([{
+          id: "computed:tick",
+          scopeKey: "space",
+          head,
+          stale: true,
+        }]);
+      });
     });
   });
 

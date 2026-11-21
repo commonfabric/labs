@@ -604,8 +604,13 @@ describe("SpaceServer", () => {
         };
       };
 
-      /** Resolves once the clock piece's stored `reader` is `expected`. */
-      const readerIs = async (expected: string) => {
+      /**
+       * Resolves once the clock piece's stored `reader` holds a tick at or
+       * after `at`, a time in milliseconds. A piece that is running goes on
+       * ticking, so this waits for a time to be reached and not for one
+       * value.
+       */
+      const readerReached = async (at: number) => {
         const reader = openRuntime(aliceSigner, false);
         const result = reader.getCell<{ reader: string }>(
           space,
@@ -616,61 +621,112 @@ describe("SpaceServer", () => {
         await waitForCellValue(
           reader,
           result.key("reader"),
-          (value: string | undefined) => value === expected,
-          { stuckLabel: `the clock piece's \`reader\` to be ${expected}` },
+          (value: string | undefined) =>
+            value !== undefined && Number(value) >= Number(tickAt(at)),
+          { stuckLabel: `the clock piece's \`reader\` to reach ${tickAt(at)}` },
         );
         await closeLastRuntime();
       };
 
-      it("gives the read of the clock as the reason its slice is not vouched for", async () => {
+      /**
+       * Hands the loop the demand of one viewer who runs nothing, for the
+       * clock piece once `piece.current` names it.
+       */
+      const demandFromAViewerWhoRunsNothing = (
+        piece: {
+          current?: { root: NormalizedFullLink; reader: NormalizedFullLink };
+        },
+      ) => {
+        (server as { demandForSpace: unknown }).demandForSpace = () =>
+          sessionDemandOf(
+            (piece.current === undefined
+              ? []
+              : [piece.current.root, piece.current.reader]).map((link) => ({
+                id: link.id,
+                scope: link.scope ?? "space",
+                scopeKey: "space",
+                root: link === piece.current!.root,
+                identity: {
+                  principal: aliceSigner.did(),
+                  sessionId: "viewer",
+                },
+              })),
+          );
+      };
+
+      it("records the slice that read the clock as expiring at the clock's next tick, and vouches for it", async () => {
         host = newHost("record");
         const { root } = await watch(
           wishProgram(`{ query: '#now/${INTERVAL_SECONDS}' }`),
         );
         await host.whenQuiescent();
 
-        const taken = snapshotOf(root)!;
-        expect(slicesAt(taken, "space")[0].unvouched).toEqual(["clock-read"]);
-        expect(await recordOf(root)).toEqual({ mark: 2, epoch: EPOCH });
+        const [shared] = slicesAt(snapshotOf(root), "space");
+        const interval = INTERVAL_SECONDS * 1000;
+        expect(shared.expiresAt).toBe(
+          (Math.floor(Date.now() / interval) + 1) * interval,
+        );
+        expect(shared.unvouched).toEqual([]);
+        expect(host.stats().currency.unvouched).toEqual({});
       });
 
-      it("starts the piece for a session that runs nothing, once the interval has passed, under `skip`", async () => {
+      it("leaves the piece unstarted within the interval, and starts it when the interval passes while its root is left unstarted, under `skip`", async () => {
         // The session's demand is handed to the loop as rows, so no client
         // runtime holds the wish's timer, and only a start moves the clock.
 
-        let piece:
-          | { root: NormalizedFullLink; reader: NormalizedFullLink }
-          | undefined = undefined;
-        (server as { demandForSpace: unknown }).demandForSpace = () =>
-          sessionDemandOf(
-            (piece === undefined ? [] : [piece.root, piece.reader]).map(
-              (link) => ({
-                id: link.id,
-                scope: link.scope ?? "space",
-                scopeKey: "space",
-                root: link === piece!.root,
-                identity: {
-                  principal: aliceSigner.did(),
-                  sessionId: "viewer",
-                },
-              }),
-            ),
-          );
+        const piece: {
+          current?: { root: NormalizedFullLink; reader: NormalizedFullLink };
+        } = {};
+        demandFromAViewerWhoRunsNothing(piece);
         host = newHost("skip");
         const { root, reader } = await setUpClock();
         await awaitEach(cycles, () => host?.spaceServer(space) !== undefined);
-        piece = { root, reader };
+        piece.current = { root, reader };
         host.spaceServer(space)!.noteDemandChanged();
         await awaitEach(cycles, () => serves(root));
         await host.whenQuiescent();
         await host.spaceServer(space)!.park("test-park");
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore > 0,
+        );
+        await host.whenQuiescent();
+        expect(serves(root)).toBe(false);
 
+        await clock.tick(INTERVAL_SECONDS * 1000);
+        const passed = Date.now();
+
+        await awaitEach(cycles, () => serves(root));
+        await readerReached(passed);
+        expect(host.stats().currency.expiryWakes).toBeGreaterThan(0);
+      });
+
+      it("starts the piece for a session that runs nothing, when the interval passed while no loop served the space, under `skip`", async () => {
+        const piece: {
+          current?: { root: NormalizedFullLink; reader: NormalizedFullLink };
+        } = {};
+        demandFromAViewerWhoRunsNothing(piece);
+        host = newHost("skip");
+        const { root, reader } = await setUpClock();
+        await awaitEach(cycles, () => host?.spaceServer(space) !== undefined);
+        piece.current = { root, reader };
+        host.spaceServer(space)!.noteDemandChanged();
+        await awaitEach(cycles, () => serves(root));
+        await host.whenQuiescent();
+        await host.close();
+        servingRuntimes = [];
         await clock.tick(2 * INTERVAL_SECONDS * 1000);
+
+        const passed = Date.now();
+
+        host = newHost("skip");
         await touchSpace();
 
         await awaitEach(cycles, () => serves(root));
-        await readerIs(tickAt(Date.now()));
+        await readerReached(passed);
         expect(host.stats().currency.servedFromStore).toBe(0);
+        expect(host.stats().currency.refused.marked).toBeGreaterThan(0);
       });
     });
 

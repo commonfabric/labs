@@ -45,9 +45,7 @@ export type PieceUnvouchedReason =
    * piece and cannot be answered for: it is not live, not clean, or runs
    * once for each viewer.
    */
-  | "unattributed-writer"
-  /** A live computation of the slice read a document a clock writes. */
-  | "clock-read";
+  | "unattributed-writer";
 
 /**
  * One slice of a piece: what its computations did when they ran at one scope
@@ -60,12 +58,18 @@ export type PieceCurrencySlice = {
 
   /**
    * Why the slice cannot be vouched for, empty when it can: every live
-   * computation that ran at its key is clean, and everything they read is no
-   * document a clock writes, has no writer the slice cannot answer for, and
-   * is in the piece's space or is a shared instance of another space that
-   * the snapshot names the seq of.
+   * computation that ran at its key is clean, and everything they read has
+   * no writer the slice cannot answer for, and is in the piece's space or is
+   * a shared instance of another space that the snapshot names the seq of.
    */
   unvouched: PieceUnvouchedReason[];
+
+  /**
+   * The time, in milliseconds since the epoch, from which the slice is no
+   * longer current whatever the store holds: the next tick of a clock one
+   * of its live computations read. Absent for a slice that read none.
+   */
+  expiresAt?: number;
 
   /**
    * The document instances the slice's live computations read, and those a
@@ -126,11 +130,16 @@ export type PieceCurrencyState = {
   >;
 
   /**
-   * The documents a clock writes, each as `clockDocumentKey()` gives it. What
-   * a computation derives from one is current only until the clock's next
-   * tick, and a tick takes a runtime that holds the clock.
+   * The documents a clock writes, each as `clockDocumentKey()` gives it,
+   * with the interval of its ticks in milliseconds. A tick falls on each
+   * whole multiple of the interval since the epoch. What a computation
+   * derives from such a document is current only until the next tick, and a
+   * tick takes a runtime that holds the clock.
    */
-  clockDocuments: ReadonlySet<string>;
+  clockDocuments: ReadonlyMap<string, number>;
+
+  /** The time the snapshot is taken at, in milliseconds since the epoch. */
+  now: number;
 
   /**
    * The seq of another space's store at which this runtime's replica of it
@@ -261,6 +270,7 @@ export function snapshotPieceCurrency(
       Pick<IMemorySpaceAddress, "space" | "id"> & { scopeKey: string }
     >;
     vouches: Set<string>;
+    expiresAt?: number;
   }>();
   const sliceAt = (key: ScopeKey) => {
     let slice = slices.get(key);
@@ -392,8 +402,10 @@ export function snapshotPieceCurrency(
           });
           continue;
         }
-        if (state.clockDocuments.has(clockDocumentKey(read))) {
-          slice.unvouched.add("clock-read");
+        const interval = state.clockDocuments.get(clockDocumentKey(read));
+        if (interval !== undefined) {
+          const tick = (Math.floor(state.now / interval) + 1) * interval;
+          slice.expiresAt = Math.min(slice.expiresAt ?? Infinity, tick);
         }
         const { attributed, unattributed } = writersOf(read.id);
         const takenOver = unattributed.map(readsOf);
@@ -426,6 +438,7 @@ export function snapshotPieceCurrency(
         unvouched: [...slice.unvouched],
         reads,
         vouches: [...slice.vouches],
+        ...(slice.expiresAt !== undefined && { expiresAt: slice.expiresAt }),
       };
     }),
   };

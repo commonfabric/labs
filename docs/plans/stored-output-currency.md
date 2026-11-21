@@ -121,10 +121,14 @@ of its runs at the snapshot:
   another memory server holds;
 - one read a document whose writer in this runtime names no piece and
   cannot be answered for. A writer that is live, clean and runs once is
-  answered for by the slice, which takes over what it read;
-- one read a document a clock writes, which is the interval cell of a wish
-  for `#now/N`: no commit marks the slice when the interval passes while no
-  runtime holds the clock.
+  answered for by the slice, which takes over what it read.
+
+A slice that read a document a clock writes, which is the interval cell of
+a wish for `#now/N`, is vouched for until the clock's next tick. No commit
+marks it when the interval passes while no runtime holds the clock, so its
+record names that time, and the index marks the slice once it has come
+([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
+"The interval clock").
 
 Any other read in another space is registered with that space's index when
 the record is stored
@@ -343,9 +347,8 @@ wrong.
   15 µs each on the memory server's thread.
 - **A piece whose output depends on something that is not a read** is held
   clean while what it would compute moves. The interval clock of a wish is
-  the one such input the index knows, and a slice that read it is never
-  vouched for, so its piece always starts. The same plan gives that slice
-  an expiry.
+  the one such input the index knows, and a slice that read it expires at
+  the clock's next tick.
 - **A crash loses what the last cycles would have recorded.** The affected
   pieces are marked by their own later commits and start again.
 
@@ -471,10 +474,10 @@ of which exist:
 25. A piece whose first record was taken below a client's write of an
     instance it vouches for is stored clean once a record covers that
     write.
-26. A slice that read the interval clock of a wish is stored marked, and
-    under `skip` its piece is started by a demand made after the interval
-    passed, for a session that runs nothing itself
-    (`space-server-currency-wish.test.ts`).
+26. A slice that read the interval clock of a wish is stored with the time
+    of the clock's next tick. Under `skip` its piece is left unstarted
+    within the interval and started once it has passed, for a session that
+    runs nothing itself (`space-server-currency-wish.test.ts`).
 
 ## Related
 
