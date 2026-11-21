@@ -76,11 +76,22 @@ declares it. Catalog restoration supersedes an older room tombstone; catalog
 archive or removal supersedes a saved room record. A record's optional
 `catalogRevision` remembers that authority across catalog removal. A
 container's conversation is listed by its membership, whose `container` links
-the root declaring it; forgetting it never archives its container. Rooms are
-compared by their links, which a membership holds as its handler resolved
-them, so a comparison resolves nothing; a standalone room is listed once for
-its space, which holds no other. Clients pass the revision back unchanged to
-`forget`.
+the root declaring it; forgetting it never archives its container. Archiving
+the container in the catalog does leave the conversation out: a conversation
+its container's membership governs, which no standalone catalog entry does,
+is not listed while the catalog's entry for its container's space, the space
+the `container` link names (`spaceOfLink()`), is `archived`, and is listed
+again once that entry is restored. The manager writes nothing either way, so
+the membership and its revision stand as they were, a conversation forgotten
+before stays forgotten, and joining the conversation while its container is
+archived, by a visit, a message or an explicit join, lists nothing. A catalog
+with no entry for the container leaves the conversation listed, since an entry
+removed and one never registered read alike. An archive that never reaches the
+catalog, such as one a client keeps in its own records, leaves the
+conversation listed too. Rooms are compared by their links, which a
+membership holds as its handler resolved them, so a comparison resolves
+nothing; a standalone room is listed once for its space, which holds no other.
+Clients pass the revision back unchanged to `forget`.
 
 Joining a record-backed standalone room registers its own space even when a
 container declares it, and records a membership of it, as creating or
