@@ -124,7 +124,7 @@ export interface GameState {
  * by `move`. It is one string rather than a record because the release's
  * input witness holds for a scalar its writer read and then set, and does not
  * hold for a record written that way
- * (SEALED-STATE-MACHINE-FINDINGS.md, "State shape").
+ * (SEALED-STATE-MACHINE-FINDINGS.md, gap A).
  */
 export type StoredGame = WriteAuthorizedBy<Sealed<string>, typeof move>;
 
@@ -322,8 +322,8 @@ export const move = handler<Move, MoveState>((event, { state }) => {
 /**
  * What anyone at the table may see. Every field is a scalar: the display
  * boundary releases a scalar `observe` wrote, and refuses a read that covers
- * a list or a record of them (SEALED-STATE-MACHINE-FINDINGS.md, "View
- * shape"). So a list is written as one string.
+ * a list or a record of them (SEALED-STATE-MACHINE-FINDINGS.md, gap C). So a
+ * list is written as one string.
  */
 export interface ObserverView {
   /** `seating` before the deal, `over` once every slot is captured. */

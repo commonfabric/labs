@@ -92,7 +92,10 @@ view against a viewer's ceiling.
 `runtime/runner/test/cfc-transformed-by-input-witness-state-machine.test.ts`
 pins which ways of storing a state keep the witness.
 `SEALED-STATE-MACHINE-FINDINGS.md` records what was run, what was read, and what
-does not work.
+does not work, and reports each of the three choices above as a runtime gap: the
+example is the shape the runtime releases today, not the shape to copy once
+those are closed. The second has an answer already, a rule in two steps, which
+the display test runs.
 
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
