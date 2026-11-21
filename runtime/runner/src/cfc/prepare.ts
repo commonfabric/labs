@@ -14168,16 +14168,36 @@ export function* prepareBoundaryCommitSteps(
           }
           // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
           // A path a compiled pattern's write covers at or below a write of
-          // links stores its label too: at a link, on the link's own entry
-          // (PL §3.2, "Where the atom of a kept output is stored"), and at
-          // a container of links, as at any covered path. Behind
-          // `compiledPatterns`, which defaults off.
-          for (const covered of planLabels.paths.get(key) ?? []) {
-            if (!isPrefix(path, covered)) continue;
-            const held = writtenValueAt(flowWrittenValues, covered);
-            if (isPrimitiveCellLink(held)) linkLabelPaths.push(covered);
-            else if (held !== undefined) derivedStampPaths.push(covered);
-          }
+          // links stores its label too, as at any covered path: the label
+          // of a kept output that passes a value on by reference, the atom
+          // of its pattern included, is stored on the content at the
+          // output's path, where a read through the link takes it, whether
+          // the path is written alone or with the document that holds it.
+          // Behind `compiledPatterns`, which defaults off.
+          // The elements of an array of links whose labels are all one
+          // store one entry at the array's `*` path
+          // (`collapseEqualElements`).
+          const coveredHere = (planLabels.paths.get(key) ?? []).filter((
+            covered,
+          ) =>
+            isPrefix(path, covered) &&
+            writtenValueAt(flowWrittenValues, covered) !== undefined
+          );
+          for (
+            const covered of collapseEqualElements(
+              coveredHere,
+              (at) => planLabels.byTarget.get(key)?.get(planLabelPathKey(at)),
+              (at) => writtenValueAt(flowWrittenValues, at),
+              (at, label) => {
+                let labels = collapsedLabels.get(key);
+                if (labels === undefined) {
+                  labels = new Map();
+                  collapsedLabels.set(key, labels);
+                }
+                labels.set(planLabelPathKey(at), label);
+              },
+            )
+          ) derivedStampPaths.push(covered);
           continue;
         }
         derivedStampPaths.push(path);

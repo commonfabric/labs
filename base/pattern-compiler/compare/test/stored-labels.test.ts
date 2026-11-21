@@ -516,6 +516,7 @@ describe("stored-labels", () => {
         "longShouted/1 note",
         "shoutedTwice/1 note",
         '{"body":0,"write":1} /1 note',
+        '{"body":0,"write":0} /1 note',
       ]);
     });
 

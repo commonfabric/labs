@@ -9477,22 +9477,36 @@ export class Instance {
     const own = this.#keysFor(record.cone, pairs);
     const inputs = this.#inputsOf(record.cone, own);
     const result = this.#inputs.get(RESULT_INPUTS);
+    const given = this.#storedInPlace(
+      record.template,
+      this.#inputsFor(
+        record.template,
+        this.collectionsOf(record.cone).map((collection, index) => [
+          collection,
+          own[index],
+        ]),
+        [inputs, result],
+      ),
+      { doc, path: at },
+    );
+    // The entry of an element held below a kept output, with a slot the
+    // executor has no position for, as that of an element of an array a
+    // computation returned: the record is given as bound, and the path
+    // takes the label of a write with no record, where the template could
+    // only be refused.
+    const unbound = !record.kept && record.template !== undefined &&
+      [...reachedBy(record.template, this.plan.templates ?? []).slots].some(
+        (slot) => {
+          const binding = given.slots[slot];
+          return binding === undefined ||
+            ("chain" in binding && binding.chain.length === 0);
+        },
+      );
     return {
       target: { doc, path: at },
       record: { output },
-      ...this.#storedInPlace(
-        record.template,
-        this.#inputsFor(
-          record.template,
-          this.collectionsOf(record.cone).map((collection, index) => [
-            collection,
-            own[index],
-          ]),
-          [inputs, result],
-        ),
-        { doc, path: at },
-      ),
-      ...(stored?.bound ? { bound: true as const } : {}),
+      ...given,
+      ...(stored?.bound || unbound ? { bound: true as const } : {}),
     };
   }
 

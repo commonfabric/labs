@@ -1217,6 +1217,53 @@ describe("cfc-plan-labels", () => {
       expect(value["/items/1"]).toEqual(["secret-b"]);
     });
 
+    it("stores the atom of a kept output that passes a reference on in the value entry at the output's path, whether the path is written alone or with its document", async () => {
+      const kept: CompiledPlan = {
+        ...plan,
+        outputs: [{ template: { op: "slot", slot: 0 }, kept: true }],
+      };
+      const link = {
+        "/": { "link@1": { id: "of:src-a", path: [], space } },
+      } as unknown as FabricValue;
+      const record = (
+        tx: IExtendedStorageTransaction,
+        identity: string,
+        target: CfcAddress,
+      ) =>
+        tx.recordCfcWritePolicyInput(
+          {
+            kind: "plan-write",
+            target: { ...target, path: ["a"] },
+            compiledPattern: identity,
+            record: { output: 0 },
+            instance: target.id,
+            keys: [],
+            slots: {
+              0: { chain: [address("of:src-a")], observes: "followRef" },
+            },
+          },
+          runtimeWritePolicyAuthorization,
+        );
+      const alone = await commitWrites(true, record, false, {
+        plan: kept,
+        a: () => link,
+      });
+      const whole = await commitWrites(
+        true,
+        record,
+        { a: link, b: "y" } as unknown as FabricValue,
+        { plan: kept },
+      );
+
+      for (const { error, derived } of [alone, whole]) {
+        expect(error).toBeUndefined();
+        expect(JSON.stringify(derived["value /a"])).toContain(
+          CFC_ATOM_TYPE.TransformedBy,
+        );
+        expect(derived["followRef /a"]).toBeUndefined();
+      }
+    });
+
     it("stores the atom of a kept output that passes a reference on, on the entry of the link at the output's path", async () => {
       // PL §3.2, "Where the atom of a kept output is stored": "A kept
       // output that passes a value on by reference stores a link, and the
