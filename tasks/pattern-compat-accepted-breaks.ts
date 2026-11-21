@@ -86,8 +86,8 @@ export interface RequiredPatternOverride {
 
 const MENTIONABLE_OBJECT_ALTERNATIVE_REASON =
   "MentionablePiece's mentionable property lost its object alternative; a piece stores a link to an exported array there, so no stored piece holds an object";
-const MENTIONABLE_OBJECT_ALTERNATIVE_RECORD =
-  "docs/history/mentionable-piece-object-alternative-break.md";
+const SYSTEM_PATTERNS_SUBSET_TYPES_RECORD =
+  "docs/history/system-patterns-subset-types-break.md";
 
 export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
@@ -3021,7 +3021,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "argument.pieceRegistry[].mentioned[].mentionable",
     ],
     reason: MENTIONABLE_OBJECT_ALTERNATIVE_REASON,
-    record: MENTIONABLE_OBJECT_ALTERNATIVE_RECORD,
+    record: SYSTEM_PATTERNS_SUBSET_TYPES_RECORD,
   },
   {
     pattern: "apps/annotation/annotation.tsx",
@@ -3037,7 +3037,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "argument.targetPiece",
     ],
     reason: MENTIONABLE_OBJECT_ALTERNATIVE_REASON,
-    record: MENTIONABLE_OBJECT_ALTERNATIVE_RECORD,
+    record: SYSTEM_PATTERNS_SUBSET_TYPES_RECORD,
   },
   {
     pattern: "system/omnibox-fab/omnibox-fab.tsx",
@@ -3048,14 +3048,14 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     ],
     paths: ["argument.mentionable[].mentionable"],
     reason: MENTIONABLE_OBJECT_ALTERNATIVE_REASON,
-    record: MENTIONABLE_OBJECT_ALTERNATIVE_RECORD,
+    record: SYSTEM_PATTERNS_SUBSET_TYPES_RECORD,
   },
   {
     pattern: "system/quick-capture/quick-capture.tsx",
     baselines: ["20260729T022742Z-X9QaF-JkGRiGHI0l"],
     paths: ["argument.pieceRegistry[].mentionable"],
     reason: MENTIONABLE_OBJECT_ALTERNATIVE_REASON,
-    record: MENTIONABLE_OBJECT_ALTERNATIVE_RECORD,
+    record: SYSTEM_PATTERNS_SUBSET_TYPES_RECORD,
   },
   {
     // The suggestion's `context` argument moved from `any` to
@@ -3071,6 +3071,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: ["argument.context.*"],
     reason:
       "the context argument moved from any to the cell record llmDialog declares, so each entry is read as a cell; a stored literal or link reads as one",
-    record: "docs/history/suggestion-context-cell-entries-break.md",
+    record: SYSTEM_PATTERNS_SUBSET_TYPES_RECORD,
   },
 ];
