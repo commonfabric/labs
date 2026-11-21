@@ -80,6 +80,9 @@ export class StoreCurrency {
    */
   readonly #foreignReads = new Map<string, ForeignRead[]>();
 
+  /** Whether `#foreignReads` changed since `takeForeignReadsChanged()`. */
+  #foreignReadsChanged = false;
+
   /**
    * The owed pieces a record of which was stored behind a commit its settle
    * had not covered, each with that settle's `asOf`. A snapshot taken at
@@ -193,6 +196,16 @@ export class StoreCurrency {
   }
 
   /**
+   * Whether a snapshot found a piece's reads in another space changed, or
+   * gone, since this was last called.
+   */
+  takeForeignReadsChanged(): boolean {
+    const changed = this.#foreignReadsChanged;
+    this.#foreignReadsChanged = false;
+    return changed;
+  }
+
+  /**
    * Snapshots each piece of `runtime` a computation of which changed since
    * the last snapshot, and each piece a snapshot is owed. The caller has
    * established that the scheduler is idle and that no effect is
@@ -220,7 +233,8 @@ export class StoreCurrency {
     for (const piece of pieces) {
       this.#owed.delete(piece);
       this.#behindAt.delete(piece);
-      this.#foreignReads.delete(piece);
+      // A piece that is gone, or reads no other space any longer, has none.
+      if (this.#foreignReads.delete(piece)) this.#foreignReadsChanged = true;
       if (!isDocumentId(piece)) continue;
       const taken = runtime.scheduler.pieceCurrencySnapshot(this.#space, piece);
       if (taken === undefined) continue;
@@ -234,7 +248,10 @@ export class StoreCurrency {
           scopeKey: read.scopeKey,
         }))
       );
-      if (foreign.length > 0) this.#foreignReads.set(piece, foreign);
+      if (foreign.length > 0) {
+        this.#foreignReads.set(piece, foreign);
+        this.#foreignReadsChanged = true;
+      }
       const facts = runtime.runner.pieceCurrencyFacts(
         runtime.getCellFromLink({
           space: this.#space,

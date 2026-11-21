@@ -64,10 +64,12 @@ import {
   readSpaceKind,
 } from "@commonfabric/memory/v2/genesis-root";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
-import type {
-  AdmittedCommitNotice,
-  CarriedDemandRow,
-} from "@commonfabric/memory/v2/server";
+import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
+import {
+  CarriedDemand,
+  type CarriedPair,
+  carriedRowsOf,
+} from "./carried-demand.ts";
 
 import type { HostMemoryServer } from "./host-memory-server.ts";
 import type { RoutedPlane, RouteOptions } from "./routed-plane.ts";
@@ -797,26 +799,6 @@ export async function selectForeignStaleInstances(
  * registry (stage B): both components, so two sessions of one user are
  * two demanders (a node beneath the root may narrow to session for that
  * user). */
-/**
- * A pair that demands in a space, with the client session it is carried
- * into another space for.
- */
-type CarriedPair = ScopeKeyIdentity & { origin: CarriedDemandRow["origin"] };
-
-/**
- * Whether `pair` is one a run under `identity` was made for: every pair
- * where the run names no actor, the pairs of its principal where it names
- * one, and the one pair where it names a session too.
- */
-const pairIsOf = (
-  pair: ScopeKeyIdentity,
-  identity: Partial<ScopeKeyIdentity> | undefined,
-): boolean =>
-  identity === undefined ||
-  (identity.principal === pair.principal &&
-    (identity.sessionId === undefined ||
-      identity.sessionId === pair.sessionId));
-
 const demanderPairKey = (identity: ScopeKeyIdentity): string =>
   `${identity.principal ?? ""}\0${
     identity.sessionId === undefined ? "" : String(identity.sessionId)
@@ -1309,23 +1291,16 @@ export class SpaceServer implements TransactionSealDestination {
   #currency: StoreCurrency | undefined;
 
   /**
-   * What this loop last sent each space it carries demand into
-   * (serving-loop.md §3b): the rows as one string, so that a set that has
-   * not changed is not sent again, and how many they were.
+   * What this loop carries into the spaces its runs read (serving-loop.md
+   * §3b), made when a run first reads one.
    */
-  readonly #carriedDemandSent = new Map<
-    string,
-    { signature: string; rows: number }
-  >();
+  #carriedDemand: CarriedDemand | undefined;
 
   /**
    * The pairs that demand in this space, each with the session it is
    * carried for, as the last demand pass that changed a row left them.
    */
   #carriedDemandPairs: CarriedPair[] | undefined;
-
-  /** Settles once every carried set sent so far has been taken. */
-  #carriedDemandSync: Promise<void> = Promise.resolve();
 
   /** Wake latch: a stored currency record left a piece owed another
    * snapshot, which the next cycle's settle takes, or the currency index
@@ -2962,7 +2937,7 @@ export class SpaceServer implements TransactionSealDestination {
     const runtime = this.#runtime;
     if (!this.#active || runtime === undefined) return;
     await this.#currency?.stored;
-    await this.#carriedDemandSync;
+    await this.#carriedDemand?.settled;
     await this.#outbox?.settle();
     await runtime.settled();
     await this.#options.server.idle();
@@ -7352,70 +7327,37 @@ export class SpaceServer implements TransactionSealDestination {
       Math.max(asOf, this.#watermark),
       this.#ownDerivedSeqs,
     );
-    // The snapshot is what finds a run's reads in another space.
-    if (snapshot !== undefined) this.#syncCarriedDemand();
+    // Taking the snapshot is what finds a run's reads in another space,
+    // and what finds them gone, whether or not it leaves a record to store.
+    if (
+      currency.takeForeignReadsChanged() ||
+      this.#carriedDemand?.retryOwed === true
+    ) this.#syncCarriedDemand();
     return snapshot;
   }
 
   /**
    * Sends each space a run here read the demand that read carries
    * (serving-loop.md §3b), where it changed: the instance read, for each
-   * pair demanding in this space that the run was made for. A run in the
-   * `space` slice was made for every pair, one in a user's slice for that
-   * user's pairs, and one in a session's slice for that pair. A pair that
-   * reached this space carried from another keeps the origin it came with.
-   * A space no run reads any longer is sent an empty set.
+   * pair demanding in this space that the run was made for
+   * (`carriedRowsOf()`).
    */
   #syncCarriedDemand(): void {
     const reads = this.#currency?.foreignReads;
-    if (
-      reads === undefined ||
-      (reads.size === 0 && this.#carriedDemandSent.size === 0)
-    ) return;
-    const bySource = new Map<string, Map<string, CarriedDemandRow>>();
-    for (const foreign of reads.values()) {
-      for (const read of foreign) {
-        const made = read.slice === "space"
-          ? undefined
-          : identityOfScopeKey(read.slice as ScopeKey);
-        const keyed = read.scopeKey === "space"
-          ? undefined
-          : identityOfScopeKey(read.scopeKey as ScopeKey);
-        for (const pair of this.#demandingPairs()) {
-          // An instance narrower than the space is its actor's own, and is
-          // demanded for no other.
-          if (!pairIsOf(pair, made) || !pairIsOf(pair, keyed)) continue;
-          let rows = bySource.get(read.space);
-          if (rows === undefined) {
-            rows = new Map();
-            bySource.set(read.space, rows);
-          }
-          rows.set(
-            [read.id, read.scopeKey, pair.origin.space, pair.origin.sessionId]
-              .join("\0"),
-            {
-              id: read.id,
-              scope: scopeOfScopeKey(read.scopeKey as ScopeKey) as CellScope,
-              scopeKey: read.scopeKey as ScopeKey,
-              origin: pair.origin,
-            },
-          );
-        }
-      }
-    }
-    for (
-      const source of new Set([
-        ...bySource.keys(),
-        ...this.#carriedDemandSent.keys(),
-      ])
-    ) {
-      const rows = bySource.get(source);
-      this.#sendCarriedDemand(
-        source,
-        rows === undefined ? [] : [...rows.values()],
-        rows === undefined ? "" : [...rows.keys()].sort().join("\n"),
-      );
-    }
+    if (reads === undefined) return;
+    if (reads.size === 0 && this.#carriedDemand?.carries !== true) return;
+    this.#carriedDemand ??= new CarriedDemand({
+      space: this.#options.space,
+      server: this.#options.server,
+      serviceIdentity: this.#options.serviceIdentity,
+      stats: this.#options.stats,
+    });
+    this.#carriedDemand.send(
+      carriedRowsOf(
+        [...reads.values()].flat(),
+        reads.size === 0 ? [] : this.#demandingPairs(),
+      ),
+    );
   }
 
   /**
@@ -7441,46 +7383,6 @@ export class SpaceServer implements TransactionSealDestination {
     }
     this.#carriedDemandPairs = [...pairs.values()];
     return this.#carriedDemandPairs;
-  }
-
-  /**
-   * Replaces what this loop carries into `source` with `rows`, whose
-   * `signature` names them, unless it is what `source` was last sent.
-   */
-  #sendCarriedDemand(
-    source: string,
-    rows: CarriedDemandRow[],
-    signature: string,
-  ): void {
-    const sent = this.#carriedDemandSent.get(source);
-    if ((sent?.signature ?? "") === signature) return;
-    if (rows.length === 0) this.#carriedDemandSent.delete(source);
-    else this.#carriedDemandSent.set(source, { signature, rows: rows.length });
-    const stats = this.#options.stats.currency;
-    stats.carried += rows.length - (sent?.rows ?? 0);
-    const space = this.#options.space;
-    this.#carriedDemandSync = this.#carriedDemandSync.then(async () => {
-      const { refused } = await this.#options.server.setCarriedDemand(
-        source,
-        space,
-        rows,
-        { excludePrincipal: this.#options.serviceIdentity },
-      );
-      stats.carriedRefused += refused;
-    }).catch((error) => {
-      logger.warn("carried-demand-failed", () => [
-        `space ${space}: the demand carried into ${source} was not taken`,
-        error,
-      ]);
-    });
-  }
-
-  /** Withdraws everything this loop carries into other spaces. */
-  #withdrawCarriedDemand(): void {
-    for (const source of [...this.#carriedDemandSent.keys()]) {
-      this.#sendCarriedDemand(source, [], "");
-    }
-    this.#carriedDemandPairs = undefined;
   }
 
   /**
@@ -9227,7 +9129,8 @@ export class SpaceServer implements TransactionSealDestination {
     this.#demandRootAddresses.clear();
     this.#rootsAwaitingFirstLoad.clear();
     // No run of this tenure reads another space any longer.
-    this.#withdrawCarriedDemand();
+    this.#carriedDemand?.withdraw();
+    this.#carriedDemandPairs = undefined;
     // The registry is empty, so the next tenure's first pass reconciles
     // every key it reads.
     this.#demandMirror.clear();
@@ -9274,7 +9177,7 @@ export class SpaceServer implements TransactionSealDestination {
     const wave = this.#currentWave;
     this.#currentWave = undefined;
     await this.#sealChain;
-    await this.#carriedDemandSync;
+    await this.#carriedDemand?.settled;
     wave?.abandon(`parked: ${reason}`);
     // Nothing sealed into this tenure's waves commits now: a barrier
     // waiting on one has nothing left to wait for.

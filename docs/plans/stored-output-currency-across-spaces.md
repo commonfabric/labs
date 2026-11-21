@@ -682,9 +682,8 @@ A third is ruled:
    left out; the reading loop's set, sent when it changes and withdrawn at
    a park; and activation and parking of the source, which follow from the
    rows being held among the source's sessions. Still to do: the acceptance
-   tests 11 and 12 below, one for a `PerUser` instance of the source read
-   under two actors, and a measurement of what a carried demand costs the
-   source.
+   tests 11, 12 and 22 below, and a measurement of what a carried demand
+   costs the source.
 6. **Computations that run without demand.** Envelopes among the write
    rows; a computation recorded as unbounded from what it wrote; the
    unsettled space, settled before a judgment in it or a pull from it
@@ -784,6 +783,25 @@ For computations that run without demand, in both places:
     its armed readers without a pull.
 19. A reader of an instance that a piece in another space declares it
     writes is marked `1` while that piece's slice is marked there.
+
+For demand across spaces. Tests 20 and 21 exist, in
+`runtime/memory/test/v2-server-carried-demand.test.ts` and
+`runtime/runner/test/executor/carried-demand.test.ts`:
+
+20. A row carried into a space stands in its demand set with the origin
+    session's pair, tells the serving host as an opened session does, is
+    left out while the space's index proves its instance current and stands
+    again once a piece there is behind on it, is refused for an actor's own
+    instance without that actor's READ grant, and is dropped when its
+    origin session ends.
+21. A read made in the `space` slice is carried for every demanding pair,
+    one made in a user's slice for that user's pairs, one made in a
+    session's slice for that pair, and each user's own instance of a
+    document for that user's pairs and no other's.
+22. A piece in one space whose runs read a `PerUser` instance of another
+    space, watched by two viewers: the other space's loop computes each
+    viewer's instance, and a change to one viewer's input there reaches
+    that viewer's session and starts nothing for the other.
 
 ## Related
 
