@@ -215,6 +215,16 @@ until every member of the default has been replaced. A state that starts as
 `null`, or as any value nothing of which survives the first write, has no such
 member.
 
+The value an action returns is a whole-value destination too. The runtime
+writes a `lift`'s or a `computed`'s result to its result cell through the
+diff, and records that cell as written (`writeResultValue` in
+`pattern-binding.ts`). A run that changes any part of its result therefore
+stamps all of it, the parts it left equal included, which would otherwise keep
+the stamp of whichever earlier run last changed them. A result cell declares
+no ceiling, and its store is the runtime's own; a join the runtime-owned-store
+route admits for the diff's own stamps is admitted for the whole value as
+well.
+
 A peer that adds a member beneath the destination after the writer read its
 replica makes the writer's commit a conflict, so the retry sets over the
 member rather than stamping it.

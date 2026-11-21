@@ -310,4 +310,24 @@ export const meddle = handler<void, { state: Writable<Stored> }>(
       );
     });
   });
+
+  describe("a projection computed before the writer's first move", () => {
+    it("releases a field of it that the first move left unchanged", async () => {
+      // `kept` reads the same before the first move and after it. The lift's
+      // run after the move wrote the projection, so the field carries that
+      // run's witness, and not the stamp of the run before the move.
+
+      await run(
+        machine({ state: FROM_NULL, move: STEP }),
+        "projection unchanged field",
+        async (send, read) => {
+          await send("publishKept");
+          expect((await read()).roomKept).toBe(UNTOUCHED);
+          await send("move");
+          await send("publishKept");
+          expect((await read()).roomKept).toBe("kept:");
+        },
+      );
+    });
+  });
 });

@@ -537,10 +537,13 @@ describe("input witnesses through references", () => {
       });
     });
 
-    it("releases nothing of the honest chain", async () => {
+    it("releases the honest chain", async () => {
       // The submit step's slot stamp carries its join, which the slot's
-      // ceiling, declaring nothing, does not admit, so the slot keeps no
-      // writer and a followed reference there withholds the witness.
+      // ceiling, declaring nothing, does not admit. The list is a store of
+      // the runtime's own, where a join that misfits is admitted for the
+      // stamps the diff's writes get, so the slot's whole-value stamp is
+      // admitted too and the slot keeps its writer.
+
       await runChain(onFields(TWO_LEVEL_PROGRAM), "fields honest", async (
         send,
         read,
@@ -549,7 +552,7 @@ describe("input witnesses through references", () => {
         await send("commit");
         expect((await read()).tally).toBe("1");
         await send("publish");
-        expect((await read()).room).toBe("");
+        expect((await read()).room).toBe("1");
       });
     });
   });
