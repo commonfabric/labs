@@ -4,7 +4,9 @@
  * the rooms: nothing. A client loads a room's documents when a read of its
  * reaches the room, and its bring-up names nothing a node reads past a link
  * into another space, so what the manager's view or its `people` declare of
- * the rooms is read only by whoever reads them.
+ * the rooms is read only by whoever reads them. Once another client has
+ * archived a container whose chat the person joined, a fresh client leaves
+ * the chat out, and still loads nothing in the container's space.
  *
  * Each scenario has a fresh person keep rooms of their own.
  * `fabrichat-room-list-fixture.ts` holds the server and clients the
@@ -15,7 +17,8 @@ import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
 import { Identity } from "@commonfabric/identity";
-import type { Cell } from "@commonfabric/runner";
+import { type Cell, normalizeSpaceHost } from "@commonfabric/runner";
+import { sendVerbEvent } from "@commonfabric/piece/verb-call";
 import {
   CHAT_START,
   closeMember,
@@ -31,6 +34,8 @@ import {
   heldIn,
   openedOf,
   RoomListServer,
+  ROW,
+  type Row,
   serving,
 } from "./fabrichat-room-list-fixture.ts";
 
@@ -246,6 +251,126 @@ describe("fabrichat-room-list-derived", () => {
       // its pass is counted with the clients'.
       if (serving) return;
       expect(crossSpaceReadsAtBringUp).toBe(0);
+    });
+  });
+
+  describe("a container's conversation once the catalog archives its container", () => {
+    // Nia keeps a room of her own, and joins the chat a container declares in
+    // its own space, as a loom's chat is, which her catalog lists under the
+    // `loom` kind. She then archives the container in her catalog.
+
+    let ownRoom: DID;
+    let containerSpace: DID;
+
+    /** The spaces of the rooms her manager listed before the archive. */
+    let listedBefore: DID[];
+
+    let client: Client;
+    let rows: Row[];
+
+    beforeAll(async () => {
+      const made = await fabric.personWithRooms("nia", 1);
+      ownRoom = made.rooms[0];
+      const member = await openMember(fabric.url, made.person, 0);
+      try {
+        const runtime = member.controller.runtime;
+        containerSpace = await runtime.createSpace({});
+        const tx = runtime.edit();
+        const room = runtime.getCell(
+          containerSpace,
+          "declared conversation",
+          undefined,
+          tx,
+        );
+        room.set({ about: { kind: "group", title: "Workshop chat" } });
+        const container = runtime.getCell<Record<string, unknown>>(
+          containerSpace,
+          "container",
+          undefined,
+          tx,
+        );
+        container.set({ chatRoom: room });
+        runtime.getSpaceCell(containerSpace, undefined, tx).key(
+          "defaultPattern",
+        ).set(container);
+        const { error } = await tx.commit().settled;
+        if (error) throw new Error(`Making the container: ${error.message}`);
+
+        const registered = await sendVerbEvent(
+          member.home.key("registerSharedSpace"),
+          {
+            space: containerSpace,
+            host: normalizeSpaceHost(new URL(runtime.apiUrl).origin).origin,
+            kind: "loom",
+            title: "Workshop",
+          },
+        );
+        if (registered.status !== "committed") {
+          throw new Error("Registering the container did not commit");
+        }
+        const manager = member.home.key("chatManager");
+        await sendVerbEvent(manager.key("joinRoom"), {
+          room,
+          container,
+          requestId: "nia-join",
+        });
+        const joined = await member.waits.until(
+          "the join of the container's chat",
+          manager.key("requests").key("nia-join") as Cell<
+            { status?: string; reason?: string } | undefined
+          >,
+          (value) => value?.status !== undefined,
+        );
+        if (joined.status !== "done") {
+          throw new Error(`The manager refused the join: ${joined.reason}`);
+        }
+        await fabric.settle(member.controller);
+        const listed = await member.waits.until(
+          "a list holding the container's chat",
+          manager.key("rooms").asSchema<Row[]>({ type: "array", items: ROW }),
+          (value) => (value?.length ?? 0) >= 2,
+        );
+        listedBefore = listed.map((row) => row.room.space as DID);
+
+        const revision = await manager.key("sharedSpaceCatalog").key("entries")
+          .key(containerSpace).key("revision").asSchema<string>({
+            type: "string",
+          }).pull();
+        const archived = await sendVerbEvent(
+          member.home.key("changeSharedSpaceMembership"),
+          {
+            space: containerSpace,
+            id: "nia-archive",
+            expectedRevision: revision,
+            state: "archived",
+          },
+        );
+        if (archived.status !== "committed") {
+          throw new Error("Archiving the container did not commit");
+        }
+        await fabric.settle(member.controller);
+      } finally {
+        await closeMember(member);
+      }
+      client = await fabric.bootClient({ person: made.person });
+      rows = await fabric.listRooms(client, 1);
+    });
+
+    afterAll(async () => {
+      await client?.controller.dispose();
+    });
+
+    it("lists the container's chat before the container is archived", () => {
+      expect(listedBefore.sort()).toEqual([ownRoom, containerSpace].sort());
+    });
+
+    it("lists only the person's own room once the container is archived", () => {
+      expect(rows.map((row) => row.room.space)).toEqual([ownRoom]);
+    });
+
+    it("opens no session to the container's space, and receives no document from it", () => {
+      expect(openedOf(client, [containerSpace])).toEqual([]);
+      expect(arrivedIn(client, [containerSpace])).toEqual([0]);
     });
   });
 });
