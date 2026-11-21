@@ -5295,14 +5295,17 @@ the slot is **bound**.
   that of the reference. The elements of a `fold` are grouped by the same
   identifiers. The prototype compares them so (`Instance.#labelKey` of
   `base/pattern-compiler/exec/executor.ts`, with `TransactionHooks.labelOf`
-  given the class of the observation). The report is smaller, but forming it
-  this way still visits every position, so over an array of references the work
-  is linear in the elements. Section 4.7 removes that walk: a read that covers
-  the members of a container is bound by the groups kept with the collection
-  (adopted by ruling, being built; section 8, question 186). For an array of
-  plain values in place there is no further binding to report, and for the
-  result of another per-element construct whose positions hold links the rule is
-  that of an array of references.
+  given the class of the observation). Forming the report by asking for the
+  identifier of every position is linear in the elements of an array of
+  references. Section 4.7 removes that walk, and the prototype builds it: a read
+  that covers the members of an array of references is bound by one member of
+  each group of equal labels, from a table kept with the array, and the binding
+  states the container with its numbers of members and of groups, which the
+  runtime does not read to form the label (`SlotBinding.members` of
+  `runtime/runner/src/cfc/types.ts`; section 8, question 186). For an array of
+  plain values in place there is no further binding to report. The result of
+  another per-element construct is bound to the upstream output, whose elements
+  a `fold` reports by groups (section 4.2).
 - **A value in place under a template of one reference slot.** A template that
   is one `slot` node of the class `identity`, directly or through the `output`
   and `shared` nodes it names, says that the written path holds a reference.
@@ -5446,8 +5449,14 @@ the slot is **bound**.
     `runtime/runner/src/cfc/types.ts`). It holds over an array of references,
     over an array of plain values in place and over the result of another
     per-element construct as the source. An addition to the source puts nothing
-    on a position of the derived collection and leaves those entries as they are
-    ("An addition through a handle" below).
+    on a position of the derived collection and leaves those entries as they
+    are: the record of an addition at the end of a kept result is marked
+    (`PlanWrite.membersAppended`), and the entries at the `*` path stay for it
+    and for a record whose label alone is formed again (*provisional,* P44 of
+    the continuation plan; "An addition through a handle" below). The first
+    members of the result of a `flatMap` are reported as a change other than an
+    addition, so its positions keep the label of the membership across later
+    additions.
   - *Entries stored per position, when positions shift.* The specification keys
     every entry by path and has no operation that moves the members of an array.
     By ruling (2026-11-20; Z72 of the continuation plan) a kept element that
@@ -5544,8 +5553,16 @@ the slot is **bound**.
   takes the transaction's join, joined for the number of members and the
   membership with what the list stored of them (`PlanWrite.bound`). A write that
   replaces an array stores its label as the `enumerate` entry of the array as
-  well. Three further rules close reads that consumed nothing of what decided
-  the members, each behind the experimental option:
+  well. *Provisional (P44 of the continuation plan; no owner ruling):* what a
+  write of a whole list of plain values in place stores once for its members,
+  the derived `value` entry at the list's path, stays when a later transaction
+  writes one member, as an append does, and mints the declared entry of the
+  path again: the entry is dropped only where the transaction wrote a value at
+  the path or a record gives the path a label. Without that, the members that
+  the earlier write stored read with the declared label alone after the next
+  `push`. With the experimental option off the entry is dropped, as today.
+  Three further rules close reads that consumed nothing of what decided the
+  members, each behind the experimental option:
   - *A read of a position that holds no member consumes the list's membership.*
     That a position holds no member says how many members the list has. For a
     content read at a path through such a position, the resolver joins what a
@@ -5565,11 +5582,14 @@ the slot is **bound**.
     After `key(i).set(undefined)` the position holds nothing, and a reader of it
     consumes what decided the write.
 
-  What the ruling on an append leaves open: a member appended after a removal.
-  For a stored list the `*` entries of the removal are joined on a read of the
-  later position. Whether every such position of a kept per-element result
-  stores a clause of what decided the earlier removal is not established
-  (section 8, question 192).
+  A member appended after a removal reads what decided the removal. For a stored
+  list the `*` entries of the removal are joined on a read of the later
+  position. For a kept result of another per-element construct the entries at
+  the result's `*` path, which hold the label of the membership, stay across an
+  addition at its end (P44, above), so a read of the appended position joins
+  them. What the ruling on an append leaves open is whether that rule for a kept
+  per-element result is the one wanted; it is built and not ruled (section 8,
+  question 192).
 
 A read stays `dynamic` where the plan cannot name its path ahead of the
 evaluation: a read through a handle that happens on some runs only or at a
@@ -10739,6 +10759,22 @@ checks:
 This list is the whole of what is instantiated.
 `execution-and-storage.md` §1.6 and §1.9 refer to it.
 
+**One plan for each instance that writes.** A write record names a record of the
+plan that the writing instance runs, and the runtime instantiates it against
+that plan. A transaction can hold writes of instances of several patterns: a
+handler that instantiates another pattern writes that instance's first values in
+its own transaction. The preparation therefore needs the `CompiledPattern` of
+every such instance registered, one table of inputs per plan in the transaction
+(section 4.7), and each record under the plan of its instance. *As built in the
+prototype's comparison, a stub (provisional, P43 of the continuation plan;
+section 8, question 203):* the adapter registers the plan of the starting
+pattern alone and gives the runtime no record of an instance of another pattern,
+so the paths such an instance writes take the label of a write with no record,
+the transaction's join (section 4.2, "A record that lacks an input"). Under the
+stub a write of such an instance that leaves its value as it was stores no
+label, which the rule for a write that leaves the value as it was (section 3.12)
+does not allow.
+
 **Only a serving runtime commits labels from templates.** By ruling
 (2026-11-19), a label from a template is stored only by a transaction that a
 serving runtime commits. A client's speculative run evaluates the same
@@ -11137,6 +11173,32 @@ instantiates the predicate's template for every element of the prefix on
 every commit that changes the scan, at the cost of the length of the
 prefix.
 
+**A record that lacks an input.** *Provisional (P42 of the continuation plan; no
+owner ruling; section 8, question 202).* A record whose template reaches a slot
+with no binding or bound to no position, a collection with no elements reported,
+or a choice that was not reported and chooses from no collection does not refuse
+the commit. Its target takes the label of a write with no record, the
+transaction's join, as a record that the writer gives as bound does, and it
+counts among the bounds. The records of the number of members and of the
+membership of a member change take the join joined with the positions they name.
+A record whose label alone is formed again (section 4.1) and that has no inputs
+takes the join together with what the path stores, since a transaction that
+evaluates nothing read nothing. *The condition the rule rests on:* the join
+holds what the transaction read through the storage, and nothing else. It is
+equal to or wider than the label a template would give only where every value
+that flowed into the write was read in the transaction. A value that reaches a
+write from the memory of the evaluation was not: the memo entry of a cone, an
+element of an upstream per-element result, the copied state of a binding. The
+case found is a handler bound in a row of a `map` over an array that a
+computation returned, the result of another per-element construct, whose state
+is the row, at no stored position; the labels stored were too narrow. As built
+for that case, the handler's transaction reads every stored position that the
+computation of the array read, at a cost linear in those positions for each
+event. The other sites are not audited, so the rule is not shown to be sound in
+general. The alternatives for a site: that read; a binding of the slot to the
+stored output or the record of the computation that made the value, which reads
+no source; or the refusal.
+
 **Selections and choices that are reported, and the bound where one is
 not.** A `select`, a `pick` and a `fold` with `through` instantiate from a
 value that the evaluation decided: the branch, the chosen child, the
@@ -11147,15 +11209,18 @@ outcome: the join of all branches of a `select`, the join over all
 children of a `pick`, the whole collection for a prefix, and the
 transaction's join for a `dynamic` node. A bound is equal to or wider than
 the label the rule gives, never narrower, so it is sound, and it gives up
-the narrowing that the rule exists for. In the ninth run of milestone 4
-of the integration over the corpus the runtime took a bound 1,762 times,
-in 70 of the 238 modules that run. The count holds two kinds: a write
-that reaches the runtime without one of the six reports below, which the
-prototype does not make, and a record that the executor gives as bound
-because it has no inputs for it, which takes the transaction's join (a
-kept output the plan has no template for, an element entry with a slot
-that has no stored position, and a member change under an envelope). The
-run does not count the two apart. For each report, the table has who
+the narrowing that the rule exists for. That holds for the bounds of
+this paragraph, which join labels the rule itself names; the
+transaction's join is a bound only under the condition of "A record that
+lacks an input" above. In the corpus run of code round m of milestone 4
+of the integration the runtime took a bound 1,284 times, in 82 of the 244
+modules that run. The count holds three kinds: a write that reaches the
+runtime without one of the six reports below, which the prototype does
+not make; a record that the executor gives as bound because it has no
+inputs for it, which takes the transaction's join (a kept output the plan
+has no template for, an element entry with a slot that has no stored
+position, and a member change under an envelope); and a record that lacks
+an input. The run does not count them apart. For each report, the table has who
 knows the answer, what is reported, and where it is kept between
 evaluations, so that a change of a label alone (section 4.1) instantiates
 without running value code.
@@ -11275,6 +11340,9 @@ value = label id
   entry is as pure for the reason given for an `output` node: the label
   of a template is a function of the template as written, its own
   selections and slot labels, and the labels of what it names.
+- Inside one transaction the label of a named output, and of a `shared`
+  entry, is found by the index of its inputs in the transaction's table of
+  inputs (section 4.7), so no content hash of the inputs is formed for it.
 - That design holds label identifiers only above an inline size limit
   (`CFC_LABEL_INLINE_LIMIT` in `runtime/runner/src/cfc/label-documents.ts`).
   The memo key uses the hash of the label either way; whether the stored
@@ -12109,38 +12177,62 @@ member would consume in any case. It is not adopted (section 8, question 199).
 
 **The representation.** By ruling (2026-11-20; Z75 of the continuation plan; the
 owner's words: "Yes, build them") three changes of representation are adopted.
-Each leaves every stored label as it is, which a run over the corpus that stores
-byte-equal labels before and after can check. They are being built in milestone
-4 of the integration, behind the experimental option, and no figure exists for
-them as built.
+Each leaves every stored label as it is. They are built in milestone 4 of the
+integration, behind the experimental option, and a run over the corpus stores
+byte-equal labels before and after: all 2,153 rows, in the stored label, the
+label with every link followed and the label at the position alone.
 
 - **(a) One table of inputs per transaction.** The inputs of each cone instance
   are written once per transaction, and a write record names them by index. A
   record that names an output holds the index of that output's inputs and no
-  copy of them. The memo keys of section 4.3 for an `output` and a `shared`
-  label are then the index, and no content hash of the inputs. The bytes of the
-  records of a transaction are linear in the cone instances evaluated plus the
-  records.
+  copy of them, and a set of inputs names each slot binding by index as well.
+  The memo keys of section 4.3 for an `output` and a `shared` label are then the
+  index, and no content hash of the inputs. The bytes of the records of a
+  transaction are linear in the cone instances evaluated plus the records. As
+  built, the table is the `PlanInputsTable` of
+  `runtime/runner/src/cfc/plan-inputs.ts`, which the writer records in parts as
+  write-policy inputs of the kind `plan-inputs`.
 - **(b) One record for equal writes into one container.** Writes with one plan
-  record and equal inputs, whose targets are members of one container, are one
-  record whose target holds `*` at the member's position. The runtime stores one
-  `*` entry where section 2.3 allows it, and applies the one label to the listed
-  members otherwise. It is the rule for a whole write over an array of
-  references; over an array of plain values in place a whole write is one record
-  already. The result of another per-element construct gives one record per
-  element evaluated, with the inputs of that element, and those records are one
-  only where the inputs are equal.
-- **(c) Groups with counts for any read that covers a whole container.** A slot
-  whose read covers the members of a container is bound as a `fold` with an
-  identity body is: by the groups of section 4.2, one entry per distinct label
-  identifier with a count, in place of chains. The one chain of an `identity`
-  slot that resolves through the links of a value is the same table for the
-  class `followRef`. The table, from label identifier to count per observation
-  class, is kept with the collection's assembly record
-  (`execution-and-storage.md` §2.5), and by the same rule for a stored array or
-  record that a whole read covers. A transaction updates it from the members it
-  wrote, `Δ` updates, and a label that changes alone updates it for the member
-  whose label changed (section 4.1). By ruling (2026-11-20; Z85 of the
+  record and one entry of the table of inputs, whose targets differ in a member
+  of one container or in the document, are one record whose target holds `*` at
+  the member's position. The record always lists the members it stands for,
+  indices next to each other as a range, or the further documents; its `*` never
+  stands for a member it does not list, so a member that another transaction
+  adds is not labeled by it. The runtime reads the record as one record for each
+  path it covers, instantiates its template once where the instantiation takes
+  no label that the transaction staged, stores one `*` entry where section 2.3
+  allows it, and applies the one label to the listed members otherwise
+  (`mergedPlanWrites` and `planWritesPerTarget` of
+  `runtime/runner/src/cfc/plan-write-targets.ts`). It is the rule for a whole
+  write over an array of references; over an array of plain values in place a
+  whole write is one record already. The result of another per-element construct
+  gives one record per element evaluated, and those records are one where their
+  inputs are one entry of the table. *Provisional (P45 of the continuation plan;
+  no owner ruling):* the evaluation gives the records of the elements of a
+  per-element result one set of inputs where the positions that each element's
+  cone instance bound hold labels with equal identifiers, by the rule that forms
+  the groups of a `fold` (section 4.2), over an array of references, an array of
+  plain values in place and the result of another per-element construct alike. A
+  record that shares another element's inputs keeps its own element's positions
+  as what it read, so a change of a label there forms that record again, with
+  inputs of its own, and no other. The inputs are not shared where the template
+  has a `fold` or a `dynamic` node, reaches a slot that no evaluation bound, is
+  bound again by the target (section 2.5, "A value in place under a template of
+  one reference slot") or covers the members of a container, nor where a
+  position has no label identifier, as one that the transaction in progress
+  wrote.
+- **(c) Groups for any read that covers a whole container.** A slot whose read
+  covers the members of a container is bound by the groups of section 4.2, one
+  entry per distinct label identifier, in place of one chain per member. The one
+  chain of an `identity` slot that resolves through the links of a value is
+  formed from the same table for the class `identity`. The table, the group of
+  every member for each observation class and each set of positions read below a
+  member, is kept with the collection, and a transaction updates it from the
+  members it wrote, `Δ` updates, and a label that changes alone updates it for
+  the member whose label changed (section 4.1). A change of a member's label
+  that makes or empties a group forms again the label of each output whose
+  binding names the container; a member that moves between two groups that both
+  stay changes no label and gives no record. By ruling (2026-11-20; Z85 of the
   continuation plan) the table is kept in memory with the collection and is not
   stored: it is formed by one walk of the collection after a start, of the order
   of computing the value, and it is a function of committed state, so two
@@ -12148,21 +12240,49 @@ them as built.
   would be a stored label that follows later changes of the labels of other
   documents, against the ruling that a stored label is concrete (section 2.3).
   The cost is of the order of `G` per record, `Δ` per transaction, and `N` once
-  per collection and runtime. It applies to an array of references and to the
-  result of another per-element construct; an array of plain values in place has
-  its entries in one envelope and needs no table.
+  per collection and runtime. As built it covers an array of references (the
+  type `MemberGroups` of `base/pattern-compiler/exec/executor.ts`, with
+  `SlotBinding.members` of `runtime/runner/src/cfc/types.ts`). An array of plain
+  values in place has its entries in one envelope and needs no table, and the
+  result of another per-element construct is bound to the upstream output, whose
+  elements a `fold` reports by groups.
 
-Measured by encoding again the records of the two large transactions of the
-measured case, and not by building the changes:
+Measured as built, in bytes of the write records that the runtime's transaction
+is given, before the changes and with them:
 
-| Transaction | Records | Bytes as recorded | With (a) | With (a) and (b) | With (a), (b) and (c) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| A handler's write of 10,000 members, an array of references | 10,007 | 11,908,330 | 4,233,706 | 4,070 | 4,070 |
-| The outputs that read the list | 13 | 12,981,878 | 1,446,001 | 1,445,203 | 6,511 |
+| Transaction | Records before | Bytes before | Records as built | Bytes as built |
+| --- | ---: | ---: | ---: | ---: |
+| A handler's write of 10,000 documents, the members of an array of references | 10,007 | 19,623,727 | 7 | 545,044 |
+| The outputs that read the list, an array of references | 19 | 37,735,505 | 19 | 16,062 |
+| The largest transaction of `patterns/apps/person-workbench/main.tsx` | 40 | 1,249,365 | 40 | 52,173 |
 
-The growth that (a) removes exists with small data as well: one transaction of
-`patterns/apps/person-workbench/main.tsx` records 503,983 bytes where 24,492
-hold the same content, and 14 of 276 corpus modules have a factor of 3 or more.
+The first row is linear in the documents written, at about 54 bytes each,
+because the record lists them. For the records of the elements of a per-element
+result: a `map` over 1,000 plain values in place gives 3 records of 2,336 bytes
+where it gave 1,002 of 930,858, and a `map` over the result of a `filter` 3
+records of 2,772 bytes where it gave 668 of 620,421. The growth that (a) removes
+exists with small data as well, as the third row shows.
+
+**What still grows as built.** Read from the prototype, each with a plan and
+none a change of a stored label (section 8, question 196):
+
+- *An array of references.* A label change at a path below the container, and a
+  member with a position in the changed document, are regrouped whatever the
+  class of the change; a change of the container's own `enumerate` entry or of a
+  `shape` entry at the container is not, since it labels a read of that path
+  alone. The table is formed by one walk per collection and runtime.
+- *The result of another per-element construct.* Sharing the inputs of the
+  elements' records costs one ask for a label identifier per position each
+  element's cone instance bound, for each record, since no kept identifier of an
+  element that no `fold` names is invalidated when a label changes.
+- *Every case.* The commit preparation of a transaction that stores a label on
+  many documents compares its read records once per document, and a transaction
+  that the experimental option gives labels is prepared where today's runtime,
+  which finds no label in it, prepares none.
+- *Where `G` is `N`,* every figure is linear in the members, and the record of a
+  whole read is about 10% larger with the table of inputs than without:
+  2,378,558 bytes against 2,170,613 for a `filter` over an array of 10,000
+  references with 10,000 distinct labels.
 
 One further change is not part of the ruling and is open (section 8, question
 200): the form of the stored entries where `G` is above 1. Per-member entries
@@ -16578,9 +16698,10 @@ this document made.
      plan): it is refused where it is given as a tool. When the modifier
      is needed on a tool, the captures stay with the factory value,
      alternative (b) of that point, in the owner's words "whenever we
-     need it, (b)". Not built: the prototype translates no closure used as
-     a value, and the diagnostic has no identifier yet. It is question 310
-     of the continuation plan.
+     need it, (b)". The diagnostic is `tool:in-space-factory`
+     (`language-subset.md` §10.2). Not built: the prototype translates no
+     closure used as a value and does not report the diagnostic. It is
+     question 310 of the continuation plan.
 183. **The groups of a scan's prefix** (for the project owner to ratify;
      section 4.2, "The groups of a prefix"). *Assumed,* provisional
      (P37): a scan keeps a count per group over its prefix with its memo
@@ -16624,8 +16745,9 @@ this document made.
      array of references are the ones they remove: finding the label identifier
      of every position a read reached, the one chain of an `identity` slot, and
      one write record per element of a write of many elements. By ruling (Z85)
-     the group table is kept in memory with the collection. Being built in
-     milestone 4 of the integration; no result. Equal labels for a read of the
+     the group table is kept in memory with the collection. Built in milestone
+     4 of the integration (section 4.7): the stored labels of the corpus are
+     byte-equal before and after. Equal labels for a read of the
      value at a position do not imply equal labels for a link followed there, so
      a group compares the identifier of each observation (section 2.5). What is
      not verified is question 196. It is question 318 of the continuation plan.
@@ -16685,13 +16807,13 @@ this document made.
      question 187 has it for the source; (2) join it into the entry of every
      position. *Assumed,* as built in milestone 4 of the integration and not
      ruled: alternative 1, for a kept result whose members change otherwise than
-     by an addition at its end (section 2.5). Open with it: a member appended to
-     the source after a removal. The check of stored labels counts such a
-     position as no failure by the ruling on an append and reports it apart, 17
-     positions in 2 modules of the corpus, all of them appended after another
-     change of the list; whether each stores a clause of what decided the
-     earlier change is not established. It is question 328 of the continuation
-     plan.
+     by an addition at its end (section 2.5). With it, provisional (P44 of the
+     continuation plan): the entries at the `*` path stay across a later
+     addition at the end of the result, so a member appended to the source after
+     a removal reads what decided the removal. The check of stored labels
+     reports no position of a kept per-element result as appended after another
+     change of the list in the corpus run of code round m. It is question 328 of
+     the continuation plan.
 193. **Whether a read of a position that holds no member consumes the list's
      enumeration** (section 2.5, "An addition through a handle"). After
      additions alone, a read of a position behind the last member reveals the
@@ -16755,28 +16877,25 @@ this document made.
      document the handler creates does not. *Assumed:* nothing changes until the
      proposal is ruled in the specification. It is question 335 of the
      continuation plan.
-196. **What is not verified of the three changes of representation** (section
-     4.7). That they store byte-equal labels is argued from the idempotence of
-     join and meet and is not built; the corpus run with them is the check. The
-     byte figures of section 4.7 are an encoding of real records and no
-     measurement of the changes, and for (c) a binding of more than 8 positions
-     is counted as 300 bytes. What the 20,001 positions of the one `identity`
-     chain of the measured case are was not read: the number fits one position
-     for the array and two per member. Only an array of references was measured;
-     an array of plain values in place and the result of another per-element
-     construct are reasoned. The patterns that read a whole list of references
-     that grows in use were named by reading their source and were not run at
-     size: the lifts `crossrefTable` and `cardRowsByActivity` of
-     `patterns/apps/topics/main.tsx`, which read the whole list of topics and
-     write one row cell per topic;
+196. **What is not verified of the three changes of representation, and what
+     they leave linear** (section 4.7). That they store byte-equal labels is
+     shown by a run over the corpus at the commit that holds the three: 2,153
+     rows of 2,153. The byte figures of section 4.7 are of the records as built.
+     Not verified: equality at size beyond the one measured module, since the
+     lists of the corpus hold two or three members; and the patterns that read a
+     whole list of references that grows in use, which were named by reading
+     their source and were not run at size: the lifts `crossrefTable` and
+     `cardRowsByActivity` of `patterns/apps/topics/main.tsx`, which read the
+     whole list of topics and write one row cell per topic;
      `patterns/system/summary-index/summary-index.tsx`,
      `patterns/system/knowledge-graph/knowledge-graph.tsx` and
      `patterns/system/backlinks-index/backlinks-index.tsx`, each a `computed`
      over the mentionable pieces of a space, whose members come from several
      patterns and users, so `G` is not small there; and the `computed`s over
-     catalogs in `patterns/system/fabrichat/manager.tsx`. *Assumed:* the labels
-     are equal, and the build is held to that by the corpus run. It is question
-     338 of the continuation plan.
+     catalogs in `patterns/system/fabrichat/manager.tsx`. As built, (c) covers
+     an array of references alone, and "What still grows as built" lists what
+     the build leaves linear. *Assumed:* the labels are equal at size as well.
+     It is questions 338 and 351 of the continuation plan.
 197. **The diagnostic and the hard limit for a label of very many clauses** (for
      the project owner; section 4.7). By ruling (2026-11-20; Z79) a diagnostic,
      and a refusal above a hard limit set well above it. Not ruled: whether the
@@ -16814,8 +16933,8 @@ this document made.
      Where `G` is above 1, per-member entries could hold a label by content
      address, and the label of a `fold` could be stored once in place of once
      inline in each entry of each class that holds it: measured for a `filter`
-     over 10,000 references with 10,000 distinct clauses, the label is stored
-     three times, 4.35 MB of entries where today's runtime stores 1.45 MB. Not
+     over 10,000 references with 10,000 distinct clauses, the entries of the
+     list take 8.69 MB where today's runtime stores 1.45 MB. Not
      verified: whether the inline limit of content-addressed labels
      (`CFC_LABEL_INLINE_LIMIT` of `runtime/runner/src/cfc/label-documents.ts`)
      applies to those entries; and whether the normal form of a label absorbs a
@@ -16837,3 +16956,22 @@ this document made.
      resolution with the experimental option off, so the specification comes
      first. *Assumed:* not fixed until the sentence is reviewed. It is question
      343 of the continuation plan.
+202. **A record that lacks an input takes the transaction's join** (for the
+     project owner, as to the remedy; section 4.2, "A record that lacks an
+     input"). *Assumed,* provisional (P42): the join, in place of a refusal of
+     the commit. The join is a bound of the label only where every value that
+     flowed into the write was read in the transaction. One site where a value
+     reaches a write from the memory of the evaluation is found and fixed, by a
+     read of what the value was made from; the others are not audited. The
+     alternatives for a site: that read, linear in what the value was made from
+     for each event; a binding of the slot to the stored output or the record of
+     the computation that made the value; or the refusal. It is question 349 of
+     the continuation plan.
+203. **One plan for each instance that writes** (section 4.1). *Assumed,*
+     provisional (P43), as a stub of the prototype's comparison: the records of
+     an instance of another pattern that a handler makes are not given to the
+     runtime, and its paths take the transaction's join. The design is the
+     paragraph of section 4.1: every such plan registered, one table of inputs
+     per plan, and each record under the plan of its instance. Open with the
+     stub: a write of such an instance that leaves its value as it was stores no
+     label. It is question 348 of the continuation plan.
