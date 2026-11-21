@@ -106,22 +106,24 @@ function groupByPath(
   parentNode: Int32Array,
   pathSteps: number,
 ): Map<string, number> {
-  const steps = new Map<number, string[]>();
+  // Indexed by node, since a heap can hold more nodes than a `Map` holds
+  // entries (2^24).
+  const steps: (string[] | undefined)[] = new Array(graph.nodeCount);
   const stepsOf = (node: number): string[] => {
     const chain: number[] = [];
     let at = node;
-    while (parentEdge[at] >= 0 && !steps.has(at)) {
+    while (parentEdge[at] >= 0 && steps[at] === undefined) {
       chain.push(at);
       at = parentNode[at];
     }
-    let known = steps.get(at) ?? [];
+    let known = steps[at] ?? [];
     for (let i = chain.length - 1; i >= 0; i--) {
       const label = graph.edgeLabel(parentEdge[chain[i]]);
       const named = !UNNAMED_STEPS.has(label) && !/^\d+$/.test(label);
       if (named && known.length < pathSteps) {
         known = [...known, label.slice(0, 28)];
       }
-      steps.set(chain[i], known);
+      steps[chain[i]] = known;
     }
     return known;
   };
