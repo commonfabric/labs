@@ -143,6 +143,43 @@ describe("SpaceSession", () => {
         expect(seen).toEqual([first.seq]);
       });
 
+      it("reports nothing for an answer that arrives after the session began closing", async () => {
+        const writer = await mount();
+        const queried = Promise.withResolvers<void>();
+        const inner = loopback(server);
+        const client = await connect({
+          transport: {
+            ...inner,
+            send(payload) {
+              const sent = inner.send(payload);
+              if (payload.includes('"graph.query"')) queried.resolve();
+              return sent;
+            },
+          },
+        });
+        clients.push(client);
+        const session = await client.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const applied = await write(writer, 1);
+        const seen: number[] = [];
+        session.subscribeServerSeq((seq) => seen.push(seq));
+
+        // The query is sent before the close begins, and answered at the
+        // writer's commit, which the session had not heard of.
+        const answered = session.queryGraph(rootQuery);
+        await queried.promise;
+        const closing = session.close();
+        const result = await answered;
+        await closing;
+
+        expect(result.serverSeq).toBe(applied.seq);
+        expect(session.serverSeq).toBe(applied.seq);
+        expect(seen).toEqual([]);
+      });
+
       it("reports nothing once the session is closed", async () => {
         const session = await mount();
         const seen: number[] = [];

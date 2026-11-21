@@ -1267,9 +1267,68 @@ describe("XHistoryView", () => {
           { steps: [step(5)] },
         ]);
         disconnect(view);
+        // A report the runtime made as the following stopped.
+        follows[0].onAdvance(9);
+        await queuedTurns();
 
         expect(follows[0].stopped).toBe(true);
         expect(listings).toEqual([undefined]);
+      });
+
+      it("lists once more after an older stretch, for a seq reported during a refresh the older stretch replaced", async () => {
+        // The older stretch lists no newer step, so the seq reported while
+        // the refresh it replaced was made is listed after it.
+
+        const refresh = Promise.withResolvers<Page>();
+        const answers: Promise<Page>[] = [
+          Promise.resolve({ steps: [step(6), step(5)], next: 5 }),
+          refresh.promise,
+          Promise.resolve({ steps: [step(4)] }),
+          Promise.resolve({ steps: [step(8), step(7), step(6)] }),
+        ];
+        const { view, follows, listings, reuses, markup, until } =
+          await following([], () => answers.shift()!);
+        follows[0].onAdvance(7);
+        follows[0].onAdvance(8);
+        expect(listings).toEqual([undefined, undefined]);
+
+        const [older] = templateListeners(view.render(), "click", view).filter((
+          { text },
+        ) => text === "Show older steps");
+        await until(
+          () => older.dispatch(new Event("click")),
+          (rendered) => rendered.includes('data-seq="8"'),
+        );
+
+        expect(listings).toEqual([undefined, undefined, 5, undefined]);
+        expect(reuses).toEqual([false, true, false, true]);
+        const seqs = [...markup().matchAll(/data-seq="(\d+)"/g)].map((
+          [, seq],
+        ) => Number(seq));
+        expect(seqs).toEqual([8, 7, 6, 5, 4]);
+      });
+
+      it("leaves the list as it was for a refresh that answers after a fork opened", async () => {
+        const refresh = Promise.withResolvers<Page>();
+        const answers: Promise<Page>[] = [
+          Promise.resolve({ steps: [step(5)] }),
+          refresh.promise,
+        ];
+        const { view, follows, listings, markup } = await following(
+          [],
+          () => answers.shift()!,
+        );
+        follows[0].onAdvance(7);
+        expect(listings).toEqual([undefined, undefined]);
+
+        view.open = { seq: 5, busy: false };
+        refresh.resolve({ steps: [step(7), step(6), step(5)] });
+        // The listing was waiting on this promise before this case was, so
+        // it has been resumed by the time this case is.
+        await refresh.promise;
+
+        expect(markup()).not.toContain('data-seq="7"');
+        expect(markup()).toContain('data-seq="5"');
       });
 
       it("asks for no listing while one is under way", async () => {
