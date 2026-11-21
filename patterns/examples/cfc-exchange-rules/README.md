@@ -73,6 +73,17 @@ their own seat's view and nobody else's. `SEAT-VIEWS-FINDINGS.md` records what
 the runtime does with it, what it took to get there, and why it does not yet
 hold against the table's owner.
 
+`card-table.tsx` is the same table in the shape the list release could not give
+it. The whole state, who sits where included, is one sealed record with one
+writer, `move`, and a number of seats its setup chooses. One function,
+`viewFor`, reads the record and asks the runtime who it is computed for, and the
+rule releases what it returns to that principal. The runtime computes the view
+once for each principal who looks, so nothing is kept per seat: no key, no list,
+no roster and no second handler. It needs the `viewerBoundRelease` experimental
+option, which is off by default. `MODULE-NAMED-AUDIENCE-PROPOSAL.md` is the
+specification change it rests on, with the cases that ran and what the change
+leaves open.
+
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
 as the policy subject and requires that exact manifest to be installed in the
@@ -103,4 +114,6 @@ deno task cf test patterns/examples/cfc-exchange-rules/custody-answer-room.test.
 deno task cf test patterns/examples/cfc-exchange-rules/witnessed-chain.test.tsx
 deno task cf test patterns/examples/cfc-exchange-rules/seat-views.test.tsx
 deno task cf test patterns/examples/cfc-exchange-rules/seat-views-multi-user.test.tsx
+EXPERIMENTAL_VIEWER_BOUND_RELEASE=true deno task cf test patterns/examples/cfc-exchange-rules/card-table.test.tsx
+EXPERIMENTAL_VIEWER_BOUND_RELEASE=true deno task cf test patterns/examples/cfc-exchange-rules/card-table-multi-user.test.tsx
 ```
