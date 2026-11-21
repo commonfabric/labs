@@ -66,8 +66,8 @@ describe("space history", () => {
    * Creates a counter, opens it in the shell and increments it three times
    * from the page, opening the history panel after the first. Returns the
    * page and the seq of the step that left the counter at one. The panel
-   * lists history as it stood when it opened, so that step stays listed
-   * while the space moves on, whichever side computes the space.
+   * keeps the steps it has listed as the space moves on, so that step stays
+   * listed whichever side computes the space.
    */
   async function openCountedToThree(): Promise<{ page: Page; first: string }> {
     const program = await resolveLocalProgram(
@@ -147,6 +147,19 @@ describe("space history", () => {
     await page.evaluate("globalThis.app.setConfig('showHistoryView', true)");
     await clickCfButton(page, ".pattern-restore");
     await waitForCounter(page, "1st");
+  });
+
+  it("lists the steps the space takes while the panel is open", async () => {
+    // The panel opened after the first increment, so a first step that is
+    // not the one it opened on is one it listed as the space moved on.
+    const { page, first } = await openCountedToThree();
+    await page.waitForSelector(
+      `ol > li:first-child > .step:not([data-seq="${first}"])`,
+      { strategy: "pierce" },
+    );
+    await page.waitForSelector(`.step[data-seq="${first}"]`, {
+      strategy: "pierce",
+    });
   });
 
   it("shows the piece as an earlier step left it, and returns to now", async () => {

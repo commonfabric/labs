@@ -83,6 +83,7 @@ async function operationSettlementFixture(
     });
   const session = {
     subscribeTermination: () => () => {},
+    subscribeServerSeq: () => () => {},
     watchAddSync: (
       _watches: WatchSpec[],
       consume?: (m: WatchMutation) => void,
@@ -255,6 +256,7 @@ describe("operation storage capability", () => {
               } as unknown as MemoryV2Client.Client;
               const session = {
                 subscribeTermination: () => () => {},
+                subscribeServerSeq: () => () => {},
                 watchAddSync: (
                   _watches: WatchSpec[],
                   consume?: (m: WatchMutation) => void,
@@ -387,6 +389,7 @@ describe("operation storage capability", () => {
               } as unknown as MemoryV2Client.Client;
               const session = {
                 subscribeTermination: () => () => {},
+                subscribeServerSeq: () => () => {},
                 watchAddSync: (
                   _watches: WatchSpec[],
                   consume?: (m: WatchMutation) => void,
@@ -516,6 +519,7 @@ describe("operation storage capability", () => {
                 } as unknown as MemoryV2Client.Client,
                 session: {
                   subscribeTermination: () => () => {},
+                  subscribeServerSeq: () => () => {},
                   watchAddSync: () => Promise.reject(new Error("watch failed")),
                 } as unknown as MemoryV2Client.SpaceSession,
               }),
@@ -604,6 +608,7 @@ describe("operation storage capability", () => {
                 client: unsupportedClient,
                 session: {
                   subscribeTermination: () => () => {},
+                  subscribeServerSeq: () => () => {},
                 } as unknown as MemoryV2Client.SpaceSession,
               }),
           },
@@ -626,6 +631,7 @@ describe("operation storage capability", () => {
     } as unknown as MemoryV2Client.Client;
     const session = {
       subscribeTermination: () => () => {},
+      subscribeServerSeq: () => () => {},
       transact: () => Promise.resolve({}),
     } as unknown as MemoryV2Client.SpaceSession;
     const storage = new (class extends V2StorageManager {
@@ -675,6 +681,7 @@ describe("operation storage capability", () => {
     let attempts = 0;
     const session = {
       subscribeTermination: () => () => {},
+      subscribeServerSeq: () => () => {},
       watchAddSync: (
         _watches: WatchSpec[],
         consume?: (m: WatchMutation) => void,
@@ -841,6 +848,7 @@ describe("operation storage capability", () => {
     let removalCount = 0;
     const session = {
       subscribeTermination: () => () => {},
+      subscribeServerSeq: () => () => {},
       watchAddSync: (
         _watches: WatchSpec[],
         consume?: (m: WatchMutation) => void,
@@ -963,6 +971,7 @@ describe("operation storage capability", () => {
     let additions = 0;
     const session = {
       subscribeTermination: () => () => {},
+      subscribeServerSeq: () => () => {},
       watchAddSync: (
         _watches: WatchSpec[],
         consume?: (m: WatchMutation) => void,
@@ -1067,6 +1076,7 @@ describe("operation storage capability", () => {
     const lateAdditionView = MemoryV2Client.WatchView.fromSync(sync);
     const addingStorage = createStorage({
       subscribeTermination: () => () => {},
+      subscribeServerSeq: () => () => {},
       watchAddSync: (
         _watches: WatchSpec[],
         consume?: (m: WatchMutation) => void,
@@ -1100,6 +1110,7 @@ describe("operation storage capability", () => {
     const lateRemovalView = MemoryV2Client.WatchView.fromSync(sync);
     const removingStorage = createStorage({
       subscribeTermination: () => () => {},
+      subscribeServerSeq: () => () => {},
       watchAddSync: (
         _watches: WatchSpec[],
         consume?: (m: WatchMutation) => void,
@@ -1142,6 +1153,7 @@ describe("operation storage capability", () => {
     const view = MemoryV2Client.WatchView.fromSync(sync);
     const session = {
       subscribeTermination: () => () => {},
+      subscribeServerSeq: () => () => {},
       watchAddSync: (
         _watches: WatchSpec[],
         consume?: (m: WatchMutation) => void,

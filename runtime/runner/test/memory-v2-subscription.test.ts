@@ -695,6 +695,7 @@ describe("Memory v2 storage notifications", () => {
     }>();
     const session = {
       subscribeTermination: () => () => {},
+      subscribeServerSeq: () => () => {},
       watchAddSync: () => {
         watchStarted.resolve();
         return watchResponse.promise;
@@ -745,6 +746,7 @@ describe("Memory v2 storage notifications", () => {
     } as unknown as MemoryV2Client.Client;
     const session = {
       subscribeTermination: () => () => {},
+      subscribeServerSeq: () => () => {},
       watchAddSync: () => Promise.reject(new Error("scripted watch failure")),
     } as unknown as MemoryV2Client.SpaceSession;
     const sessionFactory: SessionFactory = {
