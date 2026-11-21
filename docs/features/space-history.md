@@ -129,10 +129,10 @@ private as the space: whoever can read the space can read its branches.
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | Memory engine  | `listCommits()` and `restoreBranch()` in `runtime/memory/v2/history.ts`; `createBranch()` and `deleteBranch()`                   |
 | Memory wire    | `branch.create`, `branch.delete`, `branch.list`, `history.list`, `branch.restore`; `SessionDescriptor.branch` and `forkBranch`   |
-| Runner storage | `Options.branches` and `Options.forkBranch` on the storage manager; `listHistory()` and the branch methods on a space's provider |
+| Runner storage | `Options.branches` and `Options.forkBranch` on the storage manager; `listHistory()`, `subscribeServerSeq()` and the branch methods on a space's provider |
 | Runner         | `historySteps()` in `runtime/runner/src/history-steps.ts`, which groups commits into steps                                       |
-| Runtime client | `spaceHistory()`, `createSpaceBranch()`, `deleteSpaceBranch()`, `restoreSpace()`; `InitializationData.branches`                  |
-| `lib-shell`    | `RuntimeInternals.spaceHistory()`, `forkSpace()`, `restoreSpace()`, `restorePiecePattern()`; `SpaceFork`; `withPatternChanges()` |
+| Runtime client | `spaceHistory()`, `watchSpaceHistory()` and the `spaceseqadvanced` event, `createSpaceBranch()`, `deleteSpaceBranch()`, `restoreSpace()`; `InitializationData.branches` |
+| `lib-shell`    | `RuntimeInternals.spaceHistory()`, `watchSpaceHistory()`, `forkSpace()`, `restoreSpace()`, `restorePiecePattern()`; `SpaceFork`; `withPatternChanges()` |
 | Shell          | The history panel (`XHistoryView`) and the `open-history`, `close-history`, `restore-history` and `restore-pattern` commands     |
 
 A session is opened on a branch, and the server reads and writes that branch
@@ -197,9 +197,24 @@ believing it is the space's.
 space (`showHistoryView` in the shell's display toggles). The panel lists the
 space's steps, newest first, each with what began it, its `seq`, its time and
 the principal that made it, and marks a step that is not settled as in
-progress. The list is read when the
-panel opens, after returning from a fork and after a pattern version is
-restored; it does not follow the space live.
+progress. The list is read when the panel opens, after returning from a fork
+and after a pattern version is restored, and again each time the space moves
+on past its newest step while no fork is open. The older steps already listed
+stay listed beneath the new ones where the newest stretch reaches back to
+them; where the space moved on by more than a stretch, the new stretch
+replaces the list, and "Show older steps" lists the steps between. The
+space's pieces are listed again, and the pattern changes are placed from the
+piece sources the panel last read, reading only those of pieces listed since.
+
+The panel learns that the space moved on from the newest `seq` of it that the
+runtime has heard of, which a space's memory session keeps
+(`SpaceSession.subscribeServerSeq()`) and the worker reports to a page that
+asks (`RuntimeClient.watchSpaceHistory()`). That seq moves when the server
+accepts a commit this runtime made and when it pushes a commit to a document
+this runtime watches, so a commit to a document nothing in the shell watches,
+such as one to another user's piece that is not in view, is listed once
+something the runtime watches changes or the panel lists again for another
+reason.
 
 A step during which a piece's pattern changed lists each change beneath it:
 the piece, what the change was, as the piece menu's "Origin and history"

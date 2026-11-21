@@ -89,6 +89,11 @@ export type GraphQueryWalkStats = {
   dagTraversals: number;
   getDocAtPathCalls: number;
   schemaMemoHits: number;
+
+  /** Positions the traversal ran from its own stack rather than on the
+   * JavaScript stack, which it does once the data is deep enough
+   * (`SchemaObjectTraverser.nativeDepthHandoffs`). */
+  nativeDepthHandoffs: number;
 };
 
 export const createGraphQueryWalkStats = (): GraphQueryWalkStats => ({
@@ -100,6 +105,7 @@ export const createGraphQueryWalkStats = (): GraphQueryWalkStats => ({
   dagTraversals: 0,
   getDocAtPathCalls: 0,
   schemaMemoHits: 0,
+  nativeDepthHandoffs: 0,
 });
 
 /**
@@ -722,5 +728,6 @@ export class GraphQueryWalk {
     this.stats.dagTraversals += traverser.traverseDAGCalls;
     this.stats.getDocAtPathCalls += traverser.getDocAtPathCalls;
     this.stats.schemaMemoHits += traverser.schemaMemoHits;
+    this.stats.nativeDepthHandoffs += traverser.nativeDepthHandoffs;
   }
 }

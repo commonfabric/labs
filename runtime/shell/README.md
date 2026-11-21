@@ -76,7 +76,9 @@ URL rather than leaving the embedded surface.
 ## History
 
 "Toggle history" in the header menu opens a panel listing the steps of the
-viewed space's history. Choosing a step shows the whole shell on a fork of the
+viewed space's history, and lists it again while it is open whenever the runtime
+learns of a newer step, which it does for its own changes and for changes to
+documents it watches. Choosing a step shows the whole shell on a fork of the
 space as that step left it; the panel then offers "Back to now", which discards
 the fork, and "Restore this version", which sets the space's documents back to
 that step and leaves its access list and SQLite databases as they are. Changes
