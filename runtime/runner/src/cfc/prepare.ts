@@ -14199,18 +14199,7 @@ export function* prepareBoundaryCommitSteps(
         ) {
           if (seen.has(pathKey(path))) continue;
           seen.add(pathKey(path));
-          // A covered path that holds a link stores its label on the
-          // link's own entry, as it does where it is written alone: the
-          // atom of a kept output that passes a reference on is evidence
-          // about the link (§3.7.2), and a read of the link's target does
-          // not take it from a value entry at the slot.
-          if (
-            isPrimitiveCellLink(writtenValueAt(flowWrittenValues, path))
-          ) {
-            linkLabelPaths.push(path);
-          } else {
-            derivedStampPaths.push(path);
-          }
+          derivedStampPaths.push(path);
         }
       }
       // H4 writer-fit (SC-18b, §8.12.4 `canWrite`): the per-tx join landing

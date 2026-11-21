@@ -599,6 +599,13 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   #noteUnchanged(doc: string): void {
     if (this.#unchanged.has(doc)) return;
+    // The entries kept of a document no commit changed since are the ones
+    // it stores.
+    const kept = this.#touched.has(doc) ? undefined : this.#entries.get(doc);
+    if (kept !== undefined) {
+      this.#unchanged.set(doc, kept);
+      return;
+    }
     const tx = this.#runtime.edit();
     try {
       this.#unchanged.set(doc, entriesOf(this.#storedLabels(tx, doc)));
