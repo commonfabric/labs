@@ -393,7 +393,9 @@ A pattern-owned cell narrower than its result starts from its declared default
 for each actor instance. The setup that first declares the cell commits its
 manifest and default together. On a later independently owned start, an accepted
 manifest authorizes filling an absent actor instance in a separate transaction
-for that cell, before execution. Reading another private argument or another
+for that cell, before execution. A serving runtime's own start names no actor
+and fills no instance; a demander's instance is filled by the arrival seed
+(`server-side-execution/scopes.md`). Reading another private argument or another
 actor's cell during setup must not taint this constant default. The default
 does carry the label on its owning piece's root, which the filling transaction
 reads on its own, and no label of the piece's fields. The current

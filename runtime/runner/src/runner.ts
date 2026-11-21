@@ -11355,11 +11355,32 @@ export class Runner {
   }
 
   /**
+   * Returns whether `identity`, the actor a seed or a start runs under, is no
+   * actor at all on this serving runtime: absent, or the runtime's own
+   * session, which is where a transaction naming no actor resolves.
+   */
+  #isServingOwnIdentity(identity: ScopeKeyIdentity | undefined): boolean {
+    if (identity === undefined) return true;
+    const own = this.#runtime.scopeKeyIdentity;
+    return identity.principal === own.principal &&
+      identity.sessionId === own.sessionId;
+  }
+
+  /**
    * Fills the absent actor instances of the defaults `instances` declare at
    * a scope narrower than that of the instance's result, each in a
    * transaction of its own (`#prepareCellsForRunningPattern` says why),
    * under `identity` and while `isCurrent` holds. Returns whether every one
    * was verified or seeded.
+   *
+   * A serving runtime fills no instance of its own. Its starts name no actor,
+   * and a seed under its own session would be one no viewer ever reads: the
+   * service's session is nobody's, and each new serving runtime has a new one,
+   * so every start would seed every started piece's defaults again. Identity
+   * arrives with the work (protocol.md, "Server-side runs never derive
+   * identity from their own session"), and a demander's instances come from
+   * the arrival seed (scopes.md). Readers of an unseeded instance see the
+   * schema default.
    */
   async #seedOwedDefaults(
     instances: readonly ResumePatternInstance[],
@@ -11367,6 +11388,9 @@ export class Runner {
     isCurrent: () => boolean,
     allowReadOnly?: boolean,
   ): Promise<boolean> {
+    if (this.#runtime.servingPosture && this.#isServingOwnIdentity(identity)) {
+      return true;
+    }
     let defaultsPrepared = true;
     const readOnlySpaces = new Map<MemorySpace, boolean>();
     for (const instance of instances) {
