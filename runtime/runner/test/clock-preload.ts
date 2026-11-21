@@ -198,7 +198,11 @@ installFakeClock({
     // That can expire a challenge or an authenticated principal before the
     // request reaches the server. The tests wait on socket events and round
     // trips.
+    "remote-session-server-flags",
+    "remote-session-shared-connection",
     "storage-admission-notice",
+    "storage-delegation-chain",
+    "storage-first-handshake",
     "v2-remote-session-websocket",
   ],
 });
