@@ -566,6 +566,36 @@ computation that wrote outside them is recorded as unbounded.
 An effect is left as it is. It runs while its piece is started, and a mark
 on a demanded piece's slice starts the piece.
 
+### What the rows for an envelope need
+
+Three facts about the scheduler and the index decide how the first two cases
+above are built, and none of them is settled.
+
+- **An envelope names where a link is held, not what is written.** For a
+  computation handed a writable cell, the envelope is the slot that holds
+  the link to the cell, and the document the write lands in is the link's
+  target (`space-server-currency-wish.test.ts`). So the documents an
+  envelope leads to are known from what a run wrote or by following the
+  envelope's links, and not from the envelope's own addresses. The scheduler
+  keeps a run's reads and replaces its writes with the declared write
+  surface (`setSchedulerDependencies()`), so what a run wrote beyond that
+  surface is not kept today for a computation that runs once.
+- **A document a materializer writes into can have other writers.** A cell
+  handed to a computation is one a client may write too, and the index of a
+  collection is written by a materializer for each element in it
+  (`collection-index-member.ts`). A vouch row says a clean run stands behind
+  the whole instance, and a revision above it marks the slice that vouched.
+  Vouching for such a document would have each of its writers marked by
+  every other, and none of them would rest. The rows for an envelope need a
+  relation of their own: one that marks the readers of the document when the
+  materializer's slice is marked, asks for no vouch, and is not marked by
+  another writer's revision.
+- **Within one space nothing starts a stale producer.** A reader marked `1`
+  is started and reads what the store holds. The piece that would write it
+  starts only when a session demands it, or when the demand comes from
+  another space (step 5). Starting it from a reader in its own space is the
+  first plan's stage 5.
+
 ### A write into another space at an undeclared destination
 
 No rule above covers it, because what could observe the write is behind a
@@ -704,12 +734,14 @@ A third is ruled:
    its whole set whenever it changes, and each reading piece is recorded
    again with every viewer's slice at each start; both are costs still to
    take out.
-6. **Computations that run without demand.** Envelopes among the write
-   rows; a computation recorded as unbounded from what it wrote; the
-   unsettled space, settled before a judgment in it or a pull from it
+6. **Computations that run without demand.** Not started. Envelopes among
+   the write rows; a computation recorded as unbounded from what it wrote;
+   the unsettled space, settled before a judgment in it or a pull from it
    returns; the writer's registration for a declared destination in another
    space; and the counts the open question needs. Built on step 5, which
-   starts a producer.
+   starts a producer in another space, and on the first plan's stage 5 for
+   one in the same space. "What the rows for an envelope need" lists what
+   is to be settled first.
 7. **The interval clock's expiry.** Done. A space is armed with one it
    reads only until the earliest slice there expires.
 8. **Measure** a social space whose pieces read each viewer's profile, with
