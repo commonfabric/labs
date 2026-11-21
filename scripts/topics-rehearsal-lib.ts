@@ -249,6 +249,13 @@ export interface TopicsExport {
     /** Stored membership links of the board's `topics` array, in order —
      * evidence of membership and order, never a restore payload. */
     topicsLinks: unknown[];
+
+    /**
+     * The board's namespace, each number to the topic it names. A board that
+     * holds its topics in a collection appends nothing to its list, so this
+     * is where such a board's export records which topics it holds.
+     */
+    names: Record<string, unknown>;
   } | null;
   topics: TopicExportRow[];
 
@@ -270,9 +277,11 @@ export interface TopicsExport {
  * a retirable one is left out and reported, and any other is refused.
  * `buildRestoreDocument` makes each of these decisions.
  *
- * Four today: `mentionable` (the board's derived mention index),
- * `boardCrossrefs` (its reference pivot), `boardCrossrefIndex` (that pivot's
- * positions grouped by topic number), and `boardNames` (its names table). The
+ * Five today: `mentionable` (the board's mention universe), `board` (its
+ * collection of topics, which a topic asks for the topics that mention it),
+ * `boardCrossrefs` (the reference graph a topic read its backlinks from
+ * before the board held a collection), `boardCrossrefIndex` (that graph's
+ * rows grouped by topic number), and `boardNames` (its names table). The
  * mention index publishes display rows with stable strings and unread member
  * references, matching the wiring the board supplies when it creates a topic.
  *
@@ -289,6 +298,7 @@ export interface TopicsExport {
  */
 export const STRUCTURAL_LINK_SOURCES: Record<string, string> = {
   mentionable: "mentionable",
+  board: "board",
   boardCrossrefs: "crossrefs",
   boardCrossrefIndex: "crossrefIndex",
   boardNames: "namesTable",
@@ -313,12 +323,15 @@ export const STRUCTURAL_LINK_FIELDS = Object.keys(STRUCTURAL_LINK_SOURCES);
  *
  * `myName` predates the agentName attribution and no pattern declares it.
  * `boardNames` named the board's table a topic read its number from, before a
- * topic stored its own. `boardCrossrefIndex` is declared by the generations
- * that look their backlinks up by number, and not by the ones that scan.
+ * topic stored its own. `boardCrossrefs` is declared by the generations that
+ * read their backlinks out of the board's reference graph, and
+ * `boardCrossrefIndex` by those among them that look their row up by number;
+ * a topic that asks the board's collection declares neither.
  */
 export const RETIRABLE_LINK_FIELDS = [
   "myName",
   "boardNames",
+  "boardCrossrefs",
   "boardCrossrefIndex",
 ] as const;
 

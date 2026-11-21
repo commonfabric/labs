@@ -235,6 +235,7 @@ describe("topics-rehearsal-lib", () => {
         {
           title: "t",
           mentionable: link,
+          board: link,
           boardCrossrefs: link,
           boardCrossrefIndex: link,
           boardNames: link,
@@ -242,11 +243,17 @@ describe("topics-rehearsal-lib", () => {
         },
         resolved,
       );
-      expect(structural).toEqual(["mentionable", "boardCrossrefs"]);
+      expect(structural).toEqual(["mentionable", "board"]);
       // In the raw argument's own order, which is what the walk follows. All
-      // three are retired here because this target declares none of them.
-      expect(legacy).toEqual(["boardCrossrefIndex", "boardNames", "myName"]);
+      // four are retired here because this target declares none of them.
+      expect(legacy).toEqual([
+        "boardCrossrefs",
+        "boardCrossrefIndex",
+        "boardNames",
+        "myName",
+      ]);
       expect(doc.mentionable).toBeUndefined();
+      expect(doc.board).toBeUndefined();
       expect(doc.boardCrossrefs).toBeUndefined();
       expect(doc.boardCrossrefIndex).toBeUndefined();
       expect(doc.boardNames).toBeUndefined();
@@ -277,7 +284,10 @@ describe("topics-rehearsal-lib", () => {
         const { doc, structural, legacy, unpublished } = buildRestoreDocument(
           newerExport,
           resolved,
-          { declaredLinks: ["boardCrossrefIndex"], publishedSources: board },
+          {
+            declaredLinks: ["boardCrossrefs", "boardCrossrefIndex"],
+            publishedSources: board,
+          },
         );
         expect(structural).toEqual([
           "mentionable",
@@ -296,7 +306,10 @@ describe("topics-rehearsal-lib", () => {
         const { structural, legacy } = buildRestoreDocument(
           olderExport,
           resolved,
-          { declaredLinks: ["boardCrossrefIndex"], publishedSources: board },
+          {
+            declaredLinks: ["boardCrossrefs", "boardCrossrefIndex"],
+            publishedSources: board,
+          },
         );
         expect(structural).toEqual([
           "mentionable",
@@ -310,7 +323,7 @@ describe("topics-rehearsal-lib", () => {
         const { structural, legacy, unpublished } = buildRestoreDocument(
           newerExport,
           resolved,
-          { declaredLinks: [], publishedSources: board },
+          { declaredLinks: ["boardCrossrefs"], publishedSources: board },
         );
         expect(structural).toEqual(["mentionable", "boardCrossrefs"]);
         expect(legacy).toEqual(["boardCrossrefIndex"]);
@@ -327,7 +340,7 @@ describe("topics-rehearsal-lib", () => {
             exported,
             resolved,
             {
-              declaredLinks: ["boardCrossrefIndex"],
+              declaredLinks: ["boardCrossrefs", "boardCrossrefIndex"],
               publishedSources: olderBoard,
             },
           );
@@ -340,7 +353,7 @@ describe("topics-rehearsal-lib", () => {
 
       it("decides the same whatever order the raw argument holds its fields in", () => {
         const target = {
-          declaredLinks: ["boardCrossrefIndex"],
+          declaredLinks: ["boardCrossrefs", "boardCrossrefIndex"],
           publishedSources: olderBoard,
         };
         const first = buildRestoreDocument(
@@ -362,10 +375,23 @@ describe("topics-rehearsal-lib", () => {
       it("refuses, before the apply, a link that cannot be retired and whose board path is missing", () => {
         expect(() =>
           buildRestoreDocument(newerExport, resolved, {
-            declaredLinks: ["boardCrossrefIndex"],
-            publishedSources: ["mentionable", "crossrefIndex"],
+            declaredLinks: ["boardCrossrefs", "boardCrossrefIndex"],
+            publishedSources: ["crossrefs", "crossrefIndex"],
           })
-        ).toThrow("crossrefs");
+        ).toThrow("mentionable");
+      });
+
+      it("retires both for a topic that asks the board's collection, and relinks `board`", () => {
+        // A topic on the collection-backed pattern declares neither graph
+        // input. An export taken from it before it moved still names both.
+
+        const { structural, legacy } = buildRestoreDocument(
+          { ...newerExport, board: link },
+          resolved,
+          { declaredLinks: [], publishedSources: [...board, "board"] },
+        );
+        expect(structural).toEqual(["mentionable", "board"]);
+        expect(legacy).toEqual(["boardCrossrefs", "boardCrossrefIndex"]);
       });
     });
 
@@ -524,7 +550,12 @@ describe("topics-rehearsal-lib", () => {
       expect(
         await declaredRetirableLinks(counted),
       ).toEqual(["boardNames"]);
-      expect(asked).toEqual(["myName", "boardNames", "boardCrossrefIndex"]);
+      expect(asked).toEqual([
+        "myName",
+        "boardNames",
+        "boardCrossrefs",
+        "boardCrossrefIndex",
+      ]);
     });
   });
 
@@ -544,6 +575,7 @@ describe("topics-rehearsal-lib", () => {
         "crossrefs",
       ]);
       expect([...asked].sort()).toEqual([
+        "board",
         "crossrefIndex",
         "crossrefs",
         "mentionable",

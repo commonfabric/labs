@@ -463,7 +463,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260819T172917Z-K_8fL8hZtM4xYV7V",
     ],
     paths: [
-      "argument.boardCrossrefs",
       "result.crossrefs",
       "result.addLink.kind",
       // The unsigned caller retires: a comment always carries a structured author now, so the mirror beside it goes.

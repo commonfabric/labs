@@ -140,21 +140,39 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   while an optional one tolerates a topic that publishes none. Universe ROWS are
   the exception and carry the empty string, because they are copies the board
   writes rather than a demand on anything stored.
-- **`mentionable` is a derived index, and its copies are the design.** Every
-  topic on the board reads the mention universe — each child's editor
-  autocompletes over it — so whatever `mentionable` is wired to is multiplied by
-  the board's own size. Pointed at the topics themselves, every topic's walk
-  crosses into every other topic, and document-granular delivery ships each
-  sibling whole to serve two strings. The index bounds that product:
-  `mentionableIndex` derives one small document of rows, each carrying a topic's
-  display name, title and `shortName` as COPIES plus the topic itself as a
-  reference. One derivation pays the board-wide walk, once per change, in place
-  of every reader paying it on every load. The lift and its row type are shared
-  with the collection-naming exemplar
-  (`../../product/collection-naming/mentionable.ts`): both boards derive their
-  universe through the one derivation, so a member's number reads the same on
-  either. A row carries the empty name where the copy is taken off a member that
-  publishes none.
+- **The board's topics are an indexed collection.** The board holds no list of
+  its topics. `addTopic` adds each topic to an
+  [indexed collection](../../../docs/features/indexed-collections.md), which
+  mirrors what a listing shows of a topic into a SQLite table named `topics`:
+  its title, body, number, creation and activity instants, comment count, and
+  who filed it. Every listing is a query over that table, so none of them reads
+  a topic: the cards, most recently active first, a hundred at first and a
+  hundred more each time a session presses "Show more…"; the topic count; the
+  mention universe; and the `topics` and `index` outputs, which carry each topic
+  as a reference.
+
+  A topic holds the board's handle, so that it can ask which topics mention it,
+  and the board publishes the handle as `board` so that a topic can be linked to
+  it. Holding the handle does not let a topic, or anything else it is linked
+  into, write the board: the collection names a guard that only the board's own
+  ways of adding a topic may write, which are `addTopic`, `adoptTopics`,
+  `backfillNames` and the composer's submit.
+
+  What the collection mirrors is state a verb stores, so it follows a topic that
+  is not running. That is why a topic publishes `filedBy`, the author as the
+  create stored it, beside `createdBy`, which a running topic derives from it.
+
+  A topic `addTopic` has just created has no fields to mirror until it has been
+  set up, which happens after the create's transaction. For that moment its row
+  is there with its columns unset, and it sorts last in `topics` and `index`,
+  where its number will put it.
+- **`mentionable` is rows read out of the collection.** Every topic on the board
+  reads the mention universe, since each child's editor autocompletes over it,
+  so whatever `mentionable` holds is multiplied by the board's own size. It
+  holds one small row per topic: the display name, the title and the number as
+  copies, and the topic itself as a reference (`MentionableRow` in
+  `../../product/collection-naming/mentionable.ts`). A row carries the empty
+  name for a topic that has no number.
 
   The reference is what a picked completion stores, and it is deliberately
   outside the demand a topic declares over the universe: a property that demand
@@ -162,64 +180,27 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   argument, which is what keeps a topic's resume from reaching a sibling through
   its mention universe. The editor reaches it through its own contract, at the
   moment a completion is picked.
+- **A card's strings are derived once for the cards shown.** The card list is a
+  mapped sub-pattern, and every helper call or conditional in a mapped body,
+  such as `snippet(card.body)`, `topicAuthorLabel(card.createdBy)` or a ternary,
+  compiles to a computed cell of its own, minted per card, persisted per session
+  and watched by every reader. `cardRowsOf` formats the badge, title, snippet
+  and caption of every row the card query returns in one computation, and the
+  card keeps only the two conditionals it cannot precompute: the badge and the
+  snippet line are present or absent.
+- **A board that held its topics as a list adopts them.** The `topics` input is
+  read by two verbs and by nothing else. `adoptTopics` adds every listed topic
+  to the collection, and `backfillNames` does the same before it numbers them.
+  `backfillNames` numbers the topics the collection holds as well, which is
+  every topic of a board that never kept a list. Until one of them has run, such
+  a board shows no topics.
 
-  `addTopic` wires the index into each topic it creates. A piece created before
-  the index is rewired to it as a one-time link-bind; until then it reads the
-  raw topics list — correct, at the cost the index exists to remove.
-- **A declared schema is the only thing that bounds a read.** The transformer
-  shrinks a derivation's input schema to the paths it can see the body reach,
-  and gives up when it cannot: `topics.get().length` declares `items: unknown`
-  and expands no topic, while the same count through a helper it cannot see into
-  declares `items: true` and reads every topic whole — thread, verbs, and
-  rendered UI included. That is how one derived value ends up reading the whole
-  space. So every derivation here is a module-scope `lift`, because a `lift`'s
-  declared parameter type is a ceiling an opaque helper cannot widen.
-
-  Four derivations run over the whole board, and each declares only what it
-  reads. `crossrefTable` takes one list of references per topic and builds the
-  mention pivot from it; `cardRowsByActivity` takes the seven scalars a card
-  uses per topic (`CardSource`: the six it shows, and `createdAt` as the sort's
-  fallback for a topic that has never run), orders the topics by activity and
-  builds one row per card — the badge, title, snippet and caption as plain
-  strings, plus the topic as a reference for the Open link; `mentionableIndex`
-  takes the three display strings per topic and builds the mention universe;
-  `namesTable` takes the namespace map and builds one row per numbered member,
-  for a caller's reverse lookup, without reading through any of them. None
-  expands a topic's thread, verbs, or rendered UI. The card derivation alone
-  reads prose: the body string, whole, which it cuts to its 120-character
-  snippet — and nothing else of the topic.
-
-  The card rows are strings, and that is deliberate: the card list is a mapped
-  sub-pattern, and every helper call or conditional in a mapped body —
-  `snippet(card.body)`, `topicAuthorLabel(card.createdBy)`, a ternary — compiles
-  to a computed cell of its own, minted per card, persisted per session and
-  watched by every reader. On a board of nine hundred topics that was six
-  computed documents a card on every load. Deriving the strings once, in the
-  board-level lift, is the same bound the mention universe takes: one derivation
-  pays the board-wide walk, once per change, in place of every card paying it on
-  every load. The card keeps only the two conditionals it cannot precompute (the
-  badge and the snippet line are present or absent).
-
-  What each reader of a topic gets is then its own declared schema's business.
-  The published `index` declares the six scalars a survey reads, so a survey
-  cannot expand a topic past them, while the card list reads the row, never the
-  topic. Neither widens the topic, which is what leaves both free to be that
-  narrow — and it is why every field `CardSource` reads but `createdAt` carries
-  a default or is optional, since that schema is what a piece holding older
-  topics is updated against (`createdAt` is required for the reason
-  `TopicSummary` gives: the Topic pattern publishes it unconditionally).
-
-  The rule for new code stands regardless: prefer a scalar reduction
-  (`topics.get().length`) over anything that hands the array to a helper.
-- **Row identity is a cell, not an array position.** Each card row goes in a
-  cell caused by the topic it describes (`Writable.for(topic)`, as the crossref
-  table's rows do), and the rows array holds links to those cells rather than
-  the row values inline. The card list is a mapped sub-pattern, and `map` keys
-  its element runs by each element's normalized link: a link resolves to the
-  row's own entity and stays the same wherever the row sits, while an inline
-  value resolves to the array position. Because the board sorts by activity,
-  every append is a prepend — with inline rows, one new topic re-keys every card
-  and rebuilds its whole subtree.
+  A topic filed before the board held a collection also has nothing bound to its
+  `board` input, so it shows no backlinks. `scripts/topics-bind-board.ts` links
+  each such topic's `board` to the board's, once the topic runs the pattern that
+  declares it. The restore tooling (`scripts/topics-rehearsal-lib.ts`) relinks
+  `board` as it does `mentionable`, and retires `boardCrossrefs` and
+  `boardCrossrefIndex` on a topic that no longer declares them.
 - **Authoring: cf-code-editor in the Edit→Save draft flow.** The editor binds
   the session-local `bodyDraft` (never live to the shared string — whole-value
   conflict semantics hold) with `@`-mention autocomplete over `mentionable`, and
@@ -236,80 +217,50 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   still carries. Each `destination` survives the two copies because it is
   declared `unknown`, which is what carries a reference across a whole-value
   read and write instead of expanding the piece behind it.
-- **A reference is a cell, and identity is the only thing compared.** The board
-  derives the whole graph once, in `crossrefTable`, from the same topics array
-  read under two minimal declared views: one for identity, one for what each
-  topic points at. Identity is what `equals` decides, and two passes ask it.
-  Finding the distinct topics, in `distinctByIdentity`, keys each of the board's
-  `n` entries by `equalsKey`, which two entries share exactly when `equals`
-  matches them, and keeps an entry whose key a set does not hold yet: `n` keys
-  and `n` lookups. The join, in `mentionedByEach`, keys each mention the same
-  way and files each source under the key of every topic it mentions, so a run
-  is written to grow with the number of topics plus the number of mentions.
-  `mentionedBy` states the same join for one topic pair by pair, and the
-  pattern's tests hold `mentionedByEach` to it.
+- **A reference is a cell, and the graph is two relation tables.** The
+  collection mirrors what each topic points at into `topics_mentioned`, the
+  pieces the `mention` verb stored, and `topics_mentions`, everything the topic
+  derives from its prose, its links and that list. Both are indexed on the topic
+  referred to, so "which topics mention this one" is a lookup.
 
-  Each topic then does a lookup rather than the join: `backlinksOf` finds the
-  pivot row whose topic is itself, and takes that row's `mentionedBy`. Each row
-  carries its topic's number as `name`, and the board groups the pivot's
-  positions by it in `crossrefIndexOf` (`crossref-index.ts`), which it hands
-  each topic as `boardCrossrefIndex` beside the pivot. A numbered topic whose
-  index is an index of the very pivot it is wired to reads the positions filed
-  under its own number and keeps the row whose topic `equals` itself, so it
-  reads one row however large the board. When that fails — no index, an index of
-  another pivot, no number or a malformed one, or no row of its own among those
-  positions — it scans the pivot. The pivot holds one row per topic, so both
-  find the same row, or none: the number only decides how much is read. An index
-  element is a position of the pivot rather than a copy of a row, so an index
-  the board has stopped updating still reads the pivot as it is now, and a
-  position past the end of a pivot that has shrunk reads as nothing. The
-  comparison is of a field nested inside a row, and what lets it is that row's
-  declaration — the field is declared a `ComparableCell`, the annotation that
-  makes it arrive as something `equals` can follow rather than a value to look
-  at. A topic declares the rows it is handed the same way, `topic` a cell and
-  `mentionedBy` a list of cells, and that reader's declaration is what keeps a
-  read of its input from expanding the topics behind them: a query walks through
-  a link it reaches under `unknown`, which put every Topic's piece document in
-  each Topic's input sync while the topic declared the rows that way. The pivot
-  the board publishes still reads `unknown` at both fields, because a result's
-  schema keeps cell markers only for streams.
+  Each topic asks that question of the collection itself, by its own reference
+  (`MENTIONED_BY_SQL` in `topic.tsx`), and publishes the answer as
+  `referencedBy`: every topic that mentions it, once, never itself, in filing
+  order, up to two hundred. The board publishes the whole graph as `crossrefs`
+  and `crossrefIndex`, derived from the same tables for a reader that asks for
+  them; no topic reads either.
 
-  The pivot works over the board's distinct topics, with distinctness decided by
-  the same `equals`: a topic the board lists at two entries, whether as the same
-  link twice or as a link and an alias of it, has one row, so its lookup returns
-  its backlinks once, and counts once as a source in the rows of the topics it
-  mentions, at the place of its first entry. Every row is addressed by the topic
-  it describes (`Writable.for(topic)`), so a row keeps its identity however the
-  board is reordered, and a lookup re-run by an unrelated change recomputes the
-  same links at the same address and writes nothing.
+  `topics_mentioned` follows a `mention` or `unmention` as soon as it commits.
+  `topics_mentions` follows the topic's derivation, which runs when something
+  reads the topic, so a reference made in the prose or by a link reaches the
+  graph once the topic it was made on has been read. A read of `referencedBy`
+  made in the instant after a `mention` can still return the earlier answer: the
+  collection follows the commit, and the query follows the collection.
 - **Agents reference through a verb.** `mention` and `unmention` take the piece
   itself. With prose no longer scanned there is otherwise no headless way to
   make a reference, and `kind: "topic"` links are ordinary links unless their
   URL resolves.
-- **The board persists nothing derived.** The index and the reference graph are
-  recomputed from the board on read; the board writes no derived field into a
-  topic, so retracting a mention simply removes the edge. A pattern that writes
-  derived data into its own children can destroy real data when it runs from a
-  partial-view replica, so any future persisted index needs single-writer +
-  full-view preconditions first.
+- **The collection is derived, and the board writes nothing into a topic.** The
+  tables are a mirror the runtime maintains from the topics, so retracting a
+  mention removes the edge and nothing else needs undoing.
 - **A topic keeps two summaries of its own records.** `commentCount` and
-  `lastActivityAt` are stored on the topic, because the board's index reads them
-  without running the topic, and a topic written to by an agent is often never
-  run again. The topic's own verbs keep them, in the same write as the comment,
-  link, body or title change they summarize, so no writer running this module
-  has to run the topic afterwards for the board to be right. A writer still on
-  an older topic module does not keep them, so they are reliable once every
-  writer runs this one (`state-upgrades.md`, "Rollout and rollback"). Keeping
-  them costs concurrency on one topic: every such verb reads and writes the
-  activity time, so two writes to the same topic at once conflict on it where
-  two comment appends alone would merge, and the later one runs again against
-  the committed state (the scheduler's stale-basis retry) rather than merging. A
-  topic stored before they were kept gets them from the `activity-scalars`
-  upgrade step (`state-upgrades.md`), which computes both from the topic's own
-  records. That step runs once, so a value it computed from incomplete reads
-  would stay wrong: only the lift completes it, reaching each array and each
-  stamp through a key, which waits for an unresolved link rather than reading it
-  as absent or as its default.
+  `lastActivityAt` are stored on the topic, because the board's collection
+  mirrors them without running the topic, and a topic written to by an agent is
+  often never run again. The topic's own verbs keep them, in the same write as
+  the comment, link, body or title change they summarize, so no writer running
+  this module has to run the topic afterwards for the board to be right. A
+  writer still on an older topic module does not keep them, so they are reliable
+  once every writer runs this one (`state-upgrades.md`, "Rollout and rollback").
+  Keeping them costs concurrency on one topic: every such verb reads and writes
+  the activity time, so two writes to the same topic at once conflict on it
+  where two comment appends alone would merge, and the later one runs again
+  against the committed state (the scheduler's stale-basis retry) rather than
+  merging. A topic stored before they were kept gets them from the
+  `activity-scalars` upgrade step (`state-upgrades.md`), which computes both
+  from the topic's own records. That step runs once, so a value it computed from
+  incomplete reads would stay wrong: only the lift completes it, reaching each
+  array and each stamp through a key, which waits for an unresolved link rather
+  than reading it as absent or as its default.
 - Verified by `multi-user.test.tsx` (two isolated runtimes, one shared board).
 
 ## Headless / agent use
