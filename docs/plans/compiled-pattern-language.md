@@ -15,7 +15,7 @@ next.
   one before it. #9788 holds the design documents, on the branch above. #9942
   holds the prototype, on `claude/compiled-pattern-prototype`. #9992 holds the
   integration, on `claude/compiled-pattern-integration-m1`: milestone 1,
-  milestone 4 through its ninth corpus run, and the catch-up merge with `main`;
+  milestone 4 through code round m, and the catch-up merge with `main`;
   the branch `claude/compiled-pattern-m4`, on which milestone 4 was built, is
   retired. #10016 holds Topics on the executor, on
   `claude/compiled-pattern-topics`, and does not hold milestone 4. A change to a
@@ -6411,11 +6411,16 @@ is relitigated.
   groups with counts for any read that covers a whole container, kept with the
   collection. Each leaves every stored label as it is. It settles the direction
   of question 318 here. `plan-and-label-templates.md` §4.7 states them. They are
-  being built in milestone 4 of the integration, started after its ninth corpus
-  run, and no result exists. What the ruling leaves open: that the stored labels
-  are byte-equal is argued and not shown (question 338), and the form of the
-  stored entries where the members have several labels is not part of it
-  (question 342).
+  built in milestone 4 of the integration, behind the experimental option: at
+  the commit that holds the three, every one of the 2,153 rows of stored labels
+  of the corpus is byte-equal to the row before them, and the write records of
+  the measured module take 16,062 bytes where they took 37.7 MB and 545,044
+  bytes where they took 19.6 MB. As built, (c) covers an array of references; an
+  array of plain values in place needs no table, and the result of another
+  per-element construct is bound to the upstream output. What the ruling leaves
+  open: what stays linear in the build (questions 338 and 351), and the form of
+  the stored entries where the members have several labels, which is not part of
+  it (question 342).
 - At the catch-up merge with `main`, the executor's record of a splice places
   the stored label entries of an array that has one, and the alignment by value
   of `main` covers every other array (2026-11-20, Z76). The owner's words: "(a)
@@ -6506,51 +6511,67 @@ pointer to its entry.
 
 **To look at first,** in this order.
 
-1. **The findings of milestone 4,** at its ninth corpus run. Labels from
-   templates at commit are built (milestone 4 of the integration), with every
-   commit of a compiled pattern prepared, and run over the corpus with `wish`
-   simulated: of 271 modules 238 run; of 1,695 output rows 1,041 are tighter
-   than today's, 287 equal and 88 looser, and of 203 write rows 130 are equal, 9
-   tighter and 61 looser. That run is on the source of `main` before the
-   catch-up merge. *Open and unsound.* The check of the stored labels against
-   the values reports 4 values in 2 modules with every event sent three times,
-   and 1 of them on the scenario as given: 3 outputs at position 0 of the result
-   of a `map` in `examples/todo-list`, which is the result of another
-   per-element construct, and 1 write of `showcase/card-piles`, at a position
-   that a `push` after a `remove` writes. Neither is examined (question 344). A
+1. **The findings of milestone 4,** at the corpus run of code round m, on the
+   source of current `main`. Labels from templates at commit are built
+   (milestone 4 of the integration), with every commit of a compiled pattern
+   prepared, and run over the corpus with `wish` simulated: of 287 modules 244
+   run; of 1,763 output rows 1,090 are tighter than today's, 280 equal and 80
+   looser, and of 414 write rows 318 are equal, 8 tighter and 80 looser.
+   *Unsound, stubbed or not verified.* The comparison adapter registers one
+   plan, so the write records of an instance of another pattern that a handler
+   makes were instantiated against the wrong plan; as a stub those records are
+   left out and their paths take the transaction's join, and a write of such an
+   instance that leaves its value as it was stores no label, against the ruling
+   Z67 (provisional decision P43; question 348). Every join bound rests on the
+   transaction having read what flowed, which fails where a value reaches a
+   write from the executor's memory; one such case stored labels that were too
+   narrow and is fixed, the others are not audited, 1,284 bounds are taken in 82
+   modules, and 8 write records in 3 modules store a label that lacks a clause
+   the template evaluator's label holds and are not examined (provisional
+   decision P42; question 349). Suspected by reading and not verified: an
+   element of a `fold` whose slot is bound to an output may not be regrouped
+   when a label changes; and one finding of the check, in
+   `product/primitives/sortable-table.tsx`, is classified as an artifact of the
+   numbering of created documents and is not shown to be one (question 350). A
    removal's `*` entry is replaced by a more specific entry of origin
    `structure`, which needs the specification sentence first and is not fixed
    (question 343). A handler that writes nothing under a condition on a labeled
    input stores nothing; by the ruling Z77 it is a channel of the write gate,
-   recorded and not fixed, and `examples/map-demo` shows it at 16 values with
-   generated events (question 335). *Cost, a regression that is serious.*
-   Against the eighth run the preparation time with the option on rose from
-   2,176 ms to 9,250 ms, the bounds taken from 499 to 1,762, the records of
-   writes that left the value as it was from 756 to 2,297, the label entries
-   they changed from 3,625 to 22,625, the write records checked from 4,271 to
-   9,039, the refused commits from 44 to 55, and the run from 10 to 22 minutes.
-   The fixes of the round give more records and give records as bound; the
-   regression is not attributed by measurement (question 345). The memory of the
-   executor on a large result is not fixed (question 332). *Fixed.* The slow
-   events of `dev/experimental/folksonomy-stress-test` had one cause,
-   `Store.changedSince` of the executor, and take 414, 3 and 53 ms where they
-   took 4,119, 3,720 and 14,945 ms. Six defects that stored a label narrower
-   than what flowed are fixed, each with a test: the rows of a view, a kept
-   output with no template, `cell.get() ?? fallback` stored in place, an output
-   evaluated again to the value it holds, `key(i).set(undefined)`, and a
-   `flatMap` over an array of references; so are a read of a position that holds
-   no member (question 329) and an array inside a value written whole (question
-   330). The membership is no longer on the position of an added member, and the
-   check has a criterion for an appended member (ruling Z74; question 328). The
-   atom of a kept output that holds a link is on the content in every case
-   (ruling Z81). *The rest.* The three changes of representation for collections
-   with many members are adopted and being built (ruling Z75; question 318). The
-   catch-up merge with `main` is made, with the record winning over the
-   alignment by value (ruling Z76; question 346), and the corpus of current
-   `main` is 287 modules of which 244 run; no corpus run exists yet with the
-   ninth run's code on that source. The specification sentence that Z71 needs is
-   proposed (question 326). The check covers 99 of the 238 modules with repeated
-   events and is a lower bound
+   recorded and not fixed (question 335). *Cost that still grows with the data.*
+   The preparation of a transaction that writes many documents still compares
+   every read record for each written document, and with the option on such a
+   transaction is prepared where today's runtime prepares none; a handler bound
+   in a row of a `map` over an array that a computation returned reads every
+   stored position the computation read, for each event; the group table of an
+   array of references is regrouped by position and not by class for a change
+   below the container; and where each member has a label of its own every
+   figure is linear in the members (questions 351 and 339 to 342). The
+   preparation time over the corpus with the option on is 10,300 ms against 353
+   ms with it off, under load, 7,917 ms of it in three modules, two of which are
+   not attributed (question 345). The memory of the executor on a large result
+   was not measured again (question 332). *Fixed in rounds l and m,* each with a
+   test: an append dropped the label of the members that an earlier write of the
+   whole list stored, over an array of plain values in place; the `*` entries of
+   a kept per-element result were cleared by the next addition at its end; round
+   l's fallback stored labels narrower than what flowed for a handler bound in a
+   row of a `map` over a computed array; and a record given again with no inputs
+   replaced a stored label with the empty one. The 4 values that question 344
+   held were artifacts of the check but for the first of these. The check is
+   deterministic, with a fixed `Date` for each event and a seeded `crypto`,
+   covers 241 of the 244 modules on the scenarios as given with no finding and
+   131 with every event sent three times with 1, and is a lower bound. No commit
+   is refused with the option on and not off, where 60 in 25 modules were,
+   because a record that lacks an input takes the join. The general preparation
+   was quadratic in the documents a transaction writes, on `main` as well:
+   fixed, 12,030 ms to 1,659 ms at 20,000 documents on today's path, in one
+   commit that can be cherry-picked to `main` (question 347). *The rest.* The
+   three changes of representation for collections with many members are built,
+   with byte-equal stored labels (ruling Z75; questions 318 and 338). The
+   records of the elements of a per-element result are one record where their
+   inputs hold equal labels (provisional decision P45). The catch-up merge with
+   `main` is made, with the record winning over the alignment by value (ruling
+   Z76; question 346). The specification sentence that Z71 needs is proposed
+   (question 326)
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
    "Milestone 4: labels from templates at commit").
 2. **A pattern closure used as a value is not translated,** and the interim
@@ -7715,6 +7736,99 @@ today.
   (`equals_key_resolves_its_operand_as_equals_does`) and
   `exec/test/executor.test.ts`. *If decided otherwise:* the crate reports the
   call, and the Topics source replaces the two helpers that use it.
+- **P42. A write record that lacks an input takes the transaction's join, and
+  counts as a bound.** The decision of the author of code round l of milestone
+  4, adopted by the coordinator; it is no owner ruling. *The case:* the commit
+  preparation refused a commit for a record whose template reaches a slot with
+  no binding or bound to no position, a collection with no elements reported, or
+  a choice that was not reported and chooses from no collection: 60 commits in
+  25 modules of the corpus, with every write of their transactions. *Decision:*
+  such a record takes the label of a write with no record, the transaction's
+  join, as a record that the writer gives as bound does, and counts among the
+  bounds taken. Since code round m the record of the number of members and the
+  record of the membership of a member change take it as well, joined with the
+  positions they name. A record whose label alone is formed again and that has
+  no inputs takes the join together with what the path stores. *What it rests
+  on:* the join holds what the transaction read through the storage, so it is a
+  bound of the label only where everything that flowed into the value was read
+  in the transaction. It was not for a handler bound in a row of a `map` over an
+  array that a computation returned, whose state comes from the executor's
+  memory: the labels stored were too narrow, and the handler's transaction now
+  reads every stored position the computation read. The other sites are not
+  audited (question 349). *Alternatives:* the refusal, which stores no label on
+  an argument that is not made and keeps the module's storage at an earlier
+  commit; or a binding of the slot to the record of what made the value. *How it
+  is written:* `plan-and-label-templates.md` §4.2 ("A record that lacks an
+  input") and its question 202. *Tests:*
+  `runtime/runner/test/cfc-plan-labels.test.ts`, and the fixtures
+  `computed-row-state` and `computed-row-cone` with
+  `base/pattern-compiler/compare/test/stored-labels.test.ts`. *If decided
+  otherwise:* the refusal returns for the records the decision covers, and the
+  60 commits with it.
+- **P43. The write records of an instance of another pattern are left out, as a
+  stub.** The decision of the author of code round m, adopted by the
+  coordinator; it is no owner ruling, and it is a stub with a plan. *The case:*
+  question 348. *Decision:* the executor tells its hooks of each instance it
+  makes of another artifact, and the comparison adapter gives the runtime no
+  record of such an instance, so its paths take the transaction's join. *What it
+  leaves wrong:* those labels are join bounds (P42), and a write of such an
+  instance that leaves its value as it was stores no label, against the ruling
+  Z67. *The plan:* a registered plan and a table of inputs for each instantiated
+  pattern, and each write recorded under the plan its instance runs. *How it is
+  written:* `plan-and-label-templates.md` §4.1 ("One plan for each instance that
+  writes"). *Tests:* `base/pattern-compiler/compare/test/stored-labels.test.ts`,
+  with the fixture `instantiate`. *If decided otherwise:* the plan above is
+  built first.
+- **P44. What a transaction stores once for a list stays where a later
+  transaction does not replace it.** The decision of the author of code round m,
+  adopted by the coordinator; it is no owner ruling. It extends what question
+  328 holds as built and not ruled. *The case:* two entries that hold a label
+  once for many positions were dropped by a later write that did not replace
+  what they label. Over an array of plain values in place, a write of the whole
+  list stores the label of its members as one derived `value` entry at the
+  list's path, and an append minted the declared entry of the path again and
+  dropped it. Over the kept result of another per-element construct, the
+  `*`-child entries that hold the label of the membership were cleared by the
+  next addition at the result's end. *Decision:* the derived entry stays unless
+  the transaction wrote a value at the path or a record gives the path a label;
+  the `*`-child entries stay for an addition at the end of the result, which the
+  record marks, and for a record whose label alone is formed again. A member
+  appended after a removal therefore reads what decided the removal.
+  *Alternative:* the label is written again on every member that stays, which is
+  linear in the list for each append. *How it is written:*
+  `plan-and-label-templates.md` §2.5 ("An addition through a handle" and "The
+  label rule of a removal through a handle"). It changes what CFC stores with
+  the experimental option on and carries the `SPEC-PENDING` marker for specs
+  pull request 91. *Tests:* the fixtures `set-then-push` and `key-returns` with
+  `base/pattern-compiler/compare/test/stored-labels.test.ts`. Not covered by a
+  test: the entries kept for a record whose label alone is formed again. *If
+  decided otherwise:* those passages and the two fixes.
+- **P45. The records of the elements of a per-element result share one set of
+  inputs where their inputs hold equal labels, and a record with a `*` target
+  always lists its members.** The decision of the authors of code rounds l and
+  m, adopted by the coordinator; it is no owner ruling. It extends P31 and the
+  change (b) of the ruling Z75, and changes no stored label. *The case:* each
+  element's record of an output of a per-element construct named inputs of its
+  own, so the records of `N` elements did not merge and the runtime instantiated
+  the template `N` times, over an array of references, over an array of plain
+  values in place and over the result of another per-element construct.
+  *Decision:* the executor names, for the entry of an element, the identifiers
+  of the labels at the positions its cone instance bound, and gives every record
+  with one name the inputs of the first; records that name one plan record and
+  one set of inputs are one record for the runtime. That record lists its
+  members, as ranges of indices or as documents, and its `*` never stands for a
+  member it does not list. A record that names another element's inputs keeps
+  its own element's positions as what it read, so a change of a label there
+  gives that record again and no other. The inputs are not shared where the
+  template has a `fold` or a `dynamic` node, reaches a slot no evaluation bound,
+  is bound again by the target, or covers the members of a container, nor where
+  a position has no label identifier, as one that the transaction in progress
+  wrote. *Alternative:* a `*` target that stands for every member of the
+  container, which would label a member that a concurrent transaction adds. *How
+  it is written:* `plan-and-label-templates.md` §4.7. *Tests:*
+  `base/pattern-compiler/exec/test/transaction-hooks.test.ts` and
+  `runtime/runner/test/cfc/plan-write-targets.test.ts`. *If decided otherwise:*
+  one record per element, as before.
 
 **The scope of the storage decisions** (the coordinator's recommendation to
 the owner, 2026-11-18; not an owner ruling). Read in source after round 5:
@@ -12216,9 +12330,11 @@ and the rulings leave open.
      that serves the other space has to read the space the factory value is
      stored in for as long as the instance lives. Alternative (c), which copies
      the captures into the target space when the instance is made, is not taken.
-     What the ruling leaves open: the identifier and the message of the
-     diagnostic, which `language-subset.md` §10 does not list; and nothing is
-     built, since the prototype translates no closure used as a value.
+     The diagnostic is `tool:in-space-factory` (`language-subset.md` §10.2),
+     an identifier that the author of the documents chose and the owner has not
+     reviewed. What the ruling leaves open: the wording of its message; and
+     nothing is built, since the prototype translates no closure used as a
+     value and does not report the diagnostic.
 311. **The groups of a scan's prefix** (PL question 183). P31 keeps no
      order among the groups of a collection. *Assumed,* provisional
      (P37): a scan keeps a count per group over its prefix with its memo
@@ -12333,8 +12449,11 @@ questions 315, 316, 317 and 319, and the direction of question 318.
      removed from the plan; 14 of 276 corpus modules have a factor of 3 or more
      for it. Measured by encoding the real records again, not by building: the
      two large transactions of `dev/experimental/folksonomy-stress-test.tsx` go
-     from 11.9 MB and 13.0 MB to about 4 KB and 6.5 KB. Being built in milestone
-     4 of the integration; no result. *A second point, on soundness, is settled
+     from 11.9 MB and 13.0 MB to about 4 KB and 6.5 KB. Built in milestone 4 of
+     the integration, in code round l: the two transactions, which had grown to
+     19.6 MB and 37.7 MB at the round's baseline, take 545,044 and 16,062 bytes
+     as built, and every stored label of the corpus is byte-equal (question
+     338). *A second point, on soundness, is settled
      by a fix:* equal labels for a read of the value at a position do not imply
      equal labels for a link followed there, so chains and groups compare the
      identifier of each observation the runtime makes at the position
@@ -12431,13 +12550,18 @@ per-element construct.
      label is formed again. After a label changed alone the executor gives again
      the records of the outputs whose inputs read it, and no others. What
      remains: the records are found by position and not by class (question 333).
-     *Assumed:* the rule as built.
+     At the corpus run of code round m, on the source of current `main`: 2,795
+     such records, which changed 34,447 label entries; 2,911 commits against
+     2,784 with the option off, and 1,527 preparations against 688. *Assumed:*
+     the rule as built.
 325. **Findings of the seventh run, as they stand.** The 448 write records with
      no label entry stored at their path were 80 in 31 modules at the eighth
      run, of which 68 were read as the records of a list's membership and
      number of members, which the evaluator cannot form. At the ninth run they
      are 477 in 30 modules, among 9,039 records checked where the eighth run
-     checked 4,271; the 477 are not examined (question 345). The crash of the
+     checked 4,271; the 477 are not examined (question 345). At the corpus run
+     of code round m they are 506 in 35 modules, among 20,568 records checked,
+     and are not examined. The crash of the
      preparation in `dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx` is
      fixed, in the comparison adapter. Of the rows that became looser with the
      label of an unchanged write, 28 were run again with and without those
@@ -12581,8 +12705,11 @@ per-element construct.
      the events 14 to 16 of the run with generated events take 414, 3 and 53 ms
      where they took 4,119, 3,720 and 14,945 ms. The log of changes still grows
      by one entry per change for the life of an instance (`Store.log`), which
-     nothing but two tests reads. *Assumed:* a defect of the prototype's
-     executor, not of the design, until the cause is found.
+     nothing but two tests reads. Since code round l the log is kept only where
+     a caller sets one. The memory was not measured again in rounds l and m; in
+     the corpus run of round m the module is checked on its scenario as given,
+     with three runs in memory beside the run in storage. *Assumed:* a defect of
+     the prototype's executor, not of the design, until the cause is found.
 333. **After a label changed alone, which records are given again** (open
      finding 6). As built the executor finds them by the positions that the
      inputs of a record read, so an output that holds a link is given again when
@@ -12592,7 +12719,12 @@ per-element construct.
      the ninth run. The plan for it: the executor keys the readers of a record
      by the class each slot observes beside the position, the adapter reports
      the class of each changed entry, and a record is formed again only where a
-     changed entry's class is one its slot consumes. *Assumed:* the rule of §3.6
+     changed entry's class is one its slot consumes. Built of it in code round
+     m: a change of labels says at which paths every changed entry labels a read
+     of the path itself alone (`LabelChange.alone`), and the group table of an
+     array of references skips those at its container's path or above it, so an
+     addition to the array no longer asks for the label of every member. The
+     records of outputs are still found by position. *Assumed:* the rule of §3.6
      as the design, and the build narrowed to it.
 334. **Findings of the eighth run, as they stand at the ninth.** The 10 values
      of `examples/map-demo/map-demo.tsx` and the 1 of `apps/base/person.tsx`
@@ -12723,18 +12855,27 @@ are what they leave open and what the run found
 §4.7).
 
 338. **What is not verified of the three changes of representation** (PL
-     question 196). That (a), (b) and (c) of the ruling Z75 store byte-equal
-     labels is argued from the idempotence of join and meet and is not built.
-     The byte figures are an encoding of real records and no measurement of the
-     changes; for (c) a binding of more than 8 positions is counted as 300
-     bytes. What the 20,001 positions of the one `identity` chain are was not
-     read. Only an array of references was measured; an array of plain values in
-     place and the result of another per-element construct are reasoned. The
-     patterns that read a whole list of references that grows in use were named
-     by reading and not run at size: two lifts of `apps/topics/main.tsx`,
+     question 196). Answered in part by code round l of milestone 4. That (a),
+     (b) and (c) of the ruling Z75 store byte-equal labels is shown over the
+     corpus: at the commit that holds the three, all 2,153 rows are byte-equal
+     in the stored label, the label with every link followed and the label at
+     the position alone. Measured as built, for an array of references: the
+     records of the outputs that read the list of
+     `dev/experimental/folksonomy-stress-test.tsx` take 16,062 bytes where they
+     took 37,735,505, the write of 10,000 documents 545,044 bytes in 7 records
+     where it took 19,623,727 in 10,007, and the largest transaction of
+     `apps/person-workbench/main.tsx` 52,173 bytes where it took 1,249,365. As
+     built, (c) covers an array of references alone; the result of another
+     per-element construct is bound to the upstream output, and its elements'
+     records are one record where their inputs hold equal labels (provisional
+     decision P45), measured over plain values in place and over the result of a
+     `filter`. Still not verified: the corpus holds lists of two or three
+     members, so equality at size is shown for the one module; the patterns that
+     read a whole list of references that grows in use were named by reading and
+     not run at size, two lifts of `apps/topics/main.tsx`,
      `system/summary-index`, `system/knowledge-graph`, `system/backlinks-index`
-     and `system/fabrichat/manager.tsx`. *Assumed:* the labels are equal, and
-     the corpus run with the changes is the check.
+     and `system/fabrichat/manager.tsx`; and what the build leaves linear is
+     question 351. *Assumed:* the labels are equal at size as well.
 339. **The diagnostic and the hard limit for a label of very many clauses** (PL
      question 197; for the owner). The ruling Z79 has a diagnostic, and a
      refusal above a hard limit set well above it. Not ruled: whether the limit
@@ -12780,45 +12921,36 @@ are what they leave open and what the run found
      its own, as the `shape` class is resolved. It changes the resolution with
      the option off, so it needs the specification sentence of question 326
      first. *Assumed:* not fixed until that sentence is reviewed.
-344. **The open soundness findings of the ninth run** (not for the owner until
-     examined). The check of the stored labels against the values reports 4
-     values in 2 modules with every event sent three times, and 1 of the 4 on
-     the scenario as given. In `examples/todo-list/todo-list.tsx`, 3 outputs at
-     position 0 of `mentionable`, which is the result of a `map` over the array
-     that a `computed` returns: `$NAME`, `summary` and a prop of the rendered
-     tree depend on the input `items` and store no confidentiality. In
-     `showcase/card-piles/main.tsx`, 1 write, at position 3 of the list that the
-     handler `moveToPile` adds to with a `push` after a `remove` from the other
-     list, an array of plain values in place: its value depends on the input
-     `pile2` and its label holds the clause of `pile1` alone. Neither is
-     examined. The commit that ends the round states that `examples/todo-list`
-     has no finding; the tables of the run have the 3. *Assumed:* unsound until
-     shown otherwise, or shown to be an artifact of the check.
-345. **The cost regression of the ninth run** (serious; not for the owner until
-     attributed). Against the eighth run, over the same 238 modules with the
-     option on: the preparation time 9,250 ms where it was 2,176 ms; the bounds
-     taken 1,762 in 70 modules where they were 499 in 53; the records of writes
-     that left the value as it was 2,297 where they were 756, and the label
-     entries they changed 22,625 where they were 3,625; the write records
-     checked against the evaluator 9,039 where they were 4,271, of which 477 in
-     30 modules have no entry stored at their path where 80 had none; the
-     commits refused with the option on and not off 55 in 23 modules where they
-     were 44 in 24; and the run 22 minutes where it took 10. Three modules
-     account for 6,744 ms of the preparation time:
-     `examples/cfc-trusted-component-examples/main.tsx` 3,453 ms where it took
-     189 ms, `send-publish-examples.tsx` of the same directory 1,464 ms, and
-     `dev/experimental/folksonomy-stress-test.tsx` 1,828 ms where it took 942
-     ms. The fixes of the round are the likely source, by reading and not by
-     measurement: each element entry of a per-element result held below a kept
-     output has a record of its own; a kept output with no template, an element
-     entry with a slot that has no stored position, and a member change under an
-     envelope are given as bound and take the transaction's join; and an
-     evaluation that gives the value an output already holds is reported as a
-     write that left the value as it was. The machine was under load (load
-     averages near 10), so the times are an upper bound. *Assumed:* a cost of
-     the build and not of the design, until attributed; the three changes of
-     representation (question 318) are expected to lower the first, and that is
-     not shown.
+344. **The open soundness findings of the ninth run.** Answered by code round m.
+     The 3 outputs at position 0 of `mentionable` in
+     `examples/todo-list/todo-list.tsx` were an artifact of the check: the run
+     with the option on started from an argument that the runs before it had
+     appended to. The 1 write of `showcase/card-piles/main.tsx`, over an array
+     of plain values in place, was a label narrower than what flowed and is
+     fixed with a test: an append dropped the derived entry that an earlier
+     write of the whole list had stored at the list's path (provisional decision
+     P44). The check is deterministic since, and reports no value on the
+     scenarios as given and 1 with every event sent three times, which question
+     350 holds.
+345. **The cost of the labels over the corpus** (not for the owner until
+     attributed). On the source of current `main`, 244 modules, with the option
+     on: the preparation time is 10,300 ms at the corpus run of code round m,
+     against 353 ms with the option off, at load averages between 10.5 and 12.
+     It was 7,987 ms with the code of the ninth run on this source, 12,737 ms at
+     the end of round l, where 49 commits that had been refused go through and
+     are prepared, the write of 10,000 documents among them, and it fell with
+     the fix of the quadratic preparation (question 347). Three modules account
+     for 7,917 ms: `examples/cfc-trusted-component-examples/main.tsx` 3,690 ms
+     in 209 preparations, `dev/experimental/folksonomy-stress-test.tsx` 2,313 ms
+     in 14, and `send-publish-examples.tsx` of the first one's directory 1,914
+     ms in 145. The two modules of `cfc-trusted-component-examples` are not
+     attributed; they took 3,073 ms and 1,452 ms before either round. The bounds
+     taken are 1,284 in 82 modules; the records of writes that left the value as
+     it was 2,795, and the label entries they changed 34,447; the write records
+     given 20,572, recorded as 8,766; no commit is refused with the option on
+     and not off. The rise against the eighth run, on the earlier source, is not
+     attributed by measurement. *Assumed:* a cost of the build and not of the
+     design, until the two modules are attributed.
 346. **What the catch-up merge with `main` leaves untested.** The merge is made
      on the integration branch, with the ruling Z76 built (question 327). Not
      covered by a test: an array that has a membership record beneath an outer
@@ -12831,10 +12963,129 @@ are what they leave open and what the run found
      that function out of the replica; the same function tells the transaction's
      patch encoder which reads pin an array before it sends a change of that
      array as splices, and how the label dependency acts on that encoder is not
-     tested. The corpus on the source of current `main`, run with the code of
-     the eighth run, is 287 modules attempted and 244 run; no corpus run exists
-     with the code of the ninth run on that source. *Assumed:* the merge as
-     built.
+     tested. Every corpus run of code rounds l and m is on the source of current
+     `main`, 287 modules attempted and 244 run. *Assumed:* the merge as built.
+
+**From code rounds l and m of milestone 4 of the integration.** Round l built
+the three changes of representation and replaced a refusal by a join bound;
+round m examined the findings of the check, found that the join bound had stored
+labels that were too narrow in one case, and found a structural defect of the
+comparison adapter
+([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+"Milestone 4: labels from templates at commit"). Questions 338, 344 and 345
+above are answered or restated from them. The provisional decisions P42 to P45
+are theirs.
+
+347. **Whether the fix of the quadratic preparation goes to `main` in a pull
+     request of its own** (for the owner). The general commit preparation was
+     quadratic in the documents a transaction stores a label on, with no
+     experimental option: `verifyInputRequirements` of
+     `runtime/runner/src/cfc/prepare.ts` resolved the envelope of every read
+     again after each target's label write, and `valueWritePathsOf` scanned
+     every write attempt for each target. On today's path, with flow labels
+     persisted, a transaction that reads 20,000 documents and writes 20,000
+     prepared in 12,030 ms and prepares in 1,659 ms; at 10,000 the figures are
+     2,239 ms and 585 ms. The verdicts, the stored labels and the digest are
+     those of before. The change is one commit of the integration branch,
+     `17a3f57016`, in `prepare.ts` and two test files; the functions it changes
+     are byte-equal on `main` at `63023da64f`. *The coordinator's
+     recommendation, not a ruling:* yes, a pull request of its own to `main`,
+     since the cost is on today's path, the change depends on nothing of this
+     work, and a change that is not a pattern change otherwise waits for the
+     whole stack. What remains after it, `InputReadView.#stands`, is
+     question 351. *Assumed* until answered: the commit stays on the
+     integration branch alone.
+348. **The write records of an instance of another pattern** (for the owner, as
+     to when; provisional decision P43). The comparison adapter registers one
+     plan with the runtime, that of the pattern the executor is started with,
+     and recorded every write under it. An instance that a handler makes of
+     another pattern had its records instantiated against the starting plan: a
+     wrong template with the instance's bindings where the index exists, as in
+     `apps/calendar/calendar.tsx`, where the calendar's atom was minted onto a
+     value that an `EventDetail` instance wrote, and a refused commit where it
+     does not, as in `apps/base/contacts.tsx`. As stubbed, those records are
+     left out and their paths take the transaction's join. What the stub leaves
+     wrong: the labels of such an instance are join bounds (question 349), and a
+     write of such an instance that leaves its value as it was stores no label,
+     so the ruling Z67 is not met for it. The planned fix: register the plan of
+     each instantiated pattern, keep one table of inputs for each registered
+     plan in a transaction, and record each write under the plan its instance
+     runs. *The coordinator's recommendation, not a ruling:* the stub stands for
+     the next round, by the owner's working preference that a plan with a stub
+     is fine while the larger design is validated, and the fix is built before a
+     corpus figure is cited for a module that instantiates another pattern in a
+     handler. *Assumed* until answered: the stub.
+349. **The audit of the join bounds** (for the owner, as to the remedy;
+     provisional decision P42). A path takes the transaction's join where its
+     record is given as bound, lacks an input, is left out, or does not exist.
+     The join is a bound of the label only where everything that flowed into the
+     written value was read in the transaction through the storage. It was not,
+     in one case that code round m found and fixed: a handler bound in a row of
+     a `map` over an array that a computation returned takes its state from the
+     executor's memory. The other sites where a value reaches a write from
+     memory are not audited: the memo entries of cones, the elements of an
+     upstream per-element result, the copied state of a binding, and what an
+     instance of another pattern holds. 1,284 bounds are taken in 82 modules of
+     the corpus. 8 write records in 3 modules store a label that lacks a
+     confidentiality clause that the template evaluator's label holds, where
+     that label is no bound, 7 of them in the two workbench modules whose
+     refused commits go through on join bounds since round l; they are not
+     examined. The alternatives for a site that the audit finds: (a) the
+     transaction reads what the value in memory was made from, as built for the
+     one case, at a cost linear in those positions for each event; (b) the slot
+     is bound to the stored output or to the record of the computation that made
+     the value, so that its label is that output's label and no source is read;
+     (c) the commit is refused where no bound can be shown, as before round l.
+     *The coordinator's recommendation, not a ruling:* make the audit before any
+     other work of milestone 4; take (b) where the value is an output that has a
+     record, (a) where it is not, and (c) for a site that neither reaches, so
+     that no label is stored on an argument that is not made. *Assumed* until
+     answered: the fallback as built, with the one case fixed.
+350. **Findings that are read from the code or classified and not verified**
+     (not for the owner until examined). First, `Instance.#idOf` of
+     `base/pattern-compiler/exec/executor.ts`, for an element of a `fold` whose
+     slot is bound to an output, takes the positions of that output's cone
+     instance before the ask that forms them, so a change of a label that the
+     output read may not regroup the element until its next regroup; no test
+     produces it, and the cases of a collection it arises for are not
+     established. Second, the one finding of the check with every event sent
+     three times, the write of `product/primitives/sortable-table.tsx` at the
+     root of the document that `addRow` creates for the row it appends, is
+     classified as an artifact: the executor names a created document by the
+     number of documents the instance created before it, so with one more row
+     every later document has another number and the documents compared hold the
+     rows of different events. By the ruling Z74 an append puts no label of the
+     list on what it adds. No test shows the classification, and the check would
+     need to match created documents by what created them. Third, 5 values in 2
+     modules, `examples/profile-group-chat/main.tsx` and
+     `examples/profile-roster-live-demo/profile-roster-live-demo.tsx`, are found
+     in runs with a commit refused for writer-fit and are not counted. Fourth,
+     the 8 write records of question 349. *Assumed:* each is unsound until
+     examined, but for the second, which is assumed to be the artifact it is
+     classified as.
+351. **What still grows with the data after the three changes of
+     representation** (not for the owner). First, the preparation of a
+     transaction that writes many documents: `InputReadView.#stands` of
+     `runtime/runner/src/cfc/prepare.ts` compares every read record at each ask,
+     456 ms of 1,135 ms in a profile of the write of 10,000 documents, and
+     removing it needs the transaction to say when the metadata of a record was
+     replaced; with the option on that transaction is prepared, in 1,201 ms,
+     where today's runtime prepares none. Second, the read that a handler's
+     transaction makes of what a computed row was made from, linear in the
+     positions the computation read, for each event (question 349, alternative
+     (a)). Third, for an array of references: a label change at a path below the
+     container, and the members with a position in the changed document, are
+     regrouped whatever the class of the change; the readers of the elements of
+     a `fold` do not read the class; the cover of an evaluation's read is formed
+     from every position the read went through; the enclosing `fold` sorts the
+     identifiers of its inner groups on each change of one; and the table is
+     formed by one walk per collection and runtime. Fourth, the records of the
+     elements of a per-element result share their inputs at one ask for a label
+     identifier per position and record, about 0.07 ms per element at the start
+     of 1,000 elements. Fifth, where each member has a label of its own, every
+     figure is linear in the members and the record of a whole read is about 10%
+     larger with the table of inputs (questions 339 to 342). *Assumed:* each is
+     a cost of the build with a plan, and none changes a stored label.
 
 ## Open, and not needing the owner
 
@@ -13087,58 +13338,73 @@ The open questions each document ends with stay where they are.
   commit of a compiled pattern prepared, and measured over the corpus with
   `wish` simulated
   ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
-  "Milestone 4: labels from templates at commit"). The ninth corpus run is on
-  the source of `main` before the catch-up merge: of 271 modules 238 run. Beside
-  today's, of 1,695 output rows 1,041 are tighter, 287 equal, 265 have an atom
-  that names the pattern, 88 are looser and 14 incomparable; of 203 write rows
-  130 are equal, 61 looser, 9 tighter and 3 incomparable. Open, the unsound ones
-  first:
-  - 3 outputs of `examples/todo-list`, at position 0 of the result of another
-    per-element construct, and 1 write of `showcase/card-piles`, at a position
-    of an array of plain values in place that a `push` after a `remove` writes,
-    depend on an input and store no clause of it; not examined (question 344);
+  "Milestone 4: labels from templates at commit"). The corpus run of code round
+  m is on the source of current `main`: of 287 modules 244 run. Beside today's,
+  of 1,763 output rows 1,090 are tighter, 280 equal, 296 have an atom that names
+  the pattern, 80 are looser and 17 incomparable; of 414 write rows 318 are
+  equal, 80 looser, 8 tighter and 8 incomparable. Open, with what is unsound,
+  stubbed or not verified first, then the cost that grows with the data:
+  - the write records of an instance of another pattern that a handler makes are
+    left out, as a stub over a defect of the comparison adapter, which registers
+    one plan; the labels of such an instance are the transaction's join, and a
+    write of it that leaves its value as it was stores no label, against the
+    ruling Z67 (P43; question 348);
+  - every join bound rests on the transaction having read what flowed, which
+    fails where a value reaches a write from the executor's memory; one case is
+    fixed and the others are not audited; 1,284 bounds are taken in 82 modules,
+    and 8 write records in 3 modules store a label that lacks a clause the
+    template evaluator's label holds, not examined (P42; question 349);
+  - suspected and not verified: an element of a `fold` whose slot is bound to an
+    output may not be regrouped when a label changes (question 350);
   - a removal's `*` entry is replaced by a more specific entry of origin
-    `structure`, so a read of that slot does not consume what decided the
-    removal; not fixed, and it needs the specification sentence first (question
-    343);
+    `structure`, so a read of that slot of an array of references does not
+    consume what decided the removal; not fixed, and it needs the specification
+    sentence first (question 343);
+  - one finding of the check, in `product/primitives/sortable-table.tsx`, is
+    classified as an artifact of the numbering of created documents and not
+    shown to be one, and 5 values in 2 modules are found in runs with a refused
+    commit and not counted (question 350);
   - a handler that writes nothing under a condition on a labeled input stores
     nothing, a channel of the write gate that the ruling Z77 has recorded and
     not fixed (question 335);
-  - a member appended after a removal is counted as no failure by the check, 17
-    positions in 2 modules, and is not shown to be sound (question 328);
-  - the cost of the labels regressed at the ninth run: the preparation time with
-    the option on is 9,250 ms where it was 2,176 ms, the bounds taken 1,762
-    where they were 499, and the run takes 22 minutes where it took 10; not
-    attributed (question 345);
-  - the executor's memory on `dev/experimental/folksonomy-stress-test` is not
-    fixed: a process ran out of memory at 4 GB (question 332);
-  - the three changes of representation that bound the write records of a
-    transaction are adopted and being built, with no result, and until they are
-    in the records grow with the data (question 318);
-  - the diagnostic and the hard limit for a label of very many clauses, and an
-    output stored at a declared ceiling, are ruled and not built (questions 339
-    and 340);
-  - after a label changed alone the records to give again are found by position
-    and not by class (question 333);
+  - the preparation of a transaction that writes many documents compares every
+    read record for each written document, and such a transaction is prepared
+    with the option on where today's runtime prepares none (questions 347 and
+    351);
+  - a handler bound in a row of a `map` over an array that a computation
+    returned reads every stored position the computation read, for each event
+    (question 351);
+  - for an array of references, a label change below the container regroups
+    members by position and not by class, and after a label changed alone the
+    records of outputs to give again are found by position and not by class
+    (questions 333 and 351);
+  - where each member of a collection has a label of its own every figure is
+    linear in the members; the diagnostic and the hard limit for a label of very
+    many clauses, and an output stored at a declared ceiling, are ruled and not
+    built (questions 339 and 340);
+  - the preparation time over the corpus with the option on is 10,300 ms against
+    353 ms with it off, under load, and two of the three modules that hold 7,917
+    ms of it are not attributed (question 345);
+  - the executor's memory on `dev/experimental/folksonomy-stress-test` was not
+    measured again after a process ran out of memory at 4 GB (question 332);
   - the specification sentence that the ruling Z71 needs is proposed and pending
     the specification pull request (question 326);
   - the catch-up merge with `main` is made, and two of its interactions have no
-    test; no corpus run exists with the code of the ninth run on the source of
-    current `main`, whose corpus is 287 modules of which 244 run with the code
-    of the eighth (question 346);
+    test (question 346);
   - the check of stored labels against the values is a lower bound: one change
-    per input, confidentiality alone, 206 of 238 modules on the scenarios as
-    given and 99 with every event sent three times, and 60 and 50 findings in
-    modules with a refused commit that are not counted and not examined;
-    "tighter" in the comparison remains no evidence of correctness;
-  - 477 write records in 30 modules have no label entry stored at their path,
+    per input, confidentiality alone, 241 of 244 modules on the scenarios as
+    given and 131 with every event sent three times, created documents matched
+    by their number, and no sight of a value that flowed from the executor's
+    memory unless a labeled input of the scenario made it; "tighter" in the
+    comparison remains no evidence of correctness;
+  - 506 write records in 35 modules have no label entry stored at their path,
     not examined (question 325);
-  - 55 commits in 23 modules are refused with the option on and not off, each
-    with a stated reason, and a module with a refused commit holds the labels of
-    an earlier commit;
-  - the runtime took a bound 1,762 times, because a selection, a choice or the
-    addresses of a dynamic read are not reported, or because the executor gives
-    a record with no inputs as bound (`plan-and-label-templates.md` §4.2; P37);
+  - no commit is refused with the option on and not off, because a record that
+    lacks an input takes the join; that count is no evidence of sound labels;
+  - the runtime took a bound 1,284 times, because a selection, a choice or the
+    addresses of a dynamic read are not reported, because the executor gives a
+    record with no inputs as bound, or because a record lacks an input
+    (`plan-and-label-templates.md` §4.2; P37; P42);
   - at the seventh run today's label held no clause at 4 rows where the
     template's holds one, in `dev/scope-bug-ct1597-reduce/main.tsx`,
     `dev/test/non-idempotent/accumulator.tsx` and
@@ -13908,26 +14174,30 @@ The open questions each document ends with stay where they are.
 8. **In the runtime, the milestones of the integration**
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)):
    after milestones 1 and 4, the open findings of milestone 4, in this order:
-   the open soundness findings of the ninth run (question 344) and the `*` entry
-   of a removal that a more specific entry replaces, with its specification
-   sentence (questions 343 and 326); the cost regression of the ninth run
-   (question 345); the three changes of representation, which are being built,
-   with the corpus run that checks that the stored labels are equal (questions
-   318 and 338); a corpus run of the head of the integration branch on the
-   source of current `main`, and the two untested interactions of the catch-up
-   merge (question 346); the executor's memory on a large result (question 332);
-   the records given again after a label changed alone, by class (question 333);
-   the diagnostic and the hard limit for a label of many clauses and the mark
-   for an output stored at a ceiling, once their open points are decided
-   (questions 339 and 340); the findings of the check in modules with a refused
-   commit; the refused commits; the reports that remove the bounds, with the
-   groups of a scan's prefix (P37); and the four rows where today's label holds
-   no clause. Then its steps 11 and 12; the requirement on the link of an
-   argument, which the ruling Z82 schedules after milestone 4 (question 302);
-   the translation of a pattern closure used as a value, once the provisional
-   decisions P33 to P36 are ratified; then Topics at scale on the runtime's
-   storage, a compiled piece in the runner behind the experimental option, value
-   code in the sandbox, and server execution with the network.
+   the audit of the join bounds, with the 8 write records whose label lacks a
+   clause the evaluator's holds (question 349); the plan of each instantiated
+   pattern registered and its writes recorded under it, in place of the stub
+   (question 348); the suspected defect of a `fold` element bound to an output,
+   and the finding of the check that is classified and not shown (question 350);
+   the `*` entry of a removal that a more specific entry replaces, with its
+   specification sentence (questions 343 and 326); the fix of the quadratic
+   preparation as a pull request to `main`, if the owner agrees (question 347);
+   what still grows with the data, the preparation of a transaction that writes
+   many documents first (question 351), and the attribution of the preparation
+   time of the two `cfc-trusted-component-examples` modules (question 345); the
+   two untested interactions of the catch-up merge (question 346); the
+   executor's memory on a large result (question 332); the records given again
+   after a label changed alone, by class (question 333); the diagnostic and the
+   hard limit for a label of many clauses and the mark for an output stored at a
+   ceiling, once their open points are decided (questions 339 and 340); the
+   findings of the check in runs with a refused commit; the reports that remove
+   the bounds, with the groups of a scan's prefix (P37); and the four rows where
+   today's label holds no clause. Then its steps 11 and 12; the requirement on
+   the link of an argument, which the ruling Z82 schedules after milestone 4
+   (question 302); the translation of a pattern closure used as a value, once
+   the provisional decisions P33 to P36 are ratified; then Topics at scale on
+   the runtime's storage, a compiled piece in the runner behind the experimental
+   option, value code in the sandbox, and server execution with the network.
 ### Briefing an author
 
 A brief that produced a usable document in the first round had these parts:

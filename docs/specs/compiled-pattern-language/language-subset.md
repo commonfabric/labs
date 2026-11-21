@@ -1124,9 +1124,10 @@ const DonutSearch = pattern<{ donuts: Donut[] }>(({ donuts }) => {
   the modifier `inSpace` is not given to a language-model built-in as a
   tool. A closure whose own body calls `P.inSpace(space)(...)` makes the
   instance in the other space and is accepted as a tool
-  (`plan-and-label-templates.md`, §3.15, point 4). The diagnostic has no
-  identifier in [§10](#10-diagnostics-catalog) yet, and the prototype does
-  not report it.
+  (`plan-and-label-templates.md`, §3.15, point 4). The diagnostic is
+  `tool:in-space-factory` ([§10.2](#102-reactive-tier)). It is not
+  implemented in the prototype, which translates no closure used as a
+  value.
 - **Tier F.** A function body does not write a pattern closure as a value.
   An inline `pattern(...)` there is legal only as the callee of an
   instantiation, in every kind of function body, a `lift` and a `computed`
@@ -4113,6 +4114,7 @@ none of the other eight.
 | `removed-form:helper` | warning | A direct call of `ifElse`, `when`, or `unless`, or a `str` tagged template, in tier R (§4.4.3). An error once the builder form is retired | The rewrite: `c ? a : b` for `ifElse(c, a, b)`, `c && v` for `when(c, v)`, `c \|\| f` for `unless(c, f)`, a plain template literal for `str` | new |
 | `removed-form:helper-unsupported` | error | One of those four in any other form: with schema arguments, passed as a value, or through an alias. Also one of the four, in any form, in a function body or at module scope (§4.4.3) | The same rewrite. In a function body the operator is ordinary JavaScript | new |
 | `removed-form:pattern-tool-interim` | warning | A direct call of `patternTool` in tier R in a form the interim acceptance covers (§4.4.3). An error once the builder form is retired | The closure the call is compiled as, which the message holds: write it in place of the call, or write an inline `pattern(...)` that captures the bound values | new |
+| `tool:in-space-factory` | error | A pattern factory value with the modifier `inSpace` is given to a language-model built-in as a tool, written in place or through a name bound to it (§4.4.2; ruling Z83 of the continuation plan). A closure whose own body calls `P.inSpace(space)(...)` is not reported. Not implemented in the prototype | Give the tool a closure that makes the instance in the other space: `pattern<Args>((args) => P.inSpace(space)(args))` | new |
 | `removed-form:pattern-tool` | error | A call of `patternTool` in a form the interim acceptance does not cover, and `patternTool` used as a value (§4.4.3) | Write an inline `pattern(...)` that captures the bound values, and pass it as the tool (§4.4.3) | new (replaces `pattern-context:patterntool-requires-pattern`, which is retired) |
 | `removed-form:builtin` | error | A call, in any tier, of `llm`, `streamData`, `cell`, `byRef`, `nameInstance`, or a `...WithPattern` method (§4.4.3) | The replacement for the form found: `generateText` or `generateObject` for `llm`; a built-in of the fetch family for `streamData`; `Cell.of(value)` for `cell(value)`; the built-in imported by name for `byRef`; a `const` binding of the instance for `nameInstance`; the method without the suffix, with a callback written at the call, for a `...WithPattern` method | new |
 | `removed-form:schema-argument` | error | A schema passed to a form of the API that takes one (§4.4.3): beside the callback of `handler`, `lift`, or `pattern`; as the second argument of a cell constructor; as the `schema` of `wish` or `fetchJson`; as the argument of `getArgumentCell`. In any tier, whatever the schema holds. Not a schema given to a language model, nor the `tables` of `sqliteDatabase` | Delete the schema and declare the type: `handler<E, S>(fn)`, `lift<A, R>(fn)`, `pattern<I, O>(fn)`, `new X<T>(value)`, `wish<T>({ query })`, `fetchJson<T>({ url })`, `getArgumentCell<T>()`. A label goes into the type as an annotation (§8). A schema that says what no type states has no rewrite (§13, question 48) | new |

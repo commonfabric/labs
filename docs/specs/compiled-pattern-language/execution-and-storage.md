@@ -702,7 +702,22 @@ Five things differ.
    label a caller computed, which keeps the property that no caller
    supplies what the verifier verifies. The persist step is unchanged: it
    writes envelope entries of the existing shape
-   (`plan-and-label-templates.md` §2.3).
+   (`plan-and-label-templates.md` §2.3). The bound slots reach the
+   preparation as the write records of the transaction. A record names a
+   record of the plan that its instance runs, and the index of its inputs
+   in the one table of inputs of the transaction, where each distinct set
+   of inputs and each distinct slot binding is written once. Records that
+   name one plan record and one entry of the table and differ in a member
+   of one container, or in the document, are one record that lists those
+   members or documents, and a read that covers the members of an array of
+   references is bound by one member of each group of equal labels
+   (`plan-and-label-templates.md` §4.7). A transaction that holds writes of
+   instances of several patterns has a table for each plan (its §4.1, "One
+   plan for each instance that writes"). A path whose record lacks an input
+   takes the transaction's join, which is a bound only where the
+   transaction read everything that flowed into the value (provisional,
+   P42 of the continuation plan; its §4.2, "A record that lacks an
+   input").
 3. **What the prepared digest binds.** `plan-and-label-templates.md` §4.6
    governs. The preparation records as decision inputs, and the digest
    binds: the identity of the compiled pattern of every instance the
@@ -6756,9 +6771,13 @@ authored functions such as `bodyText`.
 
 *Preparation.*
 
-- The room's `messages` output: its cone was evaluated, its instantiation
-  key is unchanged when the labels of the new message and of the trigger
-  read equal the ones before, and the stored label is reused.
+- The members of the room's `messages` output that come from `facts.list`,
+  which are `count`, `oldestAt`, `newestAt`, `latest`, `threads` and
+  `legacyReplies`: the plan has no one output for `messages` as a whole
+  (`plan-and-label-templates.md` §6). Their cone, `facts`, was evaluated.
+  Each has the template `T_facts`, whose instantiation key is unchanged
+  when the labels of the new message and of the trigger read equal the
+  ones before, and the stored label is reused.
 - The new row's kept paths, about 25: their templates instantiate to the
   labels the other rows have. The entries are stored in the envelope of the
   new row's part document.
@@ -6771,7 +6790,7 @@ As deployed, every one of these labels is empty, so no entry is written.
 
 | Document | Write |
 | --- | --- |
-| The room's result document, the space's scope instance | One element appended to the `messages` output |
+| The room's result document, the space's scope instance | The members of the `messages` output whose value changed: `count`, `newestAt`, and `latest`, whose `messages` gains a reference to the new message while the room holds fewer messages than the window. `oldestAt`, `threads` and `legacyReplies` hold equal values and are not written |
 | The document that stores the main list under `[UI]`: the result document, the part document of a node that encloses the list, or the last chunk of the list where it is stored in chunks (section 4.10) | One storage link appended |
 | The new row's part document, the space's scope instance | Created, with the row's subtree |
 | The new row's part document, the session's scope instance | The row's session-scoped paths |
