@@ -150,23 +150,23 @@ command names the service and the key itself: `<key>` is
   it twice. Later saves update it in place. Tell them which loom it is on, on
   any device their Weaver runs on.
 - **build on** ("feed my digest from the triage pattern", "make this read what
-  that one finds"): one pattern takes another's output as its input. Both must
-  live in one space, so the new one goes on the loom the other is on; if the
-  other is in a different space, say building across looms is not built yet.
-  First give the new pattern an input type with only the fields it reads, not
-  the other pattern's whole output, so a change to the rest cannot break it.
-  Then:
-  - **This one** (a particular pattern of theirs): save the new pattern, then
+  that one finds"): one pattern takes another's output as its input. First give
+  the new pattern an input type with only the fields it reads, not the other
+  pattern's whole output, so a change to the rest cannot break it. Then:
+  - **This one** (a particular pattern of theirs): both must live in one space,
+    so the new one goes on the loom the other is on; if the other is in a
+    different space, say linking across looms is not built yet. Save the new
+    pattern, then
     `cf piece link my-<other>/<output field> my-<name>/<input field>`.
   - **Whichever one** (a pattern meant for other people, each of whom has their
     own copy of the other): put a `#tag` in the doc comment on the other
     pattern's output type (`/** The emails a #triage pattern kept. */`), and in
     the new pattern read it with `wish({ query: "#triage" })`, with no `scope`.
     That searches the person's favorites, in any space, by the tags a piece had
-    when it was favorited, so the other piece is found only once it is one of
-    their favorites; tell them so. Favoriting a piece from Claude Code or Weaver
-    is not built yet, so say that too, and offer **this one** for their own copy
-    meanwhile. Do not use `scope: ["."]`: it searches what the loom's own
+    when it was favorited, so the other piece is found once it is one of their
+    favorites: tell them to open it in Weaver and choose Add to Favorites from
+    its menu (Weaver on the web has it). Favoriting from Claude Code is not
+    built yet. Do not use `scope: ["."]`: it searches what the loom's own
     pattern lists, which is not the pieces saved onto it.
 
   Never read again a source another pattern already reads (their mail, their
