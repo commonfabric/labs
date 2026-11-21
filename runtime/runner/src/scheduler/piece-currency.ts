@@ -45,9 +45,7 @@ export type PieceUnvouchedReason =
    * piece and cannot be answered for: it is not live, not clean, or runs
    * once for each viewer.
    */
-  | "unattributed-writer"
-  /** A live computation of the slice read a document a clock writes. */
-  | "clock-read";
+  | "unattributed-writer";
 
 /**
  * One slice of a piece: what its computations did when they ran at one scope
@@ -60,12 +58,20 @@ export type PieceCurrencySlice = {
 
   /**
    * Why the slice cannot be vouched for, empty when it can: every live
-   * computation that ran at its key is clean, and everything they read is no
-   * document a clock writes, has no writer the slice cannot answer for, and
-   * is in the piece's space or is a shared instance of another space that
-   * the snapshot names the seq of.
+   * computation that ran at its key is clean, and everything they read has
+   * no writer the slice cannot answer for, and is in the piece's space or is
+   * one instance of a document of another space, the shared one, a user's
+   * or a session's, that the snapshot names the seq of.
    */
   unvouched: PieceUnvouchedReason[];
+
+  /**
+   * The time, in milliseconds since the epoch, from which the slice is no
+   * longer current whatever the store holds: the tick after the one a
+   * clock's document held when one of its live computations read it.
+   * Absent for a slice that read none.
+   */
+  expiresAt?: number;
 
   /**
    * The document instances the slice's live computations read, and those a
@@ -126,20 +132,35 @@ export type PieceCurrencyState = {
   >;
 
   /**
-   * The documents a clock writes, each as `clockDocumentKey()` gives it. What
-   * a computation derives from one is current only until the clock's next
-   * tick, and a tick takes a runtime that holds the clock.
+   * The documents a clock writes, each as `clockDocumentKey()` gives it.
+   * What a computation derives from such a document is current only until
+   * the tick after the one it read, and a tick takes a runtime that holds
+   * the clock.
    */
-  clockDocuments: ReadonlySet<string>;
+  clockDocuments: ReadonlyMap<string, ClockDocument>;
 
   /**
    * The seq of another space's store at which this runtime's replica of it
-   * holds the shared instance of the document at `address`, or `undefined`
-   * where it cannot say.
+   * holds the instance of the document at `address` that `scopeKey` names:
+   * the shared one, a user's, or a session's. `undefined` where it cannot
+   * say.
    */
   sourceSeqOf: (
-    address: Pick<IMemorySpaceAddress, "space" | "id">,
+    address: Pick<IMemorySpaceAddress, "space" | "id"> & { scopeKey: string },
   ) => number | undefined;
+};
+
+/** A document a clock writes, as `PieceCurrencyState.clockDocuments` holds it. */
+export type ClockDocument = {
+  /** The interval of the clock's ticks, in milliseconds. */
+  intervalMs: number;
+
+  /**
+   * Returns the tick the document holds, in milliseconds since the epoch,
+   * or `undefined` where it holds none. With the scheduler idle and a
+   * reading computation clean, that is the tick the computation read.
+   */
+  read: () => number | undefined;
 };
 
 /** The key `PieceCurrencyState.clockDocuments` holds a document under. */
@@ -261,6 +282,7 @@ export function snapshotPieceCurrency(
       Pick<IMemorySpaceAddress, "space" | "id"> & { scopeKey: string }
     >;
     vouches: Set<string>;
+    expiresAt?: number;
   }>();
   const sliceAt = (key: ScopeKey) => {
     let slice = slices.get(key);
@@ -380,10 +402,11 @@ export function snapshotPieceCurrency(
           // index, which is asked with the seq it was read at. The replica
           // holds that seq now: it tells the scheduler of a frame in the turn
           // it applies one, so a run that is clean with the scheduler idle
-          // read, at the paths it read, the version the replica holds.
-          const seq = read.scopeKey === "space"
-            ? state.sourceSeqOf(read)
-            : undefined;
+          // read, at the paths it read, the version the replica holds. A
+          // read that names no one instance has no seq to be asked with.
+          const seq = read.scopeKey === ANY_INSTANCE
+            ? undefined
+            : state.sourceSeqOf(read);
           if (seq === undefined) slice.unvouched.add("foreign-read");
           reads.push({
             ...read,
@@ -392,8 +415,15 @@ export function snapshotPieceCurrency(
           });
           continue;
         }
-        if (state.clockDocuments.has(clockDocumentKey(read))) {
-          slice.unvouched.add("clock-read");
+        const clock = state.clockDocuments.get(clockDocumentKey(read));
+        if (clock !== undefined) {
+          // The time is counted from the tick that was read rather than
+          // from now: a clock whose tick is late holds a value that is out
+          // of date already. A clock that holds no tick vouches for no
+          // time at all.
+          const tick = clock.read();
+          const expiresAt = tick === undefined ? 0 : tick + clock.intervalMs;
+          slice.expiresAt = Math.min(slice.expiresAt ?? Infinity, expiresAt);
         }
         const { attributed, unattributed } = writersOf(read.id);
         const takenOver = unattributed.map(readsOf);
@@ -426,6 +456,7 @@ export function snapshotPieceCurrency(
         unvouched: [...slice.unvouched],
         reads,
         vouches: [...slice.vouches],
+        ...(slice.expiresAt !== undefined && { expiresAt: slice.expiresAt }),
       };
     }),
   };

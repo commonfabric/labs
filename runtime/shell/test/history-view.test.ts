@@ -332,6 +332,21 @@ describe("XHistoryView", () => {
       expect(indexes).toEqual([["8", "0"], ["6", "1"]]);
     });
 
+    it("names each step by the seq it began at as well as its own", async () => {
+      // A step's own seq moves while it grows; where it began does not, which
+      // is what names it to a reader that must find it again.
+
+      const { markup } = await listed([
+        { ...step(8), startSeq: 6 },
+        { ...step(5), startSeq: 3 },
+      ]);
+
+      const starts = [...markup().matchAll(/data-start-seq="(\d+)"/g)].map((
+        [, start],
+      ) => start);
+      expect(starts).toEqual(["6", "3"]);
+    });
+
     it("says who began a step that has a principal, shortening a long DID, and nothing for one with none", async () => {
       const long = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
       const { markup } = await listed([
@@ -1224,6 +1239,22 @@ describe("XHistoryView", () => {
     });
 
     describe("a reported seq", () => {
+      it("keeps a step's first commit as its identity when later commits extend it", async () => {
+        const { markup, follows, until } = await following([
+          { steps: [{ ...step(5), startSeq: 4 }] },
+          { steps: [{ ...step(7), startSeq: 4 }] },
+        ]);
+        expect(markup()).toContain('data-start-seq="4"');
+        expect(markup()).not.toContain('data-start-seq="5"');
+
+        const rendered = await until(
+          () => follows[0].onAdvance(7),
+          (markup) => markup.includes('data-seq="7"'),
+        );
+        expect(rendered).toContain('data-start-seq="4"');
+        expect(rendered).not.toContain('data-start-seq="7"');
+      });
+
       it("lists the newest stretch again, reusing the sources read, for a seq past the newest step listed", async () => {
         const { follows, listings, reuses, until } = await following([
           { steps: [step(4)] },

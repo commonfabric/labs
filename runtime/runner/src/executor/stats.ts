@@ -361,9 +361,8 @@ export type ServingLoopStats = {
      * in another space that the snapshot cannot name the instance or the seq
      * of), `foreign-write` (another space), `unattributed-writer` (it read a
      * document whose writer names no piece and is not live, not clean, or
-     * runs once for each viewer), `clock-read` (it read a document a clock
-     * writes), `scoped-root`, `source-origin` and `no-pattern`. A record with
-     * two reasons counts under both. */
+     * runs once for each viewer), `scoped-root`, `source-origin` and
+     * `no-pattern`. A record with two reasons counts under both. */
     unvouched: Record<string, number>;
 
     /** Roots put to a judgment, counted at each judgment made. */
@@ -395,10 +394,25 @@ export type ServingLoopStats = {
      * slice here. */
     indexWakes: number;
 
+    /** Times the loop was woken to judge a root it had left unloaded
+     * because the record of a slice expired: the next tick of a clock the
+     * slice read came, which no commit reports. */
+    expiryWakes: number;
+
     /** Pieces the index held clean that wrote an instance they vouched for
-     * again with no input of theirs changed. Each one is a judgment that
-     * would have served a stale value. */
+     * again, to a value other than the one it held, with no input of theirs
+     * changed. Each one is a judgment that would have served a stale
+     * value. */
     falseClean: number;
+
+    /** Rows of demand the loops offer to carry into other spaces now: an
+     * instance there that a run here read, with a client session whose
+     * actor it was read for (serving-loop.md §3b). A row stands there
+     * unless that space's index proves the instance current. */
+    carried: number;
+
+    /** Rows of carried demand the space they were sent to refused. */
+    carriedRefused: number;
   };
 
   /** SERVER SETTLE per authored input (serving-loop.md §7; stage-C design
@@ -910,7 +924,10 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     servedFromStore: 0,
     rearmed: 0,
     indexWakes: 0,
+    expiryWakes: 0,
     falseClean: 0,
+    carried: 0,
+    carriedRefused: 0,
   },
   settle: { series: [], dropped: 0 },
   settleAdvances: { count: 0, lastDelta: 0, series: [], dropped: 0 },
