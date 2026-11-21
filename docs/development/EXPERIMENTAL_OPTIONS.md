@@ -1217,9 +1217,11 @@ holds the measurements and the conditions for revisiting.
   `runtime/runner/src/cfc/plan-labels.ts`), in place of the one join over the
   transaction's reads, where the runtime recorded that write as a `plan-write`
   write-policy input with its own authorization and registered the compiled
-  pattern. Every other path keeps the join. With it off, every `plan-write`
-  input is ignored and the preparation and its prepared digest are what they
-  are without the option. The runner path for compiled patterns is to be
+  pattern. A `plan-write` input names its inputs in the table that the
+  `plan-inputs` inputs of the transaction hold. Every other path keeps the
+  join. With it off, every `plan-write` and `plan-inputs` input is ignored
+  and the preparation and its prepared digest are what they are without the
+  option. The runner path for compiled patterns is to be
   gated by the same option.
 - **Current default and planned end state.** Off by default. A measurement
   only: the specification the template labels rest on is specs pull request
@@ -1233,7 +1235,7 @@ holds the measurements and the conditions for revisiting.
   pinned by `runtime/runner/test/cfc-plan-labels.test.ts`.
 - **Path to removal.** Delete the runtime option, its env, authority and
   shell-source entries, `CfcTxState.planLabels`, and either the `plan-write`
-  path or the gate on it.
+  and `plan-inputs` path or the gate on it.
 
 ## Category 2: Contextual Flow Control enforcement rollout dials
 
