@@ -1,4 +1,12 @@
 /// <cts-enable />
+/**
+ * A mailbox backed by SQLite where each email row's confidentiality comes from
+ * its own sender, recipients, and the database owner. It shows an inbox of all
+ * rows, a skim query that drops rows above its ceiling, a `COUNT(*)` that
+ * refuses, and a compose form whose insert is checked by the same rule.
+ * Demonstrates data-derived per-row labels with `cfSqlite` tables, output
+ * ceilings with `onExceed: "skip"`, and fail-closed aggregates and writes.
+ */
 // CFC Phase 3 demo: per-row, DATA-DERIVED SQLite labels.
 //
 // Each email row's confidentiality is computed from the row's own columns —
@@ -158,8 +166,14 @@ export default pattern<MailboxInput, MailboxOutput>(
       {
         reactOn: db,
         maxConfidentiality: [
-          "did:mailto:alice@a.example",
-          "did:mailto:bob@example.com",
+          {
+            type: "https://commonfabric.org/cfc/atom/User",
+            subject: "did:mailto:alice@a.example",
+          },
+          {
+            type: "https://commonfabric.org/cfc/atom/User",
+            subject: "did:mailto:bob@example.com",
+          },
           { __ctDbOwner: true },
         ],
         onExceed: "skip",

@@ -1,3 +1,14 @@
+/**
+ * The record a runtime keeps of the strings `dataFile` readers return, and
+ * the walk that writes each recorded string into a result projection as a
+ * link to the code document holding it rather than inline, so that a space
+ * stores a data file a pattern passes to its view once rather than once per
+ * piece (`docs/specs/iframe-static-assets.md`, part 1). Only a string of at
+ * least `SHORTEST_LINKED` characters that the bounded record still holds is
+ * linked; a shorter one, or one the record has evicted, is written inline in
+ * every result that carries it.
+ */
+
 import { LRUCache } from "@commonfabric/collections/cache";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { isPlainObject } from "@commonfabric/js-values/types";

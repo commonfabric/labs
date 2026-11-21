@@ -163,8 +163,8 @@ const ASSETS = dataFile.urls("./assets"); // { glaze: "data:image/png;…", … 
 ```
 
 The extension decides which files these are: `.png`, `.jpg`, `.jpeg`, `.gif`,
-`.webp`, `.avif`, `.woff2`, `.woff`, `.ttf`, `.otf`, `.mp3`, `.ogg`, and `.wav`.
-An SVG is text, so `dataFile()` returns its markup and `dataFile.url()` its
+`.webp`, `.avif`, `.svg`, `.woff2`, `.woff`, `.ttf`, `.otf`, `.mp3`, `.ogg`, and
+`.wav`. An SVG is text, so `dataFile()` returns its markup and `dataFile.url()` its
 URL. Both calls declare what they read, as `dataFile()` does: a build attaches
 the file, or lists the directory and attaches each such file in it. `cf piece
 getsrc` writes an image back as the bytes it was read from.

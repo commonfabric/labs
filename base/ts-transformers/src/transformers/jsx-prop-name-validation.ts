@@ -8,7 +8,7 @@ import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 /**
  * JSX Prop Name Validation Transformer
  *
- * Reports a compile-time warning for a hyphenated prop on an intrinsic element,
+ * Reports a compile-time error for a hyphenated prop on an intrinsic element,
  * such as `<cf-resizable-panel default-size={28}>`, unless it is an event
  * (`oncf-change`) or a `data-*` or `aria-*` attribute.
  *
@@ -20,9 +20,9 @@ import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
  * as the one spelling to write, and TypeScript checks that one against the
  * element's declared props.
  *
- * It is a warning, not an error, because a pattern source stored in a space
- * may hold such a prop, and a stored source has to keep compiling: the prop
- * did nothing before, and it does nothing still.
+ * Under `TransformationOptions.storedSource` it reports as a warning, as the
+ * other authoring-shape gates do: a source stored in a space may hold such a
+ * prop, and its reload has to keep compiling. The prop does nothing either way.
  *
  * `@commonfabric/pattern-contract/jsx-prop-names` holds the rule, which the
  * renderer applies too.
@@ -55,7 +55,7 @@ export class JsxPropNameValidationTransformer extends HelpersOnlyTransformer {
           property,
         ) !== undefined;
     context.reportDiagnostic({
-      severity: "warning",
+      severity: context.options.storedSource ? "warning" : "error",
       type: "jsx:misnamed-prop",
       message: known
         ? `\`${name}\` on <${tag.text}> sets nothing: a JSX prop sets the ` +

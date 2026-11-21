@@ -372,7 +372,9 @@ export const componentReadContracts: Readonly<
   },
   // `cf-cell-link` follows its reference to the cell it lands on, asks the
   // worker for that cell's `[NAME]`, and mounts a drag preview's render from
-  // it; it reads nothing of the cell through the binding itself.
+  // it; it reads nothing of the cell through the binding itself. A labelled
+  // link resolves its reference only when pressed or clicked, and never asks
+  // for the `[NAME]` it does not show.
   "cf-cell-link": {
     cell: {
       schema: NestedRenderReferenceSchema,

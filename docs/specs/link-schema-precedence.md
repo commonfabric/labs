@@ -228,12 +228,12 @@ which side won the combination.
   stored link and its schema's closure documents live. The memoized
   resolution record replays the marking per call, and evaluation happens
   at mark time, so no stale verdict is baked into the record.
-- The traversal marks each pointer it follows (`followPointer`, after
+- The traversal marks each pointer it follows (`followPointerOnce`, after
   external schema-document registration) and the extra handle hop of an
   `asCell` crossing — `getNextCellLink`, its schema.ts twin at the root
   `asCell` mint in `validateAndTransform`, and the array walk's own
   element hop, each of which dereferences a link without going through
-  `followPointer`.
+  `followPointerOnce`.
 - Content-reading resolvers opt in (`markIfcCrossings`): the entry
   resolutions, schema-less query-result proxy accesses,
   `getRaw`/`getRawUntyped` (which resolve links on the way to the

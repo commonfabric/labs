@@ -28,9 +28,12 @@ import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
+  BranchInfo,
+  BranchName,
   ClientCommit,
   CommitClass,
   CommitPrecondition,
+  CommitSummary,
   DeliveryFailureClass,
   DocumentPath,
   EntityDocument,
@@ -935,9 +938,16 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * advertise `watchRemoveV1` keeps every watch. Resolves once every space's
    * session has answered, to whether some root was kept only for having been
    * loaded or read since the previous call began, which a later call may
-   * release.
+   * release. Then, unless a commit spanning several spaces is still
+   * applying, it releases each space nothing uses any more, as "Releasing a
+   * space's session" in `docs/features/document-release.md` says: it closes
+   * the space's session and forgets the space, which the next use opens
+   * again.
    */
   releaseUnreadDocuments?(options?: ReleaseOptions): Promise<boolean>;
+
+  /** Calls `observer` with each space a release pass releases. */
+  subscribeSpacesReleased?(observer: (space: MemorySpace) => void): Cancel;
 
   /**
    * How many documents this manager has dropped. A cell loaded before the
@@ -1274,6 +1284,15 @@ export interface IStorageProvider {
   presentCount?(absences: readonly UnexaminedAbsence[]): number;
 
   /**
+   * Those of `absences`, addresses {@link unexaminedAbsences} returned, this
+   * replica still holds no record of. Optional alongside
+   * {@link unexaminedAbsences}.
+   */
+  stillUnexamined?(
+    absences: readonly UnexaminedAbsence[],
+  ): readonly UnexaminedAbsence[];
+
+  /**
    * Whether the store read-through, asked for the instance `address` names
    * under `identity`, reported holding nothing there, with no write to it
    * reported since. Such an absence stays unexamined for commit to
@@ -1373,6 +1392,45 @@ export interface IStorageProvider {
 
   /** Test one live space-scoped entity identifier without loading its value. */
   entityIdExists?(id: string): Promise<boolean | undefined>;
+
+  /**
+   * Returns the commits of a branch's history, newest first: those of
+   * `options.branch` (absent, the branch this provider's session is of),
+   * then those it inherits from each ancestor up to its fork point, below
+   * `options.before`. At most `options.limit` are returned, and 500 at the
+   * most, which is also the limit when none is given. Rejects when the
+   * server serves no history.
+   */
+  listHistory?(
+    options?: { branch?: BranchName; before?: number; limit?: number },
+  ): Promise<CommitSummary[]>;
+
+  /** Returns the space's branches, deleted ones included. */
+  listBranches?(): Promise<BranchInfo[]>;
+
+  /**
+   * Forks the branch `name` from `options.parentBranch` (absent, the
+   * default branch) as of `options.forkSeq` (absent, the parent's head).
+   */
+  createBranch?(
+    name: BranchName,
+    options?: { parentBranch?: BranchName; forkSeq?: number },
+  ): Promise<BranchInfo>;
+
+  /** Deletes the branch `name`, which then takes no further commit. */
+  deleteBranch?(name: BranchName): Promise<void>;
+
+  /**
+   * Restores the space's default branch to the state `options.source`
+   * (absent, the default branch) held as of `options.sourceSeq` (absent,
+   * its head). The space's access list, session-scoped documents, the
+   * serving loop's records and SQLite databases are left as they are.
+   * Returns the restoring commit's seq, or `undefined` when the default
+   * branch already held that state.
+   */
+  restoreBranch?(
+    options?: { source?: BranchName; sourceSeq?: number },
+  ): Promise<number | undefined>;
 
   /** Run a server-side read-only SQLite query against a cell-derived db. */
   sqliteQuery?(
@@ -2757,6 +2815,14 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    */
   runWithAmbientReadMeta<T>(meta: Metadata, fn: () => T): T;
 
+  /**
+   * Merge `meta` into every read issued until the returned scope is disposed
+   * (explicit per-read meta wins), as `runWithAmbientReadMeta()` does for the
+   * reads its function issues. Scopes nest: each is disposed before the scope
+   * it was entered within.
+   */
+  enterAmbientReadMeta(meta: Metadata): Disposable;
+
   markCfcRelevant(reason?: string): void;
 
   /**
@@ -3871,6 +3937,16 @@ export interface ViewInterestLease {
 export interface ISpaceReplica extends ISpace {
   /** Existing session progress without starting I/O or awaiting commits. */
   getDiagnostics?(): SpaceStorageDiagnostic;
+
+  /**
+   * Whether the server this replica is connected to advertised
+   * `markedSplicesV1`, so that a transaction may send a change to an array
+   * as marked splices (`V2StorageTransaction.#arraySpliceGate()`). `false`
+   * until a session exists and for a server that predates marked splices,
+   * and then the change goes index by index. Optional: a replica without it
+   * reads as `false`.
+   */
+  markedSplices?(): boolean;
 
   /** The sizes of the structures this replica holds. */
   getSizes?(): SpaceStorageSizes;

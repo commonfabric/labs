@@ -224,11 +224,11 @@ export default pattern(() => {
     removedSeed.send({ name: "Sam", profile: removed as any });
   });
   const assert_seed_after_removal_sets_no_picture = assert(() =>
-    removed.name === "Sam" && removed.picture === undefined
+    removed.name === "Sam" && bytesAre(removed.picture, [])
   );
 
   // Without a suggestion, the seed step names the profile and sets no
-  // picture.
+  // picture, which a profile holds as empty bytes.
   const plain = ProfileHome({});
   const plainSeed = seedProfileName({});
   const action_seed_without_suggestion = action(() => {
@@ -236,7 +236,7 @@ export default pattern(() => {
     plainSeed.send({ name: "Ada", profile: plain as any });
   });
   const assert_plain_seed_sets_no_picture = assert(() =>
-    plain.name === "Ada" && plain.picture === undefined
+    plain.name === "Ada" && bytesAre(plain.picture, [])
   );
 
   return {

@@ -89,8 +89,9 @@ describe("host embedding contract: profile pinning is owner-gated", () => {
     expect(home).toContain(
       "inbox?: OwnerProtectedProfileWrite<ProfileInbox, typeof setInbox>;",
     );
-    // The picture is optional for the same reason: a profile that has never
-    // had one set, of any vintage, holds no property at all.
+    // The picture is optional for the same reason: a stored profile from
+    // before its cell had a default, that has never had one set, holds no
+    // property at all.
     expect(home).toContain(
       "picture?: OwnerProtectedProfileWrite<FabricBytes, typeof setPicture>;",
     );

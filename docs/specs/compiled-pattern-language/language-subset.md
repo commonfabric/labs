@@ -155,7 +155,11 @@ function-valued constant declared in the same module. The callback of
 `pattern` is written at the call ([§4.1](#41-pattern-callback)). A callback
 reached through a property, an import, or a call is refused for all three,
 and so is a name as the callback of `pattern`
-(`builder-callback:indirect-reference`).
+(`builder-callback:indirect-reference`). The callback is the builder's
+only argument: the compiler generates every schema of a definition from
+the types the definition declares, and a call that also passes a schema
+is refused (`removed-form:schema-argument`,
+[§4.4.3](#443-removed-call-forms)).
 
 The two differ because of the tiers. A function declared at module scope is
 a tier-F body ([§1](#1-terms)), and so is the callback of a `lift` or a
@@ -320,7 +324,8 @@ the body (§4.2).
 The input type comes from the first type argument of `pattern`, or from the
 parameter's annotation. The result type comes from the second type argument,
 from the callback's return annotation, or is inferred from the returned
-expression.
+expression. Neither comes from a schema: a schema passed beside the
+callback is refused ([§4.4.3](#443-removed-call-forms)).
 
 ### 4.2 Statements
 
@@ -1145,7 +1150,8 @@ factory values.
 
 `ifElse`, `when`, `unless`, and the `str` tag are not part of the language,
 so that no new pattern is written with them. `patternTool` is removed too,
-in favor of pattern closures (§4.4.2).
+in favor of pattern closures (§4.4.2). Each of the five has an interim
+acceptance, stated below.
 
 For an interim period the compiler accepts the first four with a warning
 (`removed-form:helper`) that states the replacement, by rewriting each to
@@ -1173,9 +1179,82 @@ pattern corpus
 in this repository, which is rewritten before that stage so that no pattern
 an author might imitate uses a removed form.
 
-`patternTool(...)` has no interim acceptance (`removed-form:pattern-tool`).
-Its rewrite moves the bound parameters out of the pattern's input and into
-captures:
+By the owner's ruling of 2026-11-19, `patternTool(...)` has an interim
+acceptance of its own, so that one pattern source runs in today's runtime
+and is compiled by this compiler. In tier R, a direct call
+`patternTool(P, { a, b })` of the name imported from `commonfabric` is
+accepted with the warning `removed-form:pattern-tool-interim` and
+rewritten, before any other stage sees the module, to an inline pattern
+closure (§4.4.2) that calls `P` with the bound values:
+
+| Written | Rewritten to |
+| --- | --- |
+| `patternTool(P, { a, b })` | `pattern<Omit<Parameters<typeof P>[0], "a" \| "b">>((rest) => P({ ...rest, a, b }))` |
+| `patternTool(P)` | `pattern<Parameters<typeof P>[0]>((rest) => P(rest))` |
+
+The input type of the closure is the input type of `P` without the bound
+keys, so a caller of the closure, a language model included, supplies the
+other members only. The bound values are captures of the closure. Where
+`P` is an inline `pattern<I, O>(...)`, the type is `I` as written in place
+of `Parameters<typeof P>[0]`, and the inline pattern is the callee of the
+closure's call. The message of the warning holds the closure.
+
+A call is accepted where all of these hold.
+
+- The callee is the name `patternTool` imported from `commonfabric`: no
+  alias, no namespace, no type argument, and no optional call.
+- The call is written in tier R.
+- The first argument is the name of a pattern declared at module scope or
+  imported, or an inline `pattern(...)` with a written input type.
+- The second argument is absent, or is an object literal whose properties
+  are plain or shorthand, each with a key that is an identifier or a
+  string literal, and each key once.
+- Where keys are bound, the input type of the pattern is an object type
+  that declares each of them, or that has an index signature.
+- The call has one or two arguments, and none is a spread.
+
+Every other call stays as written and is refused with
+`removed-form:pattern-tool`, as is `patternTool` used as a value. The
+refused shapes are:
+
+- `patternTool` reached through an alias or a namespace, called with a
+  type argument, or passed as a value;
+- a call in a function body or at module scope;
+- a first argument that is no pattern, such as a function or a member
+  access `tools.search`;
+- an inline pattern as the first argument with no written input type;
+- a second argument that is not an object literal;
+- bound values that hold a spread, a computed key, a method, a getter or
+  a setter, or one key twice;
+- a bound key that the input type of the pattern does not declare;
+- a third argument, or a spread argument;
+- a call that holds another `patternTool` call. The inner call is decided
+  on its own.
+
+Three further points are the choices of the prototype's implementer and
+await confirmation. They are not rulings (the continuation plan's
+question 314).
+
+- *A call whose result is spread, read by a member access, or called is
+  refused.* Today `patternTool` returns the record
+  `{ pattern, extraParams }`, and the closure is not that record, so a
+  site that reads the result as a record has no reading of the closure.
+- *A pattern whose input is declared only by an annotation of the
+  callback's parameter is refused when keys are bound.* The rewrite needs
+  the input type as an object type to check the bound keys against. With
+  no bound key such a pattern is accepted.
+- *Where the name `pattern` is not bound at the call, the rewrite adds it
+  to the import that `patternTool` comes from.* Where `pattern` is bound
+  there to anything but the `commonfabric` export, the call is refused.
+
+The interim ends as it does for the four helpers: when the builder form
+the transformer emits is retired, `removed-form:pattern-tool-interim` is
+an error, and it ends earlier for the pattern corpus in this repository.
+
+The accepted call is rewritten mechanically, and the closure it gives
+still declares the bound keys in the input type of `P`. The rewrite an
+author makes moves the bound parameters out of the pattern's input and
+into captures:
 
 ```tsx
 // Shown for illustration only.
@@ -1199,7 +1278,7 @@ scope, or by an inline closure that calls the module-scope pattern with
 them.
 
 The other forms that `builtin-inventory.md` classifies as removed are
-refused in every tier, also with no interim acceptance
+refused in every tier, with no interim acceptance
 (`removed-form:builtin`). Each has a replacement, which the message names.
 
 | Removed form | Write instead |
@@ -1210,6 +1289,54 @@ refused in every tier, also with no interim acceptance
 | `byRef(name)` | The built-in imported by name from `commonfabric` |
 | `nameInstance(value, name)` | `const name = Child({ ... })`. The compiler records the name of the binding |
 | `xs.mapWithPattern(...)` and the other seven `...WithPattern` methods | The method without the suffix, with a callback written at the call that calls the pattern: `xs.map((donut) => DonutRow({ donut }))` |
+
+By the owner's ruling of 2026-11-20, the forms of the API that take a
+schema are not part of the language, except where the schema is given to
+a language model (below). The compiler generates every schema of a
+program from a type: those of a definition from the types the definition
+declares (§3.2, §4.1), that of a state cell from the cell's type (§4.7),
+and the schema the result of a `wish` or a `fetchJson` is read under
+from the type argument of the call. A schema written beside the type is
+a second statement of it, and the two can disagree. Where the compiler
+does not read the written schema, as for a builder or the constructor of
+a state cell in tier R, the program runs under a schema its author did
+not write. Where the compiler passes it on in the request of an
+operation, as for `wish` and `fetchJson`, one value is read under two
+schemas. So a call that passes such a schema is refused, in every tier
+and whatever the schema holds, `toSchema<T>()` of the declared type
+included (`removed-form:schema-argument`). There is no interim
+acceptance: the forms without schemas also run in today's runtime, whose
+transformer generates the schemas from the same types.
+
+| Refused | Write instead |
+| --- | --- |
+| `handler<E, S>(eventSchema, stateSchema, fn)`, with or without a result type argument | `handler<E, S>(fn)`, or `handler<E, S, R>(fn)` |
+| `lift(fn, argumentSchema, resultSchema)` from `commonfabric/schema`, with or without the result schema | `lift<A, R>(fn)` |
+| `pattern(fn, argumentSchema, resultSchema)`, with or without the result schema | `pattern<I, O>(fn)` |
+| `new X(value, schema)` and `X.of(value, schema)`, and both under `X.perSpace`, `X.perUser`, and `X.perSession`, for each cell type `X` of §4.7 | `new X<T>(value)`, `X.of<T>(value)` |
+| `wish({ query, schema })`, and `wish(target, schema)` from `commonfabric/schema` | `wish<T>({ query })` |
+| `fetchJson({ url, schema })` | `fetchJson<T>({ url })` |
+| `cell.getArgumentCell(schema)` | `cell.getArgumentCell<T>()` |
+
+The overloads of `commonfabric/schema` give the code the types its
+schemas describe (`Schema<typeof argumentSchema>`). A call of one is
+rewritten by writing those types. A label written into a schema, under
+`ifc`, is written into the type as an annotation (§8). A schema that
+says something no type of the subset states has no rewrite; the corpus
+holds one such case, in two patterns (question 48). The methods
+`asSchema` and `setSchema` are refused with the undeclared methods
+(`cell:unsupported-method`, §4.7), and the conditional helpers called
+with schemas as removed forms (`removed-form:helper-unsupported`,
+above).
+
+Two kinds of schema stay. A schema given to a language model, the
+`schema` of `generateObject` and the `resultSchema` of `llmDialog` and
+of `agent`, is data the model reads. It is written in the part of JSON
+Schema that the model accepts, not in the schemas of this runtime, and
+`toSchema<T>()` remains the way to write it from a type. *Assumed:* the
+`tables` option of `sqliteDatabase` stays too. Its values are
+`table(...)` calls (§4.7), from which the runtime builds the schema of
+each table, and no type of the program declares a table (question 49).
 
 #### 4.4.4 Pure API functions
 
@@ -3977,8 +4104,10 @@ none of the other eight.
 | `ses-callback:callable-capture` | error | A tier-F body inside tier R captures a function value from an enclosing function scope. In a function body: the state of a handler binding, in either spelling of §5.2, or an inline `pattern(...)` used as a callee (§4.4.2) holds or captures a function value or a value of another code type, such as a `Map`, a `Set`, a `Date`, or an `Error` | Move the function to module scope. For a value of another code type, capture data, such as an array of entries or a timestamp, and build the value inside the body that uses it | changes (now also covers a handler binding and an inline pattern in a function body, and a code type other than a function) |
 | `removed-form:helper` | warning | A direct call of `ifElse`, `when`, or `unless`, or a `str` tagged template, in tier R (§4.4.3). An error once the builder form is retired | The rewrite: `c ? a : b` for `ifElse(c, a, b)`, `c && v` for `when(c, v)`, `c \|\| f` for `unless(c, f)`, a plain template literal for `str` | new |
 | `removed-form:helper-unsupported` | error | One of those four in any other form: with schema arguments, passed as a value, or through an alias. Also one of the four, in any form, in a function body or at module scope (§4.4.3) | The same rewrite. In a function body the operator is ordinary JavaScript | new |
-| `removed-form:pattern-tool` | error | A call of `patternTool` | Write an inline `pattern(...)` that captures the bound values, and pass it as the tool (§4.4.3) | new (replaces `pattern-context:patterntool-requires-pattern`, which is retired) |
+| `removed-form:pattern-tool-interim` | warning | A direct call of `patternTool` in tier R in a form the interim acceptance covers (§4.4.3). An error once the builder form is retired | The closure the call is compiled as, which the message holds: write it in place of the call, or write an inline `pattern(...)` that captures the bound values | new |
+| `removed-form:pattern-tool` | error | A call of `patternTool` in a form the interim acceptance does not cover, and `patternTool` used as a value (§4.4.3) | Write an inline `pattern(...)` that captures the bound values, and pass it as the tool (§4.4.3) | new (replaces `pattern-context:patterntool-requires-pattern`, which is retired) |
 | `removed-form:builtin` | error | A call, in any tier, of `llm`, `streamData`, `cell`, `byRef`, `nameInstance`, or a `...WithPattern` method (§4.4.3) | The replacement for the form found: `generateText` or `generateObject` for `llm`; a built-in of the fetch family for `streamData`; `Cell.of(value)` for `cell(value)`; the built-in imported by name for `byRef`; a `const` binding of the instance for `nameInstance`; the method without the suffix, with a callback written at the call, for a `...WithPattern` method | new |
+| `removed-form:schema-argument` | error | A schema passed to a form of the API that takes one (§4.4.3): beside the callback of `handler`, `lift`, or `pattern`; as the second argument of a cell constructor; as the `schema` of `wish` or `fetchJson`; as the argument of `getArgumentCell`. In any tier, whatever the schema holds. Not a schema given to a language model, nor the `tables` of `sqliteDatabase` | Delete the schema and declare the type: `handler<E, S>(fn)`, `lift<A, R>(fn)`, `pattern<I, O>(fn)`, `new X<T>(value)`, `wish<T>({ query })`, `fetchJson<T>({ url })`, `getArgumentCell<T>()`. A label goes into the type as an annotation (§8). A schema that says what no type states has no rewrite (§13, question 48) | new |
 | `collection:callback-parameters` | error | A reactive collection callback that is not an arrow function written at the call, a function passed by name included (`xs.filter(Boolean)`, `xs.map(toRow)`); that takes the whole array as a parameter; or that has a default value or a rest element on a parameter or inside a parameter's destructuring pattern (§4.4.1). A parameter that is an object pattern or an array pattern is not reported | Write the arrow at the call, with the element and at most the index: `xs.filter((x) => Boolean(x))`. Capture the array by name if the body needs it. Write a default as an expression in the body | new |
 | `collection:reduce-callback` | error | A `reduce` in tier R whose callback has a block body | Write the step as one expression, `(sum, donut) => sum + donut.price`. A step that needs statements is a loop inside `computed(() => ...)` | new |
 | `collection:reduce-initial` | error | A `reduce` in tier R without an initial value | Pass the initial value as the second argument | new |
@@ -4155,7 +4284,8 @@ and 2 local type declarations, and nothing else.
 | Function overloads | 5 (2) | `patterns/system/fabrichat/manager.tsx` (4), `patterns/system/private-inbox/private-inbox.tsx` (1); 34 more in 29 pattern test files | Rewrite. Every occurrence but one is one idiom: a one-line function whose overload signature re-types a cell (`function inboxOf(pointer: Cell<A>): Cell<B>`) over an implementation that returns its argument as `unknown`. It exists because the double cast is refused. The exception, `aboutRecordOf` in `manager.tsx`, returns a `key` chain that ends at a property declared as a cell, and its overload states the flattened type that `key` has in this language (§4.7). [§12.4](#124-replace-the-re-typing-overloads-with-declared-types) gives the three rewrites, which need no new construct |
 | Mapped type | 1 (1) | `patterns/apps/topics/topic.tsx` | Rewrite as `Readonly<Record<K, number \| undefined>>` |
 | `ifElse`, `when`, `str` | 156 (54); 1 (1); 1 (1). No `unless` | for example `patterns/system/self/self.tsx`, `patterns/system/loom/main.tsx`; `when` in `patterns/system/omnibox-fab/omnibox-fab.tsx`; `str` in `patterns/apps/deep-research/deep-research.tsx` | Accepted for the interim with a warning (§4.4.3). The rewrite is mechanical: all 158 are direct calls. That each has the plain arguments is not reproduced |
-| `patternTool` | 31 (12) | pattern bodies | Rewrite to a pattern closure (§4.4.3) |
+| `patternTool` | 31 (12) | pattern bodies | 29 calls in 11 files are accepted for the interim with a warning (`removed-form:pattern-tool-interim`, §4.4.3). 2, both in `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`, are refused: each spreads the result into a record. Rewrite to a pattern closure (§4.4.3) |
+| A schema passed to a form of the API | 27 (6); 1 (1) more in a pattern test file. Counted apart from the rest of this section, on the main branch at `ba103935aa` (2026-11-20), by the method of §11.1 | 26 calls of a builder: `patterns/apps/topics/topic.tsx` (17 `handler`, 1 `lift`), `patterns/system/shared-space/shared-space-catalog.ts` (5 `handler`), and one `pattern` each in `patterns/system/home/home.tsx`, `patterns/system/agent-queue/agent-queue.tsx`, and `patterns/examples/shared-profile-demo/main.tsx`. 1 `new Cell(value, schema)`, in `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`. No `X.of` with a schema, no schema in a `wish` or a `fetchJson`, and no argument of `getArgumentCell`. The test file is `patterns/system/loom/adder-profile.test.tsx` (1 `handler`). Not counted, since they stay: 14 schemas given to a model (9 `generateObject`, 2 `llmDialog`, 3 `agent`) and 3 `tables` options | Refused (`removed-form:schema-argument`, §4.4.3). The Topics schemas are the generated ones with a hand-written reader of older data in place of one property; once the two keys it reads are declared `string` (the row on `topic.tsx` below), each is the schema of the declared type and is deleted. The five in `shared-space-catalog.ts` give the event the schema of `Record<string, any>`, wider than the declared event type; deleted, the handler accepts the declared type. `shared-profile-demo` gives the argument the schema `false`, which accepts no value, and a result schema its result type states. The cell in `cfc-agent-prompt-injection-demo` is given a schema only to carry a confidentiality label (`ifc`), which its type declares instead (§8). The `Home` and `AgentQueue` result schemas carry a key that no type states, and have no rewrite (question 48). The test reads its event under a schema of its own, which declares a property, `admission`, that the declared event type does not have |
 | A collection method called on a cell handle in a handler | 2, as `builtin-inventory.md` counts them (needs types) | handlers | Rewrite by one of the two corrections of §4.7: an inline `pattern(...)` that is instantiated, or `cell.get().map(...)` (`cell:collection-method-in-function`) |
 | A function type in a type used as data | 1 declaration, 35 uses in 10 modules (prototype) | `MentionablePiece` in `patterns/system/backlinks-index/backlinks-index.tsx`, whose property `mentionable` is declared `MentionablePiece[] \| { get?: () => MentionablePiece[] }`. The type is a pattern input, a cell value, and a handler state | Rewrite: the declaration says what the value is, a list or a cell of one (`subset-type:function-in-data`, §7.9) |
 | A cell passed to a parameter declared with a structural type | About 25 arguments (prototype) | Declarations of the kind are `roster: { get(): ... }` in `patterns/system/loom/participants.tsx` and `sources` in `patterns/apps/topics/main.tsx` | Rewrite: declare the parameter `ReadonlyCell<T>`, which accepts every cell the structural type was written to accept (§7.5.1) |
@@ -4717,7 +4847,9 @@ Decided by the project owner:
   code reads as a string is declared `string` (§7.8);
 - a writable view wider than the declaration of a place is refused, with
   no exception for migration code: an input whose stored data has an
-  older or a partial shape declares that shape (§7.5.1).
+  older or a partial shape declares that shape (§7.5.1);
+- the forms of the API that take a schema are refused, except where the
+  schema is given to a language model (§4.4.3).
 
 Decided by `plan-and-label-templates.md`: a dynamic key is a chosen child
 that does not observe the container's enumeration (its §3.18); `reduce` and
@@ -5214,3 +5346,26 @@ use, so that the other numbers stay as other documents cite them.
     new element and that nothing stored under a key is deleted, which
     the report does not change. It is questions 254, 255, 291 and 301
     of the continuation plan.
+48. **A result schema that carries a key no type states** (to the
+    project owner). `Home` and `AgentQueue` pass `pattern` a result
+    schema that is the one generated from the result type with one
+    property set by `withAgentQueueRunLinkSchema`
+    (`patterns/system/agent-queue/agent-queue.tsx`): `run` of
+    `AgentQueueEntry`, a user-scoped cell whose schema carries the
+    private key `__ctPreservePatternResultCell`. The key tells the
+    runner not to materialize that one link as it materializes the
+    other links of a pattern's result. A cell and a scope have types
+    (§7.2, §8.8); the key has none. The schema is refused (§4.4.3), so
+    both patterns are refused with no rewrite. Nothing is assumed. A
+    type of the API that states the key, or a runner that keeps that
+    link without one, would give them a rewrite. It is question 336 of
+    the continuation plan.
+49. **The `tables` option of `sqliteDatabase`** (to the project owner).
+    §4.4.3 refuses the forms of the API that take a schema and keeps
+    the schemas given to a language model. The `tables` option takes a
+    schema for each table, built by `table(columns, rule?, options?)`
+    (§4.7). *Assumed:* it stays: the call declares the table, its
+    columns, and its row labels, the runtime builds the schema from it,
+    and no type of the program declares a table. The alternative is a
+    table declared by a row type, with its labels as annotations (§8).
+    It is question 337 of the continuation plan.

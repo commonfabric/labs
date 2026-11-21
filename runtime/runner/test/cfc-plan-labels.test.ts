@@ -1152,20 +1152,45 @@ describe("cfc-plan-labels", () => {
     });
 
     describe("for changes of the members of a list in place", () => {
+      /** Records one `plan-write` input for the path, with `more` in it. */
+      type RecordWrite = (
+        path: string[],
+        more?: Partial<Extract<WritePolicyInput, { kind: "plan-write" }>>,
+      ) => void;
+
+      /** What a scenario on the list is given to commit with. */
+      interface List {
+        /** The address of `path` in the target. */
+        at(...path: string[]): CfcAddress;
+
+        /**
+         * What a change of the list's members observes of its membership:
+         * the number of members, and which positions the list has.
+         */
+        membership: NonNullable<
+          Extract<WritePolicyInput, { kind: "plan-write" }>["observed"]
+        >;
+
+        /**
+         * Commits a transaction that reads the source `source`, writes
+         * `writes` and records what `records` gives, each record bound to
+         * that source.
+         */
+        commit(
+          source: string,
+          writes: [string[], FabricValue][],
+          records: (record: RecordWrite) => void,
+        ): Promise<void>;
+      }
+
       /**
        * Seeds three sources labeled `secret-a`, `secret-b` and `secret-c`
-       * and a target, enrolled as a store the runtime owns, and commits
-       * three transactions on it, each recording what the executor records
-       * for it. The first reads `a` and writes the list `["x", "y", "z"]`
-       * whole. The second reads `b` and appends `"w"`. The third reads `c`,
-       * compares the first two members and removes the second, which moves
-       * the two members behind it. With `again`, a fourth reads `b` and
-       * appends `"v"`, at the position the removal left without a member.
-       * Returns the confidentiality of each derived entry of the target as
-       * `observes /path`, and of each `structure` entry as
+       * and a target, enrolled as a store the runtime owns, and runs
+       * `scenario` on it. Returns the confidentiality of each derived entry
+       * of the target as `observes /path`, and of each `structure` entry as
        * `structure observes /path`.
        */
-      const changed = async (again = false) => {
+      const onList = async (scenario: (list: List) => Promise<void>) => {
         let derived: Record<string, unknown[]> = {};
         await withRuntime(true, async (runtime) => {
           const seed = runtime.edit();
@@ -1223,14 +1248,7 @@ describe("cfc-plan-labels", () => {
           const commit = async (
             source: string,
             writes: [string[], FabricValue][],
-            records: (
-              record: (
-                path: string[],
-                more?: Partial<
-                  Extract<WritePolicyInput, { kind: "plan-write" }>
-                >,
-              ) => void,
-            ) => void,
+            records: (record: RecordWrite) => void,
           ) => {
             const tx = runtime.edit();
             tx.readOrThrow(memoryAddress(`of:src-${source}`, ["value"]));
@@ -1254,6 +1272,45 @@ describe("cfc-plan-labels", () => {
             );
             expect((await tx.commit().settled).error).toBeUndefined();
           };
+          await scenario({ at, membership, commit });
+          const reader = runtime.edit();
+          try {
+            const metadata = readStoredCfcMetadata(reader, {
+              space,
+              id: target.id,
+              scope: "space",
+              type: "application/json",
+            });
+            derived = Object.fromEntries(
+              (metadata?.labelMap.entries ?? [])
+                .filter((entry) =>
+                  entry.origin === "derived" || entry.origin === "structure"
+                )
+                .map((entry) => [
+                  `${
+                    entry.origin === "structure" ? "structure " : ""
+                  }${entry.observes} /${entry.path.join("/")}`,
+                  [...(entry.label.confidentiality ?? [])].sort(),
+                ]),
+            );
+          } finally {
+            reader.abort();
+          }
+        });
+        return derived;
+      };
+
+      /**
+       * Commits three transactions on the list, each recording what the
+       * executor records for it. The first reads `a` and writes the list
+       * `["x", "y", "z"]` whole. The second reads `b` and appends `"w"`. The
+       * third reads `c`, compares the first two members and removes the
+       * second, which moves the two members behind it. With `again`, a
+       * fourth reads `b` and appends `"v"`, at the position the removal left
+       * without a member.
+       */
+      const changed = (again = false) =>
+        onList(async ({ at, membership, commit }) => {
           await commit("a", [[["list"], ["x", "y", "z"]]], (record) => {
             record(["list"]);
           });
@@ -1301,32 +1358,50 @@ describe("cfc-plan-labels", () => {
               },
             );
           }
-          const reader = runtime.edit();
-          try {
-            const metadata = readStoredCfcMetadata(reader, {
-              space,
-              id: target.id,
-              scope: "space",
-              type: "application/json",
-            });
-            derived = Object.fromEntries(
-              (metadata?.labelMap.entries ?? [])
-                .filter((entry) =>
-                  entry.origin === "derived" || entry.origin === "structure"
-                )
-                .map((entry) => [
-                  `${
-                    entry.origin === "structure" ? "structure " : ""
-                  }${entry.observes} /${entry.path.join("/")}`,
-                  [...(entry.label.confidentiality ?? [])].sort(),
-                ]),
-            );
-          } finally {
-            reader.abort();
-          }
         });
-        return derived;
-      };
+
+      /**
+       * Commits three transactions on the list. The first reads `a` and
+       * writes the list `["x"]` whole. The second reads `b` and appends a
+       * second `"x"`, so the second member has an entry of its own and the
+       * first has none. The third reads `c`, compares the first member and
+       * removes it, which moves the second member to the first position and
+       * leaves the value there as it was.
+       */
+      const firstOfTwoEqualRemoved = () =>
+        onList(async ({ at, membership, commit }) => {
+          await commit("a", [[["list"], ["x"]]], (record) => {
+            record(["list"]);
+          });
+          await commit(
+            "b",
+            [[["list", "length"], 2], [["list", "1"], "x"]],
+            (record) => {
+              record(["list", "1"], { observed: membership });
+              record(["list", "length"], { observed: membership });
+              record(["list"], { observed: membership, enumeration: true });
+            },
+          );
+          const decided = [
+            { address: at("list"), observes: "shape" as const },
+            { address: at("list", "0"), observes: "value" as const },
+          ];
+          await commit(
+            "c",
+            [[["list", "length"], 1], [["list", "0"], "x"]],
+            (record) => {
+              record(["list", "length"], { decided, observed: membership });
+              record(["list"], {
+                decided,
+                observed: membership,
+                enumeration: true,
+                removes: true,
+                moves: [{ from: 1, to: 0, count: 1 }],
+                start: 0,
+              });
+            },
+          );
+        });
 
       it("stores what the list stored of its membership joined with what decided each change as the `enumerate` entry of the list", async () => {
         const derived = await changed();
@@ -1353,6 +1428,16 @@ describe("cfc-plan-labels", () => {
         // The member appended under `b` stood at position 3, and the one
         // that stood at position 2 has no entry of its own.
         expect(derived["value /list/2"]).toEqual(["secret-a", "secret-b"]);
+        expect(derived["value /list/1"]).toBeUndefined();
+      });
+
+      it("moves the entries of the second of two equal members to the first position when the first is removed", async () => {
+        const derived = await firstOfTwoEqualRemoved();
+        // The record says the member at position 1 moved to position 0. An
+        // alignment of the old and new arrays by value keeps the first of
+        // the two equal members where it is and drops the entries of the
+        // second.
+        expect(derived["value /list/0"]).toEqual(["secret-a", "secret-b"]);
         expect(derived["value /list/1"]).toBeUndefined();
       });
 

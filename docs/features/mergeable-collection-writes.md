@@ -378,7 +378,10 @@ first, since the op carries only the delta.
   The suppression drops the whole-array candidate at the op's path outright,
   plus every element candidate at or past the tail start. What is left to carry
   the prefix is only the diff's *per-index* candidates — so the op is honest
-  only while the diff actually decomposes the prefix that way.
+  only while the diff actually decomposes the prefix that way. An array the
+  suppression reaches is therefore always diffed index by index, never as the
+  splices of an edit script, which sit at the array's own path and would be
+  dropped with the whole-array candidate. Even so,
   `buildArrayPatchCandidates` gives up and emits a whole-array replacement in
   three situations, and each one abandons the op instead:
 

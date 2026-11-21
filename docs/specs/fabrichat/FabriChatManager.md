@@ -31,13 +31,26 @@ nothing else: deriving it reads no room. Every link to a room the manager
 stores, in `roomMembership`, `direct`, `requests` and `outgoingNotices`, is
 declared a handle with nothing behind it (`Cell<unknown>`), so a read of any of
 them, Home's own sync among them, keeps the link and loads no room. The
-derivations that read rooms, `people` from the listed rooms' rosters and
-`outgoingNotices` from each notice's room's roster, first re-type the links to
-`ChatRoomLink`, which declares the rosters; nothing else reads them. `people`
-re-types each link where it reads that room's roster, in an instance of its
-own per room whose argument holds the handle, so no list the manager stores
-types a room as more than a handle; a reader that syncs such a list would walk
-into every room it names.
+derivations that read rooms, `people` from the listed rooms' rosters and the
+notices with nothing left to tell from each notice's room's roster, first
+re-type the links to `ChatRoomLink`, which declares the rosters; nothing else
+reads them. `outgoingNotices` leaves those notices out in a derivation of its
+own, which also leaves out a notice of a room the catalog says is deleted, and
+which reads no room, so that a change to the catalog, such as a new room,
+derives the list again without reading any notice's room. Each notice's room
+is read in an instance of its own per notice, so a room the reader can't read,
+such as one whose access list no longer names them, holds back only its own
+notice's answer, and that notice stays listed. Since those instances read no
+catalog, each asks the memory server whether its notice's room's space is
+deleted, which opens that space; a notice of a room the catalog marks deleted
+is dropped from what the manager stores by its next request naming a room, so
+that its instance stops asking. `people` re-types each link where it reads
+that room's roster, in an instance of its own per room, and each notice's
+instance re-types its notice's room the same way. Each instance's argument
+holds the handle, so no list the manager stores types a room as more than a
+handle; a reader that syncs such a list would walk into every room it names.
+The notices' instances run over the notices in the order the manager stores
+them, so a notice dropped moves the instances of the notices after it.
 
 The manager wishes for `#profile` twice. The user's wish, stored per user,
 supplies the profile `rooms`, `people` and `outgoingNotices` are derived from,
@@ -71,7 +84,11 @@ accepting a standalone room does, so a deleted room is listed under
 `deletedRooms` by its record.
 
 The manager's rendering labels each listed room with its entry's `title`, or,
-for a direct room with no title, by its counterpart. A standalone room's
+for a direct room with no title, with its counterpart's principal, as the entry
+holds it, shortened for display by `shortDid()`
+(`patterns/system/social-space/short-did.ts`). Labeling the rooms reads nothing
+but their entries, so it opens no room's space and no profile's (see the
+[implementation status](README.md#access-and-principals)). A standalone room's
 catalog entry holds its title too, as a display hint for readers of the
 catalog. Registration takes the room's title, whatever its kind. Whenever the
 manager handles `accept` or `joinRoom` for a room, it reads the room's `about`,
@@ -127,11 +144,12 @@ counterpart still waiting in `outgoingNotices`, since the room was offered them
 nothing, is offered to them, as step 3 of [creating a room](#creating-a-room)
 offers a new room, once a request names a profile of theirs. The offer puts
 them on the room's roster by that profile, wherever it points, and
-`outgoingNotices` leaves the notice out from then on. A counterpart the room's
-roster already lists has joined the room, and is offered nothing. A room another manager created and
-offered the user is there too once the host's share intake accepts it on the
-user's behalf. `rooms` can also hold a second direct room with the same
-counterpart, after crossing creations.
+`outgoingNotices` leaves the notice out from then on; the user's next join of
+the room drops it. A counterpart the room's roster already lists has joined
+the room, is offered nothing, and has their notice dropped. A room another
+manager created and offered the user is there too once the host's share
+intake accepts it on the user's behalf. `rooms` can also hold a second direct
+room with the same counterpart, after crossing creations.
 
 `direct`'s entries, and the entry a `done` outcome in `requests` carries, hold a
 room as `FabriChatRoom.inSpace(…)` returned it at creation, or as `accept` was
@@ -218,10 +236,12 @@ is what labels it `authored-by` this user.
 
 The manager's rendering composes a group in a draft of the session's own: a
 title, members typed as chat addresses, and members picked from `people`, one
-control per person, which picks the first profile `people` lists for them,
-from the newest room whose roster holds one. Creating the
-group names the picked profiles as `createGroup`'s `profiles`, so each picked
-person is offered the room, and empties the draft.
+control per person, which picks the first profile `people` lists for them, from
+the newest room whose roster holds one. The picker lists them from
+`askedPeople`, once the session's "Add people from your chats" control has sent
+`askForPeople`, so rendering the manager reads no room's roster until someone
+opens it. Creating the group names the picked profiles as `createGroup`'s
+`profiles`, so each picked person is offered the room, and empties the draft.
 
 Someone a user adds to a room later is told of it through `offerRoom`, which
 the room's `addMember` sends once it has granted them access. It runs as an

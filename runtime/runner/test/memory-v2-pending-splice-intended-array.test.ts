@@ -33,6 +33,8 @@ describe("memory-v2-pending-splice-intended-array", () => {
   const sessions: Session[] = [];
 
   beforeEach(() => {
+    // The server advertises `markedSplicesV1`, so each head insertion goes as
+    // a marked splice, the shape these races are about.
     server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
     verdicts = [];
     heldIds = new Set();
@@ -92,6 +94,13 @@ describe("memory-v2-pending-splice-intended-array", () => {
     const tx = session.runtime.edit();
     const cell = session.runtime.getCell(space, doc, listSchema, tx);
     cell.set([...(cell.get() as string[]), item]);
+    return tx.commit({ holdSyncedUntilCovered: false }).verdict;
+  };
+
+  const prepend = (session: Session, doc: string, item: string) => {
+    const tx = session.runtime.edit();
+    const cell = session.runtime.getCell(space, doc, listSchema, tx);
+    cell.set([item, ...(cell.get() as string[])]);
     return tx.commit({ holdSyncedUntilCovered: false }).verdict;
   };
 
@@ -171,6 +180,70 @@ describe("memory-v2-pending-splice-intended-array", () => {
     expect(
       seen.filter((value) =>
         Array.isArray(value) && value.includes("x") && value.includes("e3")
+      ),
+    ).toEqual([]);
+  });
+
+  it("shows the list as it is while the other session's identical head lands first, and the store accepts the splice as an identity", async () => {
+    // Replayed over the stored list, the splice at index 0 would land its
+    // element a second time; the layer promotes to the list its transaction
+    // computed instead, which is the stored list.
+    const doc = "intended-identical-head";
+    const a = connect();
+    const b = connect();
+    await seed(a, doc, ["e1", "e2"]);
+    const { list, seen, cancel } = await watched(b, doc);
+
+    heldIds.add(list.getAsNormalizedFullLink().id);
+    const bVerdict = prepend(b, doc, "h");
+    await held.promise;
+
+    heldIds.clear();
+    expect((await prepend(a, doc, "h")).error).toBeUndefined();
+    await flush();
+    expect(list.get()).toEqual(["h", "e1", "e2"]);
+
+    release.resolve();
+    expect((await bVerdict).error).toBeUndefined();
+    await flush();
+    await b.runtime.idle();
+    cancel();
+
+    expect(list.get()).toEqual(["h", "e1", "e2"]);
+    expect(seen.filter((value) => Array.isArray(value) && value.length > 3))
+      .toEqual([]);
+    expect(verdicts).toEqual(["ok", "ok", "ok"]);
+  });
+
+  it("shows the list it computed, then the store's, when both sessions insert at the head", async () => {
+    // Each insertion is a splice at index 0. Replayed over the other's, it
+    // would show a list with both heads, which no writer wrote.
+    const doc = "intended-head";
+    const a = connect();
+    const b = connect();
+    await seed(a, doc, ["e1", "e2"]);
+    const { list, seen, cancel } = await watched(b, doc);
+
+    heldIds.add(list.getAsNormalizedFullLink().id);
+    const bVerdict = prepend(b, doc, "b0");
+    await held.promise;
+    expect(list.get()).toEqual(["b0", "e1", "e2"]);
+
+    heldIds.clear();
+    expect((await prepend(a, doc, "a0")).error).toBeUndefined();
+    await flush();
+    expect(list.get()).toEqual(["b0", "e1", "e2"]);
+
+    release.resolve();
+    expect(errorNameOf(await bVerdict)).toBe("ConflictError");
+    await flush();
+    await b.runtime.idle();
+    cancel();
+
+    expect(list.get()).toEqual(["a0", "e1", "e2"]);
+    expect(
+      seen.filter((value) =>
+        Array.isArray(value) && value.includes("a0") && value.includes("b0")
       ),
     ).toEqual([]);
   });

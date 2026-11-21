@@ -148,6 +148,11 @@ import { SpeculationLineage } from "./lineage.ts";
 import { SchedulerMaterializers } from "./materializers.ts";
 import { NodeRegistry, type SchedulerNode } from "./node-record.ts";
 import {
+  clockDocumentKey,
+  type PieceCurrencySnapshot,
+  snapshotPieceCurrency,
+} from "./piece-currency.ts";
+import {
   resolveRegistrationSurface,
   resubscribePullSchedulerAction,
   type SchedulerResubscribeOptions,
@@ -482,6 +487,10 @@ export class Scheduler {
     queueExecution: () => this.queueExecution(),
   });
   #writeIndex!: SchedulerWriteIndex;
+
+  /** The documents a clock writes, as `noteClockDocument()` was told of them. */
+  readonly #clockDocuments = new Set<string>();
+
   readonly #materializers = new SchedulerMaterializers(
     this.#nodes.effects,
     () => this.runtime.scopeKeyIdentity,
@@ -1646,6 +1655,67 @@ export class Scheduler {
     address: { space: MemorySpace; id: string; scope: CellScope },
   ): boolean {
     return this.#demandedEntityRefs.has(entityNameKey(address as never));
+  }
+
+  /**
+   * Starts recording the pieces whose nodes change, for a serving loop that
+   * keeps a currency index (serving-loop.md §3b).
+   */
+  trackChangedPieces(): void {
+    this.#nodes.trackChangedPieces();
+  }
+
+  /**
+   * The pieces a node of which joined, left, or had its status written since
+   * this was last called, each named by the raw id of its result document.
+   * Every piece a run touched is among them. Empty unless
+   * `trackChangedPieces()` was called.
+   */
+  takeChangedPieces(): string[] {
+    return this.#nodes.takeChangedPieces();
+  }
+
+  /**
+   * Whether any active node names `rootId`, the raw id of a result document,
+   * as a demand root: the piece rooted there, or one beneath it, is
+   * registered here.
+   */
+  hasNodesUnderDemandRoot(rootId: string): boolean {
+    return this.#nodes.hasNodesUnderDemandRoot(rootId);
+  }
+
+  /**
+   * Records that a clock writes the document at `address`: something other
+   * than a commit decides when its value is out of date, so the currency
+   * index vouches for no slice that read it.
+   */
+  noteClockDocument(address: Pick<IMemorySpaceAddress, "space" | "id">): void {
+    this.#clockDocuments.add(clockDocumentKey(address));
+  }
+
+  /**
+   * What the currency index records of the piece whose result document is
+   * `pieceRootId`, in `space`, as this scheduler holds it now, or `undefined`
+   * when no active node names it as its piece.
+   */
+  pieceCurrencySnapshot(
+    space: MemorySpace,
+    pieceRootId: string,
+  ): PieceCurrencySnapshot | undefined {
+    return snapshotPieceCurrency(
+      {
+        nodes: this.#nodes,
+        liveness: this.#dependencyGraphState,
+        dependencies: this.#dependencies,
+        writeIndex: this.#writeIndex,
+        clockDocuments: this.#clockDocuments,
+        sourceSeqOf: ({ space: source, id }) =>
+          this.runtime.storageManager.open(source).replica
+            .speculationRetirementView?.(id, "space").confirmedSeq,
+      },
+      space,
+      pieceRootId,
+    );
   }
 
   /** Whether a client session tracks an instance a node of the piece `id` writes. */
@@ -4250,11 +4320,11 @@ export class Scheduler {
    *
    * events.md §5's T3 drop predicate is "no runnable handler", never
    * "the run raced" — and a load failure is the second: the document the
-   * closure reads exists durably, only the read path failed. The live
-   * shape (verification-coverage.md's OW45 residue member) is a serving
-   * session revoked by the genesis ACL landing after activation —
-   * `unauthorized` on a cross-space read of a document the server itself
-   * wrote a moment earlier. Sealing §5's dropped-event notice for that
+   * closure reads exists durably, only the read path failed. The shape
+   * first seen live (verification-coverage.md's OW45 residue member) is a
+   * serving session an access-list change revoked — `unauthorized` on a
+   * cross-space read of a document the server itself wrote a moment
+   * earlier. Sealing §5's dropped-event notice for that
    * discharges at-least-once on a healthy trusted user action and
    * advances the watermark past it, so nothing ever re-runs it: the click
    * is silently lost.
@@ -4264,8 +4334,11 @@ export class Scheduler {
    * re-delivering it. What makes the deferral converge is the session
    * remount: an admitted commit touching the space's ACL document re-arms
    * the session (storage/v2.ts `consumeOwedSessionRemount`, triggered by
-   * executor/host.ts). A load whose ACL never changes, or whose re-open
-   * is denied, defers indefinitely, which is OW54's territory. The
+   * executor/host.ts). The host hears only the commits its own memory
+   * server admits, so a session that an owner in another process revoked,
+   * as an ownership move there revokes a bound one, is re-armed by nothing.
+   * Such a load, like one whose ACL never changes or whose re-open is
+   * denied, defers indefinitely, which is OW54's territory. The
    * deferral carries the drain's arrival-order BARRIER with it (events.md
    * §2, mirroring the sidecar-sync-failure arm): every later-arrived
    * durable served entry behind it IN THE SAME SPACE defers too, or a

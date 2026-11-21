@@ -2410,9 +2410,20 @@ export interface AsReadonlyCell extends HKT {
   type: ReadonlyCell<this["_A"]>;
 }
 
+/**
+ * A cell handle that can be read through and not written through. Each cell
+ * type that can be read is assignable to it: a `Cell<T>`, and so a
+ * `Writable<T>`, passes where a `ReadonlyCell<T>` is declared, as does a cell
+ * that `.key()` returns from one. A `ReadonlyCell<T>` does not pass where a
+ * `Cell<T>` is declared, and a cell that cannot be read, such as a
+ * `WriteonlyCell<T>`, does not pass where a `ReadonlyCell<T>` is.
+ */
+// The brand names the kind of each cell assignable to this one: its own, and
+// `"cell"`, the kind of the other cell type that can be read. The schema
+// generator reads that union as the kind `"readonly"` (`getCellBrand()`).
 export interface ReadonlyCell<T>
   extends
-    BrandedCell<T, "readonly">,
+    BrandedCell<T, "readonly" | "cell">,
     IAnyCell<T>,
     ICreatable<ReadonlyCell<T>>,
     IReadable<T>,
@@ -4105,8 +4116,9 @@ export type CompileAndRunFunction = <T = any, S = any>(
  * cannot fail part-way, and it returns the same bytes on every load of a given
  * source revision. A path naming no attached data file throws.
  *
- * A binary media file (an image, a font, or a sound, by its extension) has no
- * text, and reading one this way throws; read it with `dataFile.url()`.
+ * A binary media file (an image other than SVG, a font, or a sound, by its
+ * extension) has no text, and reading one this way throws; read it with
+ * `dataFile.url()`. An SVG is text, and this returns its markup.
  */
 export interface DataFileFunction {
   /** Reads the text of the attached data file `path` names. */
@@ -4286,6 +4298,91 @@ export type SqliteDatabaseFunction = {
   asScope(scope: CellScope): SqliteDatabaseFunction;
 };
 
+/**
+ * What an indexed collection mirrors of one kind of member, each of which is
+ * a cell holding a `T` (docs/features/indexed-collections.md).
+ */
+export interface IndexedCollectionOptions<T = unknown> {
+  /**
+   * Values mirrored as columns of the kind's table. A column is named for
+   * the member field it mirrors and given the SQLite type it is stored
+   * under, or is declared with a type and, as needed, the path of a value
+   * nested in the member and the column's label. A value that is absent is
+   * stored as `NULL`.
+   */
+  columns?: Record<string, string | IndexedColumnSpec>;
+
+  /**
+   * Member fields holding one reference to another cell, or a list of them.
+   * Each becomes a table named for the kind and the relation, holding a
+   * `source_cf_link` and a `target_cf_link` column, with one row per
+   * reference. A list names fields of the member; a map gives each relation
+   * the path of a nested field.
+   */
+  relations?:
+    | ReadonlyArray<keyof T & string>
+    | Record<string, readonly string[]>;
+
+  /** Secondary indexes over the kind's table, each a list of columns. */
+  indexes?: ReadonlyArray<ReadonlyArray<string>>;
+}
+
+/** A column of an indexed collection declared with more than its type. */
+export interface IndexedColumnSpec {
+  /** SQLite column type the value is stored under. */
+  type: string;
+
+  /** Keys leading from the member to the value, when it is nested. */
+  path?: readonly string[];
+
+  /**
+   * The column's label. A member's value that carries confidentiality is
+   * mirrored only into a column whose `confidentiality` covers it, and a
+   * query reading the column carries that label.
+   */
+  ifc?: {
+    confidentiality?: readonly FabricValue[];
+    maxConfidentiality?: readonly FabricValue[];
+  };
+}
+
+/**
+ * A collection of cells whose membership lives in a SQLite database the
+ * runtime keeps current. Its members come in the kinds it declares. Each kind
+ * has a table named for it, and each of its relations a table named for the
+ * kind and the relation, joined by an underscore, so a statement can join one
+ * kind's members to another's. The collection is read with `query()` and with
+ * nothing else: there is no list of members to read. `add()` and `remove()`
+ * change membership inside a handler, and the runtime re-reads a member
+ * whenever a document its mirrored fields were read from is written.
+ */
+export interface IndexedCollections<Kinds = Record<string, unknown>>
+  extends SqliteDb {
+  /**
+   * Adds `member` as one of `kind`, mirroring its declared fields in the
+   * caller's transaction. Adding a member the collection holds refreshes its
+   * rows.
+   */
+  add<K extends keyof Kinds & string>(
+    kind: K,
+    member: Kinds[K] | AnyCell<Kinds[K]>,
+  ): void;
+
+  /** Removes `member` of `kind` and every row mirrored from it. */
+  remove<K extends keyof Kinds & string>(
+    kind: K,
+    member: Kinds[K] | AnyCell<Kinds[K]>,
+  ): void;
+}
+
+/**
+ * Declares an {@link IndexedCollections}, which lives at the scope of the
+ * space, with a declaration per kind of member.
+ */
+export type IndexedCollectionsFunction = <Kinds = Record<string, unknown>>(
+  kinds: { [K in keyof Kinds & string]: IndexedCollectionOptions<Kinds[K]> },
+) => Reactive<IndexedCollections<Kinds>>;
+
 export type SqliteQueryParams = {
   db: FactoryInput<SqliteDatabase | SqliteDb>;
   sql: string;
@@ -4378,8 +4475,12 @@ export type SqliteTableFunction = (
   rule?: SqliteRowLabelRule,
   /** CFC Phase 3.b: `{ allowReadClearance: true }` opts the table into
    *  read-time clearance (reader-filtered `db.query({ readClearance: true })`).
-   *  Needs a `rule` — throws at `table()` time without one. */
-  opts?: { allowReadClearance?: boolean },
+   *  Needs a `rule` — throws at `table()` time without one. `indexes`
+   *  declares secondary indexes, each a list of column names in key order. */
+  opts?: {
+    allowReadClearance?: boolean;
+    indexes?: ReadonlyArray<ReadonlyArray<string>>;
+  },
 ) => JSONSchema;
 
 /**
@@ -5206,6 +5307,7 @@ export declare const compileAndRun: CompileAndRunFunction;
 export declare const dataFile: DataFileFunction;
 export declare const sqliteDatabase: SqliteDatabaseFunction;
 export declare const sqliteQuery: SqliteQueryFunction;
+export declare const indexedCollections: IndexedCollectionsFunction;
 export declare const table: SqliteTableFunction;
 export declare const cfLink: SqliteCfLinkFunction;
 export declare const cfSqlite: CfSqliteHelpers;
@@ -5369,6 +5471,50 @@ export type SpaceMembersFunction = (
 ) => SpaceMemberList | undefined;
 
 export declare const spaceMembers: SpaceMembersFunction;
+
+/**
+ * One member of a social space, as `joinSpaceMembers()` returns it, with the
+ * profiles of type `P` that are their own.
+ */
+export interface SpaceMemberOf<P> {
+  /** The principal's DID, as the space's access list names it. */
+  principal: DID;
+
+  /** The level the access list's entry for `principal` grants. */
+  level: SpaceGrantLevel;
+
+  /**
+   * The roster's profiles that are `principal`'s own, each once, in the order
+   * the roster first lists them, and empty for a member with none there. A
+   * reader that shows one face for the member shows the first.
+   */
+  profiles: P[];
+}
+
+/**
+ * Returns the members of a social space whose access list is `list` and whose
+ * roster is `roster`: one for each principal `list` names, sorted by DID,
+ * each with the profiles on `roster` whose owner, as `ownerOf` returns it, is
+ * that principal. `list`'s `anyone` names no one, so it adds no member, and a
+ * profile `ownerOf` returns no owner for, or an owner `list` does not name,
+ * is left out. `undefined` while `list` is, so a reader can tell "not known
+ * yet" from "nobody".
+ *
+ * Two profiles `keyOf` returns the same key for are one profile, counted
+ * once; a profile it returns no key for is the same as nothing but itself.
+ * In pattern code, `ownerOf` is `profileOwnerOf` and `keyOf` is `equalsKey`,
+ * so a profile counts toward a member exactly when it counts as theirs
+ * anywhere else; it can then be called where those can. It reads nothing
+ * itself, so it does no more than `ownerOf` and `keyOf` do.
+ */
+export type JoinSpaceMembersFunction = <P>(
+  roster: readonly P[],
+  list: SpaceMemberList | undefined,
+  ownerOf: (profile: P) => DID | undefined,
+  keyOf: (profile: P) => string | undefined,
+) => SpaceMemberOf<P>[] | undefined;
+
+export declare const joinSpaceMembers: JoinSpaceMembersFunction;
 
 /**
  * Returns the DID of the space `target`'s value lives in, after following any

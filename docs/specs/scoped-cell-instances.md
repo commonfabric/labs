@@ -585,6 +585,14 @@ The narrower scoped result is a separate storage instance for the same causal
 id. The broader output document stores a scoped link to that instance rather
 than copying the narrower value into the broader document.
 
+An instance of a pattern-owned derived cell carries the `result` back-link to
+its owning result cell, as the cell's other instances do. A setup writes it onto
+the instances it runs under. A serving runtime's computation for a demander
+writes the demander's instance, which no setup may have run under, so where that
+instance holds no back-link, the computation's write carries one with the value.
+The serving runtime so never leaves a demander's instance holding the back-link
+alone, which would read as an instance already produced.
+
 This applies to auxiliary result cells created to represent structured or
 captured reactive outputs as well as direct scalar outputs. Any intermediate or
 result cell allocated for the computation must use the effective output scope,

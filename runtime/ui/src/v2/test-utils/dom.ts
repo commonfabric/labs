@@ -29,7 +29,13 @@
  * and validity an element reports; {@link internalsOf} reads it back.
  */
 
-import { PropertySymbol, Window } from "happy-dom";
+import {
+  type Element as HappyElement,
+  type Node as HappyNode,
+  PropertySymbol,
+  type ShadowRoot as HappyShadowRoot,
+  Window,
+} from "happy-dom";
 
 /** The window whose document components are mounted in. */
 export const window = new Window({
@@ -62,6 +68,28 @@ window[PropertySymbol.dispatchError] = (error: Error) => {
     throw error;
   });
 };
+
+// A shadow root's `activeElement` is the focused element, or the host of the
+// shadow tree holding it, found inside that root, and null when focus is
+// outside it. happy-dom's walks up from a focused element in another shadow
+// tree past the document and throws, which a CodeMirror view's focus timer,
+// left running by an earlier test, hits as soon as a later test focuses an
+// editor of its own.
+Object.defineProperty(window.ShadowRoot.prototype, "activeElement", {
+  configurable: true,
+  get(this: HappyShadowRoot): HappyElement | null {
+    // The focused element itself, not retargeted to a host as
+    // `document.activeElement` is.
+    let node: HappyNode | null =
+      this[PropertySymbol.ownerDocument][PropertySymbol.activeElement];
+    while (node) {
+      const root = node.getRootNode();
+      if (root === this) return node instanceof window.Element ? node : null;
+      node = root instanceof window.ShadowRoot ? root.host : null;
+    }
+    return null;
+  },
+});
 
 // A browser fires `selectionchange` once after the calls that changed the
 // selection have returned, however many there were; happy-dom fires it within

@@ -35,8 +35,10 @@ element-body:result-stored-outside error
 ses-callback:callable-capture error
 removed-form:helper warning
 removed-form:helper-unsupported error
+removed-form:pattern-tool-interim warning
 removed-form:pattern-tool error
 removed-form:builtin error
+removed-form:schema-argument error
 collection:callback-parameters error
 collection:reduce-callback error
 collection:reduce-initial error

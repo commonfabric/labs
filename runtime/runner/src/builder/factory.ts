@@ -40,6 +40,7 @@ import { renderCellReference } from "../cell-reference.ts";
 import { getEntityId } from "../create-ref.ts";
 import type { RuntimeProgram } from "../harness/types.ts";
 import { freezeVerifiedPlainData } from "../sandbox/plain-data.ts";
+import { joinSpaceMembers } from "../space-members.ts";
 import {
   registerUnsafeHostTrustedValue,
   type UnsafeHostTrust,
@@ -58,6 +59,7 @@ import {
   generateObject,
   generateText,
   ifElse,
+  indexedCollections,
   inspectConfLabel,
   llm,
   llmDialog,
@@ -299,6 +301,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     ),
     sqliteDatabase,
     sqliteQuery,
+    indexedCollections,
     table,
     cfLink,
     // The SQLite helper namespace — one import for the growing vocabulary:
@@ -368,6 +371,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     spaceAccess,
     spaceAccessOf,
     spaceMembers,
+    joinSpaceMembers,
     spaceOf,
     spaceOfLink,
     spaceDeleted,

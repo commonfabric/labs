@@ -22,6 +22,8 @@ import {
   contendedEntities,
   convergenceExact,
   convergenceScanExact,
+  currencyCycles,
+  type CurrencyReadEdge,
   DEFAULT_SCAN_LIMIT,
   // Remote acquisition (`cf inspect --remote` / `pull`).
   defaultCacheDir,
@@ -73,9 +75,8 @@ import {
   summarizeSpace,
   valueAsIdentity,
 } from "@commonfabric/state-inspector";
-import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { maxOf } from "@commonfabric/collections/math";
-import { loadIdentity } from "../lib/identity.ts";
+import { firstPartySigner } from "../lib/first-party.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
 
 function humanSize(bytes: number): string {
@@ -341,9 +342,7 @@ async function remoteSigner(
 ): Promise<RequestSigner | undefined> {
   const path = options.identity ?? Deno.env.get("CF_IDENTITY");
   if (!path) return undefined;
-  const identity = await loadIdentity(path);
-  return ({ url, method }) =>
-    signFirstPartyHttpRequest({ url: new URL(url), method, signer: identity });
+  return await firstPartySigner(path);
 }
 
 // Map a token (full DID, prefix, or substring) to a full space DID on a remote,
@@ -1092,8 +1091,18 @@ export const inspect = new Command()
                     : ""),
               );
             }
-          } else {
+          } else if (c.readSetsNotKept === 0) {
             console.log("\n(no anomalous stale reads — store is consistent)");
+          } else {
+            console.log("\n(no anomalous stale reads among the reads kept)");
+          }
+          if (c.readSetsNotKept > 0) {
+            console.log(
+              `\n? ${c.readSetsNotKept} later commit(s) hold reads this ` +
+                `check cannot replay (a digest, compacted history, or an ` +
+                `unreadable payload), so whether they read this entity stale ` +
+                `was not checked.`,
+            );
           }
         });
         return;
@@ -1821,6 +1830,74 @@ export const inspect = new Command()
               (missing ? `\tmissing=${missing}` : "") +
               `\tclusters=${f.clusters.length}`,
           );
+        }
+      });
+    } finally {
+      for (const ref of refs) ref.space.close();
+    }
+  })
+  /* inspect currency-cycles */
+  .command(
+    "currency-cycles",
+    "Find pieces in different spaces that read what each other write, from " +
+      "what each space's currency index recorded.",
+  )
+  .option("--all", "Use all discovered spaces.")
+  .option("--spaces <list:string>", "Comma-separated DIDs/prefixes/paths.")
+  .option("--dir <dir:string>", "Directory of *.sqlite files.")
+  .option("--limit <n:number>", "Max cycles to list.", { default: 50 })
+  .option("--branch <branch:string>", "Branch (default: '').")
+  .action(async (options) => {
+    const refs = await resolveMultiSpaces(options);
+    try {
+      const result = currencyCycles(refs, {
+        limit: validatedRowLimit(options.limit),
+        branch: options.branch,
+      });
+      out(!!options.json, result, () => {
+        const indexed = result.spaces.filter((space) => space.indexed);
+        console.log(
+          `spaces examined: ${result.spaces.length}  ` +
+            `with a currency index: ${indexed.length}  ` +
+            `pieces recorded: ${
+              indexed.reduce((sum, space) => sum + space.pieces, 0)
+            }`,
+        );
+        console.log(`reads across spaces: ${result.reads.length}`);
+        for (const { from, to, documents } of result.reads) {
+          console.log(
+            `  ${escapeTerminalText(to)} reads ${documents} document(s) of ` +
+              escapeTerminalText(from),
+          );
+        }
+        if (result.unexamined.length > 0) {
+          console.log(
+            "read and not examined, so a cycle through one is not seen: " +
+              result.unexamined.map(escapeTerminalText).join(", "),
+          );
+        }
+        console.log(
+          `cycles across spaces: ${result.cycleCount}` +
+            (result.cycleCount > result.cycles.length
+              ? ` (listing ${result.cycles.length})`
+              : ""),
+        );
+        const step = (edge: CurrencyReadEdge) =>
+          `    ${escapeTerminalText(edge.from.space)} ` +
+          `${escapeTerminalText(edge.from.piece)} writes ` +
+          `${escapeTerminalText(edge.id)}, read by ` +
+          `${escapeTerminalText(edge.to.space)} ` +
+          `${escapeTerminalText(edge.to.piece)} in ` +
+          edge.slices.map(escapeTerminalText).join(", ");
+        for (const cycle of result.cycles) {
+          console.log(
+            `  ${cycle.edges.length} piece(s) in ${cycle.spaces.length} ` +
+              `spaces` +
+              (cycle.pieces > cycle.edges.length
+                ? `, of ${cycle.pieces} that read each other`
+                : ""),
+          );
+          for (const edge of cycle.edges) console.log(step(edge));
         }
       });
     } finally {

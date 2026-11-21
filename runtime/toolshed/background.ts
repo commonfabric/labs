@@ -281,9 +281,6 @@ export function logUncaughtErrors(
   target.addEventListener("error", (event) => {
     console.error("Uncaught error:", event.error ?? event.message);
   });
-  target.addEventListener("unhandledrejection", (event) => {
-    console.error("Unhandled promise rejection:", event.reason);
-  });
 }
 
 /** Announce, on stdout, that the server has bound its port. The parent of a

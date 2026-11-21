@@ -570,10 +570,11 @@ fn commit_edit_has_the_footprint_of_section_12_3() {
             "state.message : identity, shape",
             "state.myProfile : identity (resolved), shape",
             "state.myProfile-> : shape",
-            // FA §12.2 has the two calls of `spaceOf` in the right operand
-            // of `||`. The source now throws for an absent link first and
-            // calls `isInRoomOf` unconditionally, so the resolution of
-            // `room` is static.
+            // `messageInRoom` throws for an absent link and then calls
+            // `isInRoomOf` unconditionally, so the resolution of `room` is
+            // static. The listing of FA §12.3 has a plain `identity` here,
+            // for a source with both calls of `spaceOf` in the right
+            // operand of `||` (FA §12.2).
             "state.room : identity (resolved)",
         ]
     );

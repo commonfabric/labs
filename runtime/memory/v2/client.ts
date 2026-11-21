@@ -17,11 +17,24 @@ import {
 import { backtickQuote } from "@commonfabric/text/markdown";
 
 import {
+  type BranchCreateRequest,
+  type BranchCreateResult,
+  type BranchDeleteRequest,
+  type BranchDeleteResult,
+  type BranchInfo,
+  type BranchListRequest,
+  type BranchListResult,
+  type BranchName,
+  type BranchRestoreRequest,
+  type BranchRestoreResult,
+  carriesMarkedSplice,
   type ClientCommit,
+  type CommitSummary,
   compatibleMemoryProtocolFlags,
   type ConnectionAuthResult,
   type ConnectionChallengeResult,
   decodeTrustedMemoryBoundary,
+  DEFAULT_BRANCH,
   encodeMemoryBoundary,
   type EntityId,
   type EntityIdListOptions,
@@ -33,6 +46,8 @@ import {
   getMemoryProtocolFlags,
   type GraphQuery,
   type GraphQueryResult,
+  type HistoryListRequest,
+  type HistoryListResult,
   MAX_ENTITY_ID_PAGE_SIZE,
   MAX_UNTRUSTED_MESSAGE_SLOTS,
   MEMORY_PROTOCOL,
@@ -262,7 +277,10 @@ export type Transport = {
    * for replay on the next connection, so the transport must report the same
    * loss to its close receiver, which starts the reconnect that replays it;
    * `reset()` and `close()` are the exceptions, as the client calls them
-   * itself. A transport whose write of this very payload failed on an open
+   * itself. A transport that knows it wrote none of the payload, such as one
+   * whose socket was replaced while the payload waited its turn, rejects
+   * with `unsentConnectionError()`, so that the client knows no server holds
+   * it. A transport whose write of this very payload failed on an open
    * connection rejects with `writeFailedError()` instead, so that the client
    * stops replaying a commit whose own write keeps failing. Any other
    * rejection fails the request with that error. A response that arrived
@@ -419,10 +437,10 @@ export type MountOptions = {
   resumeAttempt?: number;
 
   /** The session-level delegated READ binding (OW31; see the wire
-   * `SessionDescriptor.actingAs`): only the serving plane's loopback
-   * managers set it; the server admits it for delegating-class
-   * principals only. Carried on reopen so a route replacement keeps
-   * the binding. */
+   * `SessionDescriptor.actingAs`): only the serving plane's managers set
+   * it, on loopback or on the route to a space's owner; the server admits
+   * it for delegating-class principals only. Carried on reopen so a route
+   * replacement keeps the binding. */
   actingAs?: "space-owner";
 
   /** The session's declared read ceiling (the wire
@@ -437,6 +455,18 @@ export type MountOptions = {
    * the session's reopens, which the grant it conferred already admits.
    */
   invite?: { inviteId: string; code: string };
+
+  /**
+   * The branch the session is of (the wire `SessionDescriptor.branch`),
+   * carried on every reopen. Absent, the default branch.
+   */
+  branch?: BranchName;
+
+  /**
+   * Asks the server to fork `branch` when the space has none of that name
+   * (the wire `SessionDescriptor.forkBranch`), carried on every reopen.
+   */
+  forkBranch?: true;
 };
 
 /**
@@ -609,6 +639,18 @@ type OutstandingCommit = {
    * `MAX_OWN_WRITE_FAILURES`.
    */
   writeFailures?: number;
+
+  /**
+   * Set as the commit's first send begins, and taken back where the
+   * transport reports it wrote none of that send
+   * ({@link isUnsentConnectionError}). Until then, a commit carrying a marked
+   * splice is refused where the connection it would go out on does not
+   * advertise `markedSplicesV1` ({@link isMarkedSpliceRefusal}). From then on
+   * every attempt sends it unchanged, whatever the connection advertises: the
+   * store may already hold it, and it tells a resend of a commit it took from
+   * a new one by the commit's bytes.
+   */
+  sent?: true;
 };
 
 /**
@@ -1243,6 +1285,8 @@ export class Client {
       options.resumeKey,
       options.resumeAttempt,
       result.serverBuild,
+      options.branch,
+      options.forkBranch,
     );
     this.#spaces.add(session);
     // The server answered the open on a connection the client has since
@@ -1317,6 +1361,11 @@ export class Client {
    * only after the server has handled the request, and so after the frames
    * the server sent while handling it. `options.onResponse` hears the
    * response as the client handles it, before any frame after it.
+   *
+   * `options.beforeSend` runs once the request is encoded for the connection
+   * it goes out on, with nothing left that could still stop it there, so that
+   * `serverFlags` are that connection's; throwing stops the request, unsent,
+   * with the error thrown.
    */
   async request<Result>(
     message: FabricPlainObject,
@@ -1325,6 +1374,7 @@ export class Client {
       epoch?: number;
       encoded?: string;
       onResponse?: (response: ResponseMessage<Result>) => void;
+      beforeSend?: () => void;
     } = {},
   ): Promise<Result> {
     if (options.whileConnected === true && !this.#connected) {
@@ -1357,6 +1407,7 @@ export class Client {
     const encoded = options.encoded !== undefined && options.epoch === epoch
       ? options.encoded
       : this.#encodeRequest(message);
+    options.beforeSend?.();
     const { onResponse } = options;
     // Set as the response arrives, which on some transports is before the
     // send settles.
@@ -1665,6 +1716,24 @@ export class Client {
           "memory server does not record a session's read ceiling " +
             "(`sessionReadCeiling` is not among its protocol flags), so a " +
             "session declaring one cannot be bounded by it",
+        );
+      }
+      // A server that does not know the field would open the session on
+      // the default branch, and the session would write there.
+      // The server forks only a branch the open names, so an open asking
+      // for a fork of none would be of the default branch, and write there.
+      if (
+        session.forkBranch === true &&
+        (session.branch === undefined || session.branch === DEFAULT_BRANCH)
+      ) {
+        throw protocolError(
+          "a session that asks for its branch to be forked names the branch",
+        );
+      }
+      if (session.branch !== undefined && this.serverFlags?.branches !== true) {
+        throw protocolError(
+          "memory server does not open a session on a branch (`branches` " +
+            "is not among its protocol flags)",
         );
       }
       if (
@@ -2463,12 +2532,11 @@ export class Client {
     this.#helloPending = ack;
     // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
     // `patternLifecycle`, `patternLifecycleOrigins`,
-    // `patternLifecycleScopes`, `servedRequests`, `spaceInvites` and
-    // `instanceNameMark` are the server's capabilities alone: the client
-    // reads them from `hello.ok` and
-    // never offers them. Other flags an endpoint does not know are ignored
-    // there, since the routed flag allowlists were removed (infra DEVIATIONS
-    // row 41).
+    // `patternLifecycleScopes`, `servedRequests`, `spaceInvites`,
+    // `instanceNameMark` and `branches` are the server's capabilities alone:
+    // the client reads them from `hello.ok` and never offers them. Other
+    // flags an endpoint does not know are ignored there, since the routed
+    // flag allowlists were removed (infra DEVIATIONS row 41).
     const {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
@@ -2479,6 +2547,7 @@ export class Client {
       servedRequests: _servedServerOnly,
       spaceInvites: _invitesServerOnly,
       instanceNameMark: _instanceNameMarkServerOnly,
+      branches: _branchesServerOnly,
       ...expectedFlags
     } = getMemoryProtocolFlags();
     const offerRoutedCompression = this.#offersRoutedCompression(
@@ -3597,6 +3666,8 @@ export class SpaceSession {
   readonly #routeSignal?: AbortSignal;
   readonly #actingAs?: "space-owner";
   readonly #readCeiling?: SessionReadCeiling;
+  readonly #branch?: BranchName;
+  readonly #forkBranch?: true;
   readonly #genesisRoot?: GenesisRoot;
   readonly #spaceKindIntent?: string;
   #declaredSpaceKind?: DeclaredSpaceKind;
@@ -3621,8 +3692,12 @@ export class SpaceSession {
     resumeKey: string = crypto.randomUUID(),
     resumeAttempt = 1,
     serverBuild?: string,
+    branch?: BranchName,
+    forkBranch?: true,
   ) {
     this.#client = client;
+    this.#branch = branch;
+    this.#forkBranch = forkBranch;
     this.#resumeKey = resumeKey;
     this.#resumeAttempt = resumeAttempt;
     this.#auth = auth;
@@ -4123,6 +4198,119 @@ export class SpaceSession {
         : {}),
     });
 
+    this.#noteResult(result.serverSeq);
+    return result;
+  }
+
+  /**
+   * Forks the branch `name` from `options.parentBranch` (absent, the default
+   * branch) as of `options.forkSeq` (absent, the parent's head), and returns
+   * it.
+   *
+   * @throws When the server does not advertise `branches`, when the session
+   * lacks write access, when the name is taken, or when the fork point lies
+   * outside the parent's history.
+   */
+  async createBranch(
+    name: BranchName,
+    options: { parentBranch?: BranchName; forkSeq?: number } = {},
+  ): Promise<BranchInfo> {
+    const result = await this.#branchRequest<BranchCreateResult>({
+      type: "branch.create",
+      name,
+      ...options,
+    });
+    return result.branch;
+  }
+
+  /**
+   * Deletes the branch `name`: it takes no further commit, and its name stays
+   * taken.
+   *
+   * @throws When the server does not advertise `branches`, when the session
+   * lacks write access, or when there is no such branch.
+   */
+  async deleteBranch(name: BranchName): Promise<void> {
+    await this.#branchRequest<BranchDeleteResult>({
+      type: "branch.delete",
+      name,
+    });
+  }
+
+  /**
+   * Returns the space's branches, deleted ones included.
+   *
+   * @throws When the server does not advertise `branches`.
+   */
+  async listBranches(): Promise<BranchInfo[]> {
+    const result = await this.#branchRequest<BranchListResult>({
+      type: "branch.list",
+    });
+    return result.branches;
+  }
+
+  /**
+   * Returns the commits of a branch's history, newest first: those of
+   * `options.branch` (absent, the branch this session is of) below
+   * `options.before`, and at most `options.limit` of them.
+   *
+   * @throws When the server does not advertise `branches`, or when there is
+   * no such branch.
+   */
+  async listHistory(
+    options: { branch?: BranchName; before?: number; limit?: number } = {},
+  ): Promise<CommitSummary[]> {
+    const result = await this.#branchRequest<HistoryListResult>({
+      type: "history.list",
+      ...options,
+    });
+    return result.commits;
+  }
+
+  /**
+   * Restores the space's default branch to the state `options.source`
+   * (absent, the default branch) held as of `options.sourceSeq` (absent, its
+   * head), and returns the seq of the commit that did, or `undefined` when
+   * the default branch already held that state.
+   *
+   * @throws When the server does not advertise `branches`, when the session
+   * lacks owner access, or when the point lies outside the source's history.
+   */
+  async restoreBranch(
+    options: { source?: BranchName; sourceSeq?: number } = {},
+  ): Promise<number | undefined> {
+    const result = await this.#branchRequest<BranchRestoreResult>({
+      type: "branch.restore",
+      ...options,
+    });
+    return result.seq;
+  }
+
+  /**
+   * Helper for the branch and history methods, which sends `request` for
+   * this session and notes the server seq its result reports.
+   */
+  async #branchRequest<Result extends { serverSeq: number } & FabricValue>(
+    request:
+      | Omit<BranchCreateRequest, "requestId" | "space" | "sessionId">
+      | Omit<BranchDeleteRequest, "requestId" | "space" | "sessionId">
+      | Omit<BranchListRequest, "requestId" | "space" | "sessionId">
+      | Omit<HistoryListRequest, "requestId" | "space" | "sessionId">
+      | Omit<BranchRestoreRequest, "requestId" | "space" | "sessionId">,
+  ): Promise<Result> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.branches !== true) {
+      throw protocolError(
+        "memory server does not serve branch and history requests " +
+          "(`branches` is not among its protocol flags)",
+      );
+    }
+    const result = await this.#client.request<Result>({
+      ...request,
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+    });
     this.#noteResult(result.serverSeq);
     return result;
   }
@@ -5709,6 +5897,9 @@ export class SpaceSession {
       ...(this.#readCeiling !== undefined
         ? { readCeiling: this.#readCeiling }
         : {}),
+      // A reopen without it would move the session to the default branch.
+      ...(this.#branch !== undefined ? { branch: this.#branch } : {}),
+      ...(this.#forkBranch === true ? { forkBranch: true as const } : {}),
     };
     const holdings = this.#declaredHoldings();
     const restored = await runWithAbortSignal(
@@ -5801,6 +5992,8 @@ export class SpaceSession {
         return;
       }
 
+      // Whether this attempt began the commit's first send.
+      let firstSend = false;
       try {
         const applied = await this.#client.request<AppliedCommit>({
           type: "transact",
@@ -5812,6 +6005,17 @@ export class SpaceSession {
           onResponse: (response) => {
             if (response.ok !== undefined) pendingCommit.applied = response.ok;
           },
+          beforeSend: () => {
+            if (pendingCommit.sent === true) return;
+            if (
+              carriesMarkedSplice(pendingCommit.commit) &&
+              this.#client.serverFlags?.markedSplicesV1 !== true
+            ) {
+              throw markedSpliceRefusal();
+            }
+            pendingCommit.sent = true;
+            firstSend = true;
+          },
         });
         this.#noteResult(applied.seq);
         if (this.#outstandingCommits.get(localSeq) === pendingCommit) {
@@ -5822,6 +6026,11 @@ export class SpaceSession {
           void this.ack(applied.seq).catch(() => undefined);
         }
       } catch (error) {
+        // A first send the transport wrote none of reached no server, so the
+        // next attempt is a first send again, checked on its own connection.
+        if (firstSend && isUnsentConnectionError(error)) {
+          delete pendingCommit.sent;
+        }
         if (isConnectionError(error) || isSessionRevokedError(error)) {
           // A commit whose own write fails on one new connection after
           // another is at fault itself, and replaying it again would only take
@@ -6314,6 +6523,29 @@ export const writeFailedError = (message: string, cause?: unknown): Error =>
   Object.assign(connectionError(message, cause), { ownWriteFailed: true });
 
 /**
+ * Like `connectionError()`, except that it marks a payload the transport is
+ * sure it wrote none of to any connection, such as one queued behind earlier
+ * writes whose socket was replaced before its turn: no server holds it
+ * ({@link isUnsentConnectionError}).
+ */
+export const unsentConnectionError = (
+  message: string,
+  cause?: unknown,
+): Error => markUnsent(connectionError(message, cause));
+
+/**
+ * Marks `error`, a `ConnectionError` such as a `writeFailedError()`, as one
+ * for a payload the transport wrote none of, as
+ * {@link unsentConnectionError} does, and returns it.
+ */
+export const markUnsent = (error: Error): Error =>
+  Object.assign(error, { unsent: true });
+
+/** Whether `error` is an {@link unsentConnectionError}. */
+export const isUnsentConnectionError = (error: unknown): boolean =>
+  isConnectionError(error) && (error as { unsent?: unknown }).unsent === true;
+
+/**
  * Like `connectionError()`, except that it marks a frame the transport
  * received and could not decode: a frame past the negotiated size or slot cap,
  * a compressed frame that does not inflate, or an invalid router credit. A
@@ -6406,6 +6638,32 @@ const protocolError = (message: string): Error => {
   error.name = "ProtocolError";
   return error;
 };
+
+/**
+ * The refusal of a commit carrying a marked splice (`PatchOp`'s `pinned`)
+ * whose first send would go out on a connection that does not advertise
+ * `markedSplicesV1`, as the server it reaches may then read the splice as
+ * overwriting nothing. Nothing was sent, so the commit's writer can diff the
+ * change again for the connection as it is. Named `ConflictError`, a refusal
+ * its writer can retry; it carries no seq to wait for, as the store's own
+ * conflicts do.
+ */
+const markedSpliceRefusal = (): Error =>
+  Object.assign(
+    new Error(
+      "memory v2 commit not sent: it marks a splice, and the connection " +
+        "does not advertise markedSplicesV1",
+    ),
+    { name: "ConflictError", markedSpliceRefusal: true },
+  );
+
+/**
+ * Whether `error` is a session's refusal of a commit, unsent, because it
+ * marks a splice and its connection does not advertise `markedSplicesV1`.
+ */
+export const isMarkedSpliceRefusal = (error: unknown): boolean =>
+  error instanceof Error &&
+  (error as { markedSpliceRefusal?: unknown }).markedSpliceRefusal === true;
 
 // A ProtocolError that no retry can heal (the peers disagree on a data-model
 // wire contract). Tagged so the reconnect loop gives up rather than retrying it.

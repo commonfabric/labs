@@ -856,14 +856,21 @@ Three kinds of read have no entry.
   provisional, P20 of the continuation plan): an entry for a path of a
   row is registered at the chunk that stores the row, and a split or a
   merge of chunks registers it at the chunk that stores the row
-  afterwards. Provisional (P27 and P29 of the continuation plan): the
-  same for the chunk list and the chunks of a record that is stored in
-  chunks, where an entry for a path below a member is registered at the
-  chunk that stores the member, and for the key index of an array,
-  which is read by the resolution of a reference by key and has no
-  entry of its own: a reader through a key is registered at the
-  collection's membership and at the path it resolved to, as section
-  3.2 has it, and is marked by the keys that a write touched.
+  afterwards. Provisional (P27 of the continuation plan): the same for
+  the chunk list and the chunks of a record that is stored in chunks,
+  where an entry for a path below a member is registered at the chunk
+  that stores the member. An index from a key to its chunk is open, with
+  no provisional decision (`execution-and-storage.md` §4.10, "Finding
+  the chunk of a key", and its question 110; question 299 of the
+  continuation plan), and no index is stored. A reader through a key is
+  registered at the collection's membership and at the path it resolved
+  to, as section 3.2 has it, and is marked by the keys that a write
+  touched; the chunks a runtime reads to find the key are read by
+  resolution and have no entry of their own. Chunked storage of long
+  arrays is a requirement on the storage layer and is decided there;
+  this design keeps the split points, P22 and the bound on what the
+  change of one row writes (the coordinator's recommendation on the
+  scope of the storage decisions, not an owner ruling).
 
 ### 3.2 Entries from the plan and the bindings
 
@@ -881,7 +888,7 @@ beyond link structure.
    | `state` | The state cell's document. Its identifier derives from the instance, the steps of `within` with the element keys, and the cell's name. For a migrated instance, the carry-over record in the result document names the stored document of a cell declared inside a compiled-in sub-pattern, and the scheme of a cell declared directly in the body, and the binding takes both from it (`execution-and-storage.md` §5.2 and §9.3) |
    | `operation` | The result path of the operation's state document, named the same way. For an operation inside an element body, the element key is a step of `within` in the document's identifier (`execution-and-storage.md` §6). The result of a materializer is read through such a slot (section 7.1) |
    | `child` | The child's result cell, named the same way |
-   | `params` | For an instance whose callee is an inline pattern written at an instantiation in a function body: the instance's parameters document. For a closure called as a factory value: the factory value, at the address the `identity` slot of the factory is bound to (`plan-and-label-templates.md` §3.15; `execution-and-storage.md` §4.6) |
+   | `params` | For an instance whose callee is an inline pattern written at an instantiation in a function body: the instance's parameters document. For a closure called as a factory value: the factory value, at the address the `identity` slot of the factory is bound to, where the captures are stored below its member `params` (provisional, P34 of the continuation plan; `plan-and-label-templates.md` §3.15; `execution-and-storage.md` §4.6) |
    | `binding` | Bound when an event is dispatched, for the length of its transaction. For a binding of the reactive tier each state path resolves to what the member `place` of its entry of `Binding.state` names: a slot of the instance, an output of the instance, the stream of another binding, or a constant written at the binding (`plan-and-label-templates.md` §1.1). For a binding made in a function body the root is the binding state document: a copied path is a path of that document, and a path bound by reference crosses the link the document holds. No index entry |
    | `event`, `cause` | The event, for the length of its transaction. No index entry |
    | `element` | Per element key, the address the element was read from at the position that holds the key, and for a linked element the cell it links to. Bound from the element table, not at load (below) |
@@ -1327,14 +1334,41 @@ own notification.
 
 ### 3.6 A write that changes only a label
 
-A commit can change the label stored for a path and leave the value alone,
-for example when a later write to a document adds a confidentiality clause
-to an entry. The label is stored at a reserved member of the document beside
-its value ([CFC stored envelope](../cfc-stored-envelope.md)), and readers
-register paths under the value, so today such a commit matches no reader.
-The inventory records one consequence: `inspectConfLabel` is the one
-structural built-in a re-run does not reproduce, because the label it read
-changes without its inputs changing
+A commit can change the label stored for a path and leave the value alone, for
+example when a later write to a document adds a confidentiality clause to an
+entry, or when a write of a compiled pattern leaves the value as it was and
+stores its label (`plan-and-label-templates.md` §3.12). The label is stored at a
+reserved member of the document beside its value ([CFC stored
+envelope](../cfc-stored-envelope.md)), and a read of a labeled value consumes
+the label entries.
+
+**What today's runtime does.** Measured with the experimental option
+`compiledPatterns` off and with it on, with the same result
+(`runtime/runner/test/cfc-plan-labels.test.ts`, "a commit that changes a
+declared label and no value"): a commit that changes a declared label entry at a
+path and writes no value runs a sink that read the value again, and a
+transaction that read the value before the commit fails with a conflict
+(`StorageTransactionInconsistent`). Both also hold where the changed label is
+that of another value of the same document, because the labels are stored in the
+document: a reader of one value is run again, and an earlier reader refused, for
+a label that does not concern what it read. A label-only commit therefore does
+wake a reader today, and today's runtime wakes more readers than the label
+concerns. What today's runtime does not do is store a label when a write leaves
+the value as it was; that is the rule of `plan-and-label-templates.md` §3.12,
+for compiled patterns. Under that rule, a commit that would store the label the
+path holds already writes nothing, runs no reader and conflicts with nothing
+("for a write that left the value as it was" in the same file).
+
+For soundness the conflict is what is required: a transaction that read a value
+under the earlier label cannot commit on it, since a label read remains a
+dependency of the commit (section 8.10.1, `08-10-validation-at-boundaries.md`).
+A label that a computation derived earlier and that does not run again keeps
+what it had, which section 8.9.4 of `08-09-runtime-label-propagation.md`
+permits.
+
+The inventory records one consequence of a label that changes without a value:
+`inspectConfLabel` is the one structural built-in a re-run does not reproduce,
+because the label it read changes without its inputs changing
 (`REPLAYABLE_BUILTIN_REFS` in
 `runtime/runner/src/builder/builtin-replayability.ts`).
 
@@ -1366,6 +1400,22 @@ In this design a label-only change does the following.
   label-dirty, and the next evaluation of the cone instance instantiates
   with the current label. §8.9.4 permits the delay: "There is **no
   retroactive relabeling obligation**".
+
+As built in milestone 4 of the integration, the prototype's executor keeps, for
+each record of an output it gave, the positions that the inputs of the record
+read, and the collections its template folds over (`Instance.#noteRecord` of
+`base/pattern-compiler/exec/executor.ts`). After a commit changed a label and no
+value, it gives again, in a derivation transaction of its own, the records whose
+inputs read a position at, above or below the changed entry and those that fold
+over a collection with an element whose group changed
+(`Instance.#recordsReading`, `Instance.#relabel`). One changed label among 10
+elements and among 1,000 gives the same records again, measured over an array of
+references; an array of plain values in place and the result of another
+per-element construct were not measured. The records are found by position and
+not by the class of the slot, so an output that holds a link is given again when
+any label of the document the link names changes, although its slot reads the
+reference alone. The rule above limits the work further, to the demanded outputs
+whose template reaches the changed slot in a class that the change concerns.
 
 The rule changes when a label is derived again, not what it is. It is
 *assumed*, pending the owner (question 11 of the continuation plan; open

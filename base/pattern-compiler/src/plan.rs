@@ -569,6 +569,9 @@ struct Emitter<'r, 'm, 'a> {
     /// The entries of the constructed value the expression code being
     /// built computes, for the value `build` makes.
     pending_entries: Option<Entries>,
+    /// Each call of a pattern compiled in, in source order: the `within`
+    /// that the call is written under, as text, and the name of the call.
+    site_steps: Vec<(String, String)>,
     /// What the value-code emitter reads of this walk (`crate::emit`).
     facts: crate::emit::Facts,
 }
@@ -2263,7 +2266,12 @@ impl<'a> Emitter<'_, '_, 'a> {
             .enter(at, home, start, argument.clone(), self.cone);
         let saved_env = std::mem::take(&mut self.env);
         let saved_module = std::mem::replace(&mut self.module, home);
-        self.within.push(json!({ "site": name }));
+        // The step holds the call's own number until the plan is finished,
+        // which tells two calls of one name apart (`name_sites`).
+        let enclosing = Value::Array(self.within.clone()).to_string();
+        self.within
+            .push(json!({ "site": name, "$site": self.site_steps.len() }));
+        self.site_steps.push((enclosing, name.to_string()));
         let pattern = self
             .patterns
             .iter()
@@ -6968,6 +6976,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         );
         let flows = self.constraints(&mut plan);
         crate::flow::forget_named();
+        name_sites(&mut plan, &self.site_steps);
         name_ordinals(&mut plan);
         // A state path that resolves to an output has the output's
         // template (PL §1.1, `Binding.state.place`).
@@ -8204,6 +8213,45 @@ fn resolve_values(
     }
 }
 
+/// Gives each `site` step the name of its call: the name alone for the
+/// one call of that name under its `within`, and the record of the name
+/// and the ordinal of the call among those of the name, in source order,
+/// for one of several (PL §1.3, "A `site` step holds the name of its call
+/// by the same rules"). A step of the walk holds the number of its call
+/// under `$site`, an index of `calls`, which this removes.
+fn name_sites(plan: &mut Value, calls: &[(String, String)]) {
+    let mut counts: HashMap<&(String, String), u64> = HashMap::new();
+    for call in calls {
+        *counts.entry(call).or_default() += 1;
+    }
+    let mut seen: HashMap<&(String, String), u64> = HashMap::new();
+    let names: Vec<Value> = calls
+        .iter()
+        .map(|call| {
+            let ordinal = seen.entry(call).or_default();
+            *ordinal += 1;
+            match counts[call] {
+                1 => json!(call.1),
+                _ => json!({ "name": call.1, "ordinal": *ordinal }),
+            }
+        })
+        .collect();
+    fn rename(value: &mut Value, names: &[Value]) {
+        match value {
+            Value::Object(node) => {
+                if let Some(call) = node.remove("$site") {
+                    let call = call.as_u64().unwrap_or(0) as usize;
+                    node.insert("site".to_string(), names[call].clone());
+                }
+                node.values_mut().for_each(|member| rename(member, names));
+            }
+            Value::Array(members) => members.iter_mut().for_each(|member| rename(member, names)),
+            _ => {}
+        }
+    }
+    rename(plan, &names);
+}
+
 /// Where two declarations of one pattern body have the same name, each
 /// takes the name and its ordinal among them, in source order (PL §1.3).
 /// A name of several parts is the record of its parts, and no string
@@ -8362,6 +8410,7 @@ pub fn emit_module<'a>(
             ui_chain: Vec::new(),
             ui_bound: Vec::new(),
             pending_entries: None,
+            site_steps: Vec::new(),
             facts: crate::emit::Facts::new(module, *start),
         };
         // The type the pattern declares for its result: the second type

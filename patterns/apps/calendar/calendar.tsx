@@ -1,3 +1,8 @@
+/**
+ * A calendar of dated events listed in chronological order, grouped by day with
+ * today highlighted and past days dimmed. You add an event with a title, date,
+ * and optional time, open an event to edit it, or remove it.
+ */
 import {
   action,
   computed,

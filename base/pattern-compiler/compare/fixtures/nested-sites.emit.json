@@ -1,0 +1,4473 @@
+[
+  {
+    "module": "compare/fixtures/nested-sites.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/nested-sites.tsx",
+              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst P0 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P0\");\nconst P1 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P1\");\nconst P2 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P2\");\nconst P3 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P3\");\nconst Top = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#Top\");\nObject.defineProperty($exports, \"Top\", { enumerable: true, get: () => Top });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => (($h.v($h.slot(0)) + $h.v($h.slot(1)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(0) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 2,
+        "name": "P0",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "v"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P0"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "n"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "n": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "n"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "default": 0
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/nested-sites.tsx",
+              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst P0 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P0\");\nconst P1 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P1\");\nconst P2 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P2\");\nconst P3 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P3\");\nconst Top = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#Top\");\nObject.defineProperty($exports, \"Top\", { enumerable: true, get: () => Top });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(0, ($h) => (($h.v($h.slot(0)) + $h.v($h.slot(1)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(0) })));\n});\n$rt.setup(2, function ($arg, $h) {\n$rt.value(2, ($h) => (($h.v($h.output(1)) + $h.v($h.slot(2)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(2) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s1, $h)));\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (1))));\nconst $s2 = $rt.setups[2]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s2, $h)));\n$rt.value(3, ($h) => (($h.v($h.output(0)) + $h.v($h.output(2)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(3) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
+            },
+            {
+              "cone": 2,
+              "function": true,
+              "output": 2
+            },
+            {
+              "cone": 3,
+              "function": true,
+              "output": 3
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 6,
+        "name": "P1",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 248
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 272
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [
+            {
+              "from": 0,
+              "to": 3,
+              "via": {
+                "kind": "output",
+                "output": 0
+              }
+            },
+            {
+              "from": 1,
+              "to": 2,
+              "via": {
+                "kind": "output",
+                "output": 1
+              }
+            },
+            {
+              "from": 2,
+              "to": 3,
+              "via": {
+                "kind": "output",
+                "output": 2
+              }
+            }
+          ],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "v"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 0
+                  },
+                  {
+                    "op": "output",
+                    "output": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P1",
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P0"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "n"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 1,
+                "kind": "state"
+              }
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "a"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "b"
+                }
+              ]
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "n": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "n"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "default": 0
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/nested-sites.tsx",
+              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst P0 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P0\");\nconst P1 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P1\");\nconst P2 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P2\");\nconst P3 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P3\");\nconst Top = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#Top\");\nObject.defineProperty($exports, \"Top\", { enumerable: true, get: () => Top });\n$rt.setup(2, function ($arg, $h) {\n$rt.value(0, ($h) => (($h.v($h.slot(0)) + $h.v($h.slot(1)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(0) })));\n});\n$rt.setup(3, function ($arg, $h) {\n$rt.value(2, ($h) => (($h.v($h.output(1)) + $h.v($h.slot(2)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(2) })));\n});\n$rt.setup(1, function ($arg, $h) {\nconst $s1 = $rt.setups[2]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s1, $h)));\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (1))));\nconst $s2 = $rt.setups[3]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s2, $h)));\n$rt.value(3, ($h) => (($h.v($h.output(0)) + $h.v($h.output(2)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(3) })));\n});\n$rt.setup(5, function ($arg, $h) {\n$rt.value(5, ($h) => (($h.v($h.output(4)) + $h.v($h.slot(3)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(5) })));\n});\n$rt.setup(6, function ($arg, $h) {\n$rt.value(7, ($h) => (($h.v($h.output(6)) + $h.v($h.slot(4)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(7) })));\n});\n$rt.setup(4, function ($arg, $h) {\nconst $s4 = $rt.setups[5]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s4, $h)));\n$rt.value(6, ($h) => (($h.v($h.output(4)) + (1))));\nconst $s5 = $rt.setups[6]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s5, $h)));\n$rt.value(8, ($h) => (($h.v($h.output(5)) + $h.v($h.output(7)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(8) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s3 = $rt.setups[1]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s3, $h)));\n$rt.value(4, ($h) => (($h.v($h.slot(0)) + (1))));\nconst $s6 = $rt.setups[4]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s6, $h)));\n$rt.value(9, ($h) => (($h.v($h.output(3)) + $h.v($h.output(8)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(9) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
+            },
+            {
+              "cone": 2,
+              "function": true,
+              "output": 2
+            },
+            {
+              "cone": 3,
+              "function": true,
+              "output": 3
+            },
+            {
+              "cone": 4,
+              "function": true,
+              "output": 4
+            },
+            {
+              "cone": 5,
+              "function": true,
+              "output": 5
+            },
+            {
+              "cone": 6,
+              "function": true,
+              "output": 6
+            },
+            {
+              "cone": 7,
+              "function": true,
+              "output": 7
+            },
+            {
+              "cone": 8,
+              "function": true,
+              "output": 8
+            },
+            {
+              "cone": 9,
+              "function": true,
+              "output": 9
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 11,
+        "name": "P2",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 248
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 272
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 379
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 248
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4
+              ],
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 272
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 403
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [
+            {
+              "from": 0,
+              "to": 3,
+              "via": {
+                "kind": "output",
+                "output": 0
+              }
+            },
+            {
+              "from": 1,
+              "to": 2,
+              "via": {
+                "kind": "output",
+                "output": 1
+              }
+            },
+            {
+              "from": 2,
+              "to": 3,
+              "via": {
+                "kind": "output",
+                "output": 2
+              }
+            },
+            {
+              "from": 3,
+              "to": 9,
+              "via": {
+                "kind": "output",
+                "output": 3
+              }
+            },
+            {
+              "from": 4,
+              "to": 5,
+              "via": {
+                "kind": "output",
+                "output": 4
+              }
+            },
+            {
+              "from": 4,
+              "to": 6,
+              "via": {
+                "kind": "output",
+                "output": 4
+              }
+            },
+            {
+              "from": 5,
+              "to": 8,
+              "via": {
+                "kind": "output",
+                "output": 5
+              }
+            },
+            {
+              "from": 6,
+              "to": 7,
+              "via": {
+                "kind": "output",
+                "output": 6
+              }
+            },
+            {
+              "from": 7,
+              "to": 8,
+              "via": {
+                "kind": "output",
+                "output": 7
+              }
+            },
+            {
+              "from": 8,
+              "to": 9,
+              "via": {
+                "kind": "output",
+                "output": 8
+              }
+            }
+          ],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 0
+                  },
+                  {
+                    "op": "output",
+                    "output": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 4
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 6,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 4
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 7,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 6
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 4
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 5
+                  },
+                  {
+                    "op": "output",
+                    "output": 7
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 9,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "v"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 3
+                  },
+                  {
+                    "op": "output",
+                    "output": 8
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P2",
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P1",
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P0"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "n"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 1,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 2,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 3,
+                "kind": "state"
+              }
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ]
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "n": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "n"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "default": 0
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/nested-sites.tsx",
+              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst P0 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P0\");\nconst P1 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P1\");\nconst P2 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P2\");\nconst P3 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P3\");\nconst Top = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#Top\");\nObject.defineProperty($exports, \"Top\", { enumerable: true, get: () => Top });\n$rt.setup(3, function ($arg, $h) {\n$rt.value(0, ($h) => (($h.v($h.slot(0)) + $h.v($h.slot(1)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(0) })));\n});\n$rt.setup(4, function ($arg, $h) {\n$rt.value(2, ($h) => (($h.v($h.output(1)) + $h.v($h.slot(2)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(2) })));\n});\n$rt.setup(2, function ($arg, $h) {\nconst $s1 = $rt.setups[3]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s1, $h)));\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (1))));\nconst $s2 = $rt.setups[4]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s2, $h)));\n$rt.value(3, ($h) => (($h.v($h.output(0)) + $h.v($h.output(2)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(3) })));\n});\n$rt.setup(6, function ($arg, $h) {\n$rt.value(5, ($h) => (($h.v($h.output(4)) + $h.v($h.slot(3)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(5) })));\n});\n$rt.setup(7, function ($arg, $h) {\n$rt.value(7, ($h) => (($h.v($h.output(6)) + $h.v($h.slot(4)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(7) })));\n});\n$rt.setup(5, function ($arg, $h) {\nconst $s4 = $rt.setups[6]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s4, $h)));\n$rt.value(6, ($h) => (($h.v($h.output(4)) + (1))));\nconst $s5 = $rt.setups[7]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s5, $h)));\n$rt.value(8, ($h) => (($h.v($h.output(5)) + $h.v($h.output(7)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(8) })));\n});\n$rt.setup(1, function ($arg, $h) {\nconst $s3 = $rt.setups[2]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s3, $h)));\n$rt.value(4, ($h) => (($h.v($h.slot(0)) + (1))));\nconst $s6 = $rt.setups[5]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s6, $h)));\n$rt.value(9, ($h) => (($h.v($h.output(3)) + $h.v($h.output(8)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(9) })));\n});\n$rt.setup(10, function ($arg, $h) {\n$rt.value(11, ($h) => (($h.v($h.output(10)) + $h.v($h.slot(5)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(11) })));\n});\n$rt.setup(11, function ($arg, $h) {\n$rt.value(13, ($h) => (($h.v($h.output(12)) + $h.v($h.slot(6)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(13) })));\n});\n$rt.setup(9, function ($arg, $h) {\nconst $s8 = $rt.setups[10]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s8, $h)));\n$rt.value(12, ($h) => (($h.v($h.output(10)) + (1))));\nconst $s9 = $rt.setups[11]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s9, $h)));\n$rt.value(14, ($h) => (($h.v($h.output(11)) + $h.v($h.output(13)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(14) })));\n});\n$rt.setup(13, function ($arg, $h) {\n$rt.value(16, ($h) => (($h.v($h.output(15)) + $h.v($h.slot(7)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(16) })));\n});\n$rt.setup(14, function ($arg, $h) {\n$rt.value(18, ($h) => (($h.v($h.output(17)) + $h.v($h.slot(8)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(18) })));\n});\n$rt.setup(12, function ($arg, $h) {\nconst $s11 = $rt.setups[13]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s11, $h)));\n$rt.value(17, ($h) => (($h.v($h.output(15)) + (1))));\nconst $s12 = $rt.setups[14]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s12, $h)));\n$rt.value(19, ($h) => (($h.v($h.output(16)) + $h.v($h.output(18)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(19) })));\n});\n$rt.setup(8, function ($arg, $h) {\nconst $s10 = $rt.setups[9]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s10, $h)));\n$rt.value(15, ($h) => (($h.v($h.output(10)) + (1))));\nconst $s13 = $rt.setups[12]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s13, $h)));\n$rt.value(20, ($h) => (($h.v($h.output(14)) + $h.v($h.output(19)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(20) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s7 = $rt.setups[1]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s7, $h)));\n$rt.value(10, ($h) => (($h.v($h.slot(0)) + (1))));\nconst $s14 = $rt.setups[8]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s14, $h)));\n$rt.value(21, ($h) => (($h.v($h.output(9)) + $h.v($h.output(20)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(21) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
+            },
+            {
+              "cone": 2,
+              "function": true,
+              "output": 2
+            },
+            {
+              "cone": 3,
+              "function": true,
+              "output": 3
+            },
+            {
+              "cone": 4,
+              "function": true,
+              "output": 4
+            },
+            {
+              "cone": 5,
+              "function": true,
+              "output": 5
+            },
+            {
+              "cone": 6,
+              "function": true,
+              "output": 6
+            },
+            {
+              "cone": 7,
+              "function": true,
+              "output": 7
+            },
+            {
+              "cone": 8,
+              "function": true,
+              "output": 8
+            },
+            {
+              "cone": 9,
+              "function": true,
+              "output": 9
+            },
+            {
+              "cone": 10,
+              "function": true,
+              "output": 10
+            },
+            {
+              "cone": 11,
+              "function": true,
+              "output": 11
+            },
+            {
+              "cone": 12,
+              "function": true,
+              "output": 12
+            },
+            {
+              "cone": 13,
+              "function": true,
+              "output": 13
+            },
+            {
+              "cone": 14,
+              "function": true,
+              "output": 14
+            },
+            {
+              "cone": 15,
+              "function": true,
+              "output": 15
+            },
+            {
+              "cone": 16,
+              "function": true,
+              "output": 16
+            },
+            {
+              "cone": 17,
+              "function": true,
+              "output": 17
+            },
+            {
+              "cone": 18,
+              "function": true,
+              "output": 18
+            },
+            {
+              "cone": 19,
+              "function": true,
+              "output": 19
+            },
+            {
+              "cone": 20,
+              "function": true,
+              "output": 20
+            },
+            {
+              "cone": 21,
+              "function": true,
+              "output": 21
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 16,
+        "name": "P3",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 248
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 272
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 379
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 248
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4
+              ],
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 272
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 403
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 510
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                5
+              ],
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 248
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                6
+              ],
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 272
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 379
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                7
+              ],
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 248
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                8
+              ],
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 272
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 403
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 534
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [
+            {
+              "from": 0,
+              "to": 3,
+              "via": {
+                "kind": "output",
+                "output": 0
+              }
+            },
+            {
+              "from": 1,
+              "to": 2,
+              "via": {
+                "kind": "output",
+                "output": 1
+              }
+            },
+            {
+              "from": 2,
+              "to": 3,
+              "via": {
+                "kind": "output",
+                "output": 2
+              }
+            },
+            {
+              "from": 3,
+              "to": 9,
+              "via": {
+                "kind": "output",
+                "output": 3
+              }
+            },
+            {
+              "from": 4,
+              "to": 5,
+              "via": {
+                "kind": "output",
+                "output": 4
+              }
+            },
+            {
+              "from": 4,
+              "to": 6,
+              "via": {
+                "kind": "output",
+                "output": 4
+              }
+            },
+            {
+              "from": 5,
+              "to": 8,
+              "via": {
+                "kind": "output",
+                "output": 5
+              }
+            },
+            {
+              "from": 6,
+              "to": 7,
+              "via": {
+                "kind": "output",
+                "output": 6
+              }
+            },
+            {
+              "from": 7,
+              "to": 8,
+              "via": {
+                "kind": "output",
+                "output": 7
+              }
+            },
+            {
+              "from": 8,
+              "to": 9,
+              "via": {
+                "kind": "output",
+                "output": 8
+              }
+            },
+            {
+              "from": 9,
+              "to": 21,
+              "via": {
+                "kind": "output",
+                "output": 9
+              }
+            },
+            {
+              "from": 10,
+              "to": 11,
+              "via": {
+                "kind": "output",
+                "output": 10
+              }
+            },
+            {
+              "from": 10,
+              "to": 12,
+              "via": {
+                "kind": "output",
+                "output": 10
+              }
+            },
+            {
+              "from": 10,
+              "to": 15,
+              "via": {
+                "kind": "output",
+                "output": 10
+              }
+            },
+            {
+              "from": 11,
+              "to": 14,
+              "via": {
+                "kind": "output",
+                "output": 11
+              }
+            },
+            {
+              "from": 12,
+              "to": 13,
+              "via": {
+                "kind": "output",
+                "output": 12
+              }
+            },
+            {
+              "from": 13,
+              "to": 14,
+              "via": {
+                "kind": "output",
+                "output": 13
+              }
+            },
+            {
+              "from": 14,
+              "to": 20,
+              "via": {
+                "kind": "output",
+                "output": 14
+              }
+            },
+            {
+              "from": 15,
+              "to": 16,
+              "via": {
+                "kind": "output",
+                "output": 15
+              }
+            },
+            {
+              "from": 15,
+              "to": 17,
+              "via": {
+                "kind": "output",
+                "output": 15
+              }
+            },
+            {
+              "from": 16,
+              "to": 19,
+              "via": {
+                "kind": "output",
+                "output": 16
+              }
+            },
+            {
+              "from": 17,
+              "to": 18,
+              "via": {
+                "kind": "output",
+                "output": 17
+              }
+            },
+            {
+              "from": 18,
+              "to": 19,
+              "via": {
+                "kind": "output",
+                "output": 18
+              }
+            },
+            {
+              "from": 19,
+              "to": 20,
+              "via": {
+                "kind": "output",
+                "output": 19
+              }
+            },
+            {
+              "from": 20,
+              "to": 21,
+              "via": {
+                "kind": "output",
+                "output": 20
+              }
+            }
+          ],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 0
+                  },
+                  {
+                    "op": "output",
+                    "output": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 4
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 6,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 4
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 7,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 6
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 4
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 5
+                  },
+                  {
+                    "op": "output",
+                    "output": 7
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 9,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 3
+                  },
+                  {
+                    "op": "output",
+                    "output": 8
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 10,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 11,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 10
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 5
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 10
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 13,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 12
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 6
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 14,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 11
+                  },
+                  {
+                    "op": "output",
+                    "output": 13
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 15,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 10
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 16,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 15
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 17,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 15
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 18,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 17
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 8
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 19,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 16
+                  },
+                  {
+                    "op": "output",
+                    "output": 18
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 20,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 14
+                  },
+                  {
+                    "op": "output",
+                    "output": 19
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 21,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "v"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 9
+                  },
+                  {
+                    "op": "output",
+                    "output": 20
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P3",
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P2",
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P1",
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P0"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "n"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 1,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 2,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 3,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 4,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 5,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 6,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 7,
+                "kind": "state"
+              }
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ]
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "n": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "n"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "default": 0
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/nested-sites.tsx",
+              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst P0 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P0\");\nconst P1 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P1\");\nconst P2 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P2\");\nconst P3 = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#P3\");\nconst Top = pattern(\"unhashed:pattern/compare/fixtures/nested-sites.tsx#Top\");\nObject.defineProperty($exports, \"Top\", { enumerable: true, get: () => Top });\n$rt.setup(4, function ($arg, $h) {\n$rt.value(0, ($h) => (($h.v($h.slot(0)) + $h.v($h.slot(1)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(0) })));\n});\n$rt.setup(5, function ($arg, $h) {\n$rt.value(2, ($h) => (($h.v($h.output(1)) + $h.v($h.slot(2)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(2) })));\n});\n$rt.setup(3, function ($arg, $h) {\nconst $s1 = $rt.setups[4]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s1, $h)));\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (1))));\nconst $s2 = $rt.setups[5]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s2, $h)));\n$rt.value(3, ($h) => (($h.v($h.output(0)) + $h.v($h.output(2)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(3) })));\n});\n$rt.setup(7, function ($arg, $h) {\n$rt.value(5, ($h) => (($h.v($h.output(4)) + $h.v($h.slot(3)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(5) })));\n});\n$rt.setup(8, function ($arg, $h) {\n$rt.value(7, ($h) => (($h.v($h.output(6)) + $h.v($h.slot(4)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(7) })));\n});\n$rt.setup(6, function ($arg, $h) {\nconst $s4 = $rt.setups[7]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s4, $h)));\n$rt.value(6, ($h) => (($h.v($h.output(4)) + (1))));\nconst $s5 = $rt.setups[8]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s5, $h)));\n$rt.value(8, ($h) => (($h.v($h.output(5)) + $h.v($h.output(7)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(8) })));\n});\n$rt.setup(2, function ($arg, $h) {\nconst $s3 = $rt.setups[3]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s3, $h)));\n$rt.value(4, ($h) => (($h.v($h.slot(0)) + (1))));\nconst $s6 = $rt.setups[6]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s6, $h)));\n$rt.value(9, ($h) => (($h.v($h.output(3)) + $h.v($h.output(8)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(9) })));\n});\n$rt.setup(11, function ($arg, $h) {\n$rt.value(11, ($h) => (($h.v($h.output(10)) + $h.v($h.slot(5)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(11) })));\n});\n$rt.setup(12, function ($arg, $h) {\n$rt.value(13, ($h) => (($h.v($h.output(12)) + $h.v($h.slot(6)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(13) })));\n});\n$rt.setup(10, function ($arg, $h) {\nconst $s8 = $rt.setups[11]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s8, $h)));\n$rt.value(12, ($h) => (($h.v($h.output(10)) + (1))));\nconst $s9 = $rt.setups[12]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s9, $h)));\n$rt.value(14, ($h) => (($h.v($h.output(11)) + $h.v($h.output(13)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(14) })));\n});\n$rt.setup(14, function ($arg, $h) {\n$rt.value(16, ($h) => (($h.v($h.output(15)) + $h.v($h.slot(7)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(16) })));\n});\n$rt.setup(15, function ($arg, $h) {\n$rt.value(18, ($h) => (($h.v($h.output(17)) + $h.v($h.slot(8)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(18) })));\n});\n$rt.setup(13, function ($arg, $h) {\nconst $s11 = $rt.setups[14]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s11, $h)));\n$rt.value(17, ($h) => (($h.v($h.output(15)) + (1))));\nconst $s12 = $rt.setups[15]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s12, $h)));\n$rt.value(19, ($h) => (($h.v($h.output(16)) + $h.v($h.output(18)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(19) })));\n});\n$rt.setup(9, function ($arg, $h) {\nconst $s10 = $rt.setups[10]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s10, $h)));\n$rt.value(15, ($h) => (($h.v($h.output(10)) + (1))));\nconst $s13 = $rt.setups[13]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s13, $h)));\n$rt.value(20, ($h) => (($h.v($h.output(14)) + $h.v($h.output(19)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(20) })));\n});\n$rt.setup(1, function ($arg, $h) {\nconst $s7 = $rt.setups[2]({  }, $h);\nconst a = $rt.thunk(($h) => ($rt.force($s7, $h)));\n$rt.value(10, ($h) => (($h.v($h.slot(0)) + (1))));\nconst $s14 = $rt.setups[9]({  }, $h);\nconst b = $rt.thunk(($h) => ($rt.force($s14, $h)));\n$rt.value(21, ($h) => (($h.v($h.output(9)) + $h.v($h.output(20)))));\nreturn $rt.thunk(($h) => (({ v: $h.output(21) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s15 = $rt.setups[1]({  }, $h);\nconst top = $rt.thunk(($h) => ($rt.force($s15, $h)));\nreturn $rt.thunk(($h) => (({ v: $h.output(21) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
+            },
+            {
+              "cone": 2,
+              "function": true,
+              "output": 2
+            },
+            {
+              "cone": 3,
+              "function": true,
+              "output": 3
+            },
+            {
+              "cone": 4,
+              "function": true,
+              "output": 4
+            },
+            {
+              "cone": 5,
+              "function": true,
+              "output": 5
+            },
+            {
+              "cone": 6,
+              "function": true,
+              "output": 6
+            },
+            {
+              "cone": 7,
+              "function": true,
+              "output": 7
+            },
+            {
+              "cone": 8,
+              "function": true,
+              "output": 8
+            },
+            {
+              "cone": 9,
+              "function": true,
+              "output": 9
+            },
+            {
+              "cone": 10,
+              "function": true,
+              "output": 10
+            },
+            {
+              "cone": 11,
+              "function": true,
+              "output": 11
+            },
+            {
+              "cone": 12,
+              "function": true,
+              "output": 12
+            },
+            {
+              "cone": 13,
+              "function": true,
+              "output": 13
+            },
+            {
+              "cone": 14,
+              "function": true,
+              "output": 14
+            },
+            {
+              "cone": 15,
+              "function": true,
+              "output": 15
+            },
+            {
+              "cone": 16,
+              "function": true,
+              "output": 16
+            },
+            {
+              "cone": 17,
+              "function": true,
+              "output": 17
+            },
+            {
+              "cone": 18,
+              "function": true,
+              "output": 18
+            },
+            {
+              "cone": 19,
+              "function": true,
+              "output": 19
+            },
+            {
+              "cone": 20,
+              "function": true,
+              "output": 20
+            },
+            {
+              "cone": 21,
+              "function": true,
+              "output": 21
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 21,
+        "name": "Top",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 248
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 272
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 379
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 248
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4
+              ],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 272
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 403
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 510
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [
+                {
+                  "site": "top"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                5
+              ],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 248
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                6
+              ],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 272
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 379
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                7
+              ],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 248
+              },
+              "bodies": [],
+              "entry": "n",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 139
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                8
+              ],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 272
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 403
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/nested-sites.tsx",
+                "start": 534
+              },
+              "bodies": [],
+              "entry": "v",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "top"
+                }
+              ],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [
+            {
+              "from": 0,
+              "to": 3,
+              "via": {
+                "kind": "output",
+                "output": 0
+              }
+            },
+            {
+              "from": 1,
+              "to": 2,
+              "via": {
+                "kind": "output",
+                "output": 1
+              }
+            },
+            {
+              "from": 2,
+              "to": 3,
+              "via": {
+                "kind": "output",
+                "output": 2
+              }
+            },
+            {
+              "from": 3,
+              "to": 9,
+              "via": {
+                "kind": "output",
+                "output": 3
+              }
+            },
+            {
+              "from": 4,
+              "to": 5,
+              "via": {
+                "kind": "output",
+                "output": 4
+              }
+            },
+            {
+              "from": 4,
+              "to": 6,
+              "via": {
+                "kind": "output",
+                "output": 4
+              }
+            },
+            {
+              "from": 5,
+              "to": 8,
+              "via": {
+                "kind": "output",
+                "output": 5
+              }
+            },
+            {
+              "from": 6,
+              "to": 7,
+              "via": {
+                "kind": "output",
+                "output": 6
+              }
+            },
+            {
+              "from": 7,
+              "to": 8,
+              "via": {
+                "kind": "output",
+                "output": 7
+              }
+            },
+            {
+              "from": 8,
+              "to": 9,
+              "via": {
+                "kind": "output",
+                "output": 8
+              }
+            },
+            {
+              "from": 9,
+              "to": 21,
+              "via": {
+                "kind": "output",
+                "output": 9
+              }
+            },
+            {
+              "from": 10,
+              "to": 11,
+              "via": {
+                "kind": "output",
+                "output": 10
+              }
+            },
+            {
+              "from": 10,
+              "to": 12,
+              "via": {
+                "kind": "output",
+                "output": 10
+              }
+            },
+            {
+              "from": 10,
+              "to": 15,
+              "via": {
+                "kind": "output",
+                "output": 10
+              }
+            },
+            {
+              "from": 11,
+              "to": 14,
+              "via": {
+                "kind": "output",
+                "output": 11
+              }
+            },
+            {
+              "from": 12,
+              "to": 13,
+              "via": {
+                "kind": "output",
+                "output": 12
+              }
+            },
+            {
+              "from": 13,
+              "to": 14,
+              "via": {
+                "kind": "output",
+                "output": 13
+              }
+            },
+            {
+              "from": 14,
+              "to": 20,
+              "via": {
+                "kind": "output",
+                "output": 14
+              }
+            },
+            {
+              "from": 15,
+              "to": 16,
+              "via": {
+                "kind": "output",
+                "output": 15
+              }
+            },
+            {
+              "from": 15,
+              "to": 17,
+              "via": {
+                "kind": "output",
+                "output": 15
+              }
+            },
+            {
+              "from": 16,
+              "to": 19,
+              "via": {
+                "kind": "output",
+                "output": 16
+              }
+            },
+            {
+              "from": 17,
+              "to": 18,
+              "via": {
+                "kind": "output",
+                "output": 17
+              }
+            },
+            {
+              "from": 18,
+              "to": 19,
+              "via": {
+                "kind": "output",
+                "output": 18
+              }
+            },
+            {
+              "from": 19,
+              "to": 20,
+              "via": {
+                "kind": "output",
+                "output": 19
+              }
+            },
+            {
+              "from": 20,
+              "to": 21,
+              "via": {
+                "kind": "output",
+                "output": 20
+              }
+            }
+          ],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 4
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 4
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 0
+                  },
+                  {
+                    "op": "output",
+                    "output": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 4
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 4
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 6,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 4
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 7,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 4
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 6
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 4
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 8,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 5
+                  },
+                  {
+                    "op": "output",
+                    "output": 7
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 9,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 3
+                  },
+                  {
+                    "op": "output",
+                    "output": 8
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 10,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 11,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 4
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 10
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 5
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 12,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 10
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 13,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 4
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 12
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 6
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 14,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 11
+                  },
+                  {
+                    "op": "output",
+                    "output": 13
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 15,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 10
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 16,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 4
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 15
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 17,
+              "constraints": [],
+              "interim": "n",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 15
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 18,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 4
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 17
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 8
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 19,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 3
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 16
+                  },
+                  {
+                    "op": "output",
+                    "output": 18
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 20,
+              "constraints": [],
+              "interim": "v",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 2
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 14
+                  },
+                  {
+                    "op": "output",
+                    "output": 19
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 21,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "v"
+              ],
+              "template": {
+                "by": {
+                  "expression": true,
+                  "pattern": 1
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 9
+                  },
+                  {
+                    "op": "output",
+                    "output": 20
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#Top",
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P3",
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P2",
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P1",
+            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P0"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "n"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 1,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 2,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 3,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 4,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 5,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 6,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "cell": 7,
+                "kind": "state"
+              }
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "a"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                },
+                {
+                  "site": "b"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "a"
+                }
+              ]
+            },
+            {
+              "name": "c",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": [
+                {
+                  "site": "top"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                },
+                {
+                  "site": "b"
+                }
+              ]
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "n": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "n"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "default": 0
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

@@ -702,10 +702,111 @@ Deno.test("runBuildBinaries preserves the legacy CLI-only entry point", async ()
       "--allow-net",
       "--allow-write",
       "--allow-run",
-      "--v8-flags=--max-old-space-size=16384,--perf-basic-prof-only-functions,--interpreted-frames-native-stack",
+      "--v8-flags=--max-old-space-size=16384,--perf-basic-prof-only-functions,--interpreted-frames-native-stack,--no-logfile-per-isolate,--logfile=+",
     ]);
   } finally {
     await Deno.remove(root, { recursive: true });
+  }
+});
+
+async function toolshedV8Flags(): Promise<string[]> {
+  const root = await makeFakeRepo();
+  try {
+    const configs: BuildConfig[] = [];
+    await runBuildBinaries(["toolshed"], {
+      root,
+      runBuild: (config) => {
+        configs.push(config);
+        return Promise.resolve();
+      },
+    });
+    const prefix = "--v8-flags=";
+    const v8Flags = configs[0].toolshedFlags.filter((flag) =>
+      flag.startsWith(prefix)
+    );
+    assertEquals(v8Flags.length, 1);
+    return v8Flags[0].slice(prefix.length).split(",");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+}
+
+// Runs a script that starts a worker, so that the process holds two
+// isolates, with the given V8 flags, from an empty working directory. It
+// points V8's perf map at a directory of its own, so the run leaves nothing
+// in `/tmp`.
+async function runInEmptyDirectory(v8Flags: readonly string[]): Promise<{
+  stdout: string;
+  workingDirectory: string[];
+  perfMaps: string[];
+}> {
+  const scripts = await Deno.makeTempDir({ prefix: "v8-flags-scripts-" });
+  const cwd = await Deno.makeTempDir({ prefix: "v8-flags-cwd-" });
+  const perf = await Deno.makeTempDir({ prefix: "v8-flags-perf-" });
+  try {
+    await Deno.writeTextFile(
+      join(scripts, "main.js"),
+      `const worker = new Worker(new URL("./worker.js", import.meta.url), {
+        type: "module",
+      });
+      worker.onmessage = (event) => {
+        worker.terminate();
+        console.log(event.data);
+      };
+      `,
+    );
+    await Deno.writeTextFile(
+      join(scripts, "worker.js"),
+      `self.postMessage("worker answered");\n`,
+    );
+    const output = await new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--no-config",
+        "--no-lock",
+        `--allow-read=${scripts}`,
+        `--v8-flags=${[...v8Flags, `--perf-basic-prof-path=${perf}`].join()}`,
+        join(scripts, "main.js"),
+      ],
+      cwd,
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assert(output.success, new TextDecoder().decode(output.stderr));
+    const namesIn = async (directory: string) =>
+      (await Array.fromAsync(Deno.readDir(directory))).map((e) => e.name)
+        .sort();
+    return {
+      stdout: new TextDecoder().decode(output.stdout),
+      workingDirectory: await namesIn(cwd),
+      perfMaps: await namesIn(perf),
+    };
+  } finally {
+    for (const directory of [scripts, cwd, perf]) {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }
+}
+
+Deno.test("toolshed V8 flags write nothing into the working directory", async () => {
+  const run = await runInEmptyDirectory(await toolshedV8Flags());
+
+  assertEquals(run.stdout, "worker answered\n");
+  assertEquals(run.workingDirectory, []);
+  assertEquals(run.perfMaps.length, 1);
+  assert(/^perf-\d+\.map$/.test(run.perfMaps[0]), run.perfMaps[0]);
+});
+
+Deno.test("toolshed V8 flags without the log file flags write V8 logs into the working directory", async () => {
+  const flags = (await toolshedV8Flags()).filter((flag) =>
+    flag !== "--no-logfile-per-isolate" && !flag.startsWith("--logfile=")
+  );
+  const run = await runInEmptyDirectory(flags);
+
+  assertEquals(run.stdout, "worker answered\n");
+  assertNotEquals(run.workingDirectory, []);
+  for (const name of run.workingDirectory) {
+    assert(/^isolate-0x[0-9a-f]+-\d+-v8\.log$/.test(name), name);
   }
 });
 

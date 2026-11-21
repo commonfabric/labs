@@ -1145,6 +1145,64 @@ level through `box/children/*/children` as one subtree. With a type that
 refers to itself through a property and no array, `node.next`, the second
 entry is `node/next/next`, and the widened entry is at that path.
 
+**W6 over a value whose type declares no structure.** *Assumed,
+provisional (P38;* the continuation plan's question 312*).* W6 as stated
+above is decided by type: the type says where a path enters it again. A
+body can walk a value for which no type says that: a value with no type, a
+value of type `unknown`, and a value of an object type with an index
+signature. `headerOf` in `patterns/apps/weekly-calendar/view-walk.ts` walks
+a view of type `unknown` through helpers that read `children` and iterate.
+No position on its paths has a recursive type, so W6 by type never
+applies, and the analysis records every interleaving of `children` and `*`
+that the composed calls reach. The number of entries grows with the depth
+of the composition. Two rules widen such a path as W6 widens below a second
+entry. Both are forms of W6: the cause recorded in `Body.widenings` and
+the message of §5.3 are those of W6.
+
+- **A path that repeats.** An access, of a key or of an element, on a
+  projection whose path ends in a sequence of segments written twice in
+  direct succession, where the sequence holds at least one key, widens. So
+  does an access on a projection whose path ends in three `*` in direct
+  succession. The repeated sequence is taken to lead from a position of one
+  type to another position of the same type, so the position after the
+  second copy is taken as a second entry. A sequence of `*` alone repeats in
+  an array of arrays, `grid/*/*`, which is no recursive type, so two `*`
+  do not widen and three do. This rule looks at the path and not at the
+  type, so it applies on a path through declared types as well: on a
+  declared recursive type it applies at the position where W6 by type
+  applies or one sequence later, and W6 by type decides first.
+- **A key read again.** A read of the key `k`, by a property access or by
+  an element access with a string literal, widens where the type of the
+  value read declares no structure for the key (no type, `unknown`, or an
+  object type with an index signature), a path of the value already holds
+  `k`, the type is not the cut of a declared recursive type, and the value
+  was not reached through such a cut. The key that the path already holds
+  is taken as a second entry into the type of the position it first led
+  to.
+
+In both rules the entry is `value` at the position of the projection the
+access is made on, at the path without its last `*` segments, as for the
+second entry above. An observation at that position itself is recorded
+there, like any other.
+
+*Direction.* Both rules replace entries by a `value` entry that covers
+them (§5.4), and they apply in addition to W6 by type and never in its
+place. A footprint under them is equal to or wider than the footprint
+under W6 by type alone, and never narrower: a path through no recursive
+type that repeats a sequence with a key, such as `a/b/a/b` of a declared
+type whose members happen to repeat those names, widens where W6 by type
+does not.
+
+*Why W6 by type does not cover the case.* W6 by type needs a position of
+a type `T` reached from inside a value of type `T`. `unknown`, an absent
+type and an index signature declare no member types, so no position below
+such a value has a type that the analysis could compare with the type it
+started from.
+
+*Measured.* The prototype applies both rules (`square_end` and
+`holds_key` in `base/pattern-compiler/src/footprint.rs`). For `headerOf`
+the read entries fall from 28,799 to 45. No plan of the corpus changed.
+
 The following do not widen. They are listed because the current analysis
 ([§10](#10-relation-to-the-current-system)) treats several of them as if
 they did:
@@ -1231,6 +1289,46 @@ write's target names that entry (§6.2). For a handle the body found below
 a hop whose read is dynamic ([§2.1](#21-abstract-values)), that
 observation is a journaled read of the reference at the position, and no
 static entry.
+
+**A removal removes in place.** By ruling (2026-11-20) the row of `h.remove(…)`,
+`h.removeByValue(…)` and `h.removeAll(…)` is the rule: the operation names the
+member to remove, the container's enumeration changes, and no kept element is
+written by the body. The analysis records no read of the elements for a removal:
+what the comparison with each member reads is a read of the runtime's operation,
+which the write record of the removal reports. The ruling also says that the
+kept elements are not labeled again with what the removal read, and that the
+label rule follows from the CFC specification and not from today's
+implementation. The rule is derived in `plan-and-label-templates.md` §2.5 ("The
+label rule of a removal through a handle"), and it differs by case. Over an
+array of references no kept element is labeled again, and which reference stands
+at a position is labeled once, at the container's `*` path. Over an array of
+plain values in place the elements from the first removed position on stand at
+other positions, and three further rulings of 2026-11-20 keep the row as it is:
+what the removal's decision read is stored once for the container, at its `*`
+path, and a read of a position joins it with the position's own entry; the
+stored label entries of a kept element move with it, by the runtime and with no
+write of the body; and a removal that finds no member is a label write of the
+container's enumeration. So a removal writes no position in either case. The
+result of another per-element construct has no handle to remove through. The
+prototype's executor removes in place: each run of removed positions next to
+each other is one splice of the stored list, and no member the list keeps is
+written (`Handle.remove`, `Handle.removeAll` and `Handle.#removeAt` of
+`base/pattern-compiler/exec/executor.ts`; `removeByValue` calls `removeAll`).
+
+**An addition names no stored element.** For `h.push(…)`, `h.pushAll(…)` and
+`h.addUnique(…)` the row is the rule as well: the container's enumeration and
+the added positions are written, and the elements the container held are not. By
+ruling (2026-11-20; Z74 of the continuation plan) an append puts the membership
+of the container on no position, neither on the one it writes nor on a position
+of a per-element result over the container. The label of what the container held
+therefore stays where it is stored, and provisionally (P39 of the continuation
+plan, the coordinator's decision) the container has an enumeration entry of its
+own that an addition replaces with the stored enumeration joined with what
+decided the addition, over an array of plain values in place and over an array
+of references. Milestone 4 of the integration builds it
+(`plan-and-label-templates.md` §2.5, "An addition through a handle").
+`h.addUnique(…)` of a member the container holds adds nothing, and is a label
+write of the enumeration as a removal that finds no member is.
 
 ### 6.2 Targets
 

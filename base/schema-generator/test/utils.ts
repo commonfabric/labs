@@ -27,7 +27,9 @@ declare interface Stream<E, R = void> extends BrandedCell<E, "stream"> {
   readonly [CELL_RESULT_TYPE]: R;
 }
 declare interface ComparableCell<T> extends BrandedCell<T, "comparable"> {}
-declare interface ReadonlyCell<T> extends BrandedCell<T, "readonly"> {}
+// Mirrors the real brand, which names the kind of a \`Cell\` beside its own so
+// that a \`Cell\` is assignable to it.
+declare interface ReadonlyCell<T> extends BrandedCell<T, "readonly" | "cell"> {}
 declare interface WriteonlyCell<T> extends BrandedCell<T, "writeonly"> {}
 // Mirrors the real handle type: a nominal brand keyed by an exported unique
 // symbol, which is what the emitted descriptor is recognized by.

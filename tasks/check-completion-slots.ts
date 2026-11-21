@@ -78,6 +78,11 @@ export const NO_CANDIDATES = new Map<string, string>([
   ["acl set:did", "a DID being granted access; nothing here enumerates them"],
   ["acl remove:did", "the same DID, and the same absence of a source"],
   ["inspect identity:did", "a DID to look up, pasted from elsewhere"],
+  [
+    "id pair:service",
+    "the address of the person's service, as their Weaver's settings show it",
+  ],
+  ["fetch:url", "a route on a first-party service, composed by the caller"],
   ["id derive:passphrase", "a secret; a candidate list is the wrong place"],
   ["id from-mnemonic:mnemonic", "the same"],
   ["ingest revoke:id", "an ingest key id, held by whoever minted it"],
@@ -121,6 +126,11 @@ export const NO_CANDIDATES = new Map<string, string>([
  * under `<command path>:<long name>`.
  */
 export const NO_OPTION_CANDIDATES = new Map<string, string>([
+  ["fetch:method", "any HTTP method the route takes"],
+  [
+    "pattern link:number",
+    "a shared version number, which cf pattern history lists",
+  ],
   [
     "profile attest-name:expect",
     "the receipt from the owner-reviewed inspection",
@@ -146,9 +156,23 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "a `system:` ref or fabric URL the caller names for the piece to follow",
   ],
   ["piece new:request-key", "an opaque caller retry key"],
+  ["piece new:version-description", "free prose the caller writes"],
+  ["piece setsrc:version-description", "free prose the caller writes"],
+  [
+    "piece new:built-from",
+    "the index pattern the caller built its source from, which it names",
+  ],
+  [
+    "piece setsrc:built-from",
+    "the index pattern the caller built its source from, which it names",
+  ],
   [
     "piece new:from-index",
     "a published pattern's id, which a pattern-index search answers",
+  ],
+  [
+    "piece new:from-link",
+    "a shared pattern link, which someone hands over (cf pattern link prints one)",
   ],
   [
     "ingest mint:gmail-access-token",

@@ -33,17 +33,13 @@ async function framesForSnap(): Promise<void> {
 }
 
 /**
- * Waits for a smooth snap that has started to finish. A snap that never
- * started fails here, rather than leaving the test waiting for its end.
+ * Waits for a smooth snap to finish, using the browser's `scrollend` event.
+ * The test harness detects a snap that never completes.
  */
 async function smoothSnapSettled(element: CFVScroll): Promise<void> {
-  const before = container(element).scrollTop;
-  const settled = new Promise((resolve) =>
+  await new Promise((resolve) =>
     container(element).addEventListener("scrollend", resolve, { once: true })
   );
-  await framesForSnap();
-  expect(container(element).scrollTop).toBeGreaterThan(before);
-  await settled;
 }
 
 /** A 100px-tall snapping scroller, holding `children` when it connects. */

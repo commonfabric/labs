@@ -87,9 +87,10 @@ This document adds the following.
   the place of the array holds the storage links to the chunks, each
   with the number of entries below it (section
   4.10). A record with many members is stored in chunk documents the
-  same way, by ranges of member names, and an array that is stored in
-  chunks and declares key fields has a **key index** from the key of a
-  row to its chunk (section 4.10; provisional, P27 and P29).
+  same way, by ranges of member names (section 4.10; provisional, P27).
+  How a reference by key finds the chunk of its row without reading the
+  chunks in order is open (section 4.10, "Finding the chunk of a key";
+  question 110).
 - A **collection reference** is what a cone holds of the assembled
   result of a per-element construct that it places and does not observe
   (section 2.2).
@@ -1031,6 +1032,46 @@ replaced by the link to the stream of the instance's key in each, and
 the three differ only in how the key is computed (section 2.5). In the
 result of a `flatMap` each stored position holds the link that value
 code placed in the member, over a source of any of the three cases.
+
+**What is undecided for a pattern closure used as a value: what value
+code writes.** `ConeHost` has no member that makes a factory value, so a
+cone's value function has no way to place an inline pattern that the
+source uses as a value, with its captures, in the value it returns. The
+prototype translates no such closure: it is left out of the value, and a
+closure that a language-model built-in is given as a tool is not in the
+request. *Assumed,* provisional (P35 of the continuation plan; section
+11.1, question 113): `ConeHost` gets a member
+
+```ts
+// Shown for illustration only.
+type Index = number;
+
+interface ClosureHost {
+  /**
+   * A marker for the factory value of one entry of `Plan.closures`.
+   * `computed` holds the captured values this evaluation computed, at
+   * their paths below the private parameters, and nothing at the paths
+   * of captures that are slots.
+   */
+  closure(closure: Index, computed: unknown): unknown;
+}
+```
+
+which the function calls where the source writes the closure. It returns
+a marker, as `stream` does, and the function places the marker and can
+do nothing else with it. When the runtime stores the value, it writes
+the factory value in the marker's place (section 4.6, "A pattern closure
+used as a value"): it copies from `computed` the paths that
+`Closure.params` lists as copied, each narrowed to what the inline
+pattern's plan observes, and builds the paths of slots and the links to
+captured cells itself, from the bindings of the cone instance that called
+`closure`, as it builds the slot part of the argument of `invoke`. A
+marker in an interim output stays a marker. A closure that is called in
+the body that wrote it is compiled in and has no marker. Under a
+conditional between two closures the function makes the marker of the
+branch it takes and reports the selection
+(`plan-and-label-templates.md` §3.15, "What is undecided for a pattern
+closure used as a value").
 
 The prototype's executor implements the marker and the replacement. Its
 marker is a frozen object with no member, and the binding and the keys
@@ -2045,6 +2086,33 @@ is stored when it is kept. Provisional (P22): a cone that places the
 collection and observes nothing of it is given a collection reference,
 and the rows are stored by the collection (section 2.2, "A collection
 that a cone places").
+
+**The groups of a `fold` over the collection.** Provisional (P31 of the
+continuation plan; `plan-and-label-templates.md` §4.2 and §4.3). The
+label of a `fold` is instantiated once per group of element inputs, not
+once per element. In the `groups` form, the form for an array of
+references and for the result of another per-element construct, the
+assembly keeps the group of each element key and the count per group,
+beside the element table and not in a durable state of the `fold`, so a
+`fold` that belongs to no operation, such as the membership of a `filter`
+or a `flatMap`, has them as well. Step 3, step 4 and step 5 each update
+them once for each key they touch: one update per changed element. The
+label of the `fold` changes only when the count of a group crosses zero or
+the label of a group changes. In the `uniform` form, the form for an array
+of plain values in place, there is one group and no count. A plain array
+generated from scratch is included in that case, as
+`plan-and-label-templates.md` §1.3 has it.
+
+**The stored form of equal element labels.** Provisional (P31;
+`plan-and-label-templates.md` §2.3, "One entry for the elements of an array
+written whole"). When an array is written whole and every element of it is
+covered with one label, the stored form holds one entry at the array's `*`
+path and none per element. An element written later with another label
+adds an entry of its own at its position, and a read of that position
+consumes the union of that entry and the `*` entry. A `splice` of the array
+removes the `*` entry, and the elements then take the label of the list.
+Both limits give a label equal to or wider than the label per element,
+never a narrower one.
 
 **The steps state the result, and not an algorithm.** Provisional (P23
 of the continuation plan; section 11, question 105). A runtime may keep
@@ -3378,6 +3446,18 @@ when the cell is created, and a read of the cell reads the default
 cell. Writing the constant at creation as well is legal and is not
 what this design does.
 
+By ruling (2026-11-20) a cell whose schema declares a label is the exception: it
+has a document from the start. A label is stored with a document, so the
+constant is written under the cell's schema when the cell is created, and the
+document stores the label that the schema declares
+(`plan-and-label-templates.md` §1.3). The owner's reason: a state cell that gets
+a document is no problem in general, and what this design avoids storing is the
+intermediate values. The prototype's executor does so (`Instance.stateCell` of
+`base/pattern-compiler/exec/executor.ts`), and leaves a cell without a document
+where the schema holds a declared label as the text of its type, which no store
+takes. The rule is the same for a state cell of an element body in each of the
+three cases of a per-element source.
+
 While such a cell has no document, a read at any path of it reads the
 default at that path. A write of the whole value makes the document,
 also where the value equals the default. A write below the root has to
@@ -3429,7 +3509,8 @@ plain values in place the value, and no reference to the element
 The compiled path therefore stores fewer state cell documents than a
 runtime that writes every first value. The prototype's executor keeps
 the rule for a constant first value: it writes nothing when it creates
-such a cell, and the first write makes the document. Over its corpus
+such a cell, a cell whose schema declares a label excepted, and the
+first write makes the document. Over its corpus
 run 98 state cells have a document after the scenario, where an
 executor that wrote every first value stored 898. The run of today's
 runtime it is compared with has the document of every state cell of
@@ -3618,7 +3699,12 @@ entries.
   the result document and of each part document, in each scope instance,
   holds it once, in one entry at the document's root. The entry applies
   at every path the document stores, and no entry at a path repeats the
-  atom. *Assumed,* with that document (its §8, question 71).
+  atom. *Assumed,* with that document (its §8, question 71). By ruling
+  (that document's §8, question 177), every commit of a compiled pattern
+  is prepared when the experimental option is on, a commit that reads no
+  labeled data included, so every document of the keep set it writes holds
+  the entry. Not yet built: the build prepares only the commits that read
+  labeled data.
 - **For a value passed on by reference the atom is on the link.** A kept
   path that holds a link to another address (section 4.2) is covered by
   the same root entry, which there is the label of the link at the output
@@ -3822,6 +3908,26 @@ body instantiates, or a pattern that the author calls through
   read or supply it. A pattern closure used as a value is different: its
   copied captures are stored with the factory value, wherever that is
   stored, narrowed in the same way.
+- **A pattern closure used as a value.** *Assumed,* provisional (P34 of
+  the continuation plan; section 11.1, question 114). Its factory value
+  is a record stored in place at the path the value is written to: a
+  kept output, a path of a child's argument, or a path of the stored
+  request of an effect, where it is given as a tool. The record holds
+  the content address of the compiled inline pattern, in the form a
+  module-scope pattern factory is stored in, and a member `params` that
+  holds each path of `Closure.params`: the copied value, narrowed as
+  above, or the link to the captured cell. Each copied path has the
+  label of its instantiated template at its position. An instance that a
+  receiver makes by calling the factory has no parameters document: its
+  `params` slots resolve below the `params` member of the record the
+  receiver called (`scheduler-and-serving-loop.md` §3.2). A body that
+  passes the factory on unchanged passes a reference to the record's
+  address and copies nothing. The prototype stores no such record,
+  because it translates no closure used as a value. Not determined: the
+  names of the record's members; and where the captures are stored for a
+  closure called through `inSpace`, on which
+  `plan-and-label-templates.md` §3.15 states three alternatives and
+  assumes none.
 - **A child with a scope** (`asScope`). The scope is a constant of the
   site, `Child.scope`, and sets the scope of the state the child declares
   (`plan-and-label-templates.md` §3.14). *Assumed:* the transaction that
@@ -4317,86 +4423,30 @@ members for 25 bytes of change.
 The prototype does not build this rule: a record is no split point
 there, and the figure above is what it measured without it.
 
-**Finding the chunk of a key.** Provisional (P29 of the continuation
-plan; section 11, question 110). A chunk is found by position, and a
-reference by key names no position. Where an array is stored in chunks
-and its stored schema declares key fields (`keyFields`, by ruling), the
-place of the array holds a **key index** beside the chunk list.
+**Finding the chunk of a key.** Open, with no provisional decision
+(section 11, question 110). A chunk is found by position, and a reference
+by key names no position. A runtime that holds the keys of the array in
+memory, in an element table or as the kept keys of section 2.5, resolves
+from them. One that does not reads the chunks in order and forms the keys
+of their rows until it finds the key, which is a read of the whole array
+on a runtime that has just started. No index from a key to its chunk is
+stored. Question 110 lists what an index would have to settle, among them
+what its entry names: an entry that names the chunk is written again for
+every row that a split or a merge moves, and those entries are spread over
+the whole index. The rule is the same over an array of plain values in
+place, over an array of plain values generated from scratch, over an
+array of references, whose key is the identity of a cell, and over the
+result of a `map`, a `filter` or a `flatMap`, whose rows have the keys of
+their source or of another per-element construct.
 
-- **Which schema.** By ruling no record of a stored schema is kept: a
-  reader learns the key fields from the schema that is traversed while
-  its link to the array is resolved. So storage has no schema of the
-  array to read the key fields from. *Assumed:* the stored schema of
-  the decision is the schema that the plan of the instance has for the
-  place: of the argument slot, of the state cell, or of the result.
-  The runtime that first stores the array in chunks while it holds that
-  schema creates the index and writes the names of the key fields into
-  the chunk list, and every later writer reads them there. An array
-  that was stored in chunks by a writer without that schema gets its
-  index from the first runtime that holds it, by one read of the whole
-  array (question 110).
-
-- **What it holds.** One entry for each row: the key of the row, which
-  for declared key fields is the hash of their values under the secret
-  of the space with its occurrence count (section 5.3), and the storage
-  link to the chunk that holds the row. The entries are in the order of
-  the hashes.
-- **How it is stored.** As a record with many members is: in chunk
-  documents that each hold a contiguous range of the hashes, under a
-  list of links with a bound each, which is itself stored in chunks
-  when it exceeds `DOCUMENT_MAX_BYTES`. The chunk list at the place of
-  the array holds the link to the index.
-- **What a lookup reads.** One index document for each level, the one
-  index chunk of the hash, and the chunk that the entry names. The
-  runtime then forms the keys of the rows of that one chunk to find the
-  row, which needs the salt and is bounded by the size of a chunk.
-- **What writes it.** An insertion and a removal of a row write the one
-  index chunk of the row's key. An edit that changes a key field writes
-  the index chunk of the old key and that of the new key. An edit of
-  another member writes none. *Assumed,* by the decision as it is
-  stated: an entry names the chunk, so a split or a merge of chunks of
-  the array writes the entry of every row that it moves to another
-  chunk. The hashes of those rows are spread over the whole index, so
-  such a split writes up to one index chunk for each moved row, which
-  for a small index is every chunk of it. That cost is not bounded by
-  the size of one chunk, and it is amortized over the insertions that
-  fill a chunk; question 110 has an entry that a split does not write
-  as the alternative.
-- **Where no index is stored.** An array that is stored in place has
-  none: its rows are in one document. An array whose stored schema
-  declares no key has none either: the key is then formed from the
-  whole value, or by the key fields that a reader declares (by ruling),
-  and one index for each set of key fields that some reader declares is
-  not kept. A runtime that holds the keys of the array in memory, in an
-  element table or as the kept keys of section 2.5, resolves from them.
-  One that does not reads the chunks in order and forms the keys of
-  their rows, which is a read of the whole array on a runtime that has
-  just started. Over an array of references the key is the identity of
-  the cell that a link names; *assumed:* no index is stored, and the
-  links of the chunks are compared with no hash.
-- **Which arrays.** The same for a source array and for an array of a
-  result. *Assumed:* the array of a `map`, a `filter` or a `flatMap`
-  over an array of plain values in place with a declared key, whose
-  rows have the keys of the source's elements, has an index of its own
-  where it is stored in chunks, under those keys; the same for a
-  construct over the result of another per-element construct, whose
-  rows have the upstream keys. Which key fields the schema of such a
-  result declares is assumed elsewhere
-  (`plan-and-label-templates.md` §8, question 155), and the index is
-  under the keys that the rows have, whatever that schema names. Over
-  an array of references such a result has no index, as its source has
-  none. A collection that a cone places (section 2.2; provisional, P22)
-  stores its chunk list and its index at its own place, and the placing
-  cone holds neither.
-- **Labels and demand.** *Assumed:* the index is read by resolution
-  alone and is passed through as a chunk list is; its documents carry
-  the label of the array's membership, since which hashes it holds is
-  which rows the array has; and a lookup demands nothing: demand is
-  held on the kept paths that the reader then reads.
-- **A client** cannot form the key of a plain value (section 5.3). One
-  that holds a stored reference by key holds the hash and can find the
-  chunk through the index, and cannot tell which row of the chunk has
-  the key. What it does is not determined (question 110).
+The scope of this section follows the coordinator's recommendation on the
+scope of the storage decisions (the continuation plan, "Provisional
+decisions awaiting the owner's ratification"; not an owner ruling).
+Chunked storage of long arrays is a requirement on the storage layer and
+is decided there; this design keeps the split points, the cone's reference
+to a collection it places (P22), and the bound on what the change of one
+row writes and delivers. The chunk layout of this section is the shape the
+design expects of storage.
 
 The prototype does not build the index: its executor resolves a key
 from the keys it keeps in memory.
@@ -4431,12 +4481,11 @@ chunks.**
 - **A reference by key** names the collection and the key (section 2.5).
   The runtime takes the position of the key from the element table and
   resolves the path below that position as above. Where no loaded
-  instance iterates the array, it finds the chunk of the key through
-  the key index where the array has one, and otherwise forms the keys
-  of the entries by reading the chunks in order until the key is found
-  ("Finding the chunk of a key", above; provisional, P29). The second
-  is the cost that the paragraph "Resolving a reference by key" of
-  section 2.5 states, with the chunks as the unit that is loaded. Where
+  instance iterates the array, it forms the keys of the entries by
+  reading the chunks in order until the key is found ("Finding the chunk
+  of a key", above; question 110 is open). That is the cost that the
+  paragraph "Resolving a reference by key" of section 2.5 states, with
+  the chunks as the unit that is loaded. Where
   the row of the key is a part, the part is reached through the storage
   link in the chunk and in no other way: its identifier holds no key
   (provisional, P28; "How a part document is identified", below).
@@ -4465,13 +4514,11 @@ of the tree, and on a split or a merge two chunks. A tree has one level
 of lists up to about 930 chunks and two beyond that, so the documents
 written are at most four, each of at most `DOCUMENT_MAX_BYTES`, at any
 length of the array up to about 930 times 930 chunks. An edit of a row
-writes no list. Two things are beside the bound, both provisional. A
+writes no list. One thing is beside the bound, and it is provisional: a
 change that creates a part at or below a row writes the root that holds
 the counter of minted identifiers (P28; "How a part document is
-identified", below). And where the array has a key index, an insertion
-and a removal write one chunk of the index, an edit of a key field two,
-and a split or a merge the entries of the rows that it moves, which the
-bound does not cover (P29; "Finding the chunk of a key", above). The
+identified", below). No index from a key to its chunk is stored
+("Finding the chunk of a key", above). The
 write of a chunk is a `splice` of its run or a write below a path of it
 (section 4.2). Today's storage takes the second as a patch from the
 writer and sends the chunk whole to each subscriber ("What today's
@@ -4523,8 +4570,7 @@ Neither the identifier of a chunk nor that of a part holds a key
   for the new key there, which is 2 documents more (question 109).
 - **With a declared key** (`ArrayByKey`) the key is unchanged and the
   edit writes the chunk or the part alone, in the source and in the
-  result. Where the edit changes a key field, the key index of each
-  array that has one is written ("Finding the chunk of a key", above).
+  result.
 - **Over an array of references** the key is the identity of the cell
   and no edit of the cell's content changes it.
 
@@ -4567,10 +4613,9 @@ whose entries are links.
   level.
 - **A reference by key** into such an array resolves as into any array
   that is stored in chunks: from the element table or the kept keys,
-  and where there are none through the key index where the array's
-  schema declares key fields, and otherwise by reading the chunks in
-  order and forming the keys ("Finding the chunk of a key", above;
-  provisional, P29).
+  and where there are none by reading the chunks in order and forming
+  the keys ("Finding the chunk of a key", above; question 110 is
+  open).
 - **An entry of such an array is a part from `PART_MIN_BYTES` on.**
   *Assumed,* as the prototype built it, whose layout does not know
   which kind of document it stores: an element of a source array that
@@ -4957,8 +5002,7 @@ above).
 - **A removed row.** When a key leaves a kept collection, the transaction
   removes the position from the array, in the chunk that holds it where
   the array is stored in chunks, and deletes the row's part document,
-  with the part documents and the chunk documents below it, and the
-  row's entry of the key index where the array has one. A part
+  with the part documents and the chunk documents below it. A part
   document holds kept paths
   of the result and nothing that is stored under the key, so this
   agrees with the ruling that a removal deletes no state cell and no
@@ -7454,13 +7498,13 @@ Added by the ruling that the scheduler is switched per space (section 9):
        requires a change of storage: the server resolves the path of an
        operation through a chunk list, applies `append`, `add-unique`
        and `remove-by-value` to the chunks, and maintains the lists,
-       the numbers and the key index in the commit. Without that
+       and the numbers in the commit. Without that
        change, by inference and not by a test: a `push` can still merge
        where the writer sends `append` to the last chunk and
        `increment` for the number of each list, both of which today's
        server applies against what it holds, provided that a split
-       never changes which document is the last chunk; a split, a merge
-       and an entry of a key index are then writes of the runtime that
+       never changes which document is the last chunk; a split and a merge
+       are then writes of the runtime that
        conflict with a concurrent `push`; and `add-unique` and
        `remove-by-value`, which compare with every entry of the array,
        cannot be sent to one chunk and stop merging. The author of
@@ -7500,8 +7544,8 @@ Added by the ruling that the scheduler is switched per space (section 9):
      keystroke in one member writes 572,774 bytes of documents for 25
      bytes of change. The alternative is that a record is never
      divided. If the owner decides for it, rule 5 and the paragraph "A
-     record with many members is stored in chunks" are removed, and the
-     key index of question 110 has no stored form. Not determined by
+     record with many members is stored in chunks" are removed. Not
+     determined by
      the decision, each *assumed* in the section: (a) the bound beside
      each link is fixed when the chunk is created, so an insertion
      writes no list; (b) the bounds are member names and are read
@@ -7551,42 +7595,43 @@ Added by the ruling that the scheduler is switched per space (section 9):
      chunk of the key first. It is question 298 of the continuation
      plan.
 110. **The index from a key to its chunk** (section 4.10, "Finding the
-     chunk of a key"). *Assumed,* provisional (P29 of the continuation
-     plan, the coordinator's decision, and not ruled). The alternative
-     is no index: a runtime that holds no keys reads every chunk and
-     forms the key of every row. If the owner decides for it, that
-     paragraph is removed. Not determined by the decision. (a) What
-     the "stored schema" of an array is, since by ruling no record of a
-     stored schema is kept. *Assumed:* the schema that the plan of the
-     owning instance has for the place, with the names of the key
-     fields written into the chunk list. (b) What an entry names.
-     *Assumed,* by the decision's words: the chunk. A split or a merge
-     then writes the entry of every row that it moves, and those
-     entries are spread over the whole index by the order of the
-     hashes, so one split can write every chunk of the index, which
-     the bound of section 4.10 on the bytes of one change does not
-     cover. An entry that names a number minted for the row, with the
-     chunk found from a second record that a split writes once, or a
-     record in the chunk list of which chunk each chunk was divided
-     from, would bound it; neither is designed. (c) Two rows with equal
-     key fields, whose keys differ in the occurrence count: an
-     insertion before the first changes the count of the later ones.
-     *Assumed:* the entry of a hash lists the chunks of its
-     occurrences in order. (d) A client, which holds the hash of a
-     stored reference and can find the chunk, and cannot tell which
-     row of the chunk has the key. Not determined; it waits for the
-     assumption on how a client resolves a reference by key
-     (`plan-and-label-templates.md` §8, question 113). (e) The label
-     of the index documents: *assumed* that of the array's membership.
-     (f) An array of references, and an array with no declared key:
-     *assumed* no index, with a read of every chunk on a runtime that
-     holds no keys. (g) The result of a `map`, a `filter` or a
-     `flatMap` over an array of plain values in place with a declared
-     key, and over the result of another per-element construct:
-     *assumed* an index of its own under the keys that its rows have.
-     (h) A collection that is placed at two kept paths (question 104)
-     has two chunk lists and two indexes, and each change writes both.
-     The prototype builds no index. It is question 299 of the
+     chunk of a key"). Open, with no provisional decision. Until it is
+     decided, a runtime that does not hold an array's keys in memory
+     reads the array's chunks in order to resolve a reference by key, and
+     no index is stored. Chunked storage of long arrays is a requirement
+     on the storage layer and is decided there; this design keeps the
+     split points, P22 and the bound on what the change of one row
+     writes (the coordinator's recommendation on the scope of the storage
+     decisions, not an owner ruling). The points below are what any index
+     has to settle. (a) What the "stored schema" of an array is, since by
+     ruling no record of a stored schema is kept. *Assumed* for any
+     index: the schema that the plan of the owning instance has for the
+     place, with the names of the key fields written into the chunk list.
+     (b) What an entry names. An entry that names the chunk is written
+     again for every row that a split or a merge moves, and those entries
+     are spread over the whole index by the order of the hashes, so one
+     split can write every chunk of the index, which the bound of section
+     4.10 on the bytes of one change does not cover. An entry that names
+     a number minted for the row, with the chunk found from a second
+     record that a split writes once, or a record in the chunk list of
+     which chunk each chunk was divided from, would bound it; neither is
+     designed. (c) Two rows with equal key fields, whose keys differ in
+     the occurrence count: an insertion before the first changes the
+     count of the later ones. (d) A client, which holds the hash of a
+     stored reference and could find the chunk, and cannot tell which
+     row of the chunk has the key. It waits for the assumption on how a
+     client resolves a reference by key (`plan-and-label-templates.md`
+     §8, question 113). (e) The label of the index documents: that of
+     the array's membership is the candidate. (f) An array of references,
+     whose key is the identity of a cell, and an array with no declared
+     key: no index is the candidate, with a read of every chunk on a
+     runtime that holds no keys. (g) The result of a `map`, a `filter` or
+     a `flatMap` over an array of plain values in place with a declared
+     key, and over the result of another per-element construct, whose
+     rows have the upstream keys: an index of its own under those keys
+     is the candidate. (h) A collection that is placed at two kept paths
+     (question 104) would have two indexes, and each change would write
+     both. The prototype builds no index. It is question 299 of the
      continuation plan.
 111. **Points that the rule on chunks leaves open, as the prototype
      built them** (section 4.10, the paragraph of that name and the
@@ -7621,6 +7666,21 @@ Added by the ruling that the scheduler is switched per space (section 9):
      removes a key at a position and enters another there, and a
      removal alone, which also leaves state stored, does not. It is
      question 301 of the continuation plan.
+113. **What value code writes for a pattern closure used as a value**
+     (section 2.2). *Assumed,* provisional (P35 of the continuation
+     plan, the coordinator's decision, and not ruled): a member
+     `closure` of `ConeHost` that returns a marker, which the runtime
+     replaces by the factory value when it stores the value. The
+     alternative has the value function return the record, which needs
+     it to hold links and the content address of the inline pattern. It
+     is question 309 of the continuation plan.
+114. **The stored form of the factory value of a pattern closure**
+     (section 4.6). *Assumed,* provisional (P34 of the continuation
+     plan, the coordinator's decision, and not ruled): a record in
+     place with the content address of the inline pattern and a member
+     `params`. The alternative is a parameters document that the
+     factory value links to, shared by every holder of the factory. It
+     is question 308 of the continuation plan.
 
 
 ### 11.2 For another document or the prototype

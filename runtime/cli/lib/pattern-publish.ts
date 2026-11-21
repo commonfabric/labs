@@ -1,9 +1,10 @@
 /**
  * `cf pattern share`: compile a pattern on disk, ask the index's privacy
  * question about it locally, rewrite it into a generalized version when the
- * answer is no, record it in the index, and ask for it to be shared
- * anonymously (listed under its lineage's pseudonym). `cf pattern publish`
- * runs the same steps before naming its author.
+ * answer is no, record it in the index, and share it anonymously under its
+ * lineage's pseudonym: on beta, reachable by its link only, until
+ * `cf pattern stable` makes it findable. `cf pattern publish` runs the same
+ * steps on stable, findable once checked, before naming its author.
  *
  * The person rarely reads this output; their agent does. So every step says
  * what it did in a line, the `--json` report carries the same, and nothing
@@ -22,6 +23,7 @@ import { common, dirname, join, relative, resolve } from "@std/path";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import {
+  type PatternIndexChannel,
   type PatternIndexClient,
   PatternIndexError,
   type PatternIndexFinding,
@@ -85,6 +87,14 @@ export interface PublishOptions {
    * `cf pattern rollback` restores.
    */
   slot?: string;
+
+  /**
+   * The channel to share on: `beta` is reachable by link only, `stable` is
+   * findable once checked. Needs a version (a slot) to name. Without one,
+   * `beta` shares nothing and says so; `stable`, or no channel, asks for a
+   * listing, which is stable.
+   */
+  channel?: PatternIndexChannel;
 }
 
 /** What publishing reaches the world through, so a test can stand in for it. */
@@ -111,6 +121,7 @@ export interface PublishDeps {
     | "getGardenerPrompt"
     | "publishPattern"
     | "requestListing"
+    | "shareVersion"
     | "getPattern"
     | "whoami"
     | "listLineages"
@@ -170,7 +181,20 @@ export type LocalCheckReport =
 
 /** How the listing request went. */
 export type ListingReport =
-  | { status: "requested"; listing: PatternIndexListing }
+  | {
+    status: "requested";
+    /** Absent when the index answered none, as for one already shared. */
+    listing?: PatternIndexListing;
+
+    /** The channel it was shared on, when one was asked for. */
+    channel?: PatternIndexChannel;
+
+    /**
+     * False when the index moved nothing: the source was shared already on
+     * that channel or a later one, or by another of your patterns.
+     */
+    changed?: boolean;
+  }
   | { status: "capped"; resetsAt?: string }
   | { status: "failed"; reason: string };
 
@@ -415,7 +439,32 @@ export async function publishPatternFromDisk(
     await deps.store.recordPublished(entry, response.patternId);
   }
   if (!response.created) priorPatternId = undefined;
-  const listing = await requestListing(deps, response.patternId);
+  const versionId = response.versionId;
+  const channel = options.channel;
+  const listing: ListingReport = channel !== undefined &&
+      versionId !== undefined
+    ? await requestShare(async () => {
+      const answer = await deps.client.shareVersion({ versionId, channel });
+      return {
+        status: "requested",
+        ...(answer.listing === undefined ? {} : { listing: answer.listing }),
+        channel,
+        changed: answer.changed,
+      };
+    })
+    // A listing request shares on stable, so a beta share never falls back
+    // to one: it says it shared nothing instead.
+    : channel === "beta"
+    ? {
+      status: "failed",
+      reason: "the index kept no version of it to share on beta",
+    }
+    : await requestShare(async () => ({
+      status: "requested",
+      listing: (await deps.client.requestListing({
+        patternId: response.patternId,
+      })).listing,
+    }));
   const handle = stored?.author?.pseudonym ?? stored?.handle;
   return {
     outcome: "shared",
@@ -433,7 +482,7 @@ export async function publishPatternFromDisk(
     localCheck,
     listing,
     next: listing.status === "capped"
-      ? `Run cf pattern share ${options.entry} again once the limit resets to request the listing. Meanwhile ${
+      ? `Run the same command again once the limit resets to share it. Meanwhile ${
         tryIt(response.patternId)
       }`
       : tryIt(response.patternId),
@@ -669,14 +718,12 @@ async function checkLocally(
   };
 }
 
-/** Asks for the listing, reading the daily cap as what it is. */
-async function requestListing(
-  deps: PublishDeps,
-  patternId: string,
+/** Asks the index to share, reading the daily cap as what it is. */
+async function requestShare(
+  ask: () => Promise<ListingReport>,
 ): Promise<ListingReport> {
   try {
-    const answer = await deps.client.requestListing({ patternId });
-    return { status: "requested", listing: answer.listing };
+    return await ask();
   } catch (error) {
     if (error instanceof PatternIndexError && error.status === 429) {
       return {
@@ -688,9 +735,27 @@ async function requestListing(
   }
 }
 
-/** What a listing state means to the author, in a clause. */
-const listingMeaning = (listing: PatternIndexListing): string => {
+/** What a share to beta stands at, to the author, in a clause. */
+const betaMeaning = (listing: PatternIndexListing | undefined): string => {
   switch (listing) {
+    case "passed":
+      return "reachable by its link (cf pattern link --beta); nobody finds it until cf pattern stable";
+    case "held":
+      return "held: the index found something identifying; see cf pattern mine";
+    case "error":
+      return "error: the check failed to run and waits for an admin re-run";
+    default:
+      return "once the index's privacy check passes, it is reachable by its link (cf pattern link --beta); nobody finds it until cf pattern stable";
+  }
+};
+
+/** What a listing state means to the author, in a clause. */
+const listingMeaning = (
+  listing: PatternIndexListing | undefined,
+): string => {
+  switch (listing) {
+    case undefined:
+      return "shared";
     case "pending":
       return "checking: the index's privacy check is reading it";
     case "passed":
@@ -770,11 +835,19 @@ export const publishReportLines = (report: PublishReport): string[] => {
   const listing = report.listing;
   switch (listing.status) {
     case "requested":
-      lines.push(`Listing: ${listingMeaning(listing.listing)}.`);
+      lines.push(
+        listing.changed === false
+          ? listing.listing === "pending"
+            ? "Already being checked: where it goes did not change."
+            : "Already shared: where it is did not change (cf pattern link says where)."
+          : listing.channel === "beta"
+          ? `Beta: ${betaMeaning(listing.listing)}.`
+          : `Listing: ${listingMeaning(listing.listing)}.`,
+      );
       break;
     case "capped":
       lines.push(
-        `Listing not requested: you reached today's limit on listing requests${
+        `Not shared yet: you reached today's limit on shares${
           listing.resetsAt !== undefined
             ? `; it resets at ${listing.resetsAt}`
             : ""
@@ -782,7 +855,7 @@ export const publishReportLines = (report: PublishReport): string[] => {
       );
       break;
     case "failed":
-      lines.push(`Listing not requested: ${listing.reason}.`);
+      lines.push(`Not shared: ${listing.reason}.`);
       break;
   }
   lines.push(`Next: ${report.next}.`);

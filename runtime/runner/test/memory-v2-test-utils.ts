@@ -78,6 +78,19 @@ export const newSharedServer = (options?: {
   });
 
 /**
+ * Has `server` advertise what a server that predates marked splices does: no
+ * `markedSplicesV1`, so that its clients send array changes index by index.
+ * Returns `server`.
+ */
+export const withoutMarkedSplices = (
+  server: MemoryV2Server.Server,
+): MemoryV2Server.Server => {
+  const flags = server.memoryProtocolFlags.bind(server);
+  server.memoryProtocolFlags = () => ({ ...flags(), markedSplicesV1: false });
+  return server;
+};
+
+/**
  * Writes `space`'s deletion tombstone, naming `by`, straight into `engine`,
  * as a deletion committed where no host announces it would land, and
  * returns the `seq` it is stored at (INV-15).

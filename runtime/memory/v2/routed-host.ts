@@ -1152,7 +1152,8 @@ export class RoutedMemoryHost {
       );
       requireRouted(
         !options.server.options.acl?.serviceDids?.includes(router) &&
-          !options.server.options.acl?.delegatingDids?.includes(router),
+          !options.server.options.acl?.delegatingDids?.includes(router) &&
+          options.server.options.acl?.isDelegatingPeer?.(router) !== true,
       );
     }
     this.#limits = routedHostLimitsFor(

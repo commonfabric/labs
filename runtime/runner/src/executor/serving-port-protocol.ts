@@ -237,6 +237,26 @@ export type PlaneRequests = {
     };
     result: boolean;
   };
+  "server.advanceCurrency": {
+    params: { space: string };
+    result: Awaited<ReturnType<Server["advanceCurrency"]>>;
+  };
+  "server.storeCurrencyRecords": {
+    params: {
+      space: string;
+      batch: Parameters<Server["storeCurrencyRecords"]>[1];
+    };
+    result: Awaited<ReturnType<Server["storeCurrencyRecords"]>>;
+  };
+  "server.judgeCurrencyRoots": {
+    params: {
+      space: string;
+      roots: string[];
+      excludePrincipal: string | undefined;
+      epoch: string;
+    };
+    result: Awaited<ReturnType<Server["judgeCurrencyRoots"]>>;
+  };
   "server.foreignWriteAuthorityFor": {
     params: { space: string; principal: string | undefined };
     result: Awaited<ReturnType<Server["foreignWriteAuthorityFor"]>>;
@@ -393,6 +413,7 @@ export type BridgeNotices = {
     notDemand: true | undefined;
   };
   "observer.viewsChanged": { space: string; sessionId: string };
+  "observer.currencyChanged": { space: string };
   "observer.sessionChanged": { event: SessionLifecycleEvent };
 
   /**

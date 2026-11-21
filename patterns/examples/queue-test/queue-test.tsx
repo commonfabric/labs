@@ -1,3 +1,10 @@
+/**
+ * Fires five `generateText` requests that all share one named queue, so that at
+ * most two language model calls run at once, and shows each answer as it
+ * arrives with a completed count. It demonstrates the `queue` option of
+ * `generateText` for limiting concurrent requests.
+ */
+
 import {
   computed,
   Default,

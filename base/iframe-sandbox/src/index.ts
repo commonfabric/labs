@@ -1,4 +1,5 @@
-export { type AssetRecord, toAssetRecord } from "./assets.ts";
+export { type AssetRecord, missingAssets, toAssetRecord } from "./assets.ts";
+export { guestDocument } from "./guest-document.ts";
 export * from "./csp.ts";
 export * as IPC from "./ipc.ts";
 export * from "./bridge.ts";

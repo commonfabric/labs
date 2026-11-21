@@ -212,12 +212,12 @@ export function checkPattern(
     contractHash(baseline.contract) === hash
   );
 
-  // An already-recorded contract is unchanged since the run that recorded it,
-  // and it was validated and proved then. Re-doing that work every CI run is
-  // pure waste, and it is not cheap: both the definition validator and the
-  // subset proof blow up combinatorially on some real schemas (validating
-  // lobby/main.tsx's schemas alone takes ~55s). Steady state — no contract
-  // changed in this PR — therefore costs nothing beyond the compile.
+  // A recorded contract is identical to a contract that the run recording it
+  // validated, so validating it again here would be pure waste, and it is not
+  // cheap: the definition validator blows up combinatorially on some real
+  // schemas (validating lobby/main.tsx's schemas alone takes ~55s). The subset
+  // proof below still runs against every other baseline, and it validates both
+  // contracts it compares, so that cost recurs once per baseline.
   if (!recorded) {
     findings.push({ kind: "missing-baseline", pattern, hash });
     for (

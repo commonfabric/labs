@@ -397,6 +397,12 @@ export class ExecutorHost {
         const existing = this.#spaces.get(space);
         if (existing?.active) existing.noteDemandChanged(reason);
       },
+      // A dormant space judges every root when it next activates, so only
+      // an active loop is told.
+      currencyChanged: (space) => {
+        const existing = this.#spaces.get(space);
+        if (existing?.active) existing.noteCurrencyChanged();
+      },
     });
     registerServingLoopStatsProvider(() => this.stats());
   }
@@ -575,8 +581,13 @@ export class ExecutorHost {
     // input the authorization verdict that revokes a session has. Every
     // serving runtime is told, not just this space's: the session that
     // starves is typically a CROSS-SPACE replica — a served dispatch's
-    // argument link into the viewer's home space, whose pre-genesis
-    // session that space's genesis ACL de-authorized. Latch-only and
+    // argument link into another space, whose session the change revoked,
+    // such as one bound to an owner the list no longer names. (A home
+    // space's genesis ACL revokes no serving session: the memory server
+    // binds a pre-genesis one to the owner it names,
+    // `Server.#bindToNewOwner`. A genesis whose owner the binding cannot
+    // stand for, such as a profile's own DID, binds nothing and can still
+    // revoke it.) Latch-only and
     // no-op unless a runtime actually holds a terminated session for the
     // space, so the fan-out costs one map walk per ACL-doc admission. Only
     // this server's admissions reach here; a list that changes on another
