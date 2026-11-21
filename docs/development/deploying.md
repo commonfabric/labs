@@ -320,10 +320,19 @@ Dispatch it on `main` with the full infra commit:
 gh workflow run estuary-replica-service.yml --ref main -f infra_sha=<infra SHA>
 ```
 
-The job declares the `estuary` environment, so it waits for the same approval
-as a production deployment and uses the same bastion credentials. Before it
-connects, it checks the SHA's form and asks GitHub whether the commit is on
-infra's `main`. It checks out and runs nothing on the runner. On the bastion,
+The job asks for no approval yet. It declares the `toolshed` environment,
+which holds the bastion credentials and has no reviewers, as the Rapids
+release does. While the service is being brought up no hosted pattern reads
+from it yet, and an install applies only what infra's `main` selects now. Once
+the service is in use, the job should declare `estuary` instead, which holds
+the same credentials behind the reviewers a production deployment needs.
+
+Before it connects, it checks the SHA's form, asks GitHub whether the commit is
+on infra's `main`, and requires the commit's
+`ansible/vars/replica-service-release.yml` to be the file `main` has now. With
+no reviewer, that last check is what keeps a dispatch from choosing an older
+build by naming an older commit: going back means landing the older selection
+on infra's `main`. It checks out and runs nothing on the runner. On the bastion,
 `/opt/cf/deploy-replica-service.sh` checks the commit against infra's `main`
 again, runs infra's play from a clean worktree of that commit, and the play
 verifies the build's checksum and provenance before it touches Estuary. The
