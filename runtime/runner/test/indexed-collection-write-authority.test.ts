@@ -111,10 +111,14 @@ describe("indexed-collection-write-authority", () => {
     return error;
   }
 
+  /**
+   * The collection as a holder of its handle has it: a link that carries no
+   * schema, so the claim that gates a write is the one the document stores.
+   */
   function collection(tx: IExtendedStorageTransaction): Collection {
     return createCell(
       runtime,
-      runtime.getCell(space, "collection", HANDLE_SCHEMA)
+      runtime.getCell(space, "collection")
         .getAsNormalizedFullLink(),
       tx,
       false,
