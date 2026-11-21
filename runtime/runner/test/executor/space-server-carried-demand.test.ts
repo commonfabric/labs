@@ -7,7 +7,9 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { ExecutorHost } from "../../src/executor/host.ts";
+import type { CurrencyIndexMode } from "../../src/executor/store-currency.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
+import type { NormalizedFullLink } from "../../src/link-types.ts";
 import type { Cell } from "../../src/cell.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
@@ -76,6 +78,9 @@ describe("SpaceServer", () => {
   let server: MemoryV2Server.Server;
   let host: ExecutorHost | undefined;
   let cycles: ArrivalLog<unknown>;
+
+  /** The runtimes the host made, one for each space it has served. */
+  let servingRuntimes: Runtime[];
   const opened: { runtime: Runtime; manager: EmulatedStorageManager }[] = [];
 
   /** A client runtime over the shared server, acting for `as`. */
@@ -105,7 +110,12 @@ describe("SpaceServer", () => {
       delegatingDids: [serviceSigner.did()],
     });
     cycles = new ArrivalLog();
-    host = new ExecutorHost({
+    servingRuntimes = [];
+  });
+
+  /** A host that keeps the currency index as `mode` says. */
+  const newHost = (mode: CurrencyIndexMode): ExecutorHost =>
+    new ExecutorHost({
       server,
       serviceIdentity: serviceSigner.did(),
       createRuntime: (space) => {
@@ -119,6 +129,7 @@ describe("SpaceServer", () => {
           servingPosture: true,
           experimental: { serverExecution: true },
         });
+        servingRuntimes.push(runtime);
         return Promise.resolve({
           runtime,
           dispose: async () => {
@@ -129,12 +140,11 @@ describe("SpaceServer", () => {
       },
       policy: {
         idleParkMs: 600_000,
-        currencyIndex: "record",
+        currencyIndex: mode,
         currencyEpoch: "test-epoch",
       },
       onWaveCycle: cycles.record,
     });
-  });
 
   afterEach(async () => {
     await host?.close();
@@ -179,17 +189,49 @@ describe("SpaceServer", () => {
       { stuckLabel: `a viewer to read ${shout} through the piece` },
     );
 
-  /** The principals `source`'s carried rows are for. */
-  const carriedFor = () =>
-    new Set(carriedIntoSource().map((row) => row.identity?.principal));
+  /** Whether a serving runtime runs the piece rooted at `root`. */
+  const serves = (root: NormalizedFullLink) =>
+    servingRuntimes.some((runtime) =>
+      runtime.runner.isRunning(runtime.getCellFromLink(root))
+    );
+
+  /** Commits a write to a document of `reader` that no piece reads. */
+  const touchReader = async () => {
+    const writer = openRuntime(setupSigner);
+    const cell = writer.getCell<number>(reader, "carried demand touch", {
+      type: "number",
+    });
+    await cell.sync();
+    const tx = writer.edit();
+    cell.withTx(tx).set(1);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await writer.storageManager.synced();
+    await closeLastRuntime();
+  };
+
+  /** Sets the source piece's `n`, as a client that then leaves. */
+  const changeSourceInput = async (n: number) => {
+    const setup = openRuntime(setupSigner);
+    const sourceArgument = setup.getCell<{ n?: number }>(
+      source,
+      "carried demand source argument",
+    );
+    await sourceArgument.sync();
+    const tx = setup.edit();
+    sourceArgument.withTx(tx).set({ n });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await setup.storageManager.synced();
+    await closeLastRuntime();
+  };
 
   /**
    * Stands the source piece up as a client that then leaves, so that no
    * session of `source` demands it, and the reader piece as alice, whose
-   * argument is the source piece's `mine`. Returns once bob watches the
-   * reader's result too.
+   * argument is the source piece's `mine`, under a host that keeps the
+   * index as `mode` says. Returns once bob watches the reader's result too.
    */
-  const standUp = async () => {
+  const standUp = async (mode: CurrencyIndexMode = "record") => {
+    host = newHost(mode);
     await server.writeDocument(source, aclDocId(source), {
       [setupSigner.did()]: "OWNER",
       [aliceSigner.did()]: "READ",
@@ -286,15 +328,17 @@ describe("SpaceServer", () => {
         expect(await derivedInstancesOfSource()).toEqual(
           [setupSigner, aliceSigner, bobSigner].map(ownKey).sort(),
         );
-        expect(carriedFor()).toEqual(
-          new Set([aliceSigner.did(), bobSigner.did()]),
-        );
-        expect([
-          ...new Set(carriedIntoSource().map(({ scopeKey }) => scopeKey)),
-        ].sort()).toEqual(
-          ["space", ownKey(aliceSigner), ownKey(bobSigner)].sort(),
-        );
         expect(host!.stats().currency.carriedRefused).toBe(0);
+      });
+
+      it("carries nothing into that space once it holds each viewer's instance as current", async () => {
+        const { alice, result, bob, bobResult } = await standUp();
+        await reads(alice, result, "read:mine:0");
+        await reads(bob, bobResult, "read:mine:0");
+
+        await awaitEach(cycles, () => carriedIntoSource().length === 0);
+
+        expect(host!.stats().currency.carried).toBeGreaterThan(0);
       });
 
       it("brings each viewer the value that space derives after an input of it changed", async () => {
@@ -302,31 +346,58 @@ describe("SpaceServer", () => {
         await reads(alice, result, "read:mine:0");
         await reads(bob, bobResult, "read:mine:0");
 
-        const setup = openRuntime(setupSigner);
-        const sourceArgument = setup.getCell<{ n?: number }>(
-          source,
-          "carried demand source argument",
-        );
-        await sourceArgument.sync();
-        const tx = setup.edit();
-        sourceArgument.withTx(tx).set({ n: 1 });
-        expect((await tx.commit().settled).error).toBeUndefined();
+        await changeSourceInput(1);
 
         await reads(alice, result, "read:mine:1");
         await reads(bob, bobResult, "read:mine:1");
       });
 
-      it("drops a viewer's rows from that space once the viewer has left", async () => {
-        await standUp();
-        await awaitEach(cycles, () => carriedFor().has(bobSigner.did()));
-
-        // Bob's runtime is the one opened last.
-        await closeLastRuntime();
-        await host!.whenQuiescent();
-        await clock.tick(DETACHED_SESSION_MS);
+      it("vouches for each viewer's slice of the reading piece, which read that viewer's own instance", async () => {
+        const { alice, result, bob, bobResult } = await standUp();
+        await reads(alice, result, "read:mine:0");
+        await reads(bob, bobResult, "read:mine:0");
         await host!.whenQuiescent();
 
-        expect(carriedFor()).toEqual(new Set([aliceSigner.did()]));
+        expect(host!.stats().currency.unvouched["foreign-read"])
+          .toBeUndefined();
+      });
+
+      it("leaves the reading piece unstarted, and carries nothing, for viewers whose instances in that space have not changed, under `skip`", async () => {
+        const { alice, result, bob, bobResult } = await standUp("skip");
+        await reads(alice, result, "read:mine:0");
+        await reads(bob, bobResult, "read:mine:0");
+        await host!.whenQuiescent();
+        const root = result.getAsNormalizedFullLink();
+
+        await host!.spaceServer(reader)!.park("test-park");
+        await touchReader();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore > 0,
+        );
+        await host!.whenQuiescent();
+
+        expect(serves(root)).toBe(false);
+        expect(carriedIntoSource()).toEqual([]);
+      });
+
+      it("starts the reading piece left unstarted once an input of that space's piece changed, and brings each viewer the new value, under `skip`", async () => {
+        const { alice, result, bob, bobResult } = await standUp("skip");
+        await reads(alice, result, "read:mine:0");
+        await reads(bob, bobResult, "read:mine:0");
+        await host!.whenQuiescent();
+        await host!.spaceServer(reader)!.park("test-park");
+        await touchReader();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore > 0,
+        );
+        await host!.whenQuiescent();
+
+        await changeSourceInput(1);
+
+        await reads(alice, result, "read:mine:1");
+        await reads(bob, bobResult, "read:mine:1");
       });
     });
   });

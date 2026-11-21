@@ -13165,10 +13165,27 @@ export class Server {
       // A read of a space that cannot be asked, or is held, is stored with
       // nothing reported of it, which leaves its slice marked.
       if (sourceEngine === undefined || this.#currencyHeld(source)) continue;
+      // An instance that is a user's or a session's own is read under that
+      // actor's READ grant on the source (protocol.md §2), and what the
+      // source reports of it is told under the same grant. One whose actor
+      // holds none is not registered, which leaves its slice marked too.
+      const granted = new Map<string, boolean>();
+      const admitted = [...instances.values()].filter(({ scopeKey }) => {
+        if (scopeKey === "space") return true;
+        const actor = identityOfScopeKey(scopeKey)?.principal;
+        if (actor === undefined) return false;
+        let verdict = granted.get(actor);
+        if (verdict === undefined) {
+          verdict = this.#foreignGrantOn(sourceEngine, source, actor, "READ")
+            .granted;
+          granted.set(actor, verdict);
+        }
+        return verdict;
+      });
       const registered = registerCurrencyReads(sourceEngine, {
         space: source,
         reader: space,
-        reads: [...instances.values()],
+        reads: admitted,
       });
       this.#oweCurrencyMarks(source, registered.marked);
       this.#tellCurrencyReaders(source, sourceEngine);
@@ -13572,7 +13589,7 @@ export class Server {
    * Brings the demand that stands in `space` into line with what the
    * reading spaces offered, and tells the serving host of each change. An
    * offered row stands unless `space`'s currency index proves its instance
-   * current: the instance is shared, the reading space is armed with
+   * current: the reading space registered the instance and is armed with
    * `space` for no limited time, so that it hears of the next change, and
    * the index holds the instance as one no piece here is behind on. With a
    * row for an actor's own instance stands a row for each piece the index
@@ -13598,7 +13615,7 @@ export class Server {
       for (const [sessionId, session] of offered?.get(reader) ?? []) {
         const rows = new Map(
           [...session.share.rows].filter(([, row]) =>
-            !rests || row.scopeKey !== "space" ||
+            !rests ||
             selectCurrencyExport(engine, {
                 space,
                 id: row.id,

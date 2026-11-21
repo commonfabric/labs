@@ -1,8 +1,10 @@
 import {
   type CellScope,
+  identityOfScopeKey,
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
+  scopeOfScopeKey,
 } from "@commonfabric/memory/v2";
 import { type ArmedTurn, armTurn } from "@commonfabric/async/turn";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
@@ -1719,9 +1721,20 @@ export class Scheduler {
         dependencies: this.#dependencies,
         writeIndex: this.#writeIndex,
         clockDocuments: this.#clockDocuments,
-        sourceSeqOf: ({ space: source, id }) =>
-          this.runtime.storageManager.open(source).replica
-            .speculationRetirementView?.(id, "space").confirmedSeq,
+        sourceSeqOf: ({ space: source, id, scopeKey }) => {
+          // The replica files a user's or a session's instance under the
+          // identity its key names.
+          const identity = scopeKey === "space"
+            ? undefined
+            : identityOfScopeKey(scopeKey);
+          if (scopeKey !== "space" && identity === undefined) return undefined;
+          return this.runtime.storageManager.open(source).replica
+            .confirmedDocumentSeq(
+              id,
+              scopeOfScopeKey(scopeKey) as CellScope,
+              identity,
+            );
+        },
       },
       space,
       pieceRootId,

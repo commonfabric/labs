@@ -1209,8 +1209,8 @@ executing:
   holds, which are those of the viewers demanding the piece then, and
   replaces them; a slice it does not name keeps its rows and its mark. A
   slice is stored marked when a live computation that ran at its key is not
-  clean, or read a document in another space at an instance narrower than
-  the space or at a seq its replica cannot name, or one whose writer names
+  clean, or read a document in another space at no one instance or at a
+  seq its replica cannot name, or one whose writer names
   no piece and is not live, not clean, or runs once for each viewer. A
   slice that read a document a clock writes (the interval cell of a `#now/N`
   wish) is current until the tick after the one that document holds, which
@@ -1218,12 +1218,15 @@ executing:
   time, each call that brings the marks up to date marks `2` a slice whose
   time has come, at a seq above the store's head, and a loop that left a
   root unstarted asks for a judgment at the earliest such time. A read of
-  another space's shared instance is registered with that space's index
-  when the record is stored, where one
-  memory server holds both stores: that index keeps the spaces that read
-  each of its instances and what it last told them, the instance's head and
-  whether a piece there computes it and does not answer for it at present,
-  and the reading index keeps what it was last told. A slice is stored
+  an instance of another space is registered with that space's index when
+  the record is stored, where one memory server holds both stores. A
+  user's or a session's own instance is registered at its own key, and
+  only where the actor the key names holds READ on that space (protocol.md
+  §2); one that is not registered leaves its slice marked. That index
+  keeps, for each registered instance, the spaces that read it and what it
+  last told them, the instance's head and whether a piece there computes
+  it and does not answer for it at present, and the reading index keeps
+  what it was last told. A slice is stored
   marked `2` where its read is behind that head or the space cannot be
   asked, and `1` where the instance is stale there. A judgment that may rest
   on such a slice first pulls, from each space the slices its demand rows
@@ -1267,8 +1270,8 @@ executing:
   §2b), stands with no pair, as an anonymous session's row does. The
   server holds what it admitted as offered. An offered row stands as
   demand unless that space's index proves the instance current: the
-  instance is shared, the
-  reading space is armed with the space for no limited time, and the
+  reading space registered the instance, shared or an actor's own, and is
+  armed with the space for no limited time, and the
   index holds the instance as one no piece there is behind on. Which rows
   stand is worked out again whenever that index or the arming changes. A
   reading space that offers rows pulls from the space when it is not armed

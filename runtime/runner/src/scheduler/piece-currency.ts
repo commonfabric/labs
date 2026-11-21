@@ -139,11 +139,12 @@ export type PieceCurrencyState = {
 
   /**
    * The seq of another space's store at which this runtime's replica of it
-   * holds the shared instance of the document at `address`, or `undefined`
-   * where it cannot say.
+   * holds the instance of the document at `address` that `scopeKey` names:
+   * the shared one, a user's, or a session's. `undefined` where it cannot
+   * say.
    */
   sourceSeqOf: (
-    address: Pick<IMemorySpaceAddress, "space" | "id">,
+    address: Pick<IMemorySpaceAddress, "space" | "id"> & { scopeKey: string },
   ) => number | undefined;
 };
 
@@ -399,10 +400,11 @@ export function snapshotPieceCurrency(
           // index, which is asked with the seq it was read at. The replica
           // holds that seq now: it tells the scheduler of a frame in the turn
           // it applies one, so a run that is clean with the scheduler idle
-          // read, at the paths it read, the version the replica holds.
-          const seq = read.scopeKey === "space"
-            ? state.sourceSeqOf(read)
-            : undefined;
+          // read, at the paths it read, the version the replica holds. A
+          // read that names no one instance has no seq to be asked with.
+          const seq = read.scopeKey === ANY_INSTANCE
+            ? undefined
+            : state.sourceSeqOf(read);
           if (seq === undefined) slice.unvouched.add("foreign-read");
           reads.push({
             ...read,

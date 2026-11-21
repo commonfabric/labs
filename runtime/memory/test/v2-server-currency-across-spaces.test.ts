@@ -5,6 +5,8 @@ import {
   type CurrencyRecord,
   selectCurrencyPiece,
 } from "../v2/currency-index.ts";
+import { aclDocId } from "../acl.ts";
+import { resolveScopeKey } from "../v2.ts";
 import { applyCommit } from "../v2/engine.ts";
 import { getCurrencyDelivery, Server } from "../v2/server.ts";
 
@@ -235,6 +237,152 @@ describe("v2-server-currency-across-spaces", () => {
 
         expect(server.currencyReadersArmedOn(SPACE)).toEqual([]);
         expect(told).toEqual([FAR]);
+      });
+
+      describe("with a slice of an actor that read that actor's own instance in another space", () => {
+        /** The principal `write()` and `writeOwn()` commit as. */
+        const ALICE = "did:key:alice";
+        const aliceUser = resolveScopeKey("user", { principal: ALICE });
+        const aliceSession = resolveScopeKey("session", {
+          principal: ALICE,
+          sessionId: "session-one",
+        });
+
+        /**
+         * Gives `SOURCE` an access list that grants alice `capability`, or
+         * names her nowhere.
+         */
+        const grant = async (capability?: string): Promise<void> => {
+          localSeq += 1;
+          applyCommit(await server.engineForSpace(SOURCE), {
+            sessionId: "access-list",
+            space: SOURCE,
+            commit: {
+              localSeq,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: aclDocId(SOURCE),
+                value: {
+                  value: {
+                    "did:key:owner": "OWNER",
+                    ...(capability !== undefined && { [ALICE]: capability }),
+                  },
+                },
+              }],
+            },
+          });
+        };
+
+        /**
+         * Commits a write to alice's own instance of `of:prefs` in `SOURCE`,
+         * at `scope`, and returns the commit's seq.
+         */
+        const writeOwn = async (scope: "user" | "session"): Promise<number> => {
+          localSeq += 1;
+          return applyCommit(await server.engineForSpace(SOURCE), {
+            sessionId: "session-one",
+            principal: ALICE,
+            space: SOURCE,
+            commit: {
+              localSeq,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: "of:prefs",
+                scope,
+                value: { value: { n: localSeq } },
+              }],
+            },
+          }).seq;
+        };
+
+        /**
+         * A record of `SPACE`'s piece whose slice at `key` read alice's
+         * instance of `of:prefs` in `SOURCE` at `seq`.
+         */
+        const readingOwn = (key: string, seq: number): CurrencyRecord => ({
+          piece: "of:piece",
+          under: [],
+          vouched: true,
+          writes: [],
+          owned: [],
+          slices: [
+            { key: "space", vouched: true, reads: [], vouches: [] },
+            {
+              key,
+              vouched: true,
+              reads: [{
+                space: SOURCE,
+                id: "of:prefs",
+                scopeKey: key,
+                derived: false,
+                seq,
+              }],
+              vouches: [],
+            },
+          ],
+        });
+
+        /** The mark the slice of `SPACE`'s piece at `key` holds. */
+        const markAt = async (key: string) =>
+          selectCurrencyPiece(await server.engineForSpace(SPACE), {
+            piece: "of:piece",
+            slice: key,
+          })?.mark;
+
+        /** How many instances `SOURCE` holds a registration of. */
+        const registrations = async () =>
+          ((await server.engineForSpace(SOURCE)).database.prepare(
+            `SELECT COUNT(*) AS n FROM currency_reader`,
+          ).get() as { n: number }).n;
+
+        beforeEach(() => {
+          server = newServer();
+        });
+
+        it("stores clean the user's slice, where the actor holds READ on that space", async () => {
+          await grant("READ");
+
+          await store(readingOwn(aliceUser, await writeOwn("user")));
+
+          expect(await markAt(aliceUser)).toBe(0);
+          expect(await registrations()).toBe(1);
+        });
+
+        it("stores clean the session's slice, where the actor holds READ on that space", async () => {
+          await grant("READ");
+
+          await store(readingOwn(aliceSession, await writeOwn("session")));
+
+          expect(await markAt(aliceSession)).toBe(0);
+        });
+
+        it("stores the slice marked `2` once the instance has moved past the seq it was read at", async () => {
+          await grant("READ");
+          const read = await writeOwn("user");
+          await writeOwn("user");
+
+          await store(readingOwn(aliceUser, read));
+
+          expect(await markAt(aliceUser)).toBe(2);
+        });
+
+        it("stores the slice marked `2`, and registers nothing, where that space's access list does not name the actor", async () => {
+          await grant();
+
+          await store(readingOwn(aliceUser, await writeOwn("user")));
+
+          expect(await markAt(aliceUser)).toBe(2);
+          expect(await registrations()).toBe(0);
+        });
+
+        it("stores the slice marked `2`, and registers nothing, where that space has no access list", async () => {
+          await store(readingOwn(aliceUser, await writeOwn("user")));
+
+          expect(await markAt(aliceUser)).toBe(2);
+          expect(await registrations()).toBe(0);
+        });
       });
     });
 

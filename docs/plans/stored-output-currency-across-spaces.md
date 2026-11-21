@@ -155,9 +155,18 @@ serving host holds on it, so that the source admits it on the decision that
 admitted the read (`protocol.md` §2 and §2b): the free read of space-scoped
 state, or the actor's own grant for a scoped instance.
 
-Two reads are left out, and a slice with either is not vouched for: one of
-an instance narrower than the space, and one whose seq the serving replica
-cannot name.
+A read of a user's or a session's own instance is registered as a shared
+one is, at that instance's key, where the actor the key names holds READ
+on the source: the grant the read itself was admitted under
+(`protocol.md` §2). Where the actor holds none, the instance is not
+registered and its slice is stored marked `2`. The grant is checked each
+time a record is stored. A grant withdrawn afterward does not reach a
+slice that already rests, as it does not reach an instance a serving
+replica already holds (`verification-coverage.md` OW35 (a)).
+
+Two reads are left out, and a slice with either is not vouched for: one
+that names no one instance of a document, and one whose seq the serving
+replica cannot name.
 
 A reading space that no longer holds a row for an instance names it in its
 next request, and the source drops the registration.
@@ -383,11 +392,11 @@ with, so a chain of spaces passes one actor's demand along it.
 **Which reads are carried.** Those of a started piece, for an instance the
 source's index does not prove current. The reading loop offers every read
 its records hold, and the memory server leaves out the ones that are
-proven: a shared instance, read by a space that is armed with the source
-for no limited time, which the source's index holds as one no piece there
-is behind on. A read of an instance narrower than the space is not
-registered with the source's index, so it always stands, and so does every
-read of a space the reader is not armed with. With a row for an actor's
+proven: an instance the reader registered, shared or an actor's own, read
+by a space that is armed with the source for no limited time, which the
+source's index holds as one no piece there is behind on. A read the reader
+has not registered always stands, and so does every read of a space the
+reader is not armed with. With a row for an actor's
 own instance stands a row for each piece the source's index records as
 writing that document, for the same pair: the instance may not exist yet,
 and a serving loop finds the piece behind a document from what the
@@ -435,11 +444,7 @@ watermark spans spaces.
 receives no carried demand, as it receives no registration. A loop that
 keeps no index carries nothing, since its records are where it finds what
 a run read. A piece that only a warm request or an anonymous session
-demands carries nothing, since neither names an actor to carry. A read of
-an instance narrower than the space is carried but still leaves the
-reading slice not vouched for, so its piece starts on each demand;
-registering such an instance with the source's index is what would let it
-rest.
+demands carries nothing, since neither names an actor to carry.
 
 ## Wish
 
@@ -788,7 +793,7 @@ For computations that run without demand, in both places:
 19. A reader of an instance that a piece in another space declares it
     writes is marked `1` while that piece's slice is marked there.
 
-For demand across spaces. All three exist: 20 in
+For demand across spaces. All four exist: 20 in
 `runtime/memory/test/v2-server-carried-demand.test.ts`, 21 in
 `runtime/runner/test/executor/carried-demand.test.ts`, and 22 in
 `runtime/runner/test/executor/space-server-carried-demand.test.ts`, with a
@@ -808,6 +813,14 @@ change to a shared input of the other space, which reaches both viewers:
     space, watched by two viewers who have no session in that other space:
     its loop computes each viewer's instance, each viewer reads their own
     through the piece, and a change to an input there reaches them.
+23. A slice that read its actor's own instance in another space, a user's
+    or a session's, is stored clean where the actor holds READ there and
+    marked `2` where the actor holds none, and nothing is registered for
+    the second (`v2-server-currency-across-spaces.test.ts`). Under `skip`
+    the piece of test 22 is left unstarted, and carries nothing, while
+    each viewer's instance is unchanged, and is started when an input of
+    the other space's piece changes, which brings each viewer the new
+    value (`space-server-carried-demand.test.ts`).
 
 ## Related
 

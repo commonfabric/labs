@@ -322,6 +322,46 @@ describe("piece-currency", () => {
         ).toEqual([]);
       });
 
+      it("names the seq of a read of the run's own user's instance in another space that the replica holds, and gives it as no reason", () => {
+        const far = "did:key:z6Mk-another-space" as MemorySpace;
+        const taken = snapshotOf({
+          instances: [{
+            key: user,
+            reads: [{ space: far, id: "of:prefs", scope: "user" }],
+          }],
+          sourceSeqs: { "of:prefs": 9 },
+        });
+
+        expect(sliceOf(taken, user)?.reads).toEqual([{
+          space: far,
+          id: "of:prefs",
+          scopeKey: user,
+          derived: false,
+          seq: 9,
+        }]);
+        expect(sliceOf(taken, user)?.unvouched).toEqual([]);
+      });
+
+      it("names the seq of a read of the run's own session's instance in another space that the replica holds, and gives it as no reason", () => {
+        const far = "did:key:z6Mk-another-space" as MemorySpace;
+        const taken = snapshotOf({
+          instances: [{
+            key: session,
+            reads: [{ space: far, id: "of:draft", scope: "session" }],
+          }],
+          sourceSeqs: { "of:draft": 4 },
+        });
+
+        expect(sliceOf(taken, session)?.reads).toEqual([{
+          space: far,
+          id: "of:draft",
+          scopeKey: session,
+          derived: false,
+          seq: 4,
+        }]);
+        expect(sliceOf(taken, session)?.unvouched).toEqual([]);
+      });
+
       it("gives a slice that read a document a clock writes the tick after the one the document holds as the time it expires at, and leaves it vouched for", () => {
         const taken = snapshotOf({
           instances: [

@@ -116,9 +116,10 @@ of its runs at the snapshot:
 
 - a live computation is not clean, which covers one a throttle, a debounce
   or a convergence backoff is holding;
-- one read a document in another space at an instance narrower than the
-  space, at a seq its replica cannot name, or in a space whose store
-  another memory server holds;
+- one read a document in another space at no one instance, at a seq its
+  replica cannot name, at a user's or a session's own instance whose actor
+  holds no READ grant on that space, or in a space whose store another
+  memory server holds;
 - one read a document whose writer in this runtime names no piece and
   cannot be answered for. A writer that is live, clean and runs once is
   answered for by the slice, which takes over what it read.

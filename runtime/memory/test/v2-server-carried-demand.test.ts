@@ -8,6 +8,7 @@ import {
   loopback,
   type SessionOpenAuthFactory,
 } from "../v2/client.ts";
+import { resolveScopeKey } from "../v2.ts";
 import type { CurrencyRecord } from "../v2/currency-index.ts";
 import * as Engine from "../v2/engine.ts";
 import {
@@ -266,7 +267,7 @@ describe("v2-server-carried-demand", () => {
           expect(demand().map(({ id }) => id)).toEqual(["computed:far"]);
         });
 
-        it("adds the actor's own instance of a document though the reading space is armed", async () => {
+        it("adds an actor's own instance that the reading space has not registered, though it is armed", async () => {
           const alice = await session(ALICE, "alice-one");
           await arm();
 
@@ -275,6 +276,61 @@ describe("v2-server-carried-demand", () => {
           ]);
 
           expect(demand().map(({ id }) => id)).toEqual(["of:prefs"]);
+        });
+
+        it("adds no row for an actor's own instance that the reading space registered and the index holds current", async () => {
+          const aliceKey = resolveScopeKey("user", { principal: ALICE });
+          localSeq += 1;
+          const head = Engine.applyCommit(
+            await server.engineForSpace(SOURCE),
+            {
+              sessionId: "writer",
+              principal: ALICE,
+              space: SOURCE,
+              commit: {
+                localSeq,
+                reads: { confirmed: [], pending: [] },
+                operations: [{
+                  op: "set",
+                  id: "of:prefs",
+                  scope: "user",
+                  value: { value: { n: localSeq } },
+                }],
+              },
+            },
+          ).seq;
+          await store(READER, {
+            piece: "of:viewer",
+            under: [],
+            vouched: true,
+            writes: [],
+            owned: [],
+            slices: [
+              { key: "space", vouched: true, reads: [], vouches: [] },
+              {
+                key: aliceKey,
+                vouched: true,
+                reads: [{
+                  space: SOURCE,
+                  id: "of:prefs",
+                  scopeKey: aliceKey,
+                  derived: false,
+                  seq: head,
+                }],
+                vouches: [],
+              },
+            ],
+          });
+          const alice = await session(ALICE, "alice-one");
+
+          await server.setCarriedDemand(SOURCE, READER, [{
+            id: "of:prefs",
+            scope: "user",
+            scopeKey: aliceKey,
+            origin: alice,
+          }]);
+
+          expect(demand()).toEqual([]);
         });
 
         it("adds, with a row for an actor's own instance, a row for the piece the index records as writing that document, for the same pair", async () => {
