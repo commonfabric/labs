@@ -52,7 +52,7 @@ calls it from `#instantiateNode`. The pre-sync calls it from
 `#cellsPatternNodes`, for the nodes it syncs, and from
 `#collectResumeOwnedCells`, which takes each pattern node's child result cell
 from the plan. The list-children pass is the one caller that binds a node
-without it: `#syncListSlotResolutions` and `#syncResumeListChildren` derive a
+without it: `#syncListDocuments` and `#syncResumeListChildren` derive a
 list coordinator's inputs through `#buildRawNodeInputs`, the binder a raw
 node's plan uses. The bindings the first plan of a node computes against a
 stored argument are held for every later plan of it (`NodeBindingMemo`,

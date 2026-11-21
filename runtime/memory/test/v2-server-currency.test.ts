@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import type { EntityDocument } from "../v2.ts";
 import type { CurrencyRecord } from "../v2/currency-index.ts";
@@ -220,6 +221,29 @@ describe("Server", () => {
         ).toMatchObject({ servable: [], refused: { "unvouched-instance": 1 } });
       });
 
+      it("returns the piece for an output one record writes that the space holds no instance of", async () => {
+        // A derived document that exists only at instances narrower than the
+        // space has no back-link to read at the `space` instance.
+
+        const asOf = write({ [PIECE]: { value: {} }, [INPUT]: { value: 1 } });
+        await server.storeCurrencyRecords(SPACE, {
+          asOf,
+          seen: [],
+          epoch: EPOCH,
+          records: [{ ...record(), writes: [OUTPUT, "computed:per-user"] }],
+        });
+
+        expect(
+          await server.judgeCurrencyRoots(SPACE, ["computed:per-user"], {
+            epoch: EPOCH,
+          }),
+        ).toEqual({
+          servable: [{ root: "computed:per-user", piece: PIECE }],
+          refused: {},
+          marked: [],
+        });
+      });
+
       it("returns no result for missing records, invalid back-links, or a cycle", async () => {
         write({
           "of:plain": { value: 1 },
@@ -237,6 +261,43 @@ describe("Server", () => {
           servable: [],
           refused: { "no-record": 4 },
           marked: [],
+        });
+      });
+
+      it("returns the earliest time a slice expires at, and marks that slice once the time has come", async () => {
+        let now = 1_700_000_000_000;
+        using _clock = stub(Date, "now", () => now);
+        const asOf = write({
+          [PIECE]: { value: {} },
+          [INPUT]: { value: 1 },
+          [OUTPUT]: { value: "computed", result: link(PIECE) },
+        });
+        const expiring = record();
+        await server.storeCurrencyRecords(SPACE, {
+          asOf,
+          seen: [],
+          epoch: EPOCH,
+          records: [{
+            ...expiring,
+            slices: [{ ...expiring.slices[0], expiresAt: 1_700_000_060_000 }],
+          }],
+        });
+        expect(
+          await server.judgeCurrencyRoots(SPACE, [PIECE], { epoch: EPOCH }),
+        ).toEqual({
+          servable: [{ root: PIECE, piece: PIECE }],
+          refused: {},
+          marked: [],
+          nextExpiry: 1_700_000_060_000,
+        });
+        now = 1_700_000_060_000;
+
+        expect(
+          await server.judgeCurrencyRoots(SPACE, [PIECE], { epoch: EPOCH }),
+        ).toEqual({
+          servable: [],
+          refused: { marked: 1 },
+          marked: [{ piece: PIECE, slice: "space", seq: asOf + 1, under: [] }],
         });
       });
 

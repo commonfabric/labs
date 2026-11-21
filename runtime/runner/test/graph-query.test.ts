@@ -1514,6 +1514,28 @@ describe("graph-query", () => {
 
           expect(tracked).toEqual([keyFor("of:far"), keyFor("of:tree")]);
         });
+
+        it("counts in its statistics the positions it hands to the traversal's own stack", () => {
+          const shallow = new Map<string, FabricValue>([
+            [keyFor("of:tree"), { a: "0", child: { b: "1" } }],
+          ]);
+          const deep = new Map<string, FabricValue>([
+            [keyFor("of:tree"), nestedOf({ a: "leaf" })],
+          ]);
+          const handoffsOver = (documents: Map<string, FabricValue>) => {
+            const { manager, walk } = walkOver(documents);
+            walk.visit(
+              documentFor(manager, "of:tree"),
+              { path: ["value"], schema: unionTree },
+              undefined,
+              "root",
+            );
+            return walk.stats.nativeDepthHandoffs;
+          };
+
+          expect(handoffsOver(shallow)).toBe(0);
+          expect(handoffsOver(deep)).toBeGreaterThan(0);
+        });
       });
     });
   });

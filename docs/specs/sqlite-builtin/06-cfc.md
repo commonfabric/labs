@@ -777,11 +777,6 @@ path with no recorded existence entry can receive a legacy backfill at its
 first labeled write even when its value already existed. That frozen entry
 also remains after a clean settle.
 
-The issuing transaction writes a foreign-space refusal, so its `/error`
-value carries the clause that caused the refusal. Rendering that error
-therefore consumes the issuing transaction's label. The same value-stamp
-replacement and existence rules apply to a later write there.
-
 `/result`'s per-column and selection entries keep their authored policy.
 The runtime-owned route declines at a path whose schema declares a policy,
 and the transaction settling rows adds no flow clause of its own. A
@@ -906,25 +901,27 @@ Three residuals are recorded against §8.17.6:
   pattern holding a row reference can write to it. A writer claim naming the
   builtin (`ifc.writeAuthorizedBy`) on each row document is the direction.
 
-What the store's undeclared bookkeeping was refusing by accident, before the
-route reached it, includes one case the sink seam cannot express: a query
-whose database lies in another space, issued by a request carrying
-confidentiality. The parameters of such a query go to whoever holds THAT
-space's replicas, who are not the audience the result document's residency
-names. The builtin refuses it directly, before the request is staged, with a
-stable reason and no request hash — a later evaluation whose request carries
-nothing asks again rather than finding a memo hit.
+A query whose database lies in another space is answered like one in the
+same space, labeled request or not. Its statement and parameters reach that
+space's server, an attested runtime running the same code and applying the
+same access rules as the one that serves this space, so they reach nothing
+the result's own residency would not. What each reader is shown is still
+decided by the rows' labels in that reader's runtime. An earlier refusal of a
+labeled request against a database in another space guarded against a server
+outside that model, had no section of the specification behind it, and is
+withdrawn.
 
-The measure there is the transaction's flow join, not the transaction-global
-consumed set the sink ceilings read — which is also what a per-sink ceiling
-for this sink would have to measure, if a deployment ever declares one: the
-consumed set counts this node's reads of its own settled result, so a ceiling
-reading it would refuse every issue after the first. The difference is the reads the write
-machinery makes of its own destination, which the flow join excludes
-(§18.6.2): this node reads its own settled result to decide whether a
-writeback is stale, and that result carries the labels of the columns it
-projected, so the wider set answers "labeled" on every issue after the first
-whatever the parameters are.
+The confidentiality a request carries is measured by the transaction's flow
+join, not the transaction-global consumed set the sink ceilings read — which
+is what a per-sink ceiling for this sink would have to measure, if a
+deployment ever declares one: the consumed set counts this node's reads of
+its own settled result, so a ceiling reading it would refuse every issue
+after the first. The difference is the reads the write machinery makes of
+its own destination, which the flow join excludes (§18.6.2): this node reads
+its own settled result to decide whether a writeback is stale, and that
+result carries the labels of the columns it projected, so the wider set
+answers "labeled" on every issue after the first whatever the parameters
+are.
 
 That exclusion has the cost §18.6.2 records, and it applies here: whether the
 rows landed discloses whether the stored hash still matched, and that hash is
@@ -942,12 +939,6 @@ sink. A deployment that wants a confidentiality gate on sqlite reads declares
 a ceiling for the sink, and the seam is where it applies — with the caveat
 above about which set such a ceiling must measure.
 
-The refusal is gated on the flow dial rather than on the enforcement ladder: a
-runtime deriving no flow labels has an empty join by construction, so nothing
-is labeled and the refusal never fires. The default flow mode is `off`, so a
-deployment that has not opted into flow labels gets no cross-space bound —
-and nothing for one to protect.
-
 One thing outside this builtin decides whether a caller can use any of it. A
 `lift` whose output document has acquired stored CFC label metadata cannot be
 written again unless the lift declares a RESULT SCHEMA: without one the write
@@ -960,7 +951,7 @@ built directly against the builder, as a runner test does, or one whose return
 type the injector cannot read.
 
 > Implementation: `makeResultCell` plus `recordRuntimeOwnedStore` /
-> `enrollRuntimeOwnedStore`, the `crossSpace` refusal over `deriveFlowJoin`,
+> `enrollRuntimeOwnedStore`, the request's flow join over `deriveFlowJoin`,
 > the `shapeConfidentiality` join, and
 > `enqueueSinkRequestPostCommitEffect` in
 > [`sqlite-builtins.ts`](../../../runtime/runner/src/builtins/sqlite-builtins.ts);

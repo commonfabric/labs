@@ -1498,6 +1498,13 @@ single wait is read from `CF_WAIT_FOR_CONDITION_TIMEOUT_MS`. That exists for
 the tests that drive this report and for nothing else: shortening the net in a
 run caps what a wait may observe, which is what the net is written to avoid.
 
+The page probe reads the root element's runtime-creation task even before
+`commonfabric.rt` is published. It reports that task's generation, its numeric
+Lit task status, and its rejection where there is one. Lit's statuses are
+initial (`0`), pending (`1`), complete (`2`), and error (`3`). A missing runtime
+with a pending task differs from a creation that rejected; neither has a
+published runtime whose pending requests or worker logs could explain it.
+
 `login()` reports the same block, and adds what the wait cannot know. It waits
 on `waitForCondition` for the shell to publish `globalThis.app`, which a
 document that is not the shell never publishes, and the runtime handshake after
