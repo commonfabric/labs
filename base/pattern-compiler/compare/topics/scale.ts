@@ -68,6 +68,13 @@
  * that use the runtime's storage takes client messages that stand for up
  * to that many array slots and record members, in place of its default of
  * 1,000,000 (`MAX_UNTRUSTED_MESSAGE_SLOTS` of `runtime/memory/v2.ts`).
+ *
+ * With `SCALE_LABEL_DUMP` set to the path of a file, the arm `storage`
+ * appends to that file, after each step, one line of JSON for each document
+ * the step's commits changed: the step, the kind of the document, its
+ * entity, and every label entry it holds, each with its path, its class and
+ * its label in place. The file grows with the square of the board where
+ * each topic has a clause of its own, so it is for boards of a few topics.
  */
 import { Identity } from "@commonfabric/identity";
 import { fromFileUrl } from "@std/path";
@@ -735,7 +742,8 @@ const runStorage = async (
     );
     if (binding < 0) throw new Error("the board has no binding `addTopic`");
     // The label entries the documents of `entities` hold.
-    const entriesOf = (entities: Iterable<string>) => {
+    const entriesOf = (step: string, entities: Iterable<string>) => {
+      const dump = Deno.env.get("SCALE_LABEL_DUMP");
       const tx = runtime.edit();
       try {
         let found = 0;
@@ -754,6 +762,20 @@ const runStorage = async (
           held += 1;
           if (metadata === undefined) continue;
           found += metadata.labelMap.entries.length;
+          if (dump !== undefined) {
+            Deno.writeTextFileSync(
+              dump,
+              JSON.stringify({
+                step,
+                kind:
+                  instance?.store.docs.get(storage.documentOf(entity))?.kind ??
+                    "input",
+                entity,
+                entries: metadata.labelMap.entries,
+              }) + "\n",
+              { append: true },
+            );
+          }
           bytes += JSON.stringify(metadata.labelMap.entries).length;
           for (const { path, observes } of metadata.labelMap.entries) {
             const kind =
@@ -930,7 +952,7 @@ const runStorage = async (
           before.counts.labelEntriesChanged,
         planLabelBounds: (runtime.getCfcStats().planLabelBounds ?? 0) -
           ((before.cfc.planLabelBounds as number | undefined) ?? 0),
-        labelEntries: entriesOf(changed),
+        labelEntries: entriesOf(step, changed),
         refused,
         cfc: moved(
           before.cfc,
