@@ -404,6 +404,15 @@ export type ServingLoopStats = {
      * changed. Each one is a judgment that would have served a stale
      * value. */
     falseClean: number;
+
+    /** Rows of demand the loops offer to carry into other spaces now: an
+     * instance there that a run here read, with a client session whose
+     * actor it was read for (serving-loop.md §3b). A row stands there
+     * unless that space's index proves the instance current. */
+    carried: number;
+
+    /** Rows of carried demand the space they were sent to refused. */
+    carriedRefused: number;
   };
 
   /** SERVER SETTLE per authored input (serving-loop.md §7; stage-C design
@@ -917,6 +926,8 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     indexWakes: 0,
     expiryWakes: 0,
     falseClean: 0,
+    carried: 0,
+    carriedRefused: 0,
   },
   settle: { series: [], dropped: 0 },
   settleAdvances: { count: 0, lastDelta: 0, series: [], dropped: 0 },

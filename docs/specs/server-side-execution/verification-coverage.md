@@ -3334,10 +3334,15 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   carried actor counts as that actor's demand in the foreign space. The
   demand names the actor and is not the reading space's own, since a
   per-actor derivation of the foreign space runs only for a demand that
-  names its actor. Owed: the build, which touches the (d′)
-  demand model and the memory server's demand rows
-  (`docs/plans/stored-output-currency-across-spaces.md`, "Demand across
-  spaces", step 5). Trigger for both: the first pattern whose
+  names its actor. BUILT for a loop that keeps the currency index, where
+  one memory server holds both spaces (serving-loop.md §3b;
+  `Server.setCarriedDemand`, `SpaceServer`'s `#syncCarriedDemand`; pinned
+  in `runtime/memory/test/v2-server-carried-demand.test.ts` and
+  `runtime/runner/test/executor/space-server-currency-wish.test.ts`).
+  Owed: a foreign per-actor instance read under two actors, tested end
+  to end; a loop that keeps no index; and a foreign space another memory
+  server holds (`docs/plans/stored-output-currency-across-spaces.md`,
+  "Demand across spaces", step 5). Trigger for both: the first pattern whose
   correctness rests on a revocation taking effect without a re-pull, or
   on a foreign per-actor derivation staying current with no demand of
   the actor's own in that space; FabriChat's add-member candidates read

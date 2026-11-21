@@ -2498,6 +2498,11 @@ the per-epic implementation notes).
   read another space the same memory server holds: that space is asked
   what changed before the judgment, and tells the reading space of its next
   change, which has a loop that left such a root unstarted judge it again.
+  A loop that keeps the index also carries demand into the spaces its
+  started pieces' runs read, for the actors those runs were made for, where
+  that space's index does not prove the instance current: `currency.carried`
+  counts the rows offered now, and `currency.carriedRefused` the rows a
+  space refused, as it does where the actor may not read it.
   `skip` acts on the judgment: a root
   whose piece vouches for every demanded instance of it, in slices that are
   clean, is neither loaded nor started, until an input marks a slice a

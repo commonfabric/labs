@@ -1,7 +1,7 @@
 # Serving a stored output that depends on another space or on a wish
 
-Status: In progress. Steps 1 to 4, 7 and 8 are done; the rest is a
-design, with the steps to build it. It
+Status: In progress. Steps 1 to 4, 7 and 8 are done and step 5 is partly
+built; the rest is a design, with the steps to build it. It
 continues [`stored-output-currency.md`](stored-output-currency.md), whose
 stages 1 to 4 are built, and its steps 1 to 3 come before that plan's
 stage 5.
@@ -381,14 +381,20 @@ reading space as a carried demand is carried on with the origin it came
 with, so a chain of spaces passes one actor's demand along it.
 
 **Which reads are carried.** Those of a started piece, for an instance the
-source's index does not prove current. A read of an instance narrower than
-the space is not registered with the source's index, so it is always
-carried. A read of a shared instance is carried while the row the reading
-index was last told for it is stale, or while there is no such row, which
-is every such read where either index is off. So a source whose instance
-is current is not asked to run anything, and a reading space whose piece
-is not started carries nothing: demand travels along stale edges, and
-along the edges no index can vouch for.
+source's index does not prove current. The reading loop offers every read
+its records hold, and the memory server leaves out the ones that are
+proven: a shared instance, read by a space that is armed with the source
+for no limited time, which the source's index holds as one no piece there
+is behind on. A read of an instance narrower than the space is not
+registered with the source's index, so it always stands, and so does every
+read of a space the reader is not armed with. What stands is worked out
+again whenever the source's index or the arming changes, and a reading
+space that offers rows pulls from the source when it is not armed with it
+and when the source tells it of a change, so that it is armed whenever a
+row could be proven. So a source whose
+instance is current is not asked to run anything, and a reading space
+whose piece is not started carries nothing: demand travels along stale
+edges, and along the edges no index can vouch for.
 
 **Who may be carried.** A pair is admitted into the source only where its
 actor holds READ there, by the check a named scoped read passes
@@ -419,12 +425,14 @@ it needs a decision on what a session is shown in the meantime, since no
 watermark spans spaces.
 
 **Not in this step.** A source whose store another memory server holds
-receives no carried demand, as it receives no registration. A piece that
-only a warm request demands carries nothing, since a warm request names no
-session to give as an origin. A read of an instance narrower than the
-space is carried but still leaves the reading slice not vouched for, so
-its piece starts on each demand; registering such an instance with the
-source's index is what would let it rest.
+receives no carried demand, as it receives no registration. A loop that
+keeps no index carries nothing, since its records are where it finds what
+a run read. A piece that only a warm request or an anonymous session
+demands carries nothing, since neither names an actor to carry. A read of
+an instance narrower than the space is carried but still leaves the
+reading slice not vouched for, so its piece starts on each demand;
+registering such an instance with the source's index is what would let it
+rest.
 
 ## Wish
 
@@ -604,7 +612,7 @@ of who reads what, the trigger's fan-out and its retries, sits behind an
 interface of its own, so a service between spaces can take it over without
 a change to the other two.
 
-A third is ruled and not built:
+A third is ruled:
 
 3. **The demand rule of OW35 (b), in full**: a read across spaces under a
    carried actor is that actor's demand in the source space ("Demand
@@ -665,12 +673,15 @@ A third is ruled and not built:
    another space. Which readers are armed is held in memory, and a trigger
    that leaves the process is not built.
 5. **Demand across spaces**, as ruled, built together with the first
-   plan's stage 5, which is the same mechanism within one space. In order:
+   plan's stage 5, which is the same mechanism within one space. Built:
    carried rows in the memory server's demand set, with their origin, their
-   access check and their end; the reading loop's set, sent when it
-   changes and withdrawn at a park; activation and parking of the source;
-   and the acceptance tests 11 and 12 below, with one for a `PerUser`
-   instance of the source read under two actors.
+   access check, their end and the rows the source's index proves current
+   left out; the reading loop's set, sent when it changes and withdrawn at
+   a park; and activation and parking of the source, which follow from the
+   rows being held among the source's sessions. Still to do: the acceptance
+   tests 11 and 12 below, one for a `PerUser` instance of the source read
+   under two actors, and a measurement of what a carried demand costs the
+   source.
 6. **Computations that run without demand.** Envelopes among the write
    rows; a computation recorded as unbounded from what it wrote; the
    unsettled space, settled before a judgment in it or a pull from it

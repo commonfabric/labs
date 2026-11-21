@@ -10,6 +10,7 @@ import type {
   CurrencyMarked,
   CurrencyRecord,
 } from "@commonfabric/memory/v2/currency-index";
+import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace, URI } from "../storage/interface.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";
@@ -36,6 +37,20 @@ export type CurrencySnapshot = {
   records: CurrencyRecord[];
 };
 
+/**
+ * An instance in another space that a run of a piece read, with the slice
+ * the run belongs to, which says whose run it was.
+ */
+export type ForeignRead = {
+  /** The key of the slice the run that read belongs to. */
+  slice: string;
+
+  /** The space the instance is in. */
+  space: string;
+  id: string;
+  scopeKey: string;
+};
+
 /** A demand key to re-arm, with a seq at or below the input that marked it. */
 export type CurrencyRearm = { key: string; seq: number };
 
@@ -58,6 +73,12 @@ export class StoreCurrency {
 
   /** The pieces a later snapshot covers whether or not they change again. */
   readonly #owed = new Set<string>();
+
+  /**
+   * What the runs of each piece read in another space, as the piece's
+   * latest snapshot found it. A piece with no such read has no entry.
+   */
+  readonly #foreignReads = new Map<string, ForeignRead[]>();
 
   /**
    * The owed pieces a record of which was stored behind a commit its settle
@@ -163,6 +184,15 @@ export class StoreCurrency {
   }
 
   /**
+   * What the runs of the pieces this loop holds read in another space, by
+   * piece. A read of every instance of a document names no instance to
+   * demand, and is left out.
+   */
+  get foreignReads(): ReadonlyMap<string, readonly ForeignRead[]> {
+    return this.#foreignReads;
+  }
+
+  /**
    * Snapshots each piece of `runtime` a computation of which changed since
    * the last snapshot, and each piece a snapshot is owed. The caller has
    * established that the scheduler is idle and that no effect is
@@ -190,9 +220,21 @@ export class StoreCurrency {
     for (const piece of pieces) {
       this.#owed.delete(piece);
       this.#behindAt.delete(piece);
+      this.#foreignReads.delete(piece);
       if (!isDocumentId(piece)) continue;
       const taken = runtime.scheduler.pieceCurrencySnapshot(this.#space, piece);
       if (taken === undefined) continue;
+      const foreign = taken.slices.flatMap((slice) =>
+        slice.reads.filter((read) =>
+          read.space !== this.#space && read.scopeKey !== ANY_INSTANCE
+        ).map((read) => ({
+          slice: slice.key,
+          space: read.space,
+          id: read.id,
+          scopeKey: read.scopeKey,
+        }))
+      );
+      if (foreign.length > 0) this.#foreignReads.set(piece, foreign);
       const facts = runtime.runner.pieceCurrencyFacts(
         runtime.getCellFromLink({
           space: this.#space,

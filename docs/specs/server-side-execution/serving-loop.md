@@ -343,8 +343,10 @@ events (the carries-events arm's sibling), and the target's tenure
 takes the staged instances as identity-less WARM DEMAND — the
 anonymous-session shape, a demand key with no demanding pair, unioned
 into the demand pass for that tenure — so the staged piece
-structure-loads and derives. This is the one deliberate extension of
-the demand union beyond client sessions: the issuer is the
+structure-loads and derives. This is one of two deliberate extensions of
+the demand union beyond a space's own client sessions (the other is the
+demand another space's loop carries for a client session of its own,
+§3b): the issuer is the
 provisioning run that KNOWS it staged setup needing derivation — a
 scoped signal, never a blanket write-trigger — so T11.Q7 stays as
 designed (the admission hook alone still notifies without activating;
@@ -1247,7 +1249,34 @@ executing:
   read it is marked `2` and its piece starts. A hold ends by itself, the
   first after a second and each further one after twice as long as the
   last, up to five minutes, and at once when a change the space has not
-  been sent reaches it. A
+  been sent reaches it. A read of an instance of another space by a run
+  under an actor is that actor's demand in that space (RULED 2026-11-21,
+  verification-coverage.md OW35 (b)). The loop sends the memory server,
+  for each space its started pieces' runs read, the instances read, each
+  with the client session of a pair the run was made for: every pair
+  demanding in the loop's space for a run in the `space` slice, a user's
+  pairs for one in that user's slice, and the one pair for one in a
+  session's slice. It finds the reads in the records it takes, so a loop
+  that keeps no index carries nothing. The set is replaced when it changes
+  and withdrawn at a park. The memory server admits a row only for a live
+  client session on it, whose actor holds READ on the space carried into
+  by the check a named scoped read passes (protocol.md §2), and holds what
+  it admitted as offered. An offered row stands as demand unless that
+  space's index proves the instance current: the instance is shared, the
+  reading space is armed with the space for no limited time, and the
+  index holds the instance as one no piece there is behind on. Which rows
+  stand is worked out again whenever that index or the arming changes. A
+  reading space that offers rows pulls from the space when it is not armed
+  with it, and again when the space tells it of a change, so it is armed
+  whenever a row could be proven. A row that stands is a row of the
+  space's demand set, a root with the
+  origin session's pair, held under an id of its own among the space's
+  sessions, so the space's loop loads and judges it as it does a client's:
+  the host activates a parked space that receives one and does not park it
+  idle while one stands. It is not a connected session for an intent that
+  needs a channel to its actor (builtins.md §4). A pair that reached a
+  space carried is carried on with the origin it came with, and the memory
+  server drops every row of an origin session when that session ends. A
   slice that read what a live, clean writer
   that names no piece wrote, such as a wish's shared hashtag resolver, takes
   over that writer's reads as its own. Every slice of a record is stored marked when the piece's root is
@@ -2570,7 +2599,8 @@ demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
 structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, currency:
 {recordsStored, unvouched, judged, servable, refused, servedFromStore,
-rearmed, falseClean}, settle:
+rearmed, indexWakes, expiryWakes, falseClean, carried, carriedRefused},
+settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
@@ -2760,7 +2790,11 @@ loaded, because an input marked the piece or a session's demand reached an
 instance it does not vouch for; `falseClean` the pieces the index held
 clean that wrote an instance they vouched for again, to a value other than
 the one it held, with no input of theirs changed, each one a judgment that
-would have served a stale value.
+would have served a stale value; `indexWakes` and `expiryWakes` the times
+the loop was woken to judge a root it had left unloaded, because the index
+changed from outside the loop or a slice's record expired; `carried` the
+rows of demand the loops offer to carry into other spaces now, and
+`carriedRefused` the rows a space they were sent to refused (§3b).
 `ownedDefaultSeeds` the (piece root, demanding pair) seedings the passes
 completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
 scope narrower than its result (scoped-cell-instances.md, "A pattern-owned

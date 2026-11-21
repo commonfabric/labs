@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { aclDocId } from "@commonfabric/memory/acl";
 import { scopeOfScopeKey } from "@commonfabric/memory/v2";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { selectCurrencyPiece } from "@commonfabric/memory/v2/currency-index";
@@ -505,6 +506,62 @@ describe("SpaceServer", () => {
         );
         await host.whenQuiescent();
         expect(serves(root)).toBe(false);
+      });
+    });
+
+    describe("carrying demand into the home space a piece's wish read", () => {
+      /** The rows another space carries into alice's home space. */
+      const carriedIntoHome = () =>
+        server.demandForSpace(home).flatMap((share) => [
+          ...share.rows.values(),
+        ]).filter((row) => row.origin !== undefined);
+
+      /**
+       * Gives alice's home space an access list that names her its owner,
+       * as a home space has: a demand is carried into a space only for an
+       * actor who may read it.
+       */
+      const ownHome = async () => {
+        await server.writeDocument(home, aclDocId(home), {
+          [aliceSigner.did()]: "OWNER",
+        });
+      };
+
+      it("offers the viewer's demand for what the wish read there, none of which stands while the home space's index proves it current", async () => {
+        await seedHome();
+        await ownHome();
+        host = newHost("record");
+        await watch(wishProgram("{ query: '#favorites' }"));
+        await awaitEach(cycles, () => host!.stats().currency.carried > 0);
+        await host.whenQuiescent();
+
+        expect(host.stats().currency.carriedRefused).toBe(0);
+        expect(carriedIntoHome()).toEqual([]);
+      });
+
+      it("counts the rows as refused where the home space has no access list that grants the viewer", async () => {
+        await seedHome();
+        host = newHost("record");
+        await watch(wishProgram("{ query: '#favorites' }"));
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.carriedRefused > 0,
+        );
+
+        expect(carriedIntoHome()).toEqual([]);
+      });
+
+      it("counts nothing as carried once the loop has parked", async () => {
+        await seedHome();
+        await ownHome();
+        host = newHost("record");
+        await watch(wishProgram("{ query: '#favorites' }"));
+        await awaitEach(cycles, () => host!.stats().currency.carried > 0);
+        await host.whenQuiescent();
+
+        await host.spaceServer(space)!.park("test-park");
+
+        expect(host.stats().currency.carried).toBe(0);
       });
     });
 

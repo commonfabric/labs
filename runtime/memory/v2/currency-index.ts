@@ -1820,6 +1820,28 @@ export const applyCurrencyImports = (
 };
 
 /**
+ * What `space`'s index last worked out of the instance `(id, scopeKey)` for
+ * the spaces that read it, or `undefined` where no space registered it: its
+ * head, and whether a piece here computes it and does not answer for it at
+ * present. It is as of the index's last change, so a commit since may have
+ * moved the instance.
+ */
+export const selectCurrencyExport = (
+  engine: Engine,
+  options: { space: string } & CurrencyInstance,
+): { head: number; stale: boolean } | undefined => {
+  const context = contextFor(engine, options.space);
+  const row = context.statements.selectExport.get({
+    branch: context.branch,
+    id: options.id,
+    scope_key: options.scopeKey,
+  }) as { head: number; stale: number } | undefined;
+  return row === undefined
+    ? undefined
+    : { head: row.head, stale: row.stale !== 0 };
+};
+
+/**
  * The position of the space `source` that `space`'s index last pulled
  * through, `0` where it has pulled nothing.
  */

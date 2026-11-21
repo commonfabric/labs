@@ -176,6 +176,7 @@ import {
   judgeCurrencyRoots,
   pullCurrencyExports,
   registerCurrencyReads,
+  selectCurrencyExport,
   selectCurrencyNextExpiry,
   selectCurrencyPiece,
   selectCurrencyReadersMoved,
@@ -1580,7 +1581,54 @@ export type DemandedInstanceRow = {
    * root: a piece reached only through a data link (design §2.8 flag 4).
    */
   piece?: true;
+
+  /**
+   * For a row another space carried here (`Server.setCarriedDemand()`),
+   * the client session it is carried for and the space that session is
+   * of. A serving loop that carries the row's pair on names this origin
+   * again. Absent on a row of a session of this space.
+   */
+  origin?: { readonly space: string; readonly sessionId: string };
 };
+
+/**
+ * A demand carried into a space from another (serving-loop.md §3b): an
+ * instance of the space that a run in a reading space read under the actor
+ * of the session `origin` names. The space's demand set holds it as a row
+ * of that session's pair, as if the session watched the instance there.
+ */
+export type CarriedDemandRow = {
+  id: string;
+  scope: CellScope;
+  scopeKey: ScopeKey;
+
+  /**
+   * The client session the demand is carried for, and the space it is a
+   * session of. The row stands while that session does.
+   */
+  origin: {
+    readonly space: string;
+    readonly sessionId: string;
+  };
+};
+
+/** The demand carried for one origin session from one reading space. */
+type CarriedSession = {
+  /** The id the space's demand set and session mirror hold it under. */
+  readonly sessionId: string;
+  readonly origin: CarriedDemandRow["origin"];
+  readonly principal: string | undefined;
+  readonly share: SessionDemand;
+};
+
+/**
+ * The id a carried demand is held under among a space's sessions, which
+ * is not one a client's session is opened under.
+ */
+const carriedSessionId = (
+  reader: string,
+  origin: CarriedDemandRow["origin"],
+): string => `carried\0${reader}\0${origin.space}\0${origin.sessionId}`;
 
 /**
  * One client session's share of a space's demand set: its
@@ -3872,6 +3920,27 @@ export class Server {
   >();
 
   /**
+   * The demand carried into each space, by the reading space that carries
+   * it and then by the id it is held under (`carriedSessionId()`). Held in
+   * memory: a reading loop sends its set again when it next serves.
+   */
+  readonly #carriedDemand = new Map<
+    string,
+    Map<string, Map<string, CarriedSession>>
+  >();
+
+  /**
+   * What each reading space offered to carry into each space, by the same
+   * keys: every row `setCarriedDemand()` admitted. `#carriedDemand` holds
+   * the rows of these that stand, which leaves out an instance the space's
+   * currency index proves current (`#refreshCarriedDemand()`).
+   */
+  readonly #carriedOffered = new Map<
+    string,
+    Map<string, Map<string, CarriedSession>>
+  >();
+
+  /**
    * The position of each space through which its armed readers were told
    * of what moved.
    */
@@ -4258,7 +4327,12 @@ export class Server {
       );
     }
     this.#sessions = options.sessions ?? new SessionRegistry();
-    this.#sessions.setObserver((event) => this.#notifySessionChanged(event));
+    this.#sessions.setObserver((event) => {
+      this.#notifySessionChanged(event);
+      if (event.kind === "removed") {
+        this.#dropCarriedDemandOf(event.space, event.sessionId);
+      }
+    });
     this.#store = options.store;
     this.#operationCodecs = options.operationCodecs ??
       createDefaultOperationCodecRegistry();
@@ -12361,9 +12435,10 @@ export class Server {
     space: string,
     options: { excludePrincipal?: string } = {},
   ): boolean {
-    return this.#sessions.sessionsForSpace(space).some((session) =>
-      !isServingSessionOf(session, options.excludePrincipal)
-    );
+    return this.#carriedDemand.has(space) ||
+      this.#sessions.sessionsForSpace(space).some((session) =>
+        !isServingSessionOf(session, options.excludePrincipal)
+      );
   }
 
   /** Whether ONE specific (principal, sessionId) pair holds a live
@@ -12576,6 +12651,9 @@ export class Server {
       }
       demand.push(share);
     }
+    // What another space carries here is demand of the session it names,
+    // whichever identity the reading loop signs with.
+    for (const { share } of this.#carriedSessions(space)) demand.push(share);
     return demand;
   }
 
@@ -12594,7 +12672,17 @@ export class Server {
     // Prune once for the batch before the targeted, non-pruning lookups.
     this.#sessions.sessionsForSpace(space);
     const demand: SessionDemand[] = [];
+    const carried = new Map(
+      this.#carriedSessions(space).map((
+        session,
+      ) => [session.sessionId, session.share]),
+    );
     for (const sessionId of sessionIds) {
+      const carriedShare = carried.get(sessionId);
+      if (carriedShare !== undefined) {
+        demand.push(carriedShare);
+        continue;
+      }
       const session = this.#sessions.peek(space, sessionId);
       if (
         session === undefined ||
@@ -12728,6 +12816,17 @@ export class Server {
    * change to `space`'s currency index, whose rows are current by then.
    */
   #tellCurrencyReaders(space: string, engine: Engine.Engine): void {
+    try {
+      this.#tellArmedCurrencyReaders(space, engine);
+    } finally {
+      // The index changed, and a reader may have been disarmed: either can
+      // change which demand carried into `space` stands.
+      this.#refreshCarriedDemand(space);
+    }
+  }
+
+  /** Helper for `#tellCurrencyReaders()`, which tells the armed readers. */
+  #tellArmedCurrencyReaders(space: string, engine: Engine.Engine): void {
     const armed = this.#currencyArmed.get(space);
     if (armed === undefined || armed.size === 0) return;
     const moved = selectCurrencyReadersMoved(engine, {
@@ -12742,6 +12841,7 @@ export class Server {
       armed.delete(reader);
       step ??= this.#currencyTrailFrom(space);
       this.#triggerCurrencyReader(reader, step);
+      this.#queueFollowForCarriedDemand(reader, space);
     }
     // A reader armed for longer than `space` now holds was told a later
     // time, or none, by a pull made before a slice here was recorded as
@@ -12752,6 +12852,7 @@ export class Server {
       if (entry.until !== undefined && entry.until <= until) continue;
       armed.delete(reader);
       this.#triggerCurrencyReader(reader);
+      this.#queueFollowForCarriedDemand(reader, space);
     }
   }
 
@@ -12865,7 +12966,11 @@ export class Server {
     if (armed === undefined || armed.size === 0) return;
     const readers = [...armed.keys()];
     armed.clear();
-    for (const reader of readers) this.#triggerCurrencyReader(reader, step);
+    this.#refreshCarriedDemand(space);
+    for (const reader of readers) {
+      this.#triggerCurrencyReader(reader, step);
+      this.#queueFollowForCarriedDemand(reader, space);
+    }
   }
 
   /**
@@ -12969,6 +13074,7 @@ export class Server {
     const sourceEngine = await this.#currencySourceEngine(source);
     if (sourceEngine === undefined) {
       armed?.delete(space);
+      this.#refreshCarriedDemand(source);
       return forgetCurrencySource(engine, { space, source }).length > 0;
     }
     const resting = armed?.get(space);
@@ -12990,6 +13096,7 @@ export class Server {
     }
     if (this.#currencyHeld(source)) {
       this.#currencyArmed.get(source)?.delete(space);
+      this.#refreshCarriedDemand(source);
       return forgetCurrencySource(engine, { space, source }).length > 0;
     }
     const pulled = pullCurrencyExports(sourceEngine, {
@@ -13269,6 +13376,11 @@ export class Server {
       for (const event of this.#sessions.snapshot()) {
         this.#notifySessionChanged(event);
       }
+      for (const space of this.#carriedDemand.keys()) {
+        for (const event of this.#carriedSnapshot(space)) {
+          this.#notifySessionChanged(event);
+        }
+      }
     }
   }
 
@@ -13277,7 +13389,291 @@ export class Server {
    * up to date, as installing an observer replays them for every space.
    */
   sessionSnapshot(space: string): SessionLifecycleEvent[] {
-    return this.#sessions.snapshot(space);
+    return [...this.#sessions.snapshot(space), ...this.#carriedSnapshot(space)];
+  }
+
+  /** The demands carried into `space`, each as the opening of a session. */
+  #carriedSnapshot(space: string): SessionLifecycleEvent[] {
+    return this.#carriedSessions(space).map(({ sessionId, principal }) => ({
+      kind: "opened" as const,
+      space,
+      sessionId,
+      ...(principal !== undefined && { principal }),
+    }));
+  }
+
+  /** The demands carried into `space`, from every reading space. */
+  #carriedSessions(space: string): CarriedSession[] {
+    const carried: CarriedSession[] = [];
+    for (const sessions of this.#carriedDemand.get(space)?.values() ?? []) {
+      for (const session of sessions.values()) carried.push(session);
+    }
+    return carried;
+  }
+
+  /**
+   * Replaces the demand the reading space `reader` carries into `space`
+   * with `rows` (serving-loop.md §3b): each instance a run of `reader` read
+   * here under the actor of a client session, which then demands it here
+   * as if it watched it. A row is refused where its origin is not a live
+   * client session on this server, which a serving session of
+   * `excludePrincipal` (`isServingSessionOf()`) is not; where that session
+   * is anonymous, and so names no actor to carry; where its instance
+   * is narrower than the space and not its actor's own; where its actor
+   * does not hold READ on `space`, as a named scoped read is refused
+   * (protocol.md §2); and where this server cannot ask `space`'s store. A
+   * row stands until `reader` replaces it or its origin session ends.
+   *
+   * @returns How many of `rows` were refused.
+   */
+  async setCarriedDemand(
+    space: string,
+    reader: string,
+    rows: readonly CarriedDemandRow[],
+    options: { excludePrincipal?: string } = {},
+  ): Promise<{ refused: number }> {
+    const engine = rows.length === 0
+      ? undefined
+      : await this.#currencySourceEngine(space);
+    let refused = 0;
+    const next = new Map<
+      string,
+      {
+        origin: CarriedDemandRow["origin"];
+        principal: string | undefined;
+        rows: Map<string, DemandedInstanceRow>;
+      }
+    >();
+    /** Whether `principal` holds READ on `space`, asked once for each. */
+    const granted = new Map<string, boolean>();
+    for (const row of rows) {
+      const origin = this.#sessions.peek(
+        row.origin.space,
+        row.origin.sessionId,
+      );
+      const principal = origin?.principal;
+      const actor = row.scopeKey === "space"
+        ? principal
+        : identityOfScopeKey(row.scopeKey)?.principal;
+      let admitted = engine !== undefined && origin !== undefined &&
+        !isServingSessionOf(origin, options.excludePrincipal) &&
+        principal !== undefined && actor === principal;
+      if (admitted) {
+        let verdict = granted.get(principal!);
+        if (verdict === undefined) {
+          verdict = this.#foreignGrantOn(engine!, space, principal!, "READ")
+            .granted;
+          granted.set(principal!, verdict);
+        }
+        admitted = verdict;
+      }
+      if (!admitted) {
+        refused += 1;
+        continue;
+      }
+      const sessionId = carriedSessionId(reader, row.origin);
+      let session = next.get(sessionId);
+      if (session === undefined) {
+        session = { origin: { ...row.origin }, principal, rows: new Map() };
+        next.set(sessionId, session);
+      }
+      session.rows.set(toDirtyKey(row.id, row.scopeKey), {
+        id: row.id,
+        scope: row.scope,
+        scopeKey: row.scopeKey,
+        identity: { principal: principal!, sessionId: row.origin.sessionId },
+        root: true,
+        origin: session.origin,
+      });
+    }
+    let offered = this.#carriedOffered.get(space);
+    if (next.size === 0) {
+      offered?.delete(reader);
+      if (offered?.size === 0) this.#carriedOffered.delete(space);
+    } else {
+      if (offered === undefined) {
+        offered = new Map();
+        this.#carriedOffered.set(space, offered);
+      }
+      offered.set(
+        reader,
+        new Map(
+          [...next].map(([sessionId, { origin, principal, rows }]) => [
+            sessionId,
+            { sessionId, origin, principal, share: { sessionId, rows } },
+          ]),
+        ),
+      );
+    }
+    this.#refreshCarriedDemand(space);
+    // What is proven current is proven for a reading space that hears of
+    // the next change, so one that offers demand is armed first.
+    if (next.size > 0) await this.#followForCarriedDemand(reader, space);
+    return { refused };
+  }
+
+  /**
+   * Has `reader` pull from `source`, which arms it, where it offers demand
+   * there and is not armed: `source`'s index can then prove an instance
+   * `reader` read current, and the offered row for it need not stand.
+   */
+  async #followForCarriedDemand(reader: string, source: string): Promise<void> {
+    if (this.#carriedOffered.get(source)?.has(reader) !== true) return;
+    const engine = await this.#currencySourceEngine(reader);
+    if (engine === undefined || this.#closed) return;
+    const marked = await this.#followCurrencySource(
+      engine,
+      reader,
+      source,
+      new Set([reader]),
+    );
+    // The reader's own loop may hold a root unstarted on a slice this
+    // marked.
+    if (marked) this.#notifyCurrencyChanged(reader);
+  }
+
+  /**
+   * Queues a pull by `reader` from `source`, which has just disarmed it,
+   * where `reader` offers demand there (`#followForCarriedDemand()`).
+   */
+  #queueFollowForCarriedDemand(reader: string, source: string): void {
+    if (this.#carriedOffered.get(source)?.has(reader) !== true) return;
+    const following = Promise.resolve().then(() =>
+      this.#followForCarriedDemand(reader, source)
+    ).catch((error) => {
+      console.warn(
+        `memory v2: the pull queued for ${reader} from ${source} failed`,
+        error,
+      );
+    }).finally(() => {
+      this.#currencyAdvancing.delete(following);
+    });
+    this.#currencyAdvancing.add(following);
+  }
+
+  /**
+   * Brings the demand that stands in `space` into line with what the
+   * reading spaces offered, and tells the serving host of each change. An
+   * offered row stands unless `space`'s currency index proves its instance
+   * current: the instance is shared, the reading space is armed with
+   * `space` for no limited time, so that it hears of the next change, and
+   * the index holds the instance as one no piece here is behind on. Called
+   * whenever what is offered, the index, or the arming may have changed.
+   */
+  #refreshCarriedDemand(space: string): void {
+    const offered = this.#carriedOffered.get(space);
+    let readers = this.#carriedDemand.get(space);
+    if (offered === undefined && readers === undefined) return;
+    const engine = this.#resolvedEngines.get(space);
+    for (
+      const reader of new Set([
+        ...offered?.keys() ?? [],
+        ...readers?.keys() ?? [],
+      ])
+    ) {
+      const armed = this.#currencyArmed.get(space)?.get(reader);
+      const rests = engine !== undefined && armed !== undefined &&
+        armed.until === undefined && !this.#currencyHeld(space);
+      const held = readers?.get(reader) ?? new Map<string, CarriedSession>();
+      const stands = new Map<string, CarriedSession>();
+      for (const [sessionId, session] of offered?.get(reader) ?? []) {
+        const rows = new Map(
+          [...session.share.rows].filter(([, row]) =>
+            !rests || row.scopeKey !== "space" ||
+            selectCurrencyExport(engine, {
+                space,
+                id: row.id,
+                scopeKey: row.scopeKey,
+              })?.stale !== false
+          ),
+        );
+        if (rows.size === 0) continue;
+        stands.set(sessionId, {
+          ...session,
+          share: { sessionId, rows },
+        });
+      }
+      for (const [sessionId, session] of [...held]) {
+        if (stands.has(sessionId)) continue;
+        held.delete(sessionId);
+        this.#notifySessionChanged({ kind: "removed", space, sessionId });
+        this.#notifyCarriedDemandChanged(space, session);
+      }
+      for (const [sessionId, session] of stands) {
+        const before = held.get(sessionId);
+        if (
+          before !== undefined &&
+          before.share.rows.size === session.share.rows.size &&
+          [...session.share.rows.keys()].every((key) =>
+            before.share.rows.has(key)
+          )
+        ) continue;
+        held.set(sessionId, session);
+        if (before === undefined) {
+          this.#notifySessionChanged({
+            kind: "opened",
+            space,
+            sessionId,
+            ...(session.principal !== undefined &&
+              { principal: session.principal }),
+          });
+          this.#notifySessionOpened(space);
+        }
+        this.#notifyCarriedDemandChanged(space, session);
+      }
+      if (held.size === 0) {
+        readers?.delete(reader);
+      } else {
+        if (readers === undefined) {
+          readers = new Map();
+          this.#carriedDemand.set(space, readers);
+        }
+        readers.set(reader, held);
+      }
+    }
+    if (readers?.size === 0) this.#carriedDemand.delete(space);
+  }
+
+  /**
+   * Drops every demand carried for the session `sessionId` of `origin`,
+   * which has ended, from each space it was carried into.
+   */
+  #dropCarriedDemandOf(origin: string, sessionId: string): void {
+    for (const [space, readers] of [...this.#carriedOffered]) {
+      let dropped = false;
+      for (const [reader, offered] of [...readers]) {
+        for (const [id, session] of [...offered]) {
+          if (
+            session.origin.space !== origin ||
+            session.origin.sessionId !== sessionId
+          ) continue;
+          offered.delete(id);
+          dropped = true;
+        }
+        if (offered.size === 0) readers.delete(reader);
+      }
+      if (readers.size === 0) this.#carriedOffered.delete(space);
+      if (dropped) this.#refreshCarriedDemand(space);
+    }
+  }
+
+  /** Tells the serving host that the demand `session` carries changed. */
+  #notifyCarriedDemandChanged(space: string, session: CarriedSession): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.demandChanged === undefined) return;
+    try {
+      observer.demandChanged(
+        space,
+        "watch",
+        session.principal,
+        session.sessionId,
+      );
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on demandChanged",
+        error,
+      );
+    }
   }
 
   /**
