@@ -401,13 +401,10 @@ export function make(count: Writable<number>) {
         });
       });
 
-      it("emits an opaque cell input schema for a callback that reads the cell only in a nested function", async () => {
-        // The cell type is printed, and a printed node is read whole, never
-        // taken apart for its value type.
-
+      it("emits a readonly cell input schema for a callback that reads the cell only in a nested function", async () => {
         expect(await inputSchema("lift((c) => () => c.get())")).toEqual({
           type: "number",
-          asCell: ["opaque"],
+          asCell: ["readonly"],
         });
       });
     });

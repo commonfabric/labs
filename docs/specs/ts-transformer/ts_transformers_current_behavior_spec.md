@@ -631,13 +631,25 @@ conservative wildcard path instead of taking partial transitive precision. This
 means a `lift` callback that delegates to a local helper which reads
 `(x as any).foo` will trigger shrink validation on the caller's parameter type,
 while the same helper body in another file will conservatively disable
-shrinking for that parameter. A helper is analyzed in its caller's mode, so a
-handler's analysis, which sees into the callbacks nested in its body, sees into
-the helper's too: a read or write inside a closure the helper declares, or an
-arrow it invokes on the spot, is charged like one in the helper's body. A
-handler that hands a state cell to a local helper which writes it emits that
-cell writable, and one whose helper only reads it emits it read-only (fixture
-`handler-schema/helper-writes-capture`).
+shrinking for that parameter.
+
+The analysis of a builder callback (`lift`, `computed`, `action`, or a
+handler) sees into the functions nested in its body, since they run as part of
+the callback and read its parameters when they do. A read inside a closure the
+callback hands to a helper, inside an arrow it invokes on the spot, or in a
+nested function's parameter default or computed key, is charged to the
+callback's parameter like a read in its own body, and narrows the input schema
+the same way (`test/nested-function-capture-schema.test.ts`). An array method's callback is
+walked once, with its element bound, so a value it stores in a local `Map` is
+still read back through that `Map` afterward.
+A `pattern(...)` callback's analysis does not see into nested functions: each
+function nested in a pattern body is a reactive context of its own. A helper is
+analyzed in its caller's mode, so a builder callback's analysis sees into the
+helper's nested functions too: a read or write inside a closure the helper
+declares, or an arrow it invokes on the spot, is charged like one in the
+helper's body. A handler that hands a state cell to a local helper which writes
+it emits that cell writable, and one whose helper only reads it emits it
+read-only (fixture `handler-schema/helper-writes-capture`).
 A helper parameter the analysis marks wildcard still reports its reads and
 writes, which the caller records at the path it passed, or at the static
 prefix of a dynamic one. The unknown access reaches only what was passed: a
