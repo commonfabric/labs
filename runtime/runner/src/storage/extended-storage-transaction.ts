@@ -133,6 +133,7 @@ import {
 } from "../cfc/runtime-owned-stores.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
+  CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   type CfcPreparationWork,
@@ -887,6 +888,14 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   /** The addresses `CfcTxState.nonBuiltinWrites` holds, so each is held once. */
   #nonBuiltinWriteKeys = new Set<string>();
+
+  /**
+   * The paths a marker the runtime authorized named a served event's
+   * processed claim on this transaction
+   * (`CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM`), keyed as
+   * `#nonBuiltinWriteKeys` keys an address.
+   */
+  #processedClaimKeys = new Set<string>();
 
   /**
    * The stores the runtime owns that outlive the transaction that minted them,
@@ -1955,6 +1964,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * without passing its write chokepoint (`reportUnmarkedWrites()`), so it
    * counts as made under no identity, inside the runtime's privileged
    * persistence scope too, which writes only through the chokepoint.
+   *
+   * A served event's processed claim is left out of the summary. The serving
+   * loop writes it in the handler's own transaction, before the handler runs
+   * and under no identity, and it takes nothing of what the handler reads
+   * (CFC §6.2.2, `executor/processed-claim.ts`). Counted, it would make every
+   * served handler's transaction one of mixed authorship, and nothing a
+   * served handler wrote would carry `TransformedBy`.
    */
   #noteWriteIdentity(
     address: IMemorySpaceAddress,
@@ -1980,6 +1996,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         }));
       }
     }
+    if (!unmarked && this.#isProcessedClaimWrite(address)) return;
     const summary = this.#cfcState.writeIdentity;
     if (summary.multiple) return;
     if (!summary.sawWrite) {
@@ -1991,6 +2008,23 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       summary.multiple = true;
       summary.identity = undefined;
     }
+  }
+
+  /**
+   * Whether `address` is a path the runtime named a served event's processed
+   * claim on this transaction.
+   */
+  #isProcessedClaimWrite(address: IMemorySpaceAddress): boolean {
+    if (this.#processedClaimKeys.size === 0) return false;
+    const path = canonicalizeDocumentPath(toDocumentPath(address.path));
+    return path !== undefined && this.#processedClaimKeys.has(
+      stringTupleKey([
+        address.space,
+        address.id,
+        normalizeCellScope(address.scope),
+        ...path,
+      ]),
+    );
   }
 
   /**
@@ -2591,6 +2625,17 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // could have declared a policy is a question about the document. There
       // is no owner to compare a space against — the claim says what the
       // document is, not which piece it was minted for.
+      if (
+        frozen.kind === "structural-provenance" &&
+        frozen.claim === CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM
+      ) {
+        this.#processedClaimKeys.add(stringTupleKey([
+          frozen.target.space,
+          frozen.target.id,
+          normalizeCellScope(frozen.target.scope),
+          ...canonicalizeLogicalPath(frozen.target.path),
+        ]));
+      }
       if (
         frozen.kind === "structural-provenance" &&
         frozen.claim === CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE &&
@@ -4603,6 +4648,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     state.assertedValueRoots = [];
     state.nonBuiltinWrites = [];
     this.#nonBuiltinWriteKeys.clear();
+    this.#processedClaimKeys.clear();
     state.triggerReads = [];
     state.writePolicyInputs = [];
     state.writePolicyInputIdentities = new Map();
