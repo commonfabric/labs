@@ -1104,6 +1104,18 @@ export class Client {
   }
 
   /**
+   * Indicates whether `encoded`, a request encoded for the current
+   * connection, fits what that connection takes in one request sent whole,
+   * in bytes and in values. Everything fits before the first handshake.
+   *
+   * @internal For `SpaceSession`.
+   */
+  fitsOneRequest(encoded: string): boolean {
+    return this.#requestLimits === undefined ||
+      payloadFits(encoded, wholeLimits(this.#requestLimits));
+  }
+
+  /**
    * How many requests this client has sent and not yet seen answered or
    * settled: a diagnostic, since every entry is dropped when its response
    * arrives, its send is refused, or its connection closes.
@@ -1364,8 +1376,9 @@ export class Client {
    *
    * `options.beforeSend` runs once the request is encoded for the connection
    * it goes out on, with nothing left that could still stop it there, so that
-   * `serverFlags` are that connection's; throwing stops the request, unsent,
-   * with the error thrown.
+   * `serverFlags` and the request bounds are that connection's; it is handed
+   * the encoding, and throwing stops the request, unsent, with the error
+   * thrown.
    */
   async request<Result>(
     message: FabricPlainObject,
@@ -1374,7 +1387,7 @@ export class Client {
       epoch?: number;
       encoded?: string;
       onResponse?: (response: ResponseMessage<Result>) => void;
-      beforeSend?: () => void;
+      beforeSend?: (encoded: string) => void;
     } = {},
   ): Promise<Result> {
     if (options.whileConnected === true && !this.#connected) {
@@ -1407,7 +1420,7 @@ export class Client {
     const encoded = options.encoded !== undefined && options.epoch === epoch
       ? options.encoded
       : this.#encodeRequest(message);
-    options.beforeSend?.();
+    options.beforeSend?.(encoded);
     const { onResponse } = options;
     // Set as the response arrives, which on some transports is before the
     // send settles.
@@ -6036,8 +6049,17 @@ export class SpaceSession {
           onResponse: (response) => {
             if (response.ok !== undefined) pendingCommit.applied = response.ok;
           },
-          beforeSend: () => {
+          beforeSend: (encoded) => {
             if (pendingCommit.sent === true) return;
+            // A connection refuses a request past its bounds by closing, and
+            // the commit would be sent again on each connection after it, so
+            // one that does not fit is refused here instead.
+            if (!this.#client.fitsOneRequest(encoded)) {
+              throw oversizedCommitRefusal(
+                memoryMessageFrameBytes(encoded),
+                this.#client.requestBytesLimit,
+              );
+            }
             if (
               carriesMarkedSplice(pendingCommit.commit) &&
               this.#client.serverFlags?.markedSplicesV1 !== true
@@ -6679,6 +6701,26 @@ const protocolError = (message: string): Error => {
  * its writer can retry; it carries no seq to wait for, as the store's own
  * conflicts do.
  */
+/**
+ * A session's refusal of a commit, unsent, because its encoding, `bytes`
+ * long, is past the bounds its connection holds one request to, of `limit`
+ * bytes and of a number of values. It
+ * carries the name the memory server gives a message it refuses for its
+ * size, which the runner reads as a terminal rejection.
+ */
+const oversizedCommitRefusal = (
+  bytes: number,
+  limit: number | undefined,
+): Error =>
+  Object.assign(
+    new Error(
+      `memory v2 commit not sent: its encoding, ${bytes} bytes, is past ` +
+        `the bounds this connection holds one request to (at most ${limit} ` +
+        "bytes)",
+    ),
+    { name: "MessageTooLargeError" },
+  );
+
 const markedSpliceRefusal = (): Error =>
   Object.assign(
     new Error(

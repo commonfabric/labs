@@ -86,6 +86,8 @@ interface ChatManagerOutput {
     room: Cell<ChatRoomOutput>;
     container?: Cell<{ chatRoom?: Cell<ChatRoomOutput> }>;
     messageAct?: boolean;
+    activity?: { count: number; newestAt?: FabricEpochNsec };
+    notice?: { from: string; id: string; sharedAt: number };
   }>;
   forget: Stream<{
     requestId: string;
@@ -187,7 +189,8 @@ session that has none is refused.
   the same whatever the rooms hold, and a reader of `rooms` loads no room. An
   entry holds the room's link, as a handle that declares nothing of the room,
   and what the manager's handlers recorded of the room when they read it: its
-  kind, its counterpart, its title as a hint, and its admission time.
+  kind, its counterpart, its title and where its conversation stands, each as
+  a hint, and its admission time.
   [`ChatIndexEntry`](ChatIndexEntry.md) says how a reader reads the room itself.
   A room's facts are checked by the handler that records its membership, and
   are not checked again as the list is read. A room the catalog lists with no
@@ -231,7 +234,8 @@ session that has none is refused.
 - **`roomMembership`** keeps explicit choices about individual conversations:
   resolved room links, `saved` or `archived` state, `since`, opaque
   `revision`, and what the handler recording the choice read of the room: its
-  `kind`, a direct room's `counterpart`, and its `title` hint. It is what
+  `kind`, a direct room's `counterpart`, and its `title` and `activity`
+  hints. It is what
   `rooms` lists, and a reader MAY read it, with `sharedSpaceCatalog`, in place
   of `rooms`, applying the catalog's state as `rooms` does. The manager records one for every room it creates, accepts or
   joins, beside the catalog entry a standalone room has, and one for every
@@ -315,16 +319,21 @@ A declaration with any shape of its own at `room`, even
 the room's root, and the schema documents its labels name.
 
 - **What a row holds** is what the manager recorded: the room, its `kind`, a
-  direct room's `counterpart`, its `since`, its `title` hint, and its
-  `revision`. A member's retitle reaches this user's row once this user next
-  visits the room.
+  direct room's `counterpart`, its `since`, its `title` and `activity` hints,
+  and its `revision`. A member's retitle reaches this user's row once this
+  user next visits the room.
 - **Where a conversation stands**, the count of its messages and when the
-  newest was sent, is not in the row: no event reaches this user's manager when
-  someone else writes in a room, since that someone's runtime can't write this
-  user's Home. A reader that shows it reads the room's `messages.count` and
-  `messages.newestAt` for the rows it shows, through a link declaring those
-  alone. That reads the room's root and the document holding its summary, and
-  no message, and doesn't start the room.
+  newest was sent, is the row's `activity`: as of this user's last visit to
+  the room, or their own last message in it
+  ([`ChatIndexEntry`](ChatIndexEntry.md)). No event reaches this user's
+  manager when someone else writes in a room, since that someone's runtime
+  can't write this user's Home, so another member's message shows once this
+  user next visits the room. Showing it reads nothing in any room's space. A
+  reader that shows it current reads the room's `messages.count` and
+  `messages.newestAt` instead, through a link declaring those alone. That
+  opens the room's space and reads its root and the document holding its
+  summary, and no message, and doesn't start the room, so a reader showing a
+  long list SHOULD show the row's `activity`.
 - **One request's outcome** is read at `requests.<requestId>`, which delivers
   that outcome alone. `requests` is one document, which the reader holds whole.
 - **Opening a room** is where a room that is gone, or no longer admits the
@@ -595,6 +604,14 @@ matching declaration is refused with `space-own-chat`.
   reaction in the room. A room marks the `joinRoom` it sends with each of
   those; absent, the join came some other way, a retitle or the user opening
   the room among them.
+- `activity?: { count: number; newestAt?: FabricEpochNsec }` — Where the
+  conversation stands once a message the user sent is recorded: the length of
+  the room's message list, and the message's `sentAt`. A room sends it on the
+  `joinRoom` it sends for a message, and on no other.
+- `notice?: { from: string; id: string; sharedAt: number }` — The notice that
+  the room changed which the join is sent for, as the user's host read it from
+  their share inbox: its sender, its `id` and its `sharedAt`
+  ([`private-inbox.md`](../../features/private-inbox.md#a-notice-that-a-room-changed)).
 
 Makes a room this user has joined one of their chats. The caller says what
 happened, that the user entered the room, and the manager decides what that
@@ -605,10 +622,13 @@ opening the room's page.
 
 - **Admitted:** without a reviewed gesture, as for `accept`.
 - **Effect:** for a room this user's chats list already, nothing but to bring
-  the title its catalog entry and its membership hold up to the room's, where
-  they differ, leaving the entry's revision and membership state as they are;
-  with `messageAct`, which arrives with every message and reaction and none of
-  which changes the title, not even that, and the room's `about` goes unread.
+  the title its catalog entry and its membership hold, and its membership's
+  `activity`, up to the room's `about.title`, `messages.count` and
+  `messages.newestAt`, where they differ, leaving the entry's revision and
+  membership state as they are; with `messageAct`, which arrives with every
+  message and reaction and none of which changes the title, the room goes
+  unread, and nothing changes but the membership's `activity`, to what a
+  message's `activity` says, where it differs.
   One read is added to either: a join of a room this user's manager holds a
   notice of reads the room's roster, and drops each of those notices whose
   recipient the roster lists, since a recipient who has joined, however they
@@ -623,7 +643,12 @@ opening the room's page.
   room this user created, which `accept` refuses, is listed again, and its entry
   in `direct` stays as it is. Sending it again changes nothing, so a caller MAY
   send it each time the user enters the room, without first reading whether
-  their chats list it.
+  their chats list it. A join naming a `notice` is for a room this user's
+  chats list as saved, and does for it what a join with no `messageAct` does,
+  and also marks the notice acted on in the catalog's `notices`
+  ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#notice-marks)),
+  in the same transaction. For any other room it does nothing: it restores no
+  forgotten room, records no membership, and writes no mark.
 - **Outcome:** `done` with the entry, or `refused` for the reasons `accept`
   gives, other than that this user created a direct room. Without a
   `requestId`, a join of a room this user's chats list already records no

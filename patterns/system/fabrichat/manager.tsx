@@ -82,11 +82,14 @@ import type { ShareInboxPiece } from "../profile-home/profile-home.tsx";
 import {
   changeSharedSpaceMembershipIn,
   isSharedSpaceCatalog,
+  isSharedSpaceNoticeMark,
+  markSharedSpaceNoticeIn,
   readSharedSpaceCatalog,
   registerSharedSpaceIn,
   retitleSharedSpaceIn,
   type SharedSpaceCatalogStorage,
   type SharedSpaceEntry,
+  type SharedSpaceNoticeMark,
 } from "../shared-space/shared-space-catalog.ts";
 import { shortDid } from "../social-space/short-did.ts";
 import { sameNameMarks } from "./logic.ts";
@@ -104,6 +107,7 @@ import {
   type ChatManagerProfile,
   type ChatProfile,
   type ChatRequestOutcome,
+  type ChatRoomActivity,
   type ChatRoomKind,
   type ChatRoomLink,
   epochNsecFromMsec,
@@ -279,6 +283,22 @@ export interface ManagerStreamEvent {
    * under as it is.
    */
   messageAct?: boolean;
+
+  /**
+   * Where the conversation stands after a message the user sent in the room,
+   * which a `joinRoom` marked `messageAct` carries for a message, and not for
+   * a reaction.
+   */
+  activity?: ChatRoomActivity;
+
+  /**
+   * The notice that the room changed which a `joinRoom` is sent for, as the
+   * user's host read it from their share inbox. Such a join brings the title
+   * the catalog lists the room under up to the room's own, and marks the
+   * notice acted on in the catalog, for a room the user's chats list as saved,
+   * and does nothing for any other room.
+   */
+  notice?: SharedSpaceNoticeMark;
 
   /**
    * Whether accepting a room leaves its entry archived, when it is; absent,
@@ -480,6 +500,65 @@ const refreshListedTitle = (
     space,
     title: title.slice(0, OFFER_TITLE_MAX_LENGTH),
   });
+};
+
+/**
+ * Where the conversation in `room` stands, as the room offers it; `undefined`
+ * where the room offers none. It reads the room's root and the document
+ * holding its summary, and no message.
+ */
+const activityOf = (room: Cell<ChatRoomLink>): ChatRoomActivity | undefined => {
+  const messages = room.key("messages").get();
+  if (typeof messages?.count !== "number") return undefined;
+  return {
+    count: messages.count,
+    ...(messages.newestAt === undefined ? {} : { newestAt: messages.newestAt }),
+  };
+};
+
+/** Whether `a` and `b` say the same of where a conversation stands. */
+const sameActivity = (
+  a: ChatRoomActivity | undefined,
+  b: ChatRoomActivity | undefined,
+): boolean =>
+  a === undefined || b === undefined ? a === b : a.count === b.count && (
+    a.newestAt === undefined || b.newestAt === undefined
+      ? a.newestAt === b.newestAt
+      : nsecOf(a.newestAt) === nsecOf(b.newestAt)
+  );
+
+/**
+ * Notes, in the membership of `room` among `memberships`, the room's `title`
+ * and `activity` where each is given and differs from what the membership
+ * holds, and writes nothing where neither does. The membership's revision
+ * and state stay as they are.
+ */
+const noteHeard = (
+  roomMembership: RoomMembershipCell,
+  memberships: readonly RoomMembership[],
+  room: Cell<ChatRoomLink>,
+  { title, activity }: {
+    title?: string | undefined;
+    activity?: ChatRoomActivity | undefined;
+  },
+): void => {
+  const membership = memberships.find((known) => sameRoom(known.room, room));
+  if (membership === undefined) return;
+  const retitled = title !== undefined && title !== membership.title;
+  const active = activity !== undefined &&
+    !sameActivity(activity, membership.activity);
+  if (!retitled && !active) return;
+  roomMembership.set(
+    memberships.map((known) =>
+      sameRoom(known.room, room)
+        ? {
+          ...known,
+          ...(retitled && { title }),
+          ...(active && { activity }),
+        }
+        : known
+    ),
+  );
 };
 
 /**
@@ -1424,6 +1503,11 @@ const performManagerAct = (
   const declared = container?.key("chatRoom").get();
   const hasDeclaration = declared !== undefined && equals(declared, room);
 
+  // A notice that a room changed tells of a room the user keeps, and joins
+  // them to no other.
+  const notice = act === "joinRoom" ? event?.notice : undefined;
+  if (notice !== undefined && membership?.state !== "saved") return;
+
   // A room this user's chats list already is one they have joined, so
   // joining it again changes nothing, and a join that names no request
   // records nothing either: a caller may send one each time the person
@@ -1439,27 +1523,33 @@ const performManagerAct = (
         listsRoomIn(catalog.get(), joinedSpace)))
   ) {
     // Every message and reaction in the room sends one of these, and none of
-    // them changes the room's title, so those leave the room's `about`
-    // unread. Any other join reads only `about`, whose links it doesn't
-    // follow, and writes the catalog and the membership only where their
-    // titles differ from the room's, which a retitle makes them. A room
+    // them changes the room's title, so those leave the room unread: a
+    // message's carries where the conversation stands, which the membership
+    // notes. Any other join reads only `about`, whose links it doesn't
+    // follow, and the room's message count and newest time, and writes the
+    // catalog and the membership only where what they hold differs from the
+    // room's, which a retitle or another member's message makes them. A room
     // listed only through a container has no catalog entry, and gets no
     // write there. A room this user holds a notice of has its roster read
     // too, so that a notice whose recipient has joined since is dropped.
+    // A notice that the room changed is marked acted on as the title is
+    // brought up, so the user's host acts on it once.
     dropJoinedNotices(state, room);
+    const known = state.roomMembership.get() ?? [];
     if (isWellFormedDID(joinedSpace) && event?.messageAct !== true) {
       const title = room.key("about").get()?.title;
       refreshListedTitle(catalog, joinedSpace, title);
-      if (
-        membership !== undefined && title !== undefined &&
-        title !== membership.title
-      ) {
-        state.roomMembership.set(
-          (state.roomMembership.get() ?? []).map((known) =>
-            sameRoom(known.room, room) ? { ...known, title } : known
-          ),
-        );
+      if (isSharedSpaceNoticeMark(notice)) {
+        markSharedSpaceNoticeIn(catalog, notice);
       }
+      noteHeard(state.roomMembership, known, room, {
+        title,
+        activity: activityOf(room),
+      });
+    } else if (event?.messageAct === true) {
+      noteHeard(state.roomMembership, known, room, {
+        activity: event.activity,
+      });
     }
     return;
   }
@@ -1773,6 +1863,7 @@ const performManagerAct = (
   }
   const counterpart = ownDirect ? undefined : creator;
   const title = room.key("about").get()?.title;
+  const activity = activityOf(room);
   // A room the catalog lists already is listed from when the catalog
   // admitted it, so recording its membership leaves its place in the list
   // as it was.
@@ -1781,6 +1872,7 @@ const performManagerAct = (
     kind,
     ...(counterpart === undefined ? {} : { counterpart }),
     ...(title === undefined ? {} : { title }),
+    ...(activity === undefined ? {} : { activity }),
     since: epochNsecFromMsec(catalogEntries[space]?.since ?? Date.now()),
   };
   // Registers the room, or restores an archived entry at the revision just
@@ -1822,12 +1914,13 @@ const performManagerAct = (
           state: "saved",
         },
       ]);
-    } else if (title !== undefined && title !== membership.title) {
-      state.roomMembership.set(
-        memberships.map((known) =>
-          sameRoom(known.room, room) ? { ...known, title } : known
-        ),
-      );
+    } else {
+      // The stored records, not the catalog's view of them, so that only the
+      // title and the activity change.
+      noteHeard(state.roomMembership, state.roomMembership.get() ?? [], room, {
+        title,
+        activity,
+      });
     }
   }
   // A user whose profile hasn't resolved is listed without joining the
@@ -2217,6 +2310,9 @@ const listedEntries = (
       kind: membership.kind,
       ...(counterpart === undefined ? {} : { counterpart }),
       ...(title === undefined ? {} : { title }),
+      ...(membership.activity === undefined
+        ? {}
+        : { activity: membership.activity }),
       since: membership.since,
       revision: membership.revision,
     };
