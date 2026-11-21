@@ -455,9 +455,16 @@ export type StorageStep = Step & {
   planLabelBounds: number;
   /**
    * The documents the step's commits changed, the label entries they hold
-   * after it, and the size of those entries as JSON.
+   * after it, and the size of those entries as JSON with each label held
+   * in place. With `SCALE_LABEL_PATHS` set, also how many entries there are
+   * of each of the 16 most frequent forms of path.
    */
-  labelEntries: { documents: number; entries: number; bytes: number };
+  labelEntries: {
+    documents: number;
+    entries: number;
+    bytes: number;
+    paths?: Record<string, number>;
+  };
   /** The reason of each commit the storage refused. */
   refused: string[];
   /** The counters of the runtime's preparation that moved in the step. */
@@ -535,6 +542,29 @@ const runStorage = async (
       return undefined;
     },
   });
+  // With `SCALE_RECORDS` set: the write records of each commit, each with
+  // its size as JSON with its inputs held in place and the size of each of
+  // its members, on the error stream.
+  if (Deno.env.get("SCALE_RECORDS") !== undefined) {
+    storage.onCommitted((writes) => {
+      for (const write of writes) {
+        const { target, record, ...rest } = write;
+        console.error(JSON.stringify({
+          record,
+          at: `${storage.documentOf(target.id).slice(0, 12)}/${
+            target.path.join("/")
+          }`,
+          bytes: JSON.stringify(write).length,
+          members: Object.fromEntries(
+            Object.entries(rest).map(([name, value]) => [
+              name,
+              JSON.stringify(value)?.length ?? 0,
+            ]),
+          ),
+        }));
+      }
+    });
+  }
   // The hooks, with the time each takes added up.
   const spent: HookTimes = {
     begin: 0,
@@ -667,6 +697,9 @@ const runStorage = async (
         let found = 0;
         let bytes = 0;
         let held = 0;
+        // The entries by the kind of their document, the first segments
+        // of their path with each index as `#`, and their class.
+        const shapes = new Map<string, number>();
         for (const entity of entities) {
           const metadata = readStoredCfcMetadata(tx, {
             space,
@@ -678,8 +711,27 @@ const runStorage = async (
           if (metadata === undefined) continue;
           found += metadata.labelMap.entries.length;
           bytes += JSON.stringify(metadata.labelMap.entries).length;
+          for (const { path, observes } of metadata.labelMap.entries) {
+            const kind =
+              instance?.store.docs.get(storage.documentOf(entity))?.kind ??
+                "input";
+            const shape = `${kind} /${
+              path.map((segment) => /^\d+$/.test(segment) ? "#" : segment)
+                .slice(0, 4).join("/")
+            } ${observes ?? "value"}`;
+            shapes.set(shape, (shapes.get(shape) ?? 0) + 1);
+          }
         }
-        return { documents: held, entries: found, bytes };
+        return {
+          documents: held,
+          entries: found,
+          bytes,
+          ...(Deno.env.get("SCALE_LABEL_PATHS") === undefined ? {} : {
+            paths: Object.fromEntries(
+              [...shapes].sort((a, b) => b[1] - a[1]).slice(0, 16),
+            ),
+          }),
+        };
       } finally {
         tx.abort();
       }
