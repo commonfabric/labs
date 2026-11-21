@@ -6613,6 +6613,16 @@ export class SpaceServer implements TransactionSealDestination {
           const complete = await runtime.runner.seedOwedDefaultsFor(
             root,
             identity,
+            {
+              // A seed the wave lost for good, after it came back as done
+              // here: the pair is unseeded again, and asked again when the
+              // key next changes, as an incomplete seeding is.
+              onLost: () => {
+                if (this.#active && this.#runtime === runtime) {
+                  seeded.delete(seedKey);
+                }
+              },
+            },
           );
           if (!this.#active || this.#runtime !== runtime) return;
           // An incomplete seeding — the piece stopped, or a declaration

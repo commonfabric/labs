@@ -192,10 +192,12 @@ faced them:
   serving-loop.md §7 `ownedDefaultSeeds`): the start that would have
   seeded them runs on no viewer's runtime under served views. A
   viewer's first write can create its instance before the seed reaches
-  it, holding only the field written; the seed then fills the default's
-  other fields under it and changes none the instance holds, and a seed
-  whose create a wave dropped for that write runs once more to do so
-  (serving-loop.md §3d). The
+  it, holding only the fields written and no owner link; the seed then
+  fills the default's other fields under it, at any depth, writes the
+  owner link, and changes none the instance holds. A seed whose create a
+  wave dropped for that write runs once more to do so (serving-loop.md
+  §3d), and one lost for good leaves the demander unseeded, asked again
+  when its demand next changes. The
   serving runtime's own start of a piece names no actor and seeds no
   instance: not the service identity's session, which no viewer reads
   and which every new serving runtime replaces.

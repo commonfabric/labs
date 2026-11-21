@@ -822,6 +822,19 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
         instanceHolds(engine, bobSession, '"members":""'),
     );
     expect(drafts()).toEqual([{ title: "B", members: "" }]);
+    // The repaired instance carries its owner link to the piece, as a seeded
+    // one does.
+    const draftId =
+      [...rowsUnder(engine, bobSession)].find(([, value]) =>
+        JSON.stringify(value ?? null).includes('"title"')
+      )![0];
+    const pieceId = bob.getCell(space, "fo-n4-result").getAsNormalizedFullLink()
+      .id;
+    const ownerLink = Engine.read(
+      engine,
+      { id: draftId, scopeKey: bobSession } as never,
+    )?.result;
+    expect(JSON.stringify(ownerLink ?? null)).toContain(pieceId);
     cancelDraft();
     setup.cancel();
   });
