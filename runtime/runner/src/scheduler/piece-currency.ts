@@ -438,6 +438,7 @@ export function snapshotPieceCurrency(
         const { attributed, unattributed } = writersOf(read.id);
         if (
           !attributed && unattributed.length === 0 &&
+          !writes.has(read.id) &&
           entityKindOfIdString(read.id) === "computed"
         ) readsUnstarted = true;
         const takenOver = unattributed.map(readsOf);

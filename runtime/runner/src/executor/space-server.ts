@@ -7420,7 +7420,7 @@ export class SpaceServer implements TransactionSealDestination {
   ): CurrencySnapshot | undefined {
     const currency = this.#currency;
     if (currency !== undefined && blocked && currency.staleUpstream) {
-      this.#upstreamRecordBlocked = true;
+      this.#noteUpstreamRecordBlocked(currency);
     }
     // The runs of this cycle are over, so what they were withdrawn for is
     // known, whether or not a record can be taken.
@@ -7442,7 +7442,11 @@ export class SpaceServer implements TransactionSealDestination {
     // A piece started upstream of something stale is waited on until its
     // record is stored. A cycle that ends where none can be taken does not
     // say when one will be, so the wait ends at the next judgment.
-    this.#upstreamRecordBlocked = !settled && currency.staleUpstream;
+    if (!settled && currency.staleUpstream) {
+      this.#noteUpstreamRecordBlocked(currency);
+    } else {
+      this.#upstreamRecordBlocked = false;
+    }
     if (!settled) return undefined;
     // The watermark covers this loop's own commits as well as the inputs
     // below them, and forgets the own ones it covers. A cycle that no input
@@ -7460,6 +7464,20 @@ export class SpaceServer implements TransactionSealDestination {
       this.#carriedDemand?.retryOwed === true
     ) this.#syncCarriedDemand();
     return snapshot;
+  }
+
+  /**
+   * Helper for `#takeCurrencySnapshot()`, which notes that the cycle ended
+   * where no record could be taken while something is stale upstream, and
+   * has the next cycle judge again: a piece that ran upstream of it is not
+   * waited on for a record nobody can say the time of.
+   */
+  #noteUpstreamRecordBlocked(currency: StoreCurrency): void {
+    if (this.#upstreamRecordBlocked) return;
+    this.#upstreamRecordBlocked = true;
+    if (!currency.noteIndexChanged()) return;
+    this.#pendingCurrencyWake = true;
+    this.#feedArrived?.resolve();
   }
 
   /**

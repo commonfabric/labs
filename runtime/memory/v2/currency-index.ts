@@ -215,6 +215,12 @@ export type CurrencyMarked = {
 
   /** The pieces that enclose the piece. */
   under: string[];
+
+  /**
+   * Present where the slice is left marked `1`: none of its own rows is
+   * behind, and an input of it is stale.
+   */
+  upstream?: true;
 };
 
 /** What storing a batch found. */
@@ -1059,7 +1065,13 @@ const advance = (context: Context): CurrencyMarked[] => {
       roots = underOf(context, ref.piece);
       under.set(ref.piece, roots);
     }
-    return { piece: ref.piece, slice: ref.slice, seq, under: roots };
+    return {
+      piece: ref.piece,
+      slice: ref.slice,
+      seq,
+      under: roots,
+      ...(markOf(context, ref) === 1 && { upstream: true as const }),
+    };
   });
 };
 

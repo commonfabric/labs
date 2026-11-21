@@ -533,7 +533,7 @@ export class StoreCurrency {
         // a piece that does not run here.
         this.#noteStale([
           ...stored.blocked,
-          ...stored.marked.map(({ piece }) => piece),
+          ...upstreamMarked(stored.marked),
         ]);
         // A stored record is what clears a held root or a stale running
         // piece, or shows that it stays stale, so either is judged again.
@@ -652,7 +652,7 @@ export class StoreCurrency {
       const counts = this.#stats.currency.refused;
       counts[reason] = (counts[reason] ?? 0) + count;
     }
-    this.#noteStale(judged.marked.map(({ piece }) => piece));
+    this.#noteStale(upstreamMarked(judged.marked));
     const upstream = this.#takeUpstream(judged.upstream);
     const pieces = new Map(
       judged.servable.map(({ root, piece }) => [root, piece]),
@@ -771,9 +771,10 @@ export class StoreCurrency {
   }
 
   /**
-   * Notes that the index marked a slice of each of `pieces`, or stored one
-   * marked for an input upstream of it. One that runs here may be stale
-   * only through what is upstream, which the next judgment is asked.
+   * Notes that the index holds a slice of each of `pieces` stale for an
+   * input upstream of it, with none of its own rows behind. One that runs
+   * here may be stale only through a piece that does not, which the next
+   * judgment is asked.
    */
   #noteStale(pieces: readonly string[]): void {
     for (const piece of pieces) {
@@ -800,7 +801,7 @@ export class StoreCurrency {
     const marked = await this.#server.advanceCurrency(this.#space);
     if (marked.length === 0) return [];
     this.#judgmentOwed = true;
-    this.#noteStale(marked.map(({ piece }) => piece));
+    this.#noteStale(upstreamMarked(marked));
     return this.#rearmsFor(marked);
   }
 
@@ -841,6 +842,10 @@ export class StoreCurrency {
     return rearm;
   }
 }
+
+/** The pieces a slice of which `marked` reports as stale upstream. */
+const upstreamMarked = (marked: readonly CurrencyMarked[]): string[] =>
+  marked.filter(({ upstream }) => upstream === true).map(({ piece }) => piece);
 
 /**
  * The lowest seq at which `marked` marks `piece` or a piece beneath it, or

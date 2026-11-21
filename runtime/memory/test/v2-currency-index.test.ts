@@ -270,7 +270,7 @@ describe("currency-index", () => {
       expect(advance()).toEqual(["of:piece"]);
     });
 
-    it("marks `1` each clean piece downstream of one that became marked, through a chain", () => {
+    it("marks `1` each clean piece downstream of one that became marked, through a chain, and reports each of those as stale upstream", () => {
       const asOf = write("of:a", "computed:b", "computed:c");
       store(asOf, [
         record("of:pieceB", {
@@ -290,8 +290,20 @@ describe("currency-index", () => {
 
       expect(advanceCurrencyCursor(engine, { space: SPACE })).toEqual([
         { piece: "of:pieceB", slice: "space", seq: changed, under: [] },
-        { piece: "of:pieceC", slice: "space", seq: changed, under: [] },
-        { piece: "of:pieceD", slice: "space", seq: changed, under: [] },
+        {
+          piece: "of:pieceC",
+          slice: "space",
+          seq: changed,
+          under: [],
+          upstream: true,
+        },
+        {
+          piece: "of:pieceD",
+          slice: "space",
+          seq: changed,
+          under: [],
+          upstream: true,
+        },
       ]);
       expect([markOf("of:pieceB"), markOf("of:pieceC"), markOf("of:pieceD")])
         .toEqual([2, 1, 1]);

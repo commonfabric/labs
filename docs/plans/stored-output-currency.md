@@ -1,12 +1,12 @@
 # Serving a piece's stored outputs while they are current
 
-Status: In progress. Stages 1 to 4 are built, with the index kept per viewer
+Status: In progress. Stages 1 to 5 are built, with the index kept per viewer
 slice, and a toolshed runs `skip` unless `SERVER_EXECUTION_CURRENCY_INDEX`
 says otherwise. Stage 3 measured a
 synthetic Topics board and a counter in the browser
 ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md));
-a deployed space and the production board are not measured. Stages 5 to 8
-are not started.
+a deployed space and the production board are not measured, and stage 5 is
+not measured at all. Stages 6 to 8 are not started.
 [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)
 continues this plan for a piece that reads another space or a wish, and its
 steps 1 to 3 come before stage 5.
@@ -281,14 +281,61 @@ fails the second condition, so the piece starts and seeds it.
 
 ### Starting what is stale upstream
 
-A marked piece that is not running, and that writes a document a running
-demanded piece reads, is demanded by the loop itself. Its root joins the
-structure load, indexed under the reading piece's demand keys the way an
-enclosing piece is, so its runs carry the reader's demanders and a narrowed
-writer computes their instances. The document enters the demanded entities so
-its writers run. The loop asks the store for those producers after each
-advance that marked something, following marked pieces upstream until it
-reaches clean ones.
+A root that is stale only through what is upstream of it is not made current
+by starting its piece, which would derive from what the store holds. The
+judgment tells such a root from one whose own piece is behind, and names what
+to start for it.
+
+A slice marked `1` is stale only upstream when each read that keeps it stale
+is of an instance another recorded piece is to bring up to date. That is an
+instance a piece behind on its own rows decides, reached through any number of
+slices marked `1` between, or an instance a recorded piece writes and none
+vouches for, as a viewer's own instance is before that piece has run for the
+viewer. A slice kept stale by anything else is not: a derived document no
+recorded piece writes, an instance of another space, a read that names no one
+instance. A root that would pass but for slices stale only upstream is
+**held**. Under `skip` it is left unloaded, as a root the store can serve is.
+Under `record` it is loaded, and its piece is then one that runs and is stale
+upstream.
+
+The loop demands the instances those reads name, for the pairs the reads were
+made for. It does so as demand carried into its own space: the rows stand in
+the space's demand set as a session's would, the memory server adds a row for
+each piece the index records as writing the instance, and the demand pass
+loads and starts that piece like any demanded one. So the piece runs for the
+reader's demanders, and a writer narrowed to a viewer computes that viewer's
+instance. In the chain A, B, C, a demand for C names A's output as read by B,
+starts A, and holds C. Where A derives a new value, B's row is then behind,
+the next judgment names B's output, and B starts. Where A derives the value it
+held, the marks of B and C clear, and C is served from the store without B or
+C starting.
+
+A piece that runs and reads the output of one that does not is found stale the
+same way. The loop advances the cursor on each cycle that drained input while
+such a piece runs, and each piece a commit or a stored record marked, that
+runs, is asked about in the next judgment. A run withdrawn for a scoped
+instance its writer has not produced for the run's viewer demands that
+instance the same way.
+
+While a root is held, or a running piece is stale upstream, the watermark does
+not advance. The pieces upstream run, their records are stored, and the
+judgment that follows either finds the root servable or finds its own piece
+behind and loads it; the watermark moves once neither is left. The records of
+the pieces that ran are taken as of the inputs the settle covered, and not as
+of the held watermark.
+
+The loop gives up on what is upstream of a root or a running piece when none
+of the pieces named for it can change the judgment: one whose load ended
+without a start, one that ran and was recorded with the reader stale still,
+and one that ran in a cycle that ended where no record could be taken. A root
+given up on is loaded as a refused one is, and is not held again while the
+same pieces are named for it (`currency.upstreamAbandoned`).
+
+The demanded rows are withdrawn once nothing is stale upstream, so a piece
+started this way stays running and is no longer demanded for the reader's
+viewers. The next change upstream of it is found through the index again,
+which takes a cycle or two in which the watermark can pass the change before
+the reader is found stale.
 
 ## Checking it before relying on it
 
@@ -395,11 +442,12 @@ wrong.
    a deployed space has been measured.
 4. **Not starting a current piece.** `skip` mode: the demand pass leaves a
    servable root unloaded, re-judges it, and re-arms it when it is marked.
-5. **Starting stale producers.** The index lists the marked producers of a
-   set of pieces, and the loop demands them itself. A producer in another
-   space is demanded through the same step
+5. **Starting stale producers.** Built, as "Starting what is stale upstream"
+   says: a judgment holds a root that is stale only upstream and names the
+   instances to demand, and the loop demands them in its own space the way
+   it carries demand into another
    ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
-   step 5), so the two are built together.
+   step 5). What it costs is not measured.
 6. **Judging before activation.** The host judges when a session opens a
    parked space and activates only when a root fails or events are pending. A
    commit into a space with live sessions and no serving loop advances the
@@ -463,13 +511,23 @@ write:
 16. A piece with a debounced computation still invalid at the settle is
     recorded marked.
 
-For stage 5:
+For stage 5, all of which exist in
+`runtime/runner/test/executor/space-server-currency-upstream.test.ts`, over
+a chain in which A derives `a` from an input, B derives `b` from `a`, and C
+derives `c` from `b`:
 
-17. The A, B, C case: with all three recorded and none running, a change to
-    `a` followed by a demand for C alone starts B, and C's session reads the
-    value derived from the new `a`, including where B's writer is narrowed to
-    the demanding user.
-18. In that case, when B's recomputation leaves `b` equal, C is not started.
+17. With all three recorded and none running, a change to A's input
+    followed by a demand for C alone starts A and B, and C's session reads
+    the value derived from the new input, including where B's writer is
+    narrowed to the demanding user.
+18. In that case, when A's recomputation leaves `a` equal, neither B nor C
+    is started, and all three are left clean.
+
+The same file holds three cases beside them. The watermark does not reach
+a change to A's input before the store holds what C derives from it. A C
+that runs already, under `record`, is brought the new value. And a viewer B
+never ran for, who demands C alone with nothing changed, has B started for
+them.
 
 For slices, in the index tests and in `space-server-currency.test.ts`, all
 of which exist:

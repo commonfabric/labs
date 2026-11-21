@@ -523,6 +523,23 @@ describe("piece-currency", () => {
       }
     });
 
+    describe("a read of the output of a piece that is not started", () => {
+      it("is reported for a read of a derived document no registered computation writes", () => {
+        expect(snapshotOf({ reads: [{ id: "computed:far" }] }).readsUnstarted)
+          .toBe(true);
+      });
+
+      it("is not reported for a read of the piece's own derived document", () => {
+        expect(snapshotOf({ reads: [{ id: "computed:out" }] }).readsUnstarted)
+          .toBe(false);
+      });
+
+      it("is not reported for a read of a document that is no derived one", () => {
+        expect(snapshotOf({ reads: [{ id: "of:input" }] }).readsUnstarted)
+          .toBe(false);
+      });
+    });
+
     it("reports the `space` slice of a piece with a live computation that is invalid as not clean, and vouches for nothing", () => {
       const taken = snapshotOf({ status: "invalid" });
 

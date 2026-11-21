@@ -427,6 +427,42 @@ pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
 asks for (`docs/features/document-release.md`).
 
+**A root stale upstream.** *(Behind `SpaceServerPolicy.currencyIndex`.)* A
+root whose piece is stale only through what is upstream of it is not made
+current by starting that piece: the piece would derive from what the store
+holds. The judgment tells such a root apart. A slice marked `1` is stale only
+upstream when each read that keeps it stale is of an instance another recorded
+piece is to bring up to date: one a piece that is behind on its own rows
+decides, through any number of slices marked `1` between, or one a recorded
+piece writes and none vouches for, as a viewer's own instance is before that
+piece has run for the viewer. A root that passes but for such slices is held.
+Under `skip` it is neither loaded nor started, and stays among the roots
+awaiting a first load; under `record` it is loaded, and its piece is then one
+that runs and is stale upstream. The loop demands the instances those reads
+name, in its own space, for the pairs the reads were made for, as demand it
+carries into itself (§3b): each stands as a root, with a row for the piece
+that writes it, so the demand pass loads and starts that piece as it does any
+demanded one, and its runs are supplied the reader's demanders. A piece that
+runs here and reads the output of one that does not is found stale the same
+way: the loop brings the index's marks up to the store's head on each cycle
+that drained input while one does, and asks about each such piece a commit or
+a stored record marked. A run withdrawn for a scoped instance its writer has
+not produced for the run's viewer (§3d) demands that instance the same way.
+While a root is held, or a running piece is stale, upstream, W does not
+advance: what a session reads of it is not derived through the inputs above W
+until the pieces upstream have run, their records are stored, and the judgment
+that follows finds the root servable or finds its own piece behind and loads
+it. The loop gives up on what is upstream of a root or a running piece when
+none of the pieces named for it can change that: one whose load ended without
+a start, one that ran and was recorded with the reader stale still, and one
+that ran in a cycle that ended where no record could be taken. A root given up
+on is loaded as a refused one is. Impl: `judgeCurrencyRoots()` and
+`upstreamReadsOf()` in `runtime/memory/v2/currency-index.ts`,
+`StoreCurrency.judge()` in `runtime/runner/src/executor/store-currency.ts`,
+`#releaseStuckUpstream()` in `runtime/runner/src/executor/space-server.ts`;
+pinned in
+`runtime/runner/test/executor/space-server-currency-upstream.test.ts`.
+
 **A computed document a demand names.** *(RULED 2026-11-21.)* A `computed:`
 document holds what a derivation wrote, with a `result` back-link to the piece
 that derives it and no pattern pointer of its own. A demand that names one as
@@ -1320,6 +1356,10 @@ executing:
   reached it with no pair is carried on with its origin for the reads made
   in the `space` slice, and the memory
   server drops every row of an origin session when that session ends. A
+  space's own loop offers rows the same way for what keeps one of its roots
+  or running pieces stale upstream (§1, "A root stale upstream"): each of
+  those rows stands, since its own index named the instance, and a session
+  of the space is carried as a pair without the access list being asked. A
   slice that read what a live, clean writer
   that names no piece wrote, such as a wish's shared hashtag resolver, takes
   over that writer's reads as its own. Every slice of a record is stored marked when the piece's root is
@@ -2642,7 +2682,8 @@ demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
 structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, currency:
 {recordsStored, unvouched, judged, servable, refused, servedFromStore,
-rearmed, indexWakes, expiryWakes, falseClean, carried, carriedRefused},
+rearmed, indexWakes, expiryWakes, falseClean, carried, carriedRefused,
+heldUpstream, upstreamAbandoned},
 settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
@@ -2837,7 +2878,11 @@ would have served a stale value; `indexWakes` and `expiryWakes` the times
 the loop was woken to judge a root it had left unloaded, because the index
 changed from outside the loop or a slice's record expired; `carried` the
 rows of demand the loops offer to carry into other spaces now, and
-`carriedRefused` the rows a space they were sent to refused (§3b).
+`carriedRefused` the rows a space they were sent to refused (§3b);
+`heldUpstream` the roots a `skip` loop left unloaded because what the store
+held of them was stale only upstream, once each time a root is first held,
+and `upstreamAbandoned` the roots and running pieces the loop gave up
+waiting on what is upstream of them for (§1).
 `ownedDefaultSeeds` the (piece root, demanding pair) seedings the passes
 completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
 scope narrower than its result (scoped-cell-instances.md, "A pattern-owned

@@ -2504,7 +2504,13 @@ the per-epic implementation notes).
   that space's index does not prove the instance current: `currency.carried`
   counts the rows offered now, and `currency.carriedRefused` the rows a
   space refused, as it does an actor's own instance where the actor may not
-  read the space.
+  read the space. A root that is stale only through what is upstream of it,
+  in its own space, is not made current by starting its piece: the loop
+  demands the instances that keep it stale, which starts the pieces that
+  write them, and holds the watermark until the root is judged again.
+  `currency.heldUpstream` counts the roots `skip` left unloaded for that,
+  and `currency.upstreamAbandoned` the ones the loop gave up waiting for
+  and loaded.
   `skip` acts on the judgment: a root
   whose piece vouches for every demanded instance of it, in slices that are
   clean, is neither loaded nor started, until an input marks a slice a

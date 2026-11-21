@@ -588,7 +588,7 @@ nothing serves it.
 ### What the rows for an envelope need
 
 Three facts about the scheduler and the index decide how the first two cases
-above are built, once the first step is not enough, and none of them is
+above are built, once the first step is not enough. The first two are not
 settled.
 
 - **An envelope names where a link is held, not what is written.** For a
@@ -610,11 +610,11 @@ settled.
   relation of their own: one that marks the readers of the document when the
   materializer's slice is marked, asks for no vouch, and is not marked by
   another writer's revision.
-- **Within one space nothing starts a stale producer.** A reader marked `1`
-  is started and reads what the store holds. The piece that would write it
-  starts only when a session demands it, or when the demand comes from
-  another space (step 5). Starting it from a reader in its own space is the
-  first plan's stage 5.
+- **A stale producer is started from what its record says it writes.**
+  Within one space as across spaces, a reader's stale read starts the piece
+  the index records as writing the instance (the first plan's stage 5, and
+  step 5 here). A document a materializer wrote within its envelope is in
+  no record's write rows, so a reader of it starts nothing.
 
 ### A write into another space at an undeclared destination
 
@@ -763,9 +763,9 @@ A third is ruled:
    judgment in it or a pull from it returns; the writer's registration for
    a declared destination in another space; and the counts the open
    question needs. The finer rule is built on step 5, which starts a
-   producer in another space, and on the first plan's stage 5 for one in
-   the same space, and "What the rows for an envelope need" lists what is
-   to be settled before it.
+   producer in another space, and on the first plan's stage 5, which starts
+   one in the same space, and "What the rows for an envelope need" lists
+   what is to be settled before it.
 7. **The interval clock's expiry.** Done. A space is armed with one it
    reads only until the earliest slice there expires.
 8. **Measure** a social space whose pieces read each viewer's profile, with

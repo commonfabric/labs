@@ -305,6 +305,141 @@ describe("StoreCurrency", () => {
       });
     });
 
+    describe("judge(), for a root the memory server returns as stale only upstream", () => {
+      /** The read that keeps `of:reader` stale, of an output of `of:producer`. */
+      const UPSTREAM = {
+        reader: "of:reader",
+        slice: "space",
+        id: "computed:out",
+        scopeKey: "space",
+        piece: "of:producer",
+      };
+
+      /** The pieces that run on the runtime the judgments are made for. */
+      let running: Set<string>;
+
+      /** What the memory server returns as held and as upstream of it. */
+      let stale: boolean;
+
+      /** A loop that keeps the index as `mode` says. */
+      const loop = (mode: "skip" | "record") =>
+        new StoreCurrency({
+          space: SPACE,
+          server: {
+            judgeCurrencyRoots: (_space, roots) =>
+              Promise.resolve({
+                servable: stale
+                  ? []
+                  : roots.map((root) => ({ root, piece: root })),
+                held: stale
+                  ? roots.map((root) => ({ root, piece: "of:reader" }))
+                  : [],
+                upstream: stale ? [UPSTREAM] : [],
+                refused: {},
+                marked: [],
+              }),
+          } as Pick<HostMemoryServer, "judgeCurrencyRoots"> as HostMemoryServer,
+          mode,
+          epoch: "epoch-one",
+          serviceIdentity: "did:key:service",
+          stats: emptyServingLoopStats(),
+          onOwed: () => {},
+          onMarked: () => {},
+          runs: (piece) => running.has(piece),
+        });
+
+      /** A runtime that runs the pieces of `running`. */
+      const runtime = {
+        scheduler: {
+          hasNodesUnderDemandRoot: (piece: string) => running.has(piece),
+        },
+      } as unknown as Runtime;
+
+      /** Judges the root `of:reader`, with the sessions' demand changed. */
+      const judge = (currency: StoreCurrency) =>
+        currency.judge(
+          runtime,
+          new Map([["key", { id: "of:reader", scope: "space" }]]),
+          () => true,
+          true,
+        );
+
+      beforeEach(() => {
+        running = new Set();
+        stale = true;
+      });
+
+      it("holds the root under `skip`, and returns the instance that keeps it stale as one to demand", async () => {
+        const currency = loop("skip");
+
+        expect(await judge(currency)).toEqual({
+          servable: [],
+          held: ["key"],
+          rearm: [],
+        });
+        expect(currency.staleUpstream).toBe(true);
+        expect(currency.upstreamReads).toEqual([{
+          slice: "space",
+          space: SPACE,
+          id: "computed:out",
+          scopeKey: "space",
+        }]);
+        expect([...currency.upstreamProducers]).toEqual([
+          ["of:reader", new Set(["of:producer"])],
+        ]);
+      });
+
+      it("holds no root under `record`, and keeps the root's piece as one that is stale while it runs", async () => {
+        const currency = loop("record");
+        running.add("of:reader");
+
+        expect((await judge(currency)).held).toEqual([]);
+        expect(currency.staleUpstream).toBe(true);
+        expect(currency.upstreamReads).toHaveLength(1);
+      });
+
+      it("serves the root, and demands nothing, once the memory server returns it as servable", async () => {
+        const currency = loop("skip");
+        await judge(currency);
+        expect(currency.takeUpstreamChanged()).toBe(true);
+        stale = false;
+
+        expect(await judge(currency)).toEqual({
+          servable: ["key"],
+          held: [],
+          rearm: [],
+        });
+        expect(currency.staleUpstream).toBe(false);
+        expect(currency.upstreamReads).toEqual([]);
+        expect(currency.takeUpstreamChanged()).toBe(true);
+      });
+
+      it("reports a piece upstream as just named at the first judgment that names it, and not at the next", async () => {
+        const currency = loop("skip");
+
+        await judge(currency);
+        expect(currency.producerProgress("of:producer").named).toBe(true);
+        await judge(currency);
+
+        expect(currency.producerProgress("of:producer")).toEqual({
+          named: false,
+          unrecorded: true,
+        });
+      });
+
+      it("holds the root no longer once what is upstream of it was given up on, while the same piece is named for it", async () => {
+        const currency = loop("skip");
+        await judge(currency);
+
+        currency.abandonUpstream("of:reader");
+
+        expect(currency.staleUpstream).toBe(false);
+        expect(currency.upstreamReads).toEqual([]);
+        expect((await judge(currency)).held).toEqual([]);
+        expect(currency.staleUpstream).toBe(false);
+      });
+    });
+
     describe("noteIndexChanged()", () => {
       /** The root every judgment of these cases is asked about. */
       const ROOT = "of:root";
