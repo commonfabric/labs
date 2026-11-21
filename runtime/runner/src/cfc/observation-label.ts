@@ -26,6 +26,7 @@ import { canonicalizeLogicalPath } from "./canonical.ts";
 import {
   consumedEntriesForRead,
   isRuntimeMintedTemplate,
+  joinLabels,
   labelForConsumedEntries,
 } from "./consumed-label.ts";
 import {
@@ -237,6 +238,11 @@ export class ObservationLabelResolver {
   }>();
   #writtenPaths: Map<string, PathPrefixIndex> | undefined;
   readonly #valuesAsRead = new Map<string, { value: unknown } | undefined>();
+  /**
+   * The number of members of the array at a path of a document, as the
+   * transaction holds it, and `-1` where the path holds no array.
+   */
+  readonly #lengths = new Map<string, number>();
   readonly #valuesBefore = new Map<
     string,
     (path: readonly string[]) => readonly FabricValue[] | undefined
@@ -386,11 +392,23 @@ export class ObservationLabelResolver {
         },
         index,
       );
-    const label = entries === undefined ? undefined : labelForConsumedEntries(
+    const own = entries === undefined ? undefined : labelForConsumedEntries(
       entries,
       logicalPath,
       observation.nonRecursive,
     );
+    const membership = labels.metadata === undefined
+      ? undefined
+      : this.#membershipOfAbsent(
+        document,
+        labels,
+        logicalPath,
+        observation,
+        exclusion,
+      );
+    const label = membership === undefined
+      ? own
+      : joinLabels([own, membership]);
     state.resolved.set(labelKey, label);
     return {
       document: labels,
@@ -399,6 +417,57 @@ export class ObservationLabelResolver {
       label,
       fresh: { entries, exclusion },
     };
+  }
+
+  /**
+   * Returns, for a content read at a path through a position of an array
+   * that holds no member there, the label a read of the array's membership
+   * consumes, and `undefined` for every other read.
+   */
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+  // That a position of a list holds no member says how many members the
+  // list has, so a read of such a position consumes what a read of the
+  // list's membership does (§4.6.3, the `enumerate` class), and not the
+  // entries at and above the position alone. Behind `compiledPatterns`,
+  // which defaults off.
+  #membershipOfAbsent(
+    document: ObservedDocument,
+    labels: ObservedDocumentLabels,
+    logicalPath: readonly string[],
+    observation: ObservationProfile,
+    exclusion: { readonly excludeEntry?: (entry: LabelMapEntry) => boolean },
+  ): IFCLabel | undefined {
+    if (
+      labels.metadata === undefined || observation.shape === "followRef" ||
+      this.#tx.getCfcState().planLabels !== true ||
+      isRuntimeSecretId(document.id)
+    ) return undefined;
+    for (let at = 0; at < logicalPath.length; at++) {
+      if (!/^(0|[1-9][0-9]*)$/.test(logicalPath[at])) continue;
+      const list = logicalPath.slice(0, at);
+      const key = stringTupleKey([labels.key, pathKey(list)]);
+      let length = this.#lengths.get(key);
+      if (length === undefined) {
+        const held = this.#tx.readValueOrThrow({ ...document, path: list }, {
+          meta: stableInternalVerifierRead,
+          nonRecursive: true,
+        });
+        length = Array.isArray(held) ? held.length : -1;
+        this.#lengths.set(key, length);
+      }
+      if (length < 0 || Number(logicalPath[at]) < length) continue;
+      return labelForConsumedEntries(
+        consumedEntriesForRead(
+          labels.metadata,
+          list,
+          { nonRecursive: true, consumes: "shape", ...exclusion },
+          labels.indexFor("shape"),
+        ),
+        list,
+        true,
+      );
+    }
+    return undefined;
   }
 
   /**

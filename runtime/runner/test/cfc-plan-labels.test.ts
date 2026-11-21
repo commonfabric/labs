@@ -52,11 +52,11 @@ const space = signer.did();
  * to a staged label in the cases that use it), a selection between slots 0
  * and 1 on slot 2, a fold of slot 3 over the elements of collection 0, a
  * constant, and a fold of slot 3 over the elements of collection 1, a
- * `filter` over slot 0 whose membership template is that fold; and one
- * output, of slot 0.
+ * `filter` over slot 0 whose membership template is that fold; an output of
+ * slot 0; and a kept output with no template.
  */
 const plan: CompiledPlan = {
-  outputs: [{ template: { op: "slot", slot: 0 } }],
+  outputs: [{ template: { op: "slot", slot: 0 } }, { kept: true }],
   bodies: [{
     writes: [
       { template: { op: "slot", slot: 0 } },
@@ -719,6 +719,68 @@ describe("cfc-plan-labels", () => {
       });
     });
 
+    it("returns the transaction's join for an output the plan has no template for, and counts it as a bound", async () => {
+      await withSources((runtime, tx, identity, target) => {
+        const before = runtime.getCfcStats().planLabelBounds;
+        tx.recordCfcWritePolicyInput(
+          {
+            kind: "plan-write",
+            target: { ...target, path: ["a"] },
+            compiledPattern: identity,
+            record: { output: 1 },
+            instance: target.id,
+            keys: [],
+            slots: {},
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        expect(confidentialityAt(labels, target, "a").sort()).toEqual([
+          "secret-a",
+          "secret-b",
+        ]);
+        expect(runtime.getCfcStats().planLabelBounds).toBe(before + 1);
+      });
+    });
+
+    it("returns the transaction's join for a record of an envelope and for a record given as bound", async () => {
+      await withSources((_runtime, tx, identity, target) => {
+        tx.recordCfcWritePolicyInput(
+          {
+            kind: "plan-write",
+            target: { ...target, path: ["a"] },
+            compiledPattern: identity,
+            record: { body: 0, envelope: 0 },
+            instance: target.id,
+            keys: [],
+            slots: {},
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        tx.recordCfcWritePolicyInput(
+          {
+            ...planWrite(
+              identity,
+              { ...target, path: ["b"] },
+              0,
+              address("of:src-a"),
+            ),
+            bound: true,
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        for (const name of ["a", "b"]) {
+          expect(confidentialityAt(labels, target, name).sort()).toEqual([
+            "secret-a",
+            "secret-b",
+          ]);
+        }
+      });
+    });
+
     it("returns the selected branch alone where the selection was reported", async () => {
       await withSources((_runtime, tx, identity, target) => {
         tx.recordCfcWritePolicyInput(
@@ -735,6 +797,54 @@ describe("cfc-plan-labels", () => {
         );
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(confidentialityAt(labels, target, "a")).toEqual(["secret-a"]);
+      });
+    });
+
+    it("joins the label of a list's membership for a slot bound to a position of the list that holds no member, and not for one that holds a member", async () => {
+      await withSources(async (runtime, tx, identity, target) => {
+        const seed = runtime.edit();
+        seedStoredEnvelope(seed, memoryAddress("of:src-list", []), {
+          value: { list: ["x", "y"] },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["list"],
+                label: { confidentiality: ["secret-members"] },
+                origin: "derived",
+                observes: "enumerate",
+              }],
+            },
+          },
+        });
+        expect((await seed.commit().settled).error).toBeUndefined();
+        for (const [name, position] of [["a", "5"], ["b", "1"]] as const) {
+          tx.recordCfcWritePolicyInput(
+            {
+              ...planWrite(
+                identity,
+                { ...target, path: [name] },
+                0,
+                address("of:src-list", ["list", position]),
+              ),
+              slots: {
+                0: {
+                  chain: [address("of:src-list", ["list", position])],
+                  observes: "value",
+                },
+              },
+            },
+            runtimeWritePolicyAuthorization,
+          );
+        }
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        expect(confidentialityAt(labels, target, "a")).toEqual([
+          "secret-members",
+        ]);
+        expect(confidentialityAt(labels, target, "b")).toEqual([]);
       });
     });
 
@@ -999,6 +1109,38 @@ describe("cfc-plan-labels", () => {
       expect(shape["/b"]).toEqual(["secret-b"]);
     });
 
+    it("stores the label of a write as the `enumerate` entry of the array it writes and of each array inside the value written", async () => {
+      const { error, derived } = await commitWrites(
+        true,
+        recordBoth,
+        false,
+        {
+          a: () => ({ rows: [["x"], ["y", "z"]], names: ["n"], count: 2 }),
+        },
+      );
+      expect(error).toBeUndefined();
+      for (const path of ["/a/rows", "/a/rows/0", "/a/rows/1", "/a/names"]) {
+        expect(derived[`enumerate ${path}`]).toEqual({
+          confidentiality: ["secret-a"],
+        });
+      }
+      expect(derived["enumerate /a"]).toBeUndefined();
+      expect(derived["enumerate /a/count"]).toBeUndefined();
+    });
+
+    it("stores no `enumerate` entry for an array inside a value written with the option off", async () => {
+      const { error, derived } = await commitWrites(
+        false,
+        recordBoth,
+        false,
+        { a: () => ({ rows: [["x"]] }) },
+      );
+      expect(error).toBeUndefined();
+      expect(
+        Object.keys(derived).filter((key) => key.startsWith("enumerate")),
+      ).toEqual([]);
+    });
+
     it("stores each covered path's own label below a path written whole, beside the join there", async () => {
       const { error, value, shape } = await commitWrites(
         true,
@@ -1073,6 +1215,53 @@ describe("cfc-plan-labels", () => {
       expect(error).toBeUndefined();
       expect(value["/items/*"]).toBeUndefined();
       expect(value["/items/1"]).toEqual(["secret-b"]);
+    });
+
+    it("stores the atom of a kept output that passes a reference on in the value entry at the output's path, whether the path is written alone or with its document", async () => {
+      const kept: CompiledPlan = {
+        ...plan,
+        outputs: [{ template: { op: "slot", slot: 0 }, kept: true }],
+      };
+      const link = {
+        "/": { "link@1": { id: "of:src-a", path: [], space } },
+      } as unknown as FabricValue;
+      const record = (
+        tx: IExtendedStorageTransaction,
+        identity: string,
+        target: CfcAddress,
+      ) =>
+        tx.recordCfcWritePolicyInput(
+          {
+            kind: "plan-write",
+            target: { ...target, path: ["a"] },
+            compiledPattern: identity,
+            record: { output: 0 },
+            instance: target.id,
+            keys: [],
+            slots: {
+              0: { chain: [address("of:src-a")], observes: "followRef" },
+            },
+          },
+          runtimeWritePolicyAuthorization,
+        );
+      const alone = await commitWrites(true, record, false, {
+        plan: kept,
+        a: () => link,
+      });
+      const whole = await commitWrites(
+        true,
+        record,
+        { a: link, b: "y" } as unknown as FabricValue,
+        { plan: kept },
+      );
+
+      for (const { error, derived } of [alone, whole]) {
+        expect(error).toBeUndefined();
+        expect(JSON.stringify(derived["value /a"])).toContain(
+          CFC_ATOM_TYPE.TransformedBy,
+        );
+        expect(derived["followRef /a"]).toBeUndefined();
+      }
     });
 
     it("stores the atom of a kept output that passes a reference on, on the entry of the link at the output's path", async () => {

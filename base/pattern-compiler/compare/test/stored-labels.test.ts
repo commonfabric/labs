@@ -6,7 +6,7 @@ import type { Artifact } from "../../exec/executor.ts";
 import { generateInputs } from "../generate.ts";
 import { scenarioAudience } from "../harness.ts";
 import { instanceOptions, inStorage } from "../integrated.ts";
-import { perturbedRuns } from "../perturbation.ts";
+import { perturbedRuns, sentEvents } from "../perturbation.ts";
 import {
   checkSoundness,
   deepStoredAt,
@@ -455,6 +455,222 @@ describe("stored-labels", () => {
     });
   });
 
+  // `fixtures/derived-members.tsx`: the results of `map`, `filter` and
+  // `flatMap` as kept outputs, over an array of references, over a list of
+  // plain values in place and over the result of another per-element
+  // construct, with handlers that add to and remove from both lists where
+  // the input `note` holds one text.
+  describe("soundnessOfScenario() on the results of per-element constructs over lists that handlers change", () => {
+    const check = async (events: { binding: string; event: unknown }[]) => {
+      const artifact = await artifactOf("derived-members");
+      const { soundness, refused } = await soundnessOfScenario(
+        "derived-members",
+        artifact,
+        () => undefined,
+        { note: "n", secret: "ssss" },
+        events.map(({ binding, event }) => ({
+          binding: artifact.plan.bindings.findIndex(({ name }) =>
+            name === binding
+          ),
+          event,
+        })),
+      );
+      return {
+        refused,
+        found: lines("derived-members", soundness),
+        appended: (soundness?.appended ?? []).map((
+          { path, input, afterOtherChange },
+        ) =>
+          `${path} ${input}${afterOtherChange ? " after another change" : ""}`
+        ),
+      };
+    };
+
+    it("commits every transaction, the result of a `flatMap` over an array of references included", async () => {
+      const { refused } = await check([
+        { binding: "addIfNoted", event: {} },
+        { binding: "add", event: { title: "xx" } },
+      ]);
+
+      expect(refused).toEqual([]);
+    });
+
+    it("counts as no failure a member that an append put at another position than in the run with the input changed", async () => {
+      const { found, appended } = await check([
+        { binding: "addIfNoted", event: {} },
+        { binding: "add", event: { title: "xx" } },
+      ]);
+
+      expect(found).toEqual([]);
+      expect(appended).toEqual([
+        "titles/1 note",
+        "open/1 note",
+        "twice/2 note",
+        "twice/3 note",
+        "cards/1 note",
+        "cards/1/name note",
+        "shouted/1 note",
+        "doubled/2 note",
+        "doubled/3 note",
+        "openTitles/1 note",
+        "longShouted/1 note",
+        "shoutedTwice/1 note",
+        '{"body":0,"write":1} /1 note',
+        '{"body":0,"write":0} /1 note',
+      ]);
+    });
+
+    it("finds the clause of the input that decided a removal at each position of a result that holds a member the removal moved", async () => {
+      const { refused, found, appended } = await check([
+        { binding: "add", event: { title: "aa" } },
+        { binding: "addSecret", event: {} },
+        { binding: "dropFirstIfNoted", event: {} },
+      ]);
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(appended).toEqual([]);
+    });
+
+    it("says of a member appended after a removal that its position differs for another change than additions", async () => {
+      const { found, appended } = await check([
+        { binding: "add", event: { title: "aa" } },
+        { binding: "add", event: { title: "bb" } },
+        { binding: "dropFirstIfNoted", event: {} },
+        { binding: "add", event: { title: "cc" } },
+      ]);
+
+      expect(found).toEqual([]);
+      expect(appended).toContain("titles/1 note after another change");
+      expect(appended.every((line) => line.endsWith("after another change")))
+        .toBe(true);
+    });
+  });
+
+  // `fixtures/push-under-condition.tsx`: one handler that adds a word where
+  // the input `note` holds one text and then adds the word of its event.
+  describe("soundnessOfScenario() after two additions of one handler, the first under a condition on an input", () => {
+    it("finds the clause of the input in the stored labels of both positions and of the number of members, with no member counted as appended elsewhere", async () => {
+      const { soundness, refused } = await soundnessOfScenario(
+        "push-under-condition",
+        await artifactOf("push-under-condition"),
+        () => undefined,
+        { note: "n" },
+        [{ binding: 0, event: { word: "b" } }],
+      );
+
+      expect(refused).toEqual([]);
+      expect(lines("push-under-condition", soundness)).toEqual([]);
+      expect(soundness?.appended).toEqual([]);
+      expect(soundness?.dependent).toBeGreaterThanOrEqual(3);
+    });
+  });
+
+  // `fixtures/held-in-place.tsx`: values the result holds in place where
+  // the plan's template is of a reference or of a collection's membership.
+  describe("soundnessOfScenario() on values the result holds in place", () => {
+    const argument = {
+      stops: [
+        { title: "a", position: { lat: 3, lng: 3 } },
+        { title: "b", position: { lat: 5, lng: 5 } },
+      ],
+      area: { lat: 3, lng: 3 },
+      selected: 0,
+      center: null,
+    };
+    const check = async (events: { binding: number; event: unknown }[]) => {
+      const { soundness, refused } = await soundnessOfScenario(
+        "held-in-place",
+        await artifactOf("held-in-place"),
+        () => undefined,
+        argument,
+        events,
+      );
+      return { refused, found: lines("held-in-place", soundness) };
+    };
+
+    it("finds the clause of an input an element body reads in the label of the rows a view holds", async () => {
+      expect(await check([])).toEqual({ refused: [], found: [] });
+    });
+
+    it("finds the clause of what a cell's links lead to in the label of the cell's value, given as a branch of a `select`", async () => {
+      expect(await check([{ binding: 1, event: {} }])).toEqual({
+        refused: [],
+        found: [],
+      });
+    });
+
+    it("finds the clause of what the links lead to after a write that changes them and leaves the value the output holds as it was", async () => {
+      expect(
+        await check([
+          { binding: 1, event: {} },
+          { binding: 0, event: { index: 0 } },
+        ]),
+      ).toEqual({ refused: [], found: [] });
+    });
+  });
+
+  // `fixtures/member-edges.tsx`: changes of the members of a list of plain
+  // values in place at its edges.
+  describe("soundnessOfScenario() after changes at the edges of a list of plain values in place", () => {
+    const check = async (events: { binding: string; event: unknown }[]) => {
+      const artifact = await artifactOf("member-edges");
+      const { soundness, refused } = await soundnessOfScenario(
+        "member-edges",
+        artifact,
+        () => undefined,
+        { note: "n", secret: "ssss" },
+        events.map(({ binding, event }) => ({
+          binding: artifact.plan.bindings.findIndex(({ name }) =>
+            name === binding
+          ),
+          event,
+        })),
+      );
+      return {
+        refused,
+        found: lines("member-edges", soundness),
+        dependent: soundness?.dependent ?? 0,
+      };
+    };
+
+    it("finds the clause of a member that a removal and an addition of one transaction left at the position another stood at", async () => {
+      const { refused, found, dependent } = await check([
+        { binding: "add", event: { word: "a" } },
+        { binding: "addSecret", event: {} },
+        { binding: "dropFirstAndAdd", event: { word: "w" } },
+      ]);
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThanOrEqual(1);
+    });
+
+    it("finds the clause of the input that decided a write of `undefined` at a position, at that position", async () => {
+      for (const at of [0, 1]) {
+        const { refused, found, dependent } = await check([
+          { binding: "add", event: { word: "a" } },
+          { binding: "add", event: { word: "b" } },
+          { binding: "clearAtIfNoted", event: { at } },
+        ]);
+
+        expect(refused).toEqual([]);
+        expect(found).toEqual([]);
+        expect(dependent).toBeGreaterThanOrEqual(1);
+      }
+    });
+
+    it("commits a write at a position beyond the last member", async () => {
+      const { refused, found } = await check([
+        { binding: "add", event: { word: "a" } },
+        { binding: "putAt", event: { at: 3, word: "far" } },
+      ]);
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+    });
+  });
+
   // `fixtures/state-declared.tsx`: a state cell whose type declares the
   // clause `alice`, with a constant as its first value, returned by
   // reference.
@@ -490,6 +706,66 @@ describe("stored-labels", () => {
       );
 
       expect(label?.confidentiality).toContainEqual("alice");
+    });
+  });
+
+  // `fixtures/handle-methods.tsx`: `putIfNoted` writes `key(at).set()` where
+  // the input `note` holds one text. The plan has an envelope for that
+  // write and no write edge, so no template gives its label.
+  describe("deepStoredAt() in the class `shape` after a write the plan has only an envelope for added a member", () => {
+    it("holds the clause of the input the write depends on, for the list and for what a `map` gives over it", async () => {
+      const artifact = await artifactOf("handle-methods");
+      const space = (await Identity.fromPassphrase("pattern-compiler-compare"))
+        .did();
+      const options = instanceOptions("handle-methods", space, () => undefined);
+      const binding = (name: string) =>
+        artifact.plan.bindings.findIndex((each) => each.name === name);
+      const sent = sentEvents(artifact, { note: "n" }, [
+        { binding: binding("addOnce"), event: { word: "x" } },
+        { binding: binding("putIfNoted"), event: { at: 1 } },
+      ], options);
+      const labels: Record<string, string> = {};
+      const refused: string[] = [];
+      await inStorage(
+        artifact,
+        { note: "n" },
+        sent,
+        options,
+        undefined,
+        true,
+        true,
+        {
+          refused: (reasons) => {
+            for (const reason of reasons) refused.push(reason);
+          },
+          end: (runtime, hooks, instance) => {
+            const tx = runtime.edit();
+            try {
+              for (const name of ["words", "shouted"]) {
+                labels[name] = JSON.stringify(
+                  deepStoredAt(
+                    tx,
+                    {
+                      space,
+                      id: hooks.entityOf(instance.id),
+                      scope: "space",
+                      path: [name],
+                    },
+                    [],
+                    "shape",
+                  ).label.confidentiality,
+                );
+              }
+            } finally {
+              tx.abort();
+            }
+          },
+        },
+      );
+
+      expect(refused).toEqual([]);
+      expect(labels.words).toContain("input:note");
+      expect(labels.shouted).toContain("input:note");
     });
   });
 

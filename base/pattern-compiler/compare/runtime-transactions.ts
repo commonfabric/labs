@@ -599,6 +599,13 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   #noteUnchanged(doc: string): void {
     if (this.#unchanged.has(doc)) return;
+    // The entries kept of a document no commit changed since are the ones
+    // it stores.
+    const kept = this.#touched.has(doc) ? undefined : this.#entries.get(doc);
+    if (kept !== undefined) {
+      this.#unchanged.set(doc, kept);
+      return;
+    }
     const tx = this.#runtime.edit();
     try {
       this.#unchanged.set(doc, entriesOf(this.#storedLabels(tx, doc)));
@@ -724,6 +731,8 @@ export class RuntimeTransactions implements TransactionHooks {
         ...(write.moves === undefined ? {} : { moves: write.moves }),
         ...(write.start === undefined ? {} : { start: write.start }),
         ...(write.relabel ? { relabel: true as const } : {}),
+        ...(write.bound ? { bound: true as const } : {}),
+        ...(write.membersChanged ? { membersChanged: true as const } : {}),
       };
       this.#recorded.push(recorded);
       if (unchanged) {

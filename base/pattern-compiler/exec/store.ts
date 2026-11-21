@@ -283,6 +283,22 @@ export const recordOfKey = (key: string): Record<string, FabricValue> => {
   return parts;
 };
 
+/** A path of a document in `Store.#changes`. */
+type ChangeNode = {
+  /** The time of the last change at the path itself. */
+  at: number;
+  /** The time of the last change at the path or below it. */
+  below: number;
+  children?: Map<string, ChangeNode>;
+};
+
+/**
+ * The text `Store.appended` holds a stored array under. The text of a path
+ * starts with that of each path above it.
+ */
+const arrayKey = (doc: string, path: readonly string[]): string =>
+  `${doc}\n${path.map((segment) => JSON.stringify(segment)).join("")}`;
+
 /**
  * The keys of the positions of one array, from the element part of
  * each: a key is the record of the element part, `element`, and the
@@ -921,6 +937,122 @@ export class Store {
    */
   journal: Undo[] | undefined;
 
+  /**
+   * Where a caller sets it: for each stored array whose last changes were
+   * additions at its end, by the text of its document and path, the first
+   * position of the members those additions placed. An array has no entry
+   * once a change removed, moved or replaced a member at or behind that
+   * position, or wrote the array whole with other members.
+   */
+  appended: Map<string, number> | undefined;
+
+  /**
+   * While `appended` is set: the arrays, and the paths above arrays, that
+   * a change other than an addition at the end was made at.
+   */
+  readonly changedOtherwise = new Set<string>();
+
+  /**
+   * Whether a change other than an addition at its end was made of the
+   * stored array at `ref`, or at a path above it, while `appended` was
+   * set.
+   */
+  changedOtherwiseAt(ref: Ref): boolean {
+    const reported = this.onRead;
+    this.onRead = undefined;
+    try {
+      const located = this.locate(ref, true);
+      const key = arrayKey(located.ref.doc, located.ref.path);
+      for (const changed of this.changedOtherwise) {
+        if (key.startsWith(changed)) return true;
+      }
+      return false;
+    } finally {
+      this.onRead = reported;
+    }
+  }
+
+  /**
+   * The first position of the members that additions at the end of the
+   * stored array at `ref` placed, with no member removed, moved or
+   * replaced since (`appended`), or `undefined` where there is none or
+   * nothing keeps track.
+   */
+  appendedFrom(ref: Ref): number | undefined {
+    if (this.appended === undefined) return undefined;
+    const reported = this.onRead;
+    this.onRead = undefined;
+    try {
+      const located = this.locate(ref, true);
+      return located.missing
+        ? undefined
+        : this.appended.get(arrayKey(located.ref.doc, located.ref.path));
+    } finally {
+      this.onRead = reported;
+    }
+  }
+
+  /**
+   * The position a splice that is written as a whole list adds from, while
+   * that write is made.
+   */
+  #adding: number | undefined;
+
+  /** Brings `appended` up to date with one change. */
+  #noteAppended(
+    appended: Map<string, number>,
+    doc: string,
+    path: readonly string[],
+    old: unknown,
+    splice?: { start: number; removed: number; inserted: number },
+  ): void {
+    const key = arrayKey(doc, path);
+    const now = this.peek(doc, path);
+    // The position from which the change is one of additions at the end
+    // of the array at `path` alone, where it is one.
+    let from: number | undefined;
+    if (splice !== undefined) {
+      if (
+        Array.isArray(now) && splice.removed === 0 &&
+        splice.start + splice.inserted === now.length
+      ) from = splice.start;
+    } else if (this.#adding !== undefined && Array.isArray(now)) {
+      from = this.#adding;
+    } else if (
+      Array.isArray(old) && Array.isArray(now) && old.length < now.length &&
+      old.every((member, index) =>
+        JSON.stringify(member) === JSON.stringify(now[index])
+      )
+    ) from = old.length;
+    if (from !== undefined) {
+      if (!appended.has(key)) appended.set(key, from);
+      return;
+    }
+    // A member replaced where it stands, before the members the additions
+    // placed, leaves those as they are.
+    if (splice !== undefined || Array.isArray(old) || Array.isArray(now)) {
+      this.changedOtherwise.add(key);
+    }
+    const kept = splice !== undefined && splice.removed === splice.inserted &&
+      splice.start + splice.removed <= (appended.get(key) ?? 0);
+    for (const other of [...appended.keys()]) {
+      if (other === key ? !kept : other.startsWith(key)) {
+        appended.delete(other);
+      }
+    }
+    // A write of one position of an array replaces the member there.
+    const last = path[path.length - 1];
+    if (splice === undefined && last !== undefined && /^\d+$/.test(last)) {
+      const above = arrayKey(doc, path.slice(0, -1));
+      if (Number(last) >= (appended.get(above) ?? Infinity)) {
+        appended.delete(above);
+      }
+      if (Array.isArray(this.peek(doc, path.slice(0, -1)))) {
+        this.changedOtherwise.add(above);
+      }
+    }
+  }
+
   /** A change was made: the clock, the log, the keys, and the readers. */
   #changed(
     doc: string,
@@ -931,6 +1063,10 @@ export class Store {
   ): void {
     this.clock += 1;
     this.log.push({ doc, path, at: this.clock });
+    this.#noteChange(doc, path);
+    if (this.appended !== undefined) {
+      this.#noteAppended(this.appended, doc, path, old, splice);
+    }
     const keyed = this.#touch(doc, path, splice, old);
     this.parts?.changed(doc, path, this.docs.get(doc)?.value, old, splice);
     this.onChange?.({
@@ -2227,11 +2363,20 @@ export class Store {
     const held = located.value;
     if (document === undefined || !Array.isArray(held)) {
       const before = Array.isArray(held) ? held : [];
-      this.write(ref, [
-        ...before.slice(0, start),
-        ...members,
-        ...before.slice(start + removed),
-      ]);
+      // A splice that adds at the end of a list no document holds yet is
+      // an addition, written as the whole list.
+      this.#adding = removed === 0 && start === before.length
+        ? start
+        : undefined;
+      try {
+        this.write(ref, [
+          ...before.slice(0, start),
+          ...members,
+          ...before.slice(start + removed),
+        ]);
+      } finally {
+        this.#adding = undefined;
+      }
       return;
     }
     if (removed === 0 && members.length === 0) return;
@@ -2310,10 +2455,40 @@ export class Store {
     return textOf(this.addressOf(named));
   }
 
+  /**
+   * The time of the last change at each path of each document, and of the
+   * last change at or below it: what `changedSince` reads, so that its work
+   * is the length of a path and not the number of changes made.
+   */
+  readonly #changes = new Map<string, ChangeNode>();
+
+  /** The nodes `changedSince` visited, in all its calls. */
+  changeNodesVisited = 0;
+
+  /** Notes a change at a path in `#changes`. */
+  #noteChange(doc: string, path: readonly string[]): void {
+    let node = this.#changes.get(doc);
+    if (node === undefined) {
+      node = { at: 0, below: 0 };
+      this.#changes.set(doc, node);
+    }
+    node.below = this.clock;
+    for (const segment of path) {
+      node.children ??= new Map();
+      let child = node.children.get(segment);
+      if (child === undefined) {
+        child = { at: 0, below: 0 };
+        node.children.set(segment, child);
+      }
+      child.below = this.clock;
+      node = child;
+    }
+    node.at = this.clock;
+  }
+
   /** Whether a write after `since` is at, above, or below a position. */
   changedSince(since: number, positions: readonly Position[]): boolean {
-    const last = this.log[this.log.length - 1];
-    if (last === undefined || last.at <= since) return false;
+    if (this.clock <= since) return false;
     for (const { keyed } of positions) {
       if (
         keyed !== undefined && canonical(this.read(keyed.ref)) !== keyed.seen
@@ -2321,17 +2496,20 @@ export class Store {
         return true;
       }
     }
-    for (let index = this.log.length - 1; index >= 0; index--) {
-      const entry = this.log[index];
-      if (entry.at <= since) return false;
-      for (const position of positions) {
-        if (
-          position.keyed === undefined && position.doc === entry.doc &&
-          (isPrefix(position.path, entry.path) ||
-            isPrefix(entry.path, position.path))
-        ) {
-          return true;
+    for (const position of positions) {
+      if (position.keyed !== undefined) continue;
+      let node = this.#changes.get(position.doc);
+      let depth = 0;
+      // A change at a path above the position, and then one at or below it.
+      while (node !== undefined) {
+        this.changeNodesVisited += 1;
+        if (depth === position.path.length) {
+          if (node.below > since) return true;
+          break;
         }
+        if (node.at > since) return true;
+        node = node.children?.get(position.path[depth]);
+        depth += 1;
       }
     }
     return false;

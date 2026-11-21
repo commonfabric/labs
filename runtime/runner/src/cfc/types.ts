@@ -957,6 +957,11 @@ export type PlanWrite = PlanInputs & {
   readonly record:
     | { readonly output: number }
     | { readonly body: number; readonly write: number }
+    /**
+     * An entry of `Body.envelopes`: a write the plan bounds and has no
+     * template for.
+     */
+    | { readonly body: number; readonly envelope: number }
     | { readonly cone: number; readonly write: number }
     | { readonly stateFirst: number }
     /**
@@ -1035,6 +1040,22 @@ export type PlanWrite = PlanInputs & {
    * again, and the label entries below the target stay.
    */
   readonly relabel?: true;
+
+  /**
+   * The target holds the result of a per-element construct, and the write
+   * changed its members otherwise than by adding at its end: which member
+   * stands at each position was decided anew, so the label of the record,
+   * that of the collection's membership, is stored once for every
+   * position.
+   */
+  readonly membersChanged?: true;
+
+  /**
+   * The writer has no inputs that give the label of what the target holds:
+   * the target takes the transaction's join, as a written path with no
+   * record does.
+   */
+  readonly bound?: true;
 };
 
 /**

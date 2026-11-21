@@ -54,6 +54,8 @@ export type PlanRecord =
   | { output: number }
   /** An entry of `Body.writes`, of a handler or of a body of a cone. */
   | { body: number; write: number }
+  /** An entry of `Body.envelopes`, which has no template. */
+  | { body: number; envelope: number }
   /** An entry of `Cone.writes`. */
   | { cone: number; write: number }
   /** The first value of a state cell, by `StateCell.first`. */
@@ -166,6 +168,17 @@ export type PlanWrite = NamedOutputInputs & {
    * is stored of the labels below the target stays.
    */
   relabel?: true;
+  /**
+   * The target holds the result of a per-element construct, and the write
+   * changed its members otherwise than by adding at its end.
+   */
+  membersChanged?: true;
+  /**
+   * The executor has no inputs that give the label of what the target
+   * holds: the label is that of a write with no record, the join of what
+   * the transaction read.
+   */
+  bound?: true;
 };
 
 /** What computed a `derive` (PL §1.1). */

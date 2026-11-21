@@ -5031,6 +5031,46 @@ export class Instance {
   }
 
   /**
+   * Reports the record of the output at or above `at` of the result
+   * document as that of a write that left the value as it was
+   * (`TransactionHooks.unchanged`), its label alone to be formed again: an
+   * evaluation that gives the value the path holds read what its inputs
+   * hold now, which can be other positions than the ones the stored label
+   * was formed from. An output whose template reads nothing has one label
+   * whatever was read, and is not reported; nor is a record given earlier
+   * in the transaction.
+   */
+  #unchangedOutput(at: readonly string[]): void {
+    const { root } = this;
+    const hooks = root.options.transactions;
+    if (root.#tx === undefined || hooks?.unchanged === undefined) return;
+    let nearest: { output: number; path: readonly string[] } | undefined;
+    for (const entry of this.#recordedOutputs()) {
+      if (
+        entry.path.length <= at.length && matchesPath(entry.path, at) &&
+        (nearest === undefined || entry.path.length > nearest.path.length)
+      ) nearest = entry;
+    }
+    if (nearest === undefined) return;
+    const template = this.plan.outputs[nearest.output].template;
+    if (template === undefined) return;
+    const reached = reachedBy(template, this.plan.templates ?? []);
+    if (
+      reached.slots.size === 0 && reached.outputs.size === 0 &&
+      reached.folds.size === 0 && reached.dynamic.size === 0
+    ) return;
+    const path = at.slice(0, nearest.path.length);
+    const key = this.#recordKey(nearest.output, path);
+    if (root.#givenNow.has(key)) return;
+    const write = this.#outputRecord(this.id, nearest.output, [...path]);
+    root.#noteRecord(key, this.id, write);
+    hooks.unchanged(this.id, path, this.store, undefined, [{
+      ...write,
+      relabel: true,
+    }]);
+  }
+
+  /**
    * Stores a value at a place of the result document, and writes only
    * what differs from what the place holds: a member of a record and a
    * position of an array of the same length are compared by themselves.
@@ -5102,7 +5142,11 @@ export class Instance {
         }
       }
       const now = filled(form, held);
-      if (held === now || JSON.stringify(held) === JSON.stringify(now)) return;
+      if (held === now || JSON.stringify(held) === JSON.stringify(now)) {
+        // A reference that stays names the cell it named.
+        if (!isLink(now) && !isStream(now)) this.#unchangedOutput(at);
+        return;
+      }
       const [was, size] = [bytesOf(held), bytesOf(now)];
       store.put(doc, at, now);
       if (owner === undefined) {
@@ -8814,9 +8858,23 @@ export class Instance {
           const bound = first((inputs) => inputs.slots.get(slot));
           if (bound !== undefined) {
             slots[slot] = this.#bindingOf(slot, bound, outputs, depth, keys);
-          } else if (source !== undefined) {
-            const found = this.#sourceBinding(slot, byCollection, [source]);
-            if (found !== undefined) slots[slot] = found;
+          } else {
+            // A source whose assembly found no stored array, as that of a
+            // `flatMap` before its first element, is read at the position
+            // the slot names.
+            const found = (source === undefined
+              ? undefined
+              : this.#sourceBinding(slot, byCollection, [source])) ??
+              this.#positionBinding(
+                slot,
+                this.#outerOf(folded).map((step): [number, string] => [
+                  step,
+                  byCollection.get(step) ?? "?",
+                ]),
+              );
+            if (found !== undefined) {
+              slots[slot] = found;
+            }
           }
         }
       }
@@ -9128,11 +9186,44 @@ export class Instance {
       { address: { doc, path: [...path] }, observes: "enumeration" },
     ];
     return writing.records.flatMap(({ record, template }) => {
-      // A write edge the plan has no template for has no record either.
-      if (template === undefined) return [];
       const writes: PlanWrite[] = [];
-      // The position of a member added is one the membership of the list
-      // decided, so its record keeps what the list stored of that.
+      // A record the plan has no template for has no inputs, and is given
+      // as bound.
+      if (template === undefined) {
+        const bound = (target: Address) => ({
+          target,
+          record,
+          instance: writing.instance.id,
+          keys,
+          slots: {},
+          bound: true as const,
+          ...held,
+        });
+        for (let at = splice.start; at < end; at++) {
+          writes.push(bound({ doc, path: [...path, `${at}`] }));
+        }
+        if (kept || splice.removed !== splice.inserted) {
+          writes.push({
+            ...bound({ doc, path: [...path, "length"] }),
+            observed: membership,
+          });
+        }
+        writes.push({
+          ...bound({ doc, path: [...path] }),
+          observed: membership,
+          enumeration: true,
+          ...(members.removes ? { removes: true as const } : {}),
+          ...(runs.length === 0 ? {} : { moves: runs }),
+          ...(members.start === undefined || origin === undefined
+            ? {}
+            : { start: members.start }),
+        });
+        return writes;
+      }
+      // A member added is recorded at its own position with the label of
+      // the write and of what the method compared, and with nothing of
+      // what the list stored of its membership: an addition at the end
+      // reads no member (ruling Z74).
       for (let at = splice.start; at < end; at++) {
         const target = { doc, path: [...path, `${at}`] };
         writes.push({
@@ -9144,7 +9235,6 @@ export class Instance {
             target,
           ),
           ...held,
-          observed: membership,
         });
       }
       const inputs = inputsOf(template);
@@ -9208,25 +9298,27 @@ export class Instance {
   #outputWrites(
     doc: string,
     path: readonly string[],
-    splice: { start: number; inserted: number } | undefined,
+    splice: { start: number; removed: number; inserted: number } | undefined,
   ): PlanWrite[] {
-    const { outputs } = this.plan;
+    const outputs = this.#recordedOutputs();
     const found: { output: number; at: string[] }[] = [];
     let nearest: number | undefined;
-    // An interim output is no path of the result document.
     outputs.forEach((output, index) => {
       if (
-        output.kept && output.path.length <= path.length &&
+        output.path.length <= path.length &&
         matchesPath(output.path, path) &&
         (nearest === undefined ||
           output.path.length > outputs[nearest].path.length)
       ) nearest = index;
     });
-    if (nearest !== undefined) found.push({ output: nearest, at: [...path] });
+    if (nearest !== undefined) {
+      found.push({ output: outputs[nearest].output, at: [...path] });
+    }
     const held = this.store.peek(doc, path);
-    outputs.forEach((output, index) => {
+    outputs.forEach((output) => {
+      const index = output.output;
       if (
-        !output.kept || output.path.length <= path.length ||
+        output.path.length <= path.length ||
         !matchesPath(output.path.slice(0, path.length), path)
       ) return;
       const expand = (
@@ -9261,51 +9353,209 @@ export class Instance {
       };
       expand([...path], output.path.slice(path.length), held, true);
     });
-    // An output the plan has no template for has no record: the path keeps
-    // the label the runtime gives a write it has no record of.
-    return found.filter(({ output }) => outputs[output].template !== undefined)
-      .map(({ output, at }) => {
-        const write = this.#outputRecord(doc, output, at);
-        this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
-        return write;
-      });
+    // An output the plan has no template for has a record with no inputs:
+    // the runtime gives its path the label of a write it has no record of,
+    // where it would otherwise take the label of a kept output above it.
+    // A change of the array a kept output with a collection holds, other
+    // than an addition at its end, decides anew which member stands at
+    // each position.
+    const appends = splice !== undefined && Array.isArray(held) &&
+      splice.removed === 0 && splice.start + splice.inserted === held.length;
+    return found.map(({ output, at }) => {
+      const write = this.#outputRecord(doc, output, at);
+      this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
+      return !appends && this.plan.outputs[output].collection !== undefined &&
+          this.plan.outputs[output].kept && at.length === path.length &&
+          Array.isArray(held)
+        ? { ...write, membersChanged: true as const }
+        : write;
+    });
   }
+
+  /**
+   * The outputs a change of the result document is recorded for, each with
+   * the path of the result document it is stored at: every kept output,
+   * and for a kept output that holds the result of a per-element construct
+   * of another output with no entry of its own for an element, each entry
+   * of that construct's elements, at its path below the kept output. The
+   * label of what an element holds is then that of the element's own
+   * entry, and not that of the collection's membership. A kept output
+   * that holds such a result as a branch of a `select` has no entry for
+   * an element: its records are `bound`, and the runtime gives their
+   * paths the label of a write it has no record of.
+   */
+  #recordedOutputs(): {
+    output: number;
+    path: readonly string[];
+    bound?: true;
+  }[] {
+    if (this.#recorded !== undefined) return this.#recorded;
+    const { outputs } = this.plan;
+    const templates = this.plan.templates ?? [];
+    const found: { output: number; path: readonly string[]; bound?: true }[] =
+      [];
+    const hasElementEntry = (path: readonly string[]) =>
+      outputs.some((output) =>
+        output.kept && output.path.length > path.length &&
+        output.path[path.length] === "*" &&
+        path.every((segment, index) => output.path[index] === segment)
+      );
+    // The output with a collection that a template gives the label of,
+    // and whether it does so through no `select`.
+    const collectionOf = (
+      template: Template | undefined,
+      direct: boolean,
+      depth: number,
+    ): { output: number; direct: boolean } | undefined => {
+      // A chain of outputs is as long as the plan is deep.
+      if (template === undefined || depth > 64) return undefined;
+      switch (template.op) {
+        case "shared":
+          return collectionOf(templates[template.template], direct, depth + 1);
+        case "output": {
+          const named = outputs[template.output];
+          return named?.collection !== undefined
+            ? { output: template.output, direct }
+            : collectionOf(named?.template, direct, depth + 1);
+        }
+        case "select":
+          for (const branch of template.branches) {
+            const through = collectionOf(branch, false, depth + 1);
+            if (through !== undefined) return through;
+          }
+          return undefined;
+        default:
+          return undefined;
+      }
+    };
+    const add = (output: number, path: readonly string[], depth: number) => {
+      const record = outputs[output];
+      const entry: (typeof found)[number] = { output, path };
+      found.push(entry);
+      if (record.collection !== undefined || depth > 64) return;
+      if (record.kept && hasElementEntry(record.path)) return;
+      const held = collectionOf(record.template, true, 0);
+      if (held === undefined) return;
+      if (!held.direct) {
+        entry.bound = true;
+        return;
+      }
+      const source = outputs[held.output];
+      outputs.forEach((element, index) => {
+        if (
+          index !== held.output && element.cone === source.cone &&
+          element.path.length > source.path.length &&
+          element.path[source.path.length] === "*" &&
+          source.path.every((segment, at) => element.path[at] === segment)
+        ) {
+          add(
+            index,
+            [...path, ...element.path.slice(source.path.length)],
+            depth + 1,
+          );
+        }
+      });
+    };
+    // An interim output is no path of the result document.
+    outputs.forEach((output, index) => {
+      if (output.kept) add(index, output.path, 0);
+    });
+    this.#recorded = found;
+    return found;
+  }
+
+  /** The result of `#recordedOutputs()`, made once. */
+  #recorded:
+    | { output: number; path: readonly string[]; bound?: true }[]
+    | undefined;
 
   /** The record of the output `output` of this instance at the path `at`. */
   #outputRecord(doc: string, output: number, at: string[]): PlanWrite {
     const record = this.plan.outputs[output];
-    const stars = record.path.flatMap((segment, index) =>
+    // The path the output is stored at, which for the entry of an element
+    // is below the kept output that holds the collection.
+    const stored =
+      this.#recordedOutputs().filter((entry) =>
+        entry.output === output && entry.path.length <= at.length &&
+        matchesPath(entry.path, at)
+      ).sort((a, b) => b.path.length - a.path.length)[0];
+    const stars = (stored?.path ?? record.path).flatMap((segment, index) =>
       segment === "*" ? [index] : []
     );
     const pairs = this.#keysAlong(at, stars);
     const own = this.#keysFor(record.cone, pairs);
     const inputs = this.#inputsOf(record.cone, own);
     const result = this.#inputs.get(RESULT_INPUTS);
+    const given = this.#storedInPlace(
+      record.template,
+      this.#inputsFor(
+        record.template,
+        this.collectionsOf(record.cone).map((collection, index) => [
+          collection,
+          own[index],
+        ]),
+        [inputs, result],
+      ),
+      { doc, path: at },
+    );
+    // The entry of an element held below a kept output, with a slot the
+    // executor has no position for, as that of an element of an array a
+    // computation returned: the record is given as bound, and the path
+    // takes the label of a write with no record, where the template could
+    // only be refused.
+    const templates = this.plan.templates ?? [];
+    const lacks = (
+      template: Template | undefined,
+      place: PlanInputs | undefined,
+      depth: number,
+    ): boolean => {
+      // A chain of outputs is as long as the plan is deep.
+      if (template === undefined || depth > 64) return false;
+      switch (template.op) {
+        case "slot": {
+          const binding = place?.slots[template.slot] ??
+            given.slots[template.slot];
+          return binding === undefined ||
+            ("chain" in binding && binding.chain.length === 0);
+        }
+        case "derive":
+          return template.inputs.some((input) =>
+            lacks(input, place, depth + 1)
+          );
+        case "select":
+          return lacks(template.condition, place, depth + 1) ||
+            template.branches.some((branch) => lacks(branch, place, depth + 1));
+        case "shared":
+          return lacks(templates[template.template], place, depth + 1);
+        case "output":
+          return lacks(
+            this.plan.outputs[template.output]?.template,
+            place?.outputs?.[template.output] ??
+              given.outputs?.[template.output],
+            depth + 1,
+          );
+        default:
+          return false;
+      }
+    };
+    const unbound = !record.kept && lacks(record.template, given, 0);
     return {
       target: { doc, path: at },
       record: { output },
-      ...this.#storedInPlace(
-        record.template,
-        this.#inputsFor(
-          record.template,
-          this.collectionsOf(record.cone).map((collection, index) => [
-            collection,
-            own[index],
-          ]),
-          [inputs, result],
-        ),
-        { doc, path: at },
-      ),
+      ...given,
+      ...(stored?.bound || unbound ? { bound: true as const } : {}),
     };
   }
 
   /**
-   * The inputs of a write whose template is one slot of the class
-   * `identity`, directly or through the outputs it names, with that slot
-   * bound in the class `value` where the write stored a value at `target`
-   * and no reference: what a `reduce` computed, or a copy of an array that
-   * a spread child holds. The label of the stored value is then that of
-   * what the slot's positions hold, and not that of the reference alone.
+   * The inputs of a write whose template gives the label of one slot of
+   * the class `identity`, directly, through the outputs it names or as a
+   * branch of a `select`, with that slot bound in the class `value` where
+   * the write stored a value at `target` and no reference: what a `reduce`
+   * computed, a copy of an array that a spread child holds, or the value
+   * of a cell that `a.get() ?? b` gives. The label of the stored value is
+   * then that of what the slot's positions hold, and not that of the
+   * reference alone.
    */
   #storedInPlace<T extends PlanInputs>(
     template: Template | undefined,
@@ -9315,24 +9565,58 @@ export class Instance {
     const held = this.store.peek(target.doc, target.path);
     if (held === undefined || isLink(held) || isStream(held)) return inputs;
     const templates = this.plan.templates ?? [];
-    let place: PlanInputs | undefined = inputs;
-    let at = template;
-    // A chain of outputs is as long as the plan is deep.
-    for (let depth = 0; depth < 64 && place !== undefined; depth++) {
-      if (at?.op === "shared") at = templates[at.template];
-      else if (at?.op === "output") {
-        place = place.outputs?.[at.output];
-        at = this.plan.outputs[at.output]?.template;
-      } else break;
-    }
-    if (at?.op !== "slot" || place === undefined) return inputs;
-    const binding = place.slots[at.slot];
-    if (
-      binding !== undefined && "chain" in binding &&
-      binding.observes === "identity" && binding.chain.length > 0
-    ) {
-      place.slots[at.slot] = this.#chainsOf([...binding.chain], "value");
-    }
+    const visit = (
+      at: Template | undefined,
+      place: PlanInputs | undefined,
+      depth: number,
+    ): void => {
+      // A chain of outputs is as long as the plan is deep.
+      if (at === undefined || place === undefined || depth > 64) return;
+      switch (at.op) {
+        case "shared":
+          visit(templates[at.template], place, depth + 1);
+          return;
+        case "output":
+          visit(
+            this.plan.outputs[at.output]?.template,
+            place.outputs?.[at.output],
+            depth + 1,
+          );
+          return;
+        case "select":
+          for (const branch of at.branches) visit(branch, place, depth + 1);
+          return;
+        case "slot": {
+          const binding = place.slots[at.slot];
+          if (
+            binding !== undefined && "chain" in binding &&
+            binding.observes === "identity" && binding.chain.length > 0
+          ) {
+            // A read of the value goes through each link the value holds.
+            const last = binding.chain[binding.chain.length - 1];
+            const reads: Position[] = [];
+            this.#quietly(() =>
+              this.store.read(new Ref(last.doc, last.path), reads)
+            );
+            const seen = new Set<string>();
+            const addresses = [
+              ...binding.chain,
+              ...this.#addressesOf(reads),
+            ].filter(({ doc, path }) => {
+              const id = JSON.stringify([doc, path]);
+              if (seen.has(id)) return false;
+              seen.add(id);
+              return true;
+            });
+            place.slots[at.slot] = this.#chainsOf(addresses, "value");
+          }
+          return;
+        }
+        default:
+          return;
+      }
+    };
+    visit(template, inputs, 0);
     return inputs;
   }
 
@@ -9355,7 +9639,16 @@ export class Instance {
       );
       const key = unit?.keys[Number(path[star])];
       if (unit === undefined || key === undefined) break;
-      keys.push([unit.collection, key]);
+      // The body of a `flatMap` runs once for a source element, and each
+      // member of the segment it gave has that element's key in its own.
+      const { source } = recordOfKey(key);
+      keys.push([
+        unit.collection,
+        this.plan.collections[unit.collection].construct === "flatMap" &&
+          source !== undefined
+          ? textOf(source)
+          : key,
+      ]);
       inside = unit.inside.get(key);
       base = star + 1;
     }
@@ -9396,17 +9689,25 @@ export class Instance {
       if (covered) this.counts.writesCovered += 1;
       else this.counts.writesNotCovered += 1;
     }
-    // A write that no write edge covers has no record. It is a write
-    // through a handle all the same, so one that adds a member to a list
-    // is given to the transaction hooks as the positions it wrote.
+    // A write that no write edge covers has the record of the envelope
+    // that covers it, which has no template: a change it makes of a list's
+    // members is recorded with no inputs, and the runtime gives each record
+    // the label of a write it has no record of.
+    const envelope = body.envelopes.findIndex((each) =>
+      each.kind === "handle" && covers(each)
+    );
     return this.#recording(
       host === undefined ? undefined : {
         instance: this,
         host,
-        records: write < 0 ? [] : [{
-          record: { body: index, write },
-          template: body.writes[write].template,
-        }],
+        records: write >= 0
+          ? [{
+            record: { body: index, write },
+            template: body.writes[write].template,
+          }]
+          : envelope >= 0
+          ? [{ record: { body: index, envelope }, template: undefined }]
+          : [],
         members: { decided: decided ?? [] },
       },
     );

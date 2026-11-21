@@ -70,12 +70,13 @@ import {
   artifactsOf,
   type CorpusModule,
   corpusModules,
+  eventOrder,
   mainPattern,
   type ResultRow,
   runModule,
   wishStubs,
 } from "./corpus.ts";
-import { generateInputs } from "./generate.ts";
+import { generateEvent, generateInputs } from "./generate.ts";
 import { type LabeledInput, scenarioAudience } from "./harness.ts";
 import {
   type Figure,
@@ -84,6 +85,7 @@ import {
   type Sent,
 } from "./integrated.ts";
 import {
+  appendedElsewhere,
   concretePaths,
   type PerturbedRuns,
   perturbedRuns,
@@ -196,6 +198,8 @@ export const templateOfRecord = (
     const output = plan.outputs[record.output];
     return { template: output?.template, kept: output?.kept === true };
   }
+  // An envelope has no template.
+  if ("envelope" in record) return { template: undefined, kept: false };
   if ("body" in record) {
     return {
       template: plan.bodies?.[record.body]?.writes?.[record.write]?.template,
@@ -1014,6 +1018,11 @@ export type ModuleLabels = {
     soundness?: Soundness;
     refused: string[];
     failedOn?: string;
+    /**
+     * The events are generated ones, one for each binding: the scenario of
+     * today's run committed none.
+     */
+    generated?: true;
   };
 };
 
@@ -1253,6 +1262,22 @@ export type Soundness = {
   checked: number;
   /** The pairs whose value differs when the input alone is changed. */
   dependent: number;
+  /**
+   * The pairs whose stored label lacks the input's clause and that are no
+   * failure: the member at the position stands at another position in the
+   * run with the input changed, and appends alone put it where it stands
+   * in both runs (`appendedElsewhere`).
+   */
+  appended: {
+    kind: "output" | "write";
+    path: string;
+    input: string;
+    /**
+     * One of the two runs made a change of the list other than an
+     * addition at its end before the member was appended.
+     */
+    afterOtherChange?: true;
+  }[];
   failures: SoundnessFailure[];
   /**
    * What `failures` held in a run with a refused commit: the storage does
@@ -1325,6 +1350,7 @@ export const soundnessOf = (
     ),
     checked: 0,
     dependent: 0,
+    appended: [],
     failures: [],
   };
   const { baseline } = runs;
@@ -1341,6 +1367,15 @@ export const soundnessOf = (
     address: CfcAddress,
     template: Template | undefined,
     read: (run: Instance) => unknown,
+    /**
+     * The path of the position below a root, with what reads a path below
+     * that root in a run and what names it in the run's store.
+     */
+    at: {
+      path: readonly string[];
+      valueOf: (run: Instance, path: readonly string[]) => unknown;
+      refOf: (run: Instance, path: readonly string[]) => Ref;
+    },
   ) => {
     const given = JSON.stringify(read(baseline));
     let stored: Label | undefined;
@@ -1357,8 +1392,28 @@ export const soundnessOf = (
       const held = new Set(stored.confidentiality.map(atomKey));
       const { root = [], below = [] } = clauses.get(source.name) ?? {};
       if (below.some((clause) => held.has(clauseKey(clause)))) continue;
-      for (const clause of root) {
-        if (held.has(clauseKey(clause))) continue;
+      const missing = root.filter((clause) => !held.has(clauseKey(clause)));
+      // A member that appends alone put at another position in the other
+      // run is the same member: an append reads nothing of what the list
+      // holds, and the position it writes carries no label for the
+      // members before it (ruling Z74).
+      const elsewhere = missing.length === 0 ? undefined : appendedElsewhere(
+        baseline,
+        source.instance,
+        at.path,
+        at.valueOf,
+        at.refOf,
+      );
+      if (elsewhere !== undefined) {
+        result.appended.push({
+          kind,
+          path,
+          input: source.name,
+          ...(elsewhere.afterOtherChange ? { afterOtherChange: true } : {}),
+        });
+        continue;
+      }
+      for (const clause of missing) {
         result.failures.push({
           kind,
           path,
@@ -1385,6 +1440,11 @@ export const soundnessOf = (
         { space, id, scope: "space", path },
         output.template,
         (run) => valueAt(resultOf(run), path),
+        {
+          path,
+          valueOf: (run, below) => valueAt(resultOf(run), below),
+          refOf: (run, below) => new Ref(run.id, [...below]),
+        },
       );
     }
   }
@@ -1413,6 +1473,25 @@ export const soundnessOf = (
       check.target,
       templateOfRecord(plan, check.record).template,
       (run) => run.store.read(refOf(run)),
+      {
+        path: check.path,
+        valueOf: (run, below) => {
+          const { doc, path } = refOf(run);
+          return run.store.read(
+            new Ref(doc, [
+              ...path.slice(0, path.length - check.path.length),
+              ...below,
+            ]),
+          );
+        },
+        refOf: (run, below) => {
+          const { doc, path } = refOf(run);
+          return new Ref(doc, [
+            ...path.slice(0, path.length - check.path.length),
+            ...below,
+          ]);
+        },
+      },
     );
   }
   return result;
@@ -1547,6 +1626,7 @@ export const soundnessAfterEachEvent = async (
   const checks: OracleCheck[] = [];
   const refused: string[] = [];
   const failures = new Map<string, SoundnessFailure>();
+  const appended = new Map<string, Soundness["appended"][number]>();
   let last: Soundness | undefined;
   let steps = 0;
   // The length of the text of the result at the last check.
@@ -1612,6 +1692,10 @@ export const soundnessAfterEachEvent = async (
               failures.set(key, { ...failure, event: position });
             }
           }
+          for (const each of last?.appended ?? []) {
+            const key = `${each.kind} ${each.path} ${each.input}`;
+            if (!appended.has(key)) appended.set(key, each);
+          }
         },
       },
     );
@@ -1619,9 +1703,12 @@ export const soundnessAfterEachEvent = async (
     failedOn = `${(error as Error)?.message ?? error}`.split("\n")[0]
       .slice(0, 160);
   }
-  const found: Soundness | undefined = last === undefined
-    ? undefined
-    : { ...(last as Soundness), failures: [...failures.values()], steps };
+  const found: Soundness | undefined = last === undefined ? undefined : {
+    ...(last as Soundness),
+    appended: [...appended.values()],
+    failures: [...failures.values()],
+    steps,
+  };
   return {
     soundness: unstoredAfter(found, refused),
     refused,
@@ -1870,6 +1957,7 @@ export const compareModule = async (
         unchanged: {},
         checked: 0,
         dependent: 0,
+        appended: [],
         failures: [],
       },
     };
@@ -1894,6 +1982,39 @@ export const compareModule = async (
       inputs,
       clauses,
     );
+  } else {
+    // A scenario with no committed event of today's run, of a pattern with
+    // handlers: one generated event for each binding, sent three times
+    // over, each at the last element that holds its stream.
+    const generated = eventOrder(
+      artifact.plan as Parameters<typeof eventOrder>[0],
+      "outside first",
+    ).map((binding) => ({
+      binding,
+      event: generateEvent(
+        artifact.plan as Parameters<typeof generateEvent>[0],
+        artifact.schemas as Parameters<typeof generateEvent>[1],
+        binding,
+      ),
+    }));
+    if (generated.length > 0) {
+      repeated = {
+        ...await soundnessAfterEachEvent(
+          artifact,
+          argument,
+          sentEvents(
+            artifact,
+            argument,
+            repeatedEvents(artifact.plan, artifact.schemas, generated),
+            options,
+          ),
+          options,
+          inputs,
+          clauses,
+        ),
+        generated: true,
+      };
+    }
   }
   const { rows, unmatched } = compareWithToday(
     plan,
@@ -2140,7 +2261,21 @@ const reportSoundness = (
       new Set(unstored.map(({ module }) => module)).size
     } modules`,
   );
-  return { failures, unstored };
+  const appended = ran.flatMap((result) =>
+    (result.soundness?.appended ?? []).map((each) => ({
+      module: result.module,
+      ...each,
+    }))
+  );
+  const afterOther = appended.filter((each) => each.afterOtherChange);
+  console.log(
+    `  no failure, a member that appends alone placed at another position in the run with the input changed (ruling Z74): ${appended.length} in ${
+      new Set(appended.map(({ module }) => module)).size
+    } modules, of them ${afterOther.length} in ${
+      new Set(afterOther.map(({ module }) => module)).size
+    } modules appended after another change of the list`,
+  );
+  return { failures, unstored, appended };
 };
 
 /**
@@ -2250,19 +2385,24 @@ const report = async (file: string, tables: string | undefined) => {
       } modules: ${reason}\n      e.g. ${group[0].module}`,
     );
   }
-  const { failures, unstored } = reportSoundness(
+  const once = reportSoundness(
     "stored labels checked against the values",
     ran.map((result) => ({
       module: result.module,
       soundness: result.soundness,
     })),
   );
+  const { failures, unstored } = once;
   const again = reportSoundness(
     "the same check with every event sent three times, each time with other values",
     ran.map((result) => ({
       module: result.module,
       soundness: result.repeated?.soundness,
     })),
+  );
+  const generatedAgain = ran.filter((result) => result.repeated?.generated);
+  console.log(
+    `  with one generated event for each binding, the scenario having committed none: ${generatedAgain.length} modules`,
   );
   const refusedAgain = ran.flatMap((result) =>
     [
@@ -2336,6 +2476,10 @@ const report = async (file: string, tables: string | undefined) => {
   await writeTable(`${tables}/soundness-unstored.tsv`, unstored);
   await writeTable(`${tables}/soundness-repeated-failures.tsv`, again.failures);
   await writeTable(`${tables}/soundness-repeated-unstored.tsv`, again.unstored);
+  await writeTable(`${tables}/soundness-appended.tsv`, [
+    ...once.appended.map((each) => ({ run: "as given", ...each })),
+    ...again.appended.map((each) => ({ run: "three times", ...each })),
+  ]);
   await writeTable(`${tables}/refused-repeated.tsv`, refusedAgain);
   await writeTable(`${tables}/refused-with-option-on.tsv`, refusedOnly);
   await writeTable(

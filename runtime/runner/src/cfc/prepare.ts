@@ -5049,6 +5049,32 @@ const starEntryHolds = (
 };
 
 /**
+ * The paths of the arrays `value` holds, `path` being its own: that of the
+ * value where it is an array, and that of each array inside it. What a
+ * reference in the value leads to is no part of it.
+ */
+const arrayPathsWithin = (
+  value: unknown,
+  path: readonly string[],
+  found: (readonly string[])[] = [],
+): (readonly string[])[] => {
+  if (
+    value === null || typeof value !== "object" || isPrimitiveCellLink(value)
+  ) return found;
+  if (Array.isArray(value)) {
+    found.push(path);
+    value.forEach((member, index) =>
+      arrayPathsWithin(member, [...path, String(index)], found)
+    );
+    return found;
+  }
+  for (const [name, member] of Object.entries(value)) {
+    arrayPathsWithin(member, [...path, name], found);
+  }
+  return found;
+};
+
+/**
  * The value at `path` of what a transaction wrote, from the values it wrote
  * at each path (`valuesByPath`, by path key), or `undefined` where no
  * written path is at or above it.
@@ -5513,6 +5539,7 @@ export const planLabelsFor = (
       paths: new Map(),
       enumerations: new Map(),
       labelOnly: new Map(),
+      membersChanged: new Map(),
       reasons: [],
     };
   }
@@ -12988,6 +13015,7 @@ export function* prepareBoundaryCommitSteps(
       paths: new Map(),
       enumerations: new Map(),
       labelOnly: new Map(),
+      membersChanged: new Map(),
       reasons: [],
     };
   for (const reason of planLabels.reasons) reasons.push(reason);
@@ -14483,6 +14511,18 @@ export function* prepareBoundaryCommitSteps(
           continue;
         }
         const written = flowWrittenValues?.get(flowKey);
+        // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+        // A write that leaves a path holding nothing is a write of what the
+        // attempt read: that the path holds nothing now says what decided
+        // the write. Its label is stored at the path as that of any value
+        // is. Behind `compiledPatterns`, which defaults off.
+        if (
+          planLabelsOn && written === undefined &&
+          flowWrittenValues?.has(flowKey)
+        ) {
+          derivedStampPaths.push(path);
+          continue;
+        }
         if (isPureLinkStructure(written)) {
           // A restated result wiring is written at its root beside the slots
           // its setup wrote, so a container can arrive twice.
@@ -14496,16 +14536,36 @@ export function* prepareBoundaryCommitSteps(
           }
           // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
           // A path a compiled pattern's write covers at or below a write of
-          // links stores its label too: at a link, on the link's own entry
-          // (PL §3.2, "Where the atom of a kept output is stored"), and at
-          // a container of links, as at any covered path. Behind
-          // `compiledPatterns`, which defaults off.
-          for (const covered of planLabels.paths.get(key) ?? []) {
-            if (!isPrefix(path, covered)) continue;
-            const held = writtenValueAt(flowWrittenValues, covered);
-            if (isPrimitiveCellLink(held)) linkLabelPaths.push(covered);
-            else if (held !== undefined) derivedStampPaths.push(covered);
-          }
+          // links stores its label too, as at any covered path: the label
+          // of a kept output that passes a value on by reference, the atom
+          // of its pattern included, is stored on the content at the
+          // output's path, where a read through the link takes it, whether
+          // the path is written alone or with the document that holds it.
+          // Behind `compiledPatterns`, which defaults off.
+          // The elements of an array of links whose labels are all one
+          // store one entry at the array's `*` path
+          // (`collapseEqualElements`).
+          const coveredHere = (planLabels.paths.get(key) ?? []).filter((
+            covered,
+          ) =>
+            isPrefix(path, covered) &&
+            writtenValueAt(flowWrittenValues, covered) !== undefined
+          );
+          for (
+            const covered of collapseEqualElements(
+              coveredHere,
+              (at) => planLabels.byTarget.get(key)?.get(planLabelPathKey(at)),
+              (at) => writtenValueAt(flowWrittenValues, at),
+              (at, label) => {
+                let labels = collapsedLabels.get(key);
+                if (labels === undefined) {
+                  labels = new Map();
+                  collapsedLabels.set(key, labels);
+                }
+                labels.set(planLabelPathKey(at), label);
+              },
+            )
+          ) derivedStampPaths.push(covered);
           continue;
         }
         derivedStampPaths.push(path);
@@ -14790,6 +14850,41 @@ export function* prepareBoundaryCommitSteps(
           }));
         }
       }
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // The result of a per-element construct that a compiled pattern's
+      // write changed otherwise than by adding at its end
+      // (`PlanWrite.membersChanged`): which member stands at each position
+      // was decided anew by what decides the collection's membership, the
+      // label of the record. It is stored once, as the `*`-child templates
+      // of the classes `value`, `shape` and `followRef`, in place of the
+      // ones the path carried, and a read of a position joins it with the
+      // position's own entries (§4.6.3, "Wildcard per-class entries"). An
+      // addition at the end leaves them as they are. Behind
+      // `compiledPatterns`, which defaults off.
+      for (const path of planLabels.membersChanged.get(key) ?? []) {
+        const star = pathKey([...path, "*"]);
+        let kept = 0;
+        for (const candidateEntry of persistedLabelEntries) {
+          if (
+            candidateEntry.origin === "structure" &&
+            candidateEntry.observes !== undefined &&
+            candidateEntry.observes !== "enumerate" &&
+            pathKey(candidateEntry.path) === star
+          ) continue;
+          persistedLabelEntries[kept++] = candidateEntry;
+        }
+        persistedLabelEntries.length = kept;
+        const confidentiality = flowLabelAt(key, path).confidentiality;
+        if (confidentiality.length === 0) continue;
+        for (const observes of ["shape", "value", "followRef"] as const) {
+          persistedLabelEntries.push(markFlowStampEntry({
+            path: [...path, "*"],
+            label: { confidentiality: [...confidentiality] },
+            origin: "structure",
+            observes,
+          }));
+        }
+      }
       // Each path a read was declared onward to lands here: its MEMBERSHIP
       // stamp is replaced from this attempt's join and what went onward,
       // whether or not the path itself was written (an incremental
@@ -15063,28 +15158,47 @@ export function* prepareBoundaryCommitSteps(
         // (§8.12.8, the `iterate` entries are replaced on overwrite): the
         // label of the write is stored as the `enumerate` entry of the
         // array too, so that a read of its members, their order or their
-        // number consumes it. An array inside the value written, at a path
-        // of its own below the written one, gets none. Behind
-        // `compiledPatterns`, which defaults off.
+        // number consumes it. An array inside the value written has the
+        // same entry at its own path, unless that path stores a label of
+        // its own here. Behind `compiledPatterns`, which defaults off.
         if (
           planLabelsOn &&
           (pathLabel.confidentiality.length > 0 ||
-            pathLabel.integrity.length > 0) &&
-          Array.isArray(writtenValueAt(flowWrittenValues, path))
+            pathLabel.integrity.length > 0)
         ) {
-          persistedLabelEntries.push(markFlowStampEntry({
-            path,
-            label: {
-              ...(pathLabel.confidentiality.length > 0
-                ? { confidentiality: [...pathLabel.confidentiality] }
-                : {}),
-              ...(pathLabel.integrity.length > 0
-                ? { integrity: [...pathLabel.integrity] }
-                : {}),
-            },
-            origin: "derived",
-            observes: "enumerate",
-          }));
+          for (
+            const array of arrayPathsWithin(
+              writtenValueAt(flowWrittenValues, path),
+              path,
+            )
+          ) {
+            // An array at or below a path that stores a label of its own
+            // here takes that label, where that path is reached.
+            let labeledBelow = false;
+            for (
+              let length = path.length + 1;
+              length <= array.length && !labeledBelow;
+              length++
+            ) {
+              labeledBelow = derivedStampKeys.has(
+                pathKey(array.slice(0, length)),
+              );
+            }
+            if (labeledBelow) continue;
+            persistedLabelEntries.push(markFlowStampEntry({
+              path: array,
+              label: {
+                ...(pathLabel.confidentiality.length > 0
+                  ? { confidentiality: [...pathLabel.confidentiality] }
+                  : {}),
+                ...(pathLabel.integrity.length > 0
+                  ? { integrity: [...pathLabel.integrity] }
+                  : {}),
+              },
+              origin: "derived",
+              observes: "enumerate",
+            }));
+          }
         }
         // Freeze-at-creation: mint the existence entry only when the path
         // has none (creation / legacy migration); a carried frozen entry
