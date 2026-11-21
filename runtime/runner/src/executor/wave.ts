@@ -116,9 +116,11 @@ const logger = getLogger("wave-accumulator", {
  *   the watermark-doc advance today; the acked-effect retirement write
  *   when Phase 4 lands the client-effect channel, protocol.md §5 —
  *   declare this kind; stage G's outbox-ROW retirement is an unstamped
- *   engine-table delete on plane (c), never a commit). Conflict class:
- *   non-re-derivable, so a raced bookkeeping PATCH rebases when it
- *   commutes with the concurrent commit (the loop's steady-state
+ *   engine-table delete on plane (c), never a commit). A bookkeeping write
+ *   is raced by a commit past the wave's basis, and by one its own seal's
+ *   view had not taken that this tenure did not make (`conflictsFor`).
+ *   Conflict class: non-re-derivable, so a raced bookkeeping PATCH rebases
+ *   when it commutes with the concurrent commit (the loop's steady-state
  *   watermark advance is a key-path patch); a write that cannot rebase
  *   — a whole-doc set (the first-ever watermark write materializing
  *   the doc), or a semantic conflict such as a whole-doc authored
@@ -2488,8 +2490,9 @@ export class WaveAccumulator
     }
 
     /** Whether `key` conflicts FOR this contribution: the doc moved past
-     * the wave's basis, or — for a pure derivation — past the view its own
-     * seal stood on, with an INTRUSION accounting for the difference.
+     * the wave's basis, or — for a pure derivation or the loop's own
+     * bookkeeping — past the view its own seal stood on, with an INTRUSION
+     * accounting for the difference.
      *
      * The basis and that view differ because the basis is the serverSeq
      * the wave OPENED at, while the runs sealing into it read the
@@ -2513,20 +2516,29 @@ export class WaveAccumulator
      * that read the doc carries it in its basis rows, so the arrival of
      * the commit it missed re-runs it through the ordinary dependency
      * path. One that did not read the doc runs again only if the commits
-     * it lost to left every doc with no value (SupersededOutput). A
-     * non-re-derivable
-     * consequence takes no view check here: its
-     * reads are held to the store ahead of this loop, and one with a stale
-     * read is requeued whole before any doc of its reaches this, so what
-     * arrives here rests on current reads and conflicts on its written
-     * docs against the wave's basis alone. */
+     * it lost to left every doc with no value (SupersededOutput).
+     *
+     * A bookkeeping write reads the same lagging view and takes the same
+     * check. The scoped-default seed is the case: it probes a viewer's
+     * instance, finds it absent because the replica has not taken the
+     * viewer's first write, and creates it. Without the check that create
+     * lands over the write. A bookkeeping write is not re-derivable, so a
+     * conflict here goes to the rebase below, and one that cannot rebase,
+     * such as that whole-document create, is dropped and reported to its
+     * writer as a withdrawal it can retry.
+     *
+     * An event-handler consequence takes no view check here: its reads are
+     * held to the store ahead of this loop, and one with a stale read is
+     * requeued whole before any doc of its reaches this, so what arrives
+     * here rests on current reads and conflicts on its written docs against
+     * the wave's basis alone. */
     const conflictsFor = async (
       contribution: WaveContribution,
       key: string,
       doc: { id: string; scope?: CellScope; scopeKey: string },
     ): Promise<boolean> => {
       if (conflicted.has(key)) return true;
-      if (contribution.context.kind !== "derivation") return false;
+      if (contribution.context.kind === "event-handler") return false;
       const held = contribution.viewSeqs.get(key) ?? 0;
       if ((heads.get(key) ?? 0) <= held) return false;
       return await sink.intrusionSince?.(
@@ -2720,10 +2732,19 @@ export class WaveAccumulator
             // event to requeue and DROPS whole instead — what lands it
             // again depends on which bookkeeping write it was (WaveRunKind
             // doc).
+            // A bookkeeping write rests on its own view, which can lag the
+            // basis (`conflictsFor`), so what it races is every commit
+            // since the older of the two.
+            const since = contribution.context.kind === "bookkeeping"
+              ? Math.min(
+                this.#basisSeq,
+                contribution.viewSeqs.get(key) ?? this.#basisSeq,
+              )
+              : this.#basisSeq;
             const concurrent = await sink.concurrentWritePaths(
               this.#space,
               doc,
-              this.#basisSeq,
+              since,
             );
             if (
               this.#rebases(
