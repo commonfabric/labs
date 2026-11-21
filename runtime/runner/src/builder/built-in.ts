@@ -245,18 +245,18 @@ export const sqliteDatabase = createNodeFactory({
  */
 export const indexedCollections: IndexedCollectionsFunction = (
   kinds,
-  handle,
+  options,
 ) => {
   // The node's input is the database built-in's, which the descriptor and
-  // the handle's schema ride beside `tables`.
+  // the guard ride beside `tables`.
   const node = sqliteDatabase as (
-    definition: IndexedCollectionDefinition & { handleSchema?: JSONSchema },
+    definition: IndexedCollectionDefinition & { guard?: unknown },
   ) => Reactive<SqliteDb>;
   return node({
     ...defineIndexedCollections(
       kinds as Record<string, IndexedCollectionOptions>,
     ),
-    ...(handle !== undefined && { handleSchema: handle }),
+    ...(options?.guard !== undefined && { guard: options.guard }),
   }) as ReturnType<IndexedCollectionsFunction>;
 };
 

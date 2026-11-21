@@ -45,6 +45,7 @@ import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { CellScope, JSONSchema } from "../builder/types.ts";
+import { createSigilLinkFromParsedLink, isCellLink } from "../link-utils.ts";
 import { setResultCell } from "../result-utils.ts";
 import { runtimeSecretLink } from "../runtime-secret.ts";
 import { schemaHasIfc } from "../schema-ifc.ts";
@@ -135,18 +136,6 @@ export const SQLITE_FOREIGN_SPACE_REFUSAL =
 /** What a query reads whose request was staged and never sent. */
 export const SQLITE_UNSENT_REFUSAL =
   "sqliteQuery request was refused before it started";
-
-/**
- * Returns the schema a database handle is stored under, from what the
- * pattern passed for it, or `undefined` where it passed none. The pattern
- * writes the schema of the handle as a cell, and the document holds the
- * handle's value, so the marker at its root goes.
- */
-function declaredHandleSchema(schema: unknown): JSONSchema | undefined {
-  if (!isObjectNotArray(schema)) return undefined;
-  const { asCell: _asCell, ...value } = schema as Record<string, unknown>;
-  return value as JSONSchema;
-}
 
 /**
  * The read ceiling a query issued on `tx` reads under: the runtime's own
@@ -812,21 +801,17 @@ export function sqliteDatabase(
         scope,
       );
       const options = inputsCell.withTx(tx).get() as
-        | {
-          tables?: SqliteDbRef["tables"];
-          index?: unknown;
-          handleSchema?: unknown;
-        }
+        | { tables?: SqliteDbRef["tables"]; index?: unknown }
         | undefined;
-      // The schema the pattern declared the handle under, which is where a
-      // collection says who may write it. The handle is written through it,
-      // so that the document carries the claim for every later writer.
-      const declared = declaredHandleSchema(
-        snapshotQueryResult(options?.handleSchema),
-      );
-      const stored = declared === undefined
-        ? handle
-        : handle.asSchema(declared);
+      // The cell a collection has every one of its writers write as well,
+      // carried on the handle as a reference so that whoever holds the handle
+      // writes the same one.
+      const guardInput = inputsCell.withTx(tx).key("guard");
+      const guard = isCellLink(guardInput.getRaw())
+        ? createSigilLinkFromParsedLink(
+          guardInput.resolveAsCell().getAsNormalizedFullLink(),
+        )
+        : undefined;
       // An indexed collection is a database whose handle also carries the
       // descriptor its tables were derived from.
       const index = indexedCollectionDescriptorOf(
@@ -897,13 +882,14 @@ export function sqliteDatabase(
         // docs (the very shape the materialization above exists to avoid).
         // The raw write stores the subtree verbatim; `onlyIfDifferent` keeps
         // an unchanged re-derivation write-free (no hash churn per runtime).
-        stored.withTx(tx).setRawUntyped(
+        handle.withTx(tx).setRawUntyped(
           fabricFromConvertibleJsValue({
             id,
             ...(tables !== undefined && { tables }),
             scope,
             ...(owner !== undefined && { owner }),
             ...(index !== undefined && { index }),
+            ...(guard !== undefined && { guard }),
             // Carry db.exec's write revision forward — dropping it would make
             // this re-derivation look like "new inputs" to every handle hasher.
             ...(typeof prior?.rev === "number" && { rev: prior.rev }),

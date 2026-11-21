@@ -97,6 +97,62 @@ its columns unset, and names none of the documents the piece is made of. The
 runtime re-reads every member a handler added once that handler's transaction
 has committed, which fills the row and records what it was read from.
 
+### Who may write a collection
+
+A handle is passed around so that its holders can ask it questions: a member
+that wants to know which members refer to it holds the collection's. Holding
+it also lets them write. A collection that names a guard says which handlers
+may.
+
+```tsx
+import {
+  handler,
+  indexedCollections,
+  type IndexedCollections,
+  pattern,
+  type Stream,
+  Writable,
+  type WriteAuthorizedBy,
+} from "commonfabric";
+
+interface Donut {
+  name: string;
+}
+
+type Shop = IndexedCollections<{ donuts: Donut }>;
+
+const stock = handler<{ donut: Donut }, { shop: Shop }>(
+  ({ donut }, { shop }) => shop.add("donuts", donut),
+);
+
+/** A count that `stock` alone may write. */
+type ShopGuard = WriteAuthorizedBy<number, typeof stock>;
+
+export default pattern<Record<string, never>, {
+  stock: Stream<{ donut: Donut }>;
+}>(() => {
+  const guard = new Writable<ShopGuard>(0);
+  const shop = indexedCollections<{ donuts: Donut }>(
+    { donuts: { columns: { name: "text" } } },
+    { guard },
+  );
+  return { stock: stock({ shop }) };
+});
+```
+
+The guard is an ordinary cell of the pattern's, declared with a writer policy
+as any protected cell is. The handle carries a reference to it, and `add()`,
+`remove()` and `exec()` each advance it in the transaction that carries their
+database write. A handler the policy does not name is refused that write, and
+its transaction, the database write included, does not commit. Several
+handlers are named with `WritePolicyAnyOf`. Maintenance writes the tables and
+neither the handle nor the guard, so it follows a member whoever wrote it.
+
+The guard governs writes made through the handle. The handle's own document
+carries no policy, and the database is named by an identifier the handle
+holds, so the guard is a rule for the code that is handed a handle and uses
+it as one. It is not a boundary against code written to go around it.
+
 ### Several kinds of member
 
 A collection that declares several kinds holds them in one database, so that
@@ -317,6 +373,11 @@ declares, is marked optional.
 
 The feature adds no rule and changes no decision. It applies the ones the
 SQLite built-in already has, and refuses what they cannot express.
+
+- **Who may write is a writer policy on a cell.** A collection's guard is a
+  cell of the pattern's with a writer policy of the pattern's own choosing,
+  and a write through the handle writes it. The policy decides that write as
+  it decides any write to the cell; the collection adds only the write.
 
 - **Reads are ordinary reads.** `add()` and the maintenance handler read
   member fields through their transaction, so the transaction's flow join
