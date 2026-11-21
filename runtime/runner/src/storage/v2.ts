@@ -8004,13 +8004,15 @@ export class SpaceReplica
   }
 
   /**
-   * Whether the server this replica's session is on moves the space's
-   * invitation ledger revision document with every change to the ledger
-   * (`spaceInvitesRevision`). `false` until a session exists, and refreshed
-   * by each reconnect handshake.
+   * Whether a watch through this replica on the space's invitation ledger
+   * revision document sees it move with every change to the ledger: the
+   * session is on the default branch, where the invitation service moves it,
+   * and its server advertises `spaceInvitesRevision`. `false` until a session
+   * exists, and refreshed by each reconnect handshake.
    */
-  invitesRevisionWritten(): boolean {
-    return this.#sessionClient?.serverFlags?.spaceInvitesRevision === true;
+  invitesRevisionWatchable(): boolean {
+    return this.#sessionSession?.branch === DEFAULT_BRANCH &&
+      this.#sessionClient?.serverFlags?.spaceInvitesRevision === true;
   }
 
   /** Waits for session authentication and watch restoration after reconnect. */

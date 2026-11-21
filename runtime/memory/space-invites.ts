@@ -24,11 +24,12 @@ import type { Capability } from "./acl.ts";
 export const INVITE_ACCESS = ["READ", "WRITE", "OWNER"] as const;
 
 /**
- * The id of the document the invitation service moves on whenever an operation
- * changes what `list` or `receipts` return: an invitation made or withdrawn, a
- * new receipt, or an invitation retired because its issuer no longer owns the
- * space. Its value is an {@link InviteLedgerRevision}. A client that holds a
- * session on the space watches it to learn that the ledger moved, where nothing
+ * The id of the document the invitation service moves on, on the space's
+ * default branch, whenever an operation changes what `list` or `receipts`
+ * return: an invitation made or withdrawn, a new receipt, or an invitation
+ * retired because its issuer no longer owns the space. Its value is an
+ * {@link InviteLedgerRevision}. A client that holds a session on the space's
+ * default branch watches it to learn that the ledger moved, where nothing
  * else would say so: another owner's invitation, or a redemption by an identity
  * that already held the access, which writes a receipt and leaves the access
  * list as it was.
@@ -41,9 +42,10 @@ export const INVITE_ACCESS = ["READ", "WRITE", "OWNER"] as const;
  *
  * A memory server whose service writes it advertises `spaceInvitesRevision`
  * in its handshake (`MemoryProtocolFlags` in `v2.ts`), so a client asks the
- * server its session is on. One that does not advertise it writes no such
- * document, and a client that wants to learn of a change it did not make reads
- * the ledger again itself.
+ * server its session is on. A session on another branch sees the document as
+ * it stood when the branch was forked. A server that does not advertise it
+ * writes no such document, and a client that wants to learn of a change it did
+ * not make reads the ledger again itself.
  */
 export const SPACE_INVITES_REVISION_DOC_ID = "of:space-invites-revision";
 

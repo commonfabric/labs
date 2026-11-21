@@ -456,15 +456,16 @@ origin. It defaults to `false` when absent: a client then sends no
 all. Only the server advertises it, and a client's `hello` leaves it out.
 
 `spaceInvitesRevision` advertises that the server's invitation service moves a
-space's invitation ledger revision document, `of:space-invites-revision`, in
-the transaction that changes the ledger, and tells the server's own sessions on
-the space of the move
+space's invitation ledger revision document, `of:space-invites-revision`, on
+the space's default branch in the transaction that changes the ledger, and
+tells the server's own sessions on the space of the move
 ([invitation service contract](../../../runtime/toolshed/README.md#space-invitations)).
 It is build-inherent, whether or not the server also advertises
 `spaceInvites`, since the ledger also changes through the host's HTTP routes.
-A session learns of each change to the ledger by watching the document, on a
-deployment that runs a space's invitations in the process that holds its
-sessions. A client reads the flag on the connection its session is on, and
+A session on the default branch learns of each change to the ledger by
+watching the document, on a deployment that runs a space's invitations in the
+process that holds its sessions; a session on another branch sees the document
+as it stood at the fork. A client reads the flag on the connection its session is on, and
 again when that session is replaced on reconnect, since the server it reaches
 then may not advertise it. It defaults to `false` when absent: such a server
 writes no such document, and a client that wants to learn of a change to the

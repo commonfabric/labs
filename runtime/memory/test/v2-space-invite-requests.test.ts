@@ -380,6 +380,41 @@ describe("space.invite", () => {
     });
   });
   describe("the ledger's revision document", () => {
+    it("stays on a branch as it stood when the branch was forked, while the ledger and the default branch's document move on", async () => {
+      // The service moves the document on the default branch, and the ledger
+      // belongs to no branch, so a session on a fork sees the document as the
+      // fork found it and learns nothing from watching it. A replica answers
+      // `invitesRevisionWatchable()` `false` there.
+
+      const server = serverWith({ inviteHost: INVITE_HOST });
+      const { space, owner, session } = await ownedSpace(server);
+      const revisionOn = async (on: SpaceSession) =>
+        (await on.queryGraph({
+          roots: [{
+            id: SPACE_INVITES_REVISION_DOC_ID,
+            selector: { path: [], schema: false },
+          }],
+        })).entities[0]?.document;
+      await session.administerInvites(creation(space).invite);
+      const client = await connect({ transport: loopback(server) });
+      clients.push(client);
+      const fork = await client.mount(
+        space,
+        { branch: "invites-fork", forkBranch: true },
+        authAs(owner),
+      );
+
+      await session.administerInvites(creation(space).invite);
+      const listed = await fork.administerInvites({
+        operation: "list",
+        body: {},
+      });
+
+      expect(await revisionOn(session)).toEqual({ value: { revision: 2 } });
+      expect(await revisionOn(fork)).toEqual({ value: { revision: 1 } });
+      expect(Array.isArray(listed) && listed.length).toBe(2);
+    });
+
     it("reaches an owner watching it when another owner makes an invitation and when a member already holding the access redeems one", async () => {
       // The two changes a daemon holding the space hears of no other way:
       // neither is its own, and the redemption leaves the access list as it

@@ -245,22 +245,26 @@ redeemer's access, and a preview or redemption that retires an invitation
 because its issuer no longer owns the space, which is refused but still commits.
 Reading the ledger, repeating a `create` or a redemption, a refusal for any
 other reason, and expiry move nothing; expiry because every reader compares
-`expiresAt` with the time itself. A client holding a session on the space
-watches the document to learn of changes it did not make, such as another
-owner's invitation, and reads `list` and `receipts` again when it moves. The
-memory server that ran the operation tells its own sessions on the space of the
-move, and no other process: a deployment that holds a space's sessions in one
-process routes that space's invitation requests, over HTTP as well as on a
-session, to the same process, as it routes Gmail ingest. The document says only
-that the ledger moved, so every principal that may read the space may read it,
-and its commit names no principal, so the space's history does not name
-whoever's operation moved it. Only the service writes it: the store refuses it
-in an authored or derived commit, and a branch restore leaves it as it is. A
-memory server whose service writes it advertises `spaceInvitesRevision` in its
-handshake ([protocol](../../docs/specs/memory-v2/04-protocol.md#411-websocket)),
-so a client reads the flag on the connection its session is on, from the process
-that tells that session of the move. A server without the flag writes no such
-document.
+`expiresAt` with the time itself. The commit is on the space's default branch,
+while the ledger itself belongs to no branch. A client holding a session on the
+space's default branch watches the document to learn of changes it did not make,
+such as another owner's invitation, and reads `list` and `receipts` again when
+it moves; a session on another branch sees the document as it stood when the
+branch was forked, and learns nothing from it. The memory server that ran the
+operation tells its own sessions on the space of the move, and no other process:
+a deployment that holds a space's sessions in one process routes that space's
+invitation requests, over HTTP as well as on a session, to the same process, as
+it routes Gmail ingest. The document says only that the ledger moved, so every
+principal that may read the space may read it, and its commit names no
+principal, so the space's history does not name whoever's operation moved it.
+Only the service writes it: the store refuses it in an authored or derived
+commit, and a branch restore leaves it as it is. A memory server whose service
+writes it advertises `spaceInvitesRevision` in its handshake
+([protocol](../../docs/specs/memory-v2/04-protocol.md#411-websocket)), so a
+client reads the flag on the connection its session is on, from the process that
+tells that session of the move (`ISpaceReplica.invitesRevisionWatchable()`,
+which also requires the default branch). A server without the flag writes no
+such document.
 
 Over HTTP, every invitation operation is a signed JSON POST under
 `/api/spaces/:space/invites/`: `create`, `redeem`, `preview`, `list`, `revoke`,

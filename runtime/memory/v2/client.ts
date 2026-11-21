@@ -3723,6 +3723,12 @@ export class SpaceSession {
     return this.#sessionId;
   }
 
+  /** The branch this session is of (`MountOptions.branch`): the default
+   *  branch when its open named none. */
+  get branch(): BranchName {
+    return this.#branch ?? DEFAULT_BRANCH;
+  }
+
   /** Serving-process provenance from the latest successful session open. */
   get buildDiagnostics() {
     return comparePeerBuilds(bundledBuild, this.#serverBuild);
