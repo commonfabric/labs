@@ -390,7 +390,9 @@ pair that demands in the reading space; a broad demand by a pair is then
 demand for that pair's instance of whatever narrows beneath it in the
 source, as it is for a client (`scopes.md` §2). A pair that reached the
 reading space as a carried demand is carried on with the origin it came
-with, so a chain of spaces passes one actor's demand along it.
+with, so a chain of spaces passes one actor's demand along it. A demand
+that reached it with no pair, because its actor may not read the space, is
+carried on with its origin too, for the reads made in the `space` slice.
 
 **Which reads are carried.** Those of a started piece, for an instance the
 source's index does not prove current. The reading loop offers every read
@@ -399,11 +401,12 @@ proven: an instance the reader registered, shared or an actor's own, read
 by a space that is armed with the source for no limited time, which the
 source's index holds as one no piece there is behind on. A read the reader
 has not registered always stands, and so does every read of a space the
-reader is not armed with. With a row for an actor's
-own instance stands a row for each piece the source's index records as
-writing that document, for the same pair: the instance may not exist yet,
-and a serving loop finds the piece behind a document from what the
-document holds. What stands is worked out
+reader is not armed with. With a row that stands, stands a row for each
+piece the source's index records as writing its document, for the same
+pair. A serving loop finds the piece of a computed document it is asked for
+through the document's back-link, and an instance that is an actor's own
+may not exist yet for it to find the piece from, so the piece is what it is
+given to load. What stands is worked out
 again whenever the source's index or the arming changes, and a reading
 space that offers rows pulls from the source when it is not armed with it
 and when the source tells it of a change, so that it is armed whenever a
@@ -563,6 +566,36 @@ computation that wrote outside them is recorded as unbounded.
 An effect is left as it is. It runs while its piece is started, and a mark
 on a demanded piece's slice starts the piece.
 
+### What the rows for an envelope need
+
+Three facts about the scheduler and the index decide how the first two cases
+above are built, and none of them is settled.
+
+- **An envelope names where a link is held, not what is written.** For a
+  computation handed a writable cell, the envelope is the slot that holds
+  the link to the cell, and the document the write lands in is the link's
+  target (`space-server-currency-wish.test.ts`). So the documents an
+  envelope leads to are known from what a run wrote or by following the
+  envelope's links, and not from the envelope's own addresses. The scheduler
+  keeps a run's reads and replaces its writes with the declared write
+  surface (`setSchedulerDependencies()`), so what a run wrote beyond that
+  surface is not kept today for a computation that runs once.
+- **A document a materializer writes into can have other writers.** A cell
+  handed to a computation is one a client may write too, and the index of a
+  collection is written by a materializer for each element in it
+  (`collection-index-member.ts`). A vouch row says a clean run stands behind
+  the whole instance, and a revision above it marks the slice that vouched.
+  Vouching for such a document would have each of its writers marked by
+  every other, and none of them would rest. The rows for an envelope need a
+  relation of their own: one that marks the readers of the document when the
+  materializer's slice is marked, asks for no vouch, and is not marked by
+  another writer's revision.
+- **Within one space nothing starts a stale producer.** A reader marked `1`
+  is started and reads what the store holds. The piece that would write it
+  starts only when a session demands it, or when the demand comes from
+  another space (step 5). Starting it from a reader in its own space is the
+  first plan's stage 5.
+
 ### A write into another space at an undeclared destination
 
 No rule above covers it, because what could observe the write is behind a
@@ -693,15 +726,22 @@ A third is ruled:
    access check, their end and the rows the source's index proves current
    left out; the reading loop's set, sent when it changes and withdrawn at
    a park; and activation and parking of the source, which follow from the
-   rows being held among the source's sessions. Still to do: the acceptance
-   tests 11 and 12 below, and a measurement of what a carried demand costs
-   the source.
-6. **Computations that run without demand.** Envelopes among the write
-   rows; a computation recorded as unbounded from what it wrote; the
-   unsettled space, settled before a judgment in it or a pull from it
+   rows being held among the source's sessions. Measured:
+   [the record](../history/development/performance/2026-11-21-carried-demand-cost.md).
+   A return with nothing changed hands the source no demand. A carried
+   demand costs the source the admission of its rows and the start of its
+   pieces, which it pays for viewers of its own too. The reading loop sends
+   its whole set whenever it changes, and each reading piece is recorded
+   again with every viewer's slice at each start; both are costs still to
+   take out.
+6. **Computations that run without demand.** Not started. Envelopes among
+   the write rows; a computation recorded as unbounded from what it wrote;
+   the unsettled space, settled before a judgment in it or a pull from it
    returns; the writer's registration for a declared destination in another
    space; and the counts the open question needs. Built on step 5, which
-   starts a producer.
+   starts a producer in another space, and on the first plan's stage 5 for
+   one in the same space. "What the rows for an envelope need" lists what
+   is to be settled first.
 7. **The interval clock's expiry.** Done. A space is armed with one it
    reads only until the earliest slice there expires.
 8. **Measure** a social space whose pieces read each viewer's profile, with
@@ -762,8 +802,12 @@ For the serving loop, in `runtime/runner/test/executor/`:
 11. The chain above, with all three recorded and none running: a demand for
     C alone starts B and A, and C's session reads the value derived from the
     new input.
-12. In that chain, when A's recomputation leaves `a` equal, B's mark clears
-    and B is not started again.
+12. In that chain, when A's recomputation leaves `a` equal, the marks of B
+    and C clear and C's session reads the value it held. Both exist in
+    `space-server-currency-chain.test.ts`, with a viewer who holds no grant
+    on the first two spaces, and with a demand for C that starts nothing
+    while no input changed. That B, once the demand for `b` has started it,
+    derives nothing further is not checked.
 13. A piece that reads `#now/N` is served from the store within the
     interval and started after it, and a root a loop holds unstarted is
     loaded when the interval passes. Both exist in

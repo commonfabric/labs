@@ -232,9 +232,13 @@ The memory server judges, since it holds both the index and the sessions'
 demand rows. For a root awaiting its first structure load whose piece is not
 running, the space server asks whether the root's piece can be served from the
 store. A root is not always a result document: a session that watches a
-piece's argument makes a root of it, and a load of that root starts the piece
-its `result` back-links lead to. The judgment follows the same links to the
-piece. The store can serve a root when:
+piece's argument, or a computed document the piece derives, makes a root of
+it, and a load of that root starts the piece its `result` back-links lead to.
+The judgment follows the same links to the piece, and reads a computed
+document as the one piece the index records as writing it where there is
+one. A computed document is judged at any scope, so a viewer's own instance
+of one can pass, and a root that passes is left unstarted under `skip` as
+below. The store can serve a root when:
 
 - the piece's `space` slice is clean and was recorded under the current
   epoch;

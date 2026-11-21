@@ -25,7 +25,9 @@ const logger = getLogger("carried-demand", { enabled: true, level: "warn" });
 /**
  * A pair that demands in a space, with the client session it is carried
  * into another space for: the pair's own session there, or the origin of a
- * pair another space carried there.
+ * pair another space carried there. A demand that reached the space with
+ * no pair, carried for an actor who may not read it, has an origin and no
+ * principal.
  */
 export type CarriedPair = ScopeKeyIdentity & {
   origin: CarriedDemandRow["origin"];
@@ -43,7 +45,8 @@ const NOT_TAKEN = "\0not-taken";
  * its run was made for, which the key of the run's slice says: every pair
  * for a run in the `space` slice, a user's pairs for one in that user's
  * slice, and the one pair for one in a session's slice. An instance
- * narrower than the space is carried for no pair but its own.
+ * narrower than the space is carried for no pair but its own. A demand
+ * with no pair carries the reads made in the `space` slice, and no other.
  */
 export const carriedRowsOf = (
   reads: Iterable<ForeignRead>,

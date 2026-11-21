@@ -790,10 +790,11 @@ describe("SpaceServer", () => {
 
     describe("recording a piece with a computation that writes through a cell it was handed", () => {
       it("records the piece clean, with no write row for the cell", async () => {
-        // The cell is in the computation's envelope and not in its write
-        // surface, which is where a record's write rows come from
-        // (docs/plans/stored-output-currency-across-spaces.md, "Computations
-        // that run without demand").
+        // The computation's envelope names the slot that holds the link to
+        // the cell, and its write surface, which is where a record's write
+        // rows come from, names neither
+        // (docs/plans/stored-output-currency-across-spaces.md, "What the
+        // rows for an envelope need").
 
         host = newHost("record");
         let sink: NormalizedFullLink | undefined;

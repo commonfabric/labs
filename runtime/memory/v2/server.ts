@@ -178,6 +178,7 @@ import {
   judgeCurrencyRoots,
   pullCurrencyExports,
   registerCurrencyReads,
+  selectCurrencyDeriver,
   selectCurrencyExport,
   selectCurrencyImports,
   selectCurrencyNextExpiry,
@@ -13291,7 +13292,10 @@ export class Server {
    * sessions as `demandForSpace()` reads them, after bringing the currency
    * index's marks up to the store's head. A root that is no result document
    * is judged as the piece its `result` back-links lead to, which is the
-   * piece a structure load of it starts.
+   * piece a structure load of it starts. A `computed:` root that one
+   * recorded piece writes is judged as that piece without its back-links
+   * being read, so one a session names at an instance narrower than the
+   * space, which the space may hold no instance of, is judged too.
    *
    * A root may rest on a slice that read another space. Each space read by
    * a slice the demand rows are resolved under is followed first: one that
@@ -13330,8 +13334,14 @@ export class Server {
     };
     if (roots.length === 0) return { servable: [], ...found() };
 
-    /** The recorded piece `root` leads to, if its back-links reach one. */
+    /**
+     * The recorded piece `root` leads to: the one piece recorded as deriving
+     * it where it is a computed document, or else the piece its back-links
+     * reach, if they reach one.
+     */
     const pieceOf = (root: string): string | undefined => {
+      const deriver = selectCurrencyDeriver(engine, { space, id: root });
+      if (deriver !== undefined) return deriver;
       let id = root;
       for (let hops = 0; hops <= CURRENCY_ROOT_HOPS_MAX; hops++) {
         if (selectCurrencyPiece(engine, { piece: id }) !== undefined) {
@@ -13663,8 +13673,8 @@ export class Server {
    * current: the reading space registered the instance and is armed with
    * `space` for no limited time, so that it hears of the next change, and
    * the index holds the instance as one no piece here is behind on. With a
-   * row for an actor's own instance stands a row for each piece the index
-   * records as writing that document, for the same pair. Called whenever
+   * row that stands, stands a row for each piece the index records as
+   * writing its document, for the same pair. Called whenever
    * what is offered, the index, or the arming may have changed.
    */
   #refreshCarriedDemand(space: string): void {
@@ -13672,6 +13682,8 @@ export class Server {
     let readers = this.#carriedDemand.get(space);
     if (offered === undefined && readers === undefined) return;
     const engine = this.#resolvedEngines.get(space);
+    /** What to tell the serving host, once the rows below are in place. */
+    const told: Array<() => void> = [];
     for (
       const reader of new Set([
         ...offered?.keys() ?? [],
@@ -13695,13 +13707,13 @@ export class Server {
           ),
         );
         if (rows.size === 0) continue;
-        // An instance that is the actor's own may not exist yet, and a
-        // serving loop finds the piece behind a document from what the
-        // document holds. So the piece the index records as writing it is
-        // demanded with it, for the same pair.
+        // A serving loop starts no piece for a demanded document that a
+        // computation derives, and an instance that is an actor's own may
+        // not exist yet for it to find the piece from. So each piece the
+        // index records as writing a row's document is demanded with it,
+        // for the same pair.
         if (engine !== undefined) {
           for (const row of [...rows.values()]) {
-            if (row.scopeKey === "space") continue;
             for (
               const piece of selectCurrencyWriters(engine, {
                 space,
@@ -13729,8 +13741,10 @@ export class Server {
       for (const [sessionId, session] of [...held]) {
         if (stands.has(sessionId)) continue;
         held.delete(sessionId);
-        this.#notifySessionChanged({ kind: "removed", space, sessionId });
-        this.#notifyCarriedDemandChanged(space, session);
+        told.push(() => {
+          this.#notifySessionChanged({ kind: "removed", space, sessionId });
+          this.#notifyCarriedDemandChanged(space, session);
+        });
       }
       for (const [sessionId, session] of stands) {
         const before = held.get(sessionId);
@@ -13742,17 +13756,19 @@ export class Server {
           )
         ) continue;
         held.set(sessionId, session);
-        if (before === undefined) {
-          this.#notifySessionChanged({
-            kind: "opened",
-            space,
-            sessionId,
-            ...(session.principal !== undefined &&
-              { principal: session.principal }),
-          });
-          this.#notifySessionOpened(space);
-        }
-        this.#notifyCarriedDemandChanged(space, session);
+        told.push(() => {
+          if (before === undefined) {
+            this.#notifySessionChanged({
+              kind: "opened",
+              space,
+              sessionId,
+              ...(session.principal !== undefined &&
+                { principal: session.principal }),
+            });
+            this.#notifySessionOpened(space);
+          }
+          this.#notifyCarriedDemandChanged(space, session);
+        });
       }
       if (held.size === 0) {
         readers?.delete(reader);
@@ -13765,6 +13781,9 @@ export class Server {
       }
     }
     if (readers?.size === 0) this.#carriedDemand.delete(space);
+    // The host asks what stands when it is told, so it is told once every
+    // row is in place.
+    for (const tell of told) tell();
   }
 
   /**

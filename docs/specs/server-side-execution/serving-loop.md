@@ -381,7 +381,9 @@ the currency index (§3b) in its `skip` mode, the demand pass asks the memory
 server, for each root awaiting its first structure load whose piece is not
 running, whether the store can serve it as it stands. A root that is no
 result document is judged as the piece its `result` back-links lead to,
-which is the piece a load of it would start. The store can serve a root
+which is the piece a load of it would start, and a `computed:` root that
+one recorded piece writes is judged as that piece with no back-link read.
+The store can serve a root
 when the piece's `space` slice is clean and of the current epoch, and every
 demand row of every session whose id the piece writes or owns, or a recorded
 piece beneath it does, is vouched for: each slice of the owner the row's
@@ -397,8 +399,11 @@ for it. It stays among the roots awaiting a first load and is judged again
 when demand changes, when it is found running, and when a commit marks its
 piece or one beneath it. That last case re-arms the root at the marking
 seq, as a commit re-arms a parked root, so W stays below that input until
-the piece has started and derived. A warm request's root, a root narrower
-than the space, and a root with no record are loaded as before. In the
+the piece has started and derived. A warm request's root, a root with no
+record, and a root narrower than the space that is no `computed:` document
+are loaded as before. A `computed:` root narrower than the space is judged
+as a space-scoped one is: its instance is one of the demand rows the piece
+that writes it has to vouch for. In the
 `record` mode the same judgment is made and counted, and every root is
 loaded; a loop whose policy names `skip` and no epoch
 (`SpaceServerPolicy.currencyEpoch`) runs in it. Impl: `StoreCurrency` in `runtime/runner/src/executor/store-currency.ts`,
@@ -422,12 +427,31 @@ pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
 asks for (`docs/features/document-release.md`).
 
+**A computed document a demand names.** *(RULED 2026-11-21.)* A `computed:`
+document holds what a derivation wrote, with a `result` back-link to the piece
+that derives it and no pattern pointer of its own. A demand that names one as
+a root, as a session's watch of it or a row carried from another space (§3b)
+does, is a demand for a value of that piece: its structure load follows the
+back-link and starts the piece, as a load of an argument does, and the demand's
+pair counts among the piece's demanders. Where the root is an instance
+narrower than the space, the back-link is read from the instance as a pair
+that demands it: the serving identity's own instance is not the one
+demanded, and the space may hold none. An instance that does not exist yet
+has no back-link to read, so a demand carried from another space brings the
+piece with it (§3b). A `computed:` document a session was
+only sent, because a document it names links to it, is no root. A session
+watching a piece is sent every document the piece derives, and the piece
+starts from the root that reached them. A `computed:` root that holds no
+back-link parks as any root that is no piece's does. Impl: `isComputedId()` and
+the demand pass in `runtime/runner/src/executor/space-server.ts`; pinned in
+`runtime/runner/test/executor/space-server-computed-root.test.ts`.
+
 **A nested piece a demand reaches.** A demand that reaches a nested instance's
 values starts the instances that enclose it first, whether or not it reaches
 any of theirs (runtime-mapping.md, N22): the documents of an enclosing
 instance's that a demand reaches may all be ones the demand pass starts nothing
-from, such as its argument and a `computed:` document holding a link to the
-nested instance. The walk does not reach past a piece a handler made to the
+from, such as its argument and a `computed:` document it was sent that holds
+a link to the nested instance. The walk does not reach past a piece a handler made to the
 piece whose handler made it.
 
 **Parking.** A park releases the lease and stops the loop. A park for a
@@ -1280,10 +1304,11 @@ executing:
   stand is worked out again whenever that index or the arming changes. A
   reading space that offers rows pulls from the space when it is not armed
   with it, and again when the space tells it of a change, so it is armed
-  whenever a row could be proven. With a row for an actor's own instance
-  stands a row for each piece the index records as writing that document,
-  for the same pair, since such an instance may not exist yet and a loop
-  finds the piece behind a document from what the document holds. A row
+  whenever a row could be proven. With a row that stands, stands a row for
+  each piece the index records as writing its document, for the same pair:
+  a loop finds the piece of a computed document through the document's
+  back-link (§1), and an instance that is an actor's own may not exist yet
+  for it to find the piece from. A row
   that stands is a row of the
   space's demand set, a root with the origin session's pair where it has
   one, held under an id of its own among the space's sessions, so the
@@ -1291,7 +1316,9 @@ executing:
   the host activates a parked space that receives one and does not park it
   idle while one stands. It is not a connected session for an intent that
   needs a channel to its actor (builtins.md §4). A pair that reached a
-  space carried is carried on with the origin it came with, and the memory
+  space carried is carried on with the origin it came with, a demand that
+  reached it with no pair is carried on with its origin for the reads made
+  in the `space` slice, and the memory
   server drops every row of an origin session when that session ends. A
   slice that read what a live, clean writer
   that names no piece wrote, such as a wish's shared hashtag resolver, takes
