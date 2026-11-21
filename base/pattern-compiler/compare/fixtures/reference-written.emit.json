@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/reference-written.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst select = handler((_event, { first, selected }) => {\n  selected.set({ room: first });\n});\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/reference-written.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ select: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { first, selected }) => {\n  selected.set({ room: first });\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst select = handler((_event, { first, selected }) => {\n  selected.set({ room: first });\n});\n\n\nconst $default = (pattern(\"sha256:06c3dd6cf012b7b4c71e3f8d4f1fff38cb476def6b79df4d1d8a6062f5bd38a8\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ select: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { first, selected }) => {\n  selected.set({ room: first });\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -140,7 +140,7 @@
           "operations": [],
           "outputs": [],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/reference-written.tsx#default"
+            "sha256:06c3dd6cf012b7b4c71e3f8d4f1fff38cb476def6b79df4d1d8a6062f5bd38a8"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

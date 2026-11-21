@@ -118,7 +118,7 @@ Each of these gates fails CI on its own, and none of them run as part of
   file that does not exist, a `§` citation in
   the CFC sources (`CITATION_SOURCE`, the runner's and the memory package's)
   naming a section the specification has not, or more
-  than forty `SPEC-PENDING` markers in the files it governs (`GOVERNED_SOURCE`
+  than eighty `SPEC-PENDING` markers in the files it governs (`GOVERNED_SOURCE`
   in `tasks/check-cfc-correspondence.ts`), or one naming no specs pull request. The specification is private and the snapshot is what crosses:
   `deno task cfc-spec-snapshot` regenerates it from a specs checkout, and labs
   CI never reads the specification itself. A citation written on purpose to

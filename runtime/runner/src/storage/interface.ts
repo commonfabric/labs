@@ -72,6 +72,7 @@ import type { Immutable } from "@commonfabric/js-values/types";
 
 import type { Cancel } from "../cancel.ts";
 import type { Cell } from "../cell.ts";
+import type { CompiledPlanRegistry } from "../cfc/compiled-plans.ts";
 import type {
   CfcConfidentialityRelease,
   CfcConfidentialityReleaseByIntent,
@@ -2724,6 +2725,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   setCfcEnforcementMode(mode: CfcEnforcementMode): void;
   setCfcFlowLabelsMode(mode: CfcFlowLabelsMode): void;
 
+  /**
+   * Set whether the preparation stamps the paths authorized `plan-write`
+   * inputs cover with their template labels (the experimental option
+   * `compiledPatterns`).
+   */
+  setCfcPlanLabels(enabled: boolean): void;
+
   /** Set the write-side `requiredIntegrity` floor dial (§8.12.4.1 / SC-18). */
   setCfcWriteFloorMode(mode: CfcWriteFloorMode): void;
 
@@ -3086,6 +3094,15 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
     owner: string,
     authorization?: RuntimeWritePolicyAuthorization,
   ): void;
+
+  /**
+   * The runtime's registry of compiled patterns, whose identities a
+   * `plan-write` input names, or `undefined` without the runtime's mark or
+   * on a transaction the runtime did not configure.
+   */
+  compiledPlans(
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): CompiledPlanRegistry | undefined;
 
   /**
    * Whether the runtime owns the store at `id` in `space` — named by an

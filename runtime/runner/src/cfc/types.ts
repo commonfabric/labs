@@ -663,7 +663,15 @@ export type ImplementationIdentity =
     bindingPath?: string[];
     codeHash?: string;
   }
-  | { kind: "unsupported"; className: string; reason: string };
+  | { kind: "unsupported"; className: string; reason: string }
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+  // A compiled pattern the runtime registered, by the identity
+  // `CompiledPlanRegistry.register` computed over its plan and value code,
+  // and, for a sandboxed body of it, the body's index in the plan. The
+  // `TransformedBy` a template's derivation mints names it. For expression
+  // code of a pattern compiled into the registered one, `pattern` is that
+  // pattern's entry of `Plan.patterns` instead.
+  | { kind: "compiled"; pattern: string; body?: number };
 
 export type TrustSnapshot = {
   id: string;
@@ -833,7 +841,316 @@ export type WritePolicyInput =
     readonly target?: CfcAddress;
     readonly name: string;
     readonly value: FabricValue;
+  }
+  /**
+   * One path a compiled pattern's write staged, with what its label template
+   * is instantiated from. Honored only when recorded with the runtime's mark,
+   * with the experimental option `compiledPatterns` on, and for a compiled
+   * pattern the runtime registered (`CompiledPlanRegistry`).
+   */
+  | ({ readonly kind: "plan-write" } & PlanWrite)
+  /**
+   * A part of the table of inputs that the `plan-write` inputs of one
+   * compiled pattern name their inputs in, for the transaction: the entries
+   * from `firstInput` and from `firstBinding` on. The table of a transaction
+   * is what its parts hold, each at its indices, in whatever order they were
+   * recorded. Honored as a `plan-write` input is.
+   */
+  | ({
+    readonly kind: "plan-inputs";
+    readonly compiledPattern: string;
+    readonly firstInput: number;
+    readonly firstBinding: number;
+  } & PlanInputsTable);
+
+/**
+ * Where a compiled pattern's slot is bound: the chain of addresses its
+ * observation followed, link positions first and the observed position
+ * last, with the observation class it read the last one in; or an address
+ * this transaction wrote, whose staged label the slot takes; or an output of
+ * the plan, whose label the slot takes, instantiated from the inputs that
+ * `outputs` of the same place or of an enclosing one reports for it: the
+ * slot of an element of the result of another per-element construct, which
+ * reads the output of the upstream element and has no stored address. An
+ * address path may hold the segment `*` at an element position, which
+ * resolves to the join over the entries it covers.
+ */
+export type SlotBinding =
+  | {
+    readonly chain: readonly CfcAddress[];
+    readonly observes: "value" | "shape" | "followRef";
+    /**
+     * The further chains of a read of a value that holds links: for each
+     * position the read reached through a link stored in the value, the
+     * link positions crossed on the way to it first and the position last,
+     * read in the class of `observes`.
+     */
+    readonly below?: readonly (readonly CfcAddress[])[];
+    /**
+     * The containers whose members the read covered, each with the number
+     * of its members and of the groups of members whose positions hold
+     * equal labels. `chain` and `below` hold the positions of one member
+     * of each group and of no other member, so the label of the slot is the
+     * join over the groups, whatever the number of members. What the
+     * writer states here is not read to form the label.
+     */
+    readonly members?: readonly {
+      readonly container: CfcAddress;
+      readonly count: number;
+      readonly groups: number;
+    }[];
+    /**
+     * The slot read the position at the end of `chain` after this
+     * transaction wrote it: each position of the binding that the
+     * transaction wrote takes the label staged there, and the others the
+     * label their observation consumed.
+     */
+    readonly staged?: true;
+  }
+  | { readonly staged: CfcAddress }
+  | { readonly output: number }
+  /**
+   * A slot whose value is a constant of the plan, such as a literal a
+   * handler binding gives its state: it contributes no label.
+   */
+  | { readonly constant: true };
+
+/**
+ * The bindings of a template's slots, by index into the plan's slots: each
+ * the index of a binding in the table of inputs (`PlanInputsTable`).
+ */
+export type SlotBindings = { readonly [slot: number]: number };
+
+/**
+ * The inputs of one place a template is instantiated at. What they name of
+ * other inputs and of slot bindings they name by index into the
+ * transaction's table of inputs (`PlanInputsTable`), so that inputs several
+ * places reach stand in the table once.
+ */
+export type PlanInputs = {
+  /** Every slot the template reaches. */
+  readonly slots: SlotBindings;
+
+  /** The branch taken at each selector; an absent one is not reported. */
+  readonly selections?: { readonly [selector: number]: number };
+
+  /**
+   * The child chosen at each choice point, with its own bindings, or `null`
+   * where none was chosen; an absent one is not reported.
+   */
+  readonly picks?: {
+    readonly [pick: number]: { readonly slots: SlotBindings } | null;
   };
+
+  /** The elements of each collection a `fold` names. */
+  readonly elements?: { readonly [collection: number]: PlanElements };
+
+  /** The addresses the reads of each `Plan.dynamicReads` entry read. */
+  readonly dynamic?: { readonly [reads: number]: readonly CfcAddress[] };
+
+  /**
+   * The inputs of the cone instance of each output an `output` node or an
+   * output slot binding names here, by index into the table; an enclosing
+   * place's answer one this place does not name.
+   */
+  readonly outputs?: { readonly [output: number]: number };
+};
+
+/**
+ * The elements of a collection, in one of two forms, each set of inputs
+ * named by its index in the table. `uniform` is one set of bindings whose
+ * addresses hold `*` at the element position, for a body with no node whose
+ * label depends on a value: an array of plain values in place. `groups` is
+ * one entry per distinct set of element inputs with the number of elements
+ * that have it: an array of references, or the result of another
+ * per-element construct.
+ */
+export type PlanElements =
+  | { readonly uniform: number }
+  | {
+    readonly groups: readonly {
+      readonly inputs: number;
+      readonly count: number;
+    }[];
+  };
+
+/**
+ * The inputs and the slot bindings that the write records of one compiled
+ * pattern name by index in one transaction: each distinct set of inputs and
+ * each distinct binding once, whatever the number of records and of paths
+ * through named outputs that reach it.
+ */
+export type PlanInputsTable = {
+  readonly inputs: readonly PlanInputs[];
+  readonly bindings: readonly SlotBinding[];
+};
+
+/** A stored position with the class a write record observes it in. */
+export type ObservedPosition = {
+  readonly address: CfcAddress;
+  readonly observes: "value" | "shape" | "followRef";
+
+  /** The position alone is observed, and nothing below it. */
+  readonly alone?: true;
+};
+
+/**
+ * A member a write record lists (`PlanWrite.members`): its segment, or for
+ * the members at indices next to each other the first and the last index.
+ */
+export type PlanWriteMember = string | readonly [first: number, last: number];
+
+/** One write of a compiled pattern, as the executor reports it. */
+export type PlanWrite = {
+  /**
+   * The inputs the template of the record is instantiated with: their
+   * index in the table of inputs the transaction holds for
+   * `compiledPattern` (`PlanInputsTable`).
+   */
+  readonly inputs: number;
+
+  /**
+   * The written document and path. A record that lists `members` holds `*`
+   * in the path, at the position of the member.
+   */
+  readonly target: CfcAddress;
+
+  /**
+   * The members the record covers, of the container whose path is that of
+   * `target` up to its `*`: the path of `target` with each member in the
+   * place of the `*` is a path the record covers, and the path with the `*`
+   * is none. A member is listed by its segment, and members at indices next
+   * to each other by the first and the last index. Every path covered
+   * takes the one label of the record's template.
+   */
+  readonly members?: readonly PlanWriteMember[];
+
+  /**
+   * The further documents the record covers, in the space and scope of
+   * `target`: the path of `target` in each of them takes the one label of
+   * the record's template, as that of `target` does.
+   */
+  readonly documents?: readonly string[];
+
+  /** The identity `CompiledPlanRegistry.register` returned. */
+  readonly compiledPattern: string;
+
+  /** The record of the plan whose template labels the write. */
+  readonly record:
+    | { readonly output: number }
+    | { readonly body: number; readonly write: number }
+    /**
+     * An entry of `Body.envelopes`: a write the plan bounds and has no
+     * template for.
+     */
+    | { readonly body: number; readonly envelope: number }
+    | { readonly cone: number; readonly write: number }
+    | { readonly stateFirst: number }
+    /**
+     * The outcome of an entry of `Plan.operations` of kind `wish`, which has
+     * the label of that operation's own resolution.
+     */
+    | { readonly operation: number };
+
+  /** The result-document id of the instance. */
+  readonly instance: string;
+
+  /**
+   * The element keys of the writing cone instance, outermost first; those
+   * of the first of the records one record stands for, where it lists
+   * `members` or `documents`.
+   */
+  readonly keys: readonly (readonly [collection: number, key: string])[];
+
+  /**
+   * The write left the value at the target as it was, so the transaction
+   * holds no write of the path. The label is stored all the same, for the
+   * value the path holds: what the writing code read decided that the value
+   * stays.
+   */
+  readonly unchanged?: true;
+
+  /**
+   * What a change of a container's members in place compared to find the
+   * members: stored positions whose labels the label of the write is joined
+   * with, each observed in its class as stored before the transaction. The
+   * records of one change hold one array.
+   */
+  readonly decided?: readonly ObservedPosition[];
+
+  /**
+   * Further stored positions whose labels the label of the write is joined
+   * with: the position a member the change moved to the target stood at,
+   * and for the membership of the container, what the container stored of
+   * it.
+   */
+  readonly observed?: readonly ObservedPosition[];
+
+  /**
+   * The record is of the membership of the container at the target, which
+   * a change of its members in place decided anew. Its label is stored as
+   * the `enumerate` entry at the target and labels no member.
+   */
+  readonly enumeration?: true;
+
+  /**
+   * With `enumeration`: the change removed members of the container, so
+   * what decided it decides what every position holds. It is stored once
+   * for the container, at its `*` path, and a read of a position joins it
+   * with the position's own entries.
+   */
+  readonly removes?: true;
+
+  /**
+   * With `enumeration`: the members the change kept at another position,
+   * as runs of positions next to each other: `count` members that stood
+   * from `from` on stand from `to` on. The stored label entries of a member
+   * move with it.
+   */
+  readonly moves?: readonly {
+    readonly from: number;
+    readonly to: number;
+    readonly count: number;
+  }[];
+
+  /**
+   * With `moves` or `removes`: the first position the change wrote. The
+   * members before it stay, and a member that stood at it or behind it and
+   * is in no run of `moves` was removed.
+   */
+  readonly start?: number;
+
+  /**
+   * With `unchanged`: the record is given again because a label its inputs
+   * read changed and no value did. The label of the target alone is stored
+   * again, and the label entries below the target stay.
+   */
+  readonly relabel?: true;
+
+  /**
+   * The target holds the result of a per-element construct, and the write
+   * changed its members otherwise than by adding at its end: which member
+   * stands at each position was decided anew, so the label of the record,
+   * that of the collection's membership, is stored once for every
+   * position.
+   */
+  readonly membersChanged?: true;
+
+  /**
+   * The target holds the result of a per-element construct, and the write
+   * added members at its end and changed no other: each member before them
+   * stands where it stood, so what is stored once for every position of
+   * the target stays.
+   */
+  readonly membersAppended?: true;
+
+  /**
+   * The writer has no inputs that give the label of what the target holds:
+   * the target takes the transaction's join, as a written path with no
+   * record does.
+   */
+  readonly bound?: true;
+};
 
 /**
  * One grant document a boundary evaluation consulted (§8.12.7 route 2a):
@@ -1184,6 +1501,10 @@ export type CfcTxState = {
   policyEvaluationMode: CfcPolicyEvaluationMode;
   labelMetadataProtectionMode: CfcLabelMetadataProtectionMode;
   declaredMonotonicityMode: CfcDeclaredMonotonicityMode;
+  // Whether the preparation stamps a path an authorized `plan-write` input
+  // covers with the label instantiated from its template (the experimental
+  // option `compiledPatterns`). Off, every `plan-write` input is ignored.
+  planLabels: boolean;
   // The one sanctioned per-tx exemption from the declared-monotonicity gate
   // (§8.12.7 route 2b seam). Absent = gate applies. Set only through the
   // privileged `setCfcDeclaredWideningExemption` (trusted-builtin identity),
@@ -1379,4 +1700,9 @@ export type CfcPreparationWork =
   | "flowTemplateEntriesMinted"
   | "flowTemplateContainers"
   | "inputReadViewsBuilt"
-  | "inputReadViewsReused";
+  | "inputReadViewsReused"
+  | "planTemplatesInstantiated"
+  | "planTemplateNodes"
+  | "planSlotLabels"
+  | "planLabelMemoHits"
+  | "planLabelBounds";

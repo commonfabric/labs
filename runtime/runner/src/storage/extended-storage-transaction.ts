@@ -127,6 +127,7 @@ import {
   writeStoredCfcEnvelope,
 } from "../cfc/prepare.ts";
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "../cfc/policy.ts";
+import type { CompiledPlanRegistry } from "../cfc/compiled-plans.ts";
 import {
   runtimeOwnedStoreKey,
   type RuntimeOwnedStores,
@@ -748,6 +749,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     policyEvaluationMode: DEFAULT_CFC_POLICY_EVALUATION_MODE,
     labelMetadataProtectionMode: DEFAULT_CFC_LABEL_METADATA_PROTECTION_MODE,
     declaredMonotonicityMode: DEFAULT_CFC_DECLARED_MONOTONICITY_MODE,
+    planLabels: false,
     prepare: { status: "unprepared" },
     dereferenceTraces: [],
     structureContainers: [],
@@ -895,6 +897,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * configure, which leaves only this transaction's own markers.
    */
   #runtimeOwnedStores: RuntimeOwnedStores | undefined;
+
+  /**
+   * The compiled patterns the runtime registered, shared with every other
+   * transaction of the same runtime. Absent on a transaction the runtime did
+   * not configure, where no `plan-write` input is honored.
+   */
+  #compiledPlans: CompiledPlanRegistry | undefined;
 
   /**
    * Per-transaction cache of `Cell.get()` results, keyed by stable cell view
@@ -1157,6 +1166,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       policyEvaluation: this.#cfcState.policyEvaluationMode,
       labelMetadataProtection: this.#cfcState.labelMetadataProtectionMode,
       declaredMonotonicity: this.#cfcState.declaredMonotonicityMode,
+      ...(this.#cfcState.planLabels ? { planLabels: true } : {}),
     };
   }
 
@@ -1281,6 +1291,19 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (mode === "persist") {
       this.#cfcFlowLabelsPinned = true;
     }
+  }
+
+  setCfcPlanLabels(enabled: boolean): void {
+    // Like the flow-labels mode, the dial decides what the preparation stamps
+    // and is not part of PreparedDigestInput, so a change after prepare
+    // invalidates the prepared decision.
+    if (
+      this.#cfcState.planLabels !== enabled &&
+      this.#cfcState.prepare.status === "prepared"
+    ) {
+      this.invalidateCfc("plan-labels-changed");
+    }
+    this.#cfcState.planLabels = enabled;
   }
 
   setCfcWriteFloorMode(mode: CfcWriteFloorMode): void {
@@ -2567,6 +2590,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // for exactly the records that arrived with the mark.
     if (runtimeWritePolicyAuthorized(authorization)) {
       this.#runtimeWritePolicyInputs.add(frozen);
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // A write of a compiled pattern stores the label of its template, and
+      // every kept output the atom of its pattern, so with labels from
+      // templates on the transaction is prepared whatever it read.
+      if (frozen.kind === "plan-write" && this.#cfcState.planLabels) {
+        this.markCfcRelevant("plan-write");
+      }
       // An authorized marker naming a WHOLE document in the OWNER's own space
       // says the runtime owns that store, for the rest of this transaction.
       // Both tests are the ones enrollment applies: a marker carrying a path
@@ -2636,6 +2666,26 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       );
     }
     this.#runtimeOwnedStores = stores;
+  }
+
+  /**
+   * One-shot handover of the runtime's compiled-plan registry, called by
+   * `Runtime.edit` for every transaction it creates.
+   */
+  configureCompiledPlans(registry: CompiledPlanRegistry): void {
+    if (this.#compiledPlans !== undefined) {
+      throw new Error(
+        "Compiled plans are already configured for this transaction",
+      );
+    }
+    this.#compiledPlans = registry;
+  }
+
+  compiledPlans(
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): CompiledPlanRegistry | undefined {
+    if (!runtimeWritePolicyAuthorized(authorization)) return undefined;
+    return this.#compiledPlans;
   }
 
   enrollRuntimeOwnedStore(
@@ -5175,6 +5225,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     this.#wrapped.setCfcFlowLabelsMode(mode);
   }
 
+  setCfcPlanLabels(enabled: boolean): void {
+    this.#wrapped.setCfcPlanLabels(enabled);
+  }
+
   setCfcWriteFloorMode(mode: CfcWriteFloorMode): void {
     this.#wrapped.setCfcWriteFloorMode(mode);
   }
@@ -5378,6 +5432,12 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   isRuntimeWritePolicyInput(input: WritePolicyInput): boolean {
     return this.#wrapped.isRuntimeWritePolicyInput(input);
+  }
+
+  compiledPlans(
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): CompiledPlanRegistry | undefined {
+    return this.#wrapped.compiledPlans(authorization);
   }
 
   enrollRuntimeOwnedStore(

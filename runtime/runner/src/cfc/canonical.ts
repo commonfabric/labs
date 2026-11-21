@@ -331,6 +331,7 @@ export const canonicalizeWritePolicyInput = (
     case "result-wiring":
     case "owner-adoption":
     case "initialization":
+    case "plan-write":
       return {
         ...input,
         target: {
@@ -380,6 +381,7 @@ export const canonicalizeWritePolicyInput = (
         ? input
         : { ...input, target: canonicalizeAttemptedWrite(input.target) };
     case "sink-request":
+    case "plan-inputs":
       return input;
   }
 };

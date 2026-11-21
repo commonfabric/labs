@@ -104,6 +104,7 @@ import {
   runtimeOwnedStoreOwnerKey,
   RuntimeOwnedStores,
 } from "./cfc/runtime-owned-stores.ts";
+import { CompiledPlanRegistry } from "./cfc/compiled-plans.ts";
 import {
   type CfcExternalContentObservation,
   type RuntimeWritePolicyAuthorization,
@@ -511,6 +512,17 @@ export interface ExperimentalOptions {
    * it (`docs/development/EXPERIMENTAL_OPTIONS.md#synccidreferencesv1`).
    */
   syncCidReferences?: boolean | undefined;
+
+  /**
+   * The compiled pattern language integration
+   * (`docs/plans/compiled-pattern-language-integration.md`). On, the commit
+   * preparation stamps a path a compiled pattern's write covers with the
+   * label instantiated from the plan's label template, where the runtime
+   * recorded that write as an authorized `plan-write` input, in place of the
+   * one join over the transaction's reads. Defaults to off, which stores the
+   * join on every path and ignores every `plan-write` input.
+   */
+  compiledPatterns?: boolean | undefined;
 }
 
 /**
@@ -1128,6 +1140,28 @@ export interface CfcRuntimeStats {
    */
   inputReadViewsReused: number;
 
+  /**
+   * Label templates of compiled patterns instantiated at commit: each
+   * template, and each body of a `fold` or `pick` group.
+   */
+  planTemplatesInstantiated: number;
+
+  /** Template nodes those instantiations visited. */
+  planTemplateNodes: number;
+
+  /** Slot labels those instantiations asked for. */
+  planSlotLabels: number;
+
+  /**
+   * Template labels returned from a memo: a join or meet over a set of
+   * label identifiers already combined, or an `output` or `shared` label
+   * already instantiated in the transaction.
+   */
+  planLabelMemoHits: number;
+
+  /** Selections, choices and prefix folds instantiated as their bound. */
+  planLabelBounds: number;
+
   cfcPreparedTx: number;
   cfcPrepareRejects: number;
   cfcDigestInvalidations: number;
@@ -1184,6 +1218,11 @@ const initialCfcRuntimeStats = (): CfcRuntimeStats => ({
   flowTemplateContainers: 0,
   inputReadViewsBuilt: 0,
   inputReadViewsReused: 0,
+  planTemplatesInstantiated: 0,
+  planTemplateNodes: 0,
+  planSlotLabels: 0,
+  planLabelMemoHits: 0,
+  planLabelBounds: 0,
   cfcPreparedTx: 0,
   cfcPrepareRejects: 0,
   cfcDigestInvalidations: 0,
@@ -1640,6 +1679,9 @@ export class Runtime {
    */
   readonly #runtimeOwnedStores = new RuntimeOwnedStores();
 
+  /** The compiled patterns this runtime registered (`compiledPlans`). */
+  readonly #compiledPlans = new CompiledPlanRegistry();
+
   /**
    * The serving loop's run stamper (installed _with_ the destination): the
    * scheduler hands it each run's durable action id and kind, and it attaches
@@ -1730,6 +1772,15 @@ export class Runtime {
    */
   get scopeKeyIdentity(): ScopeKeyIdentity {
     return this.storageManager.scopeKeyIdentity();
+  }
+
+  /**
+   * The compiled patterns this runtime registered. Registering one takes the
+   * runtime's write-policy authorization; a `plan-write` input is honored only
+   * for a pattern registered here.
+   */
+  get compiledPlans(): CompiledPlanRegistry {
+    return this.#compiledPlans;
   }
 
   /** The ids of the derived internal cells this runtime's pieces own. */
@@ -3016,6 +3067,11 @@ export class Runtime {
     wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
     wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
     wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
+    // Only a serving runtime stores labels from templates: a client's
+    // speculative run is never the stored result.
+    wrapped.setCfcPlanLabels(
+      this.experimental.compiledPatterns === true && this.servingPosture,
+    );
     wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
     wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
     wrapped.setCfcTrustConfig(this.cfcTrustConfig);
@@ -3031,6 +3087,7 @@ export class Runtime {
       this.#transactionSealDestination ?? this.#speculationDestination(),
     );
     wrapped.configureRuntimeOwnedStores(this.#runtimeOwnedStores);
+    wrapped.configureCompiledPlans(this.#compiledPlans);
     this.#transactions.add(wrapped);
     return wrapped;
   }

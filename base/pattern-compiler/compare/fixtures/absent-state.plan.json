@@ -254,7 +254,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/absent-state.tsx#default"
+            "sha256:681eed8f8aa46f3fc5d6e88647e2f1b32333bb2e1895b62970e42005b7f39643"
           ],
           "picks": [],
           "selectors": [],

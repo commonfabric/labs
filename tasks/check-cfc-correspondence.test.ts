@@ -22,6 +22,7 @@ import {
   report,
   show,
   type SourceFile,
+  SPEC_PENDING_BUDGET,
   valueImports,
 } from "./check-cfc-correspondence.ts";
 
@@ -789,6 +790,10 @@ export { le as atomLe };
             "4 `SPEC-PENDING` markers across the governed files exceed the " +
             "budget of 3; land a ruling before adding another",
           ]);
+      });
+
+      it("runs the gate with a budget of eighty markers", () => {
+        expect(SPEC_PENDING_BUDGET).toBe(80);
       });
     });
   });

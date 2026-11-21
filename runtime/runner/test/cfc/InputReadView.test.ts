@@ -197,6 +197,41 @@ describe("InputReadView", () => {
         }
       });
 
+      it("returns the envelopes it resolved when a write retires an envelope that none of its reads is of", async () => {
+        // A boundary pass resolves the stored envelope of each target it
+        // verifies through the same resolver, and its label write retires
+        // that envelope. A target the transaction did not read leaves the
+        // envelopes of the reads as they are.
+
+        const runtime = newRuntime();
+        const labeled = await seedLabeled(runtime, "labeled-kept");
+        const tx = runtime.edit();
+        try {
+          tx.readOrThrow({ ...labeled, path: ["value", "field"] });
+          const view = new InputReadView(tx);
+          const resolver = new VerifierMetadataResolver(tx);
+          view.reads();
+          resolver.refresh();
+          const envelopes = view.sourceMetadata(resolver);
+          const target = address("target-only");
+          resolver.read(space, target.id, "space", "application/json");
+
+          tx.writeOrThrow({ ...target, path: ["value"] }, { n: 1 });
+          resolver.refresh();
+          expect(view.sourceMetadata(resolver)).toBe(envelopes);
+
+          // A later write of a document a read is of still retires its
+          // envelope.
+          tx.writeOrThrow({ ...labeled, path: ["value", "field"] }, "changed");
+          resolver.refresh();
+          const after = view.sourceMetadata(resolver);
+          expect(after).not.toBe(envelopes);
+          expect(after[0]?.labelMap.entries).toHaveLength(1);
+        } finally {
+          tx.abort();
+        }
+      });
+
       it("describes the reads the last `reads()` saw", () => {
         const runtime = newRuntime();
         const tx = runtime.edit();

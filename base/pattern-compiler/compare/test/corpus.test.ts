@@ -1,9 +1,17 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import type { Artifact } from "../../exec/executor.ts";
 import { eventOrder, type ResultRow, resultRow, tally } from "../corpus.ts";
 import type { WriteRow } from "../harness.ts";
-import { compareLabels } from "../template.ts";
+import { instanceOptions, inStorage } from "../integrated.ts";
+import {
+  checkWrites,
+  compareWithToday,
+  type LabelPlan,
+  type OracleCheck,
+} from "../stored-labels.ts";
+import { compareLabels, type Label } from "../template.ts";
 
 const row = (fields: Partial<ResultRow>): ResultRow => ({
   kind: "output",
@@ -176,5 +184,77 @@ describe("resultRow", () => {
       "onClick#1#0/",
     ]);
     expect(rows.map((row) => row.binding)).toEqual([4, 9]);
+  });
+});
+
+describe("the labels stored from templates beside today's and the evaluator's", () => {
+  it("compares a row the integrated path stored with today's row of the same path and with the evaluator", async () => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL("../fixtures/briefing.emit.json", import.meta.url),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const artifact = patterns[patterns.length - 1];
+    const plan = artifact.plan as unknown as LabelPlan;
+    const checks: OracleCheck[] = [];
+    let climate: Label | undefined;
+    await inStorage(
+      artifact,
+      { secret: "s", city: "Paris" },
+      [],
+      instanceOptions("briefing", "did:key:unused", () => undefined),
+      undefined,
+      true,
+      true,
+      {
+        committed: (runtime, _hooks, writes) => {
+          for (const check of checkWrites(runtime, plan, writes)) {
+            checks.push(check);
+          }
+        },
+        end: () => {
+          climate = checks.find((check) =>
+            check.path.length === 1 && check.path[0] === "climate"
+          )?.stored;
+        },
+      },
+    );
+    // Every write record the commit recorded has the evaluator's label.
+    expect(checks.length).toBeGreaterThan(0);
+    expect(
+      checks.filter((check) =>
+        check.error !== undefined || check.confidentiality !== "equal" ||
+        check.integrity !== "equal"
+      ),
+    ).toEqual([]);
+    // Today's label of `climate` is the join over the transaction, which
+    // holds the clause of `secret` the template leaves out, written as the
+    // store writes the clause of `city`.
+    expect(JSON.stringify(climate?.confidentiality)).toContain("input:city");
+    const today: Label = {
+      confidentiality: [
+        ...climate!.confidentiality,
+        ...JSON.parse(
+          JSON.stringify(climate!.confidentiality).replace(
+            "input:city",
+            "input:secret",
+          ),
+        ),
+      ],
+      integrity: [],
+    };
+    const { rows, unmatched } = compareWithToday(
+      plan,
+      [row({ path: "climate", runtimeLabel: today })],
+      (record, path) =>
+        record === "output" && path.join("/") === "climate"
+          ? climate
+          : undefined,
+    );
+    expect(unmatched).toEqual({});
+    expect(rows.map(({ category, confidentiality }) => ({
+      category,
+      confidentiality,
+    }))).toEqual([{ category: "tighter", confidentiality: "tighter" }]);
   });
 });

@@ -283,6 +283,22 @@ export const recordOfKey = (key: string): Record<string, FabricValue> => {
   return parts;
 };
 
+/** A path of a document in `Store.#changes`. */
+type ChangeNode = {
+  /** The time of the last change at the path itself. */
+  at: number;
+  /** The time of the last change at the path or below it. */
+  below: number;
+  children?: Map<string, ChangeNode>;
+};
+
+/**
+ * The text `Store.appended` holds a stored array under. The text of a path
+ * starts with that of each path above it.
+ */
+const arrayKey = (doc: string, path: readonly string[]): string =>
+  `${doc}\n${path.map((segment) => JSON.stringify(segment)).join("")}`;
+
 /**
  * The keys of the positions of one array, from the element part of
  * each: a key is the record of the element part, `element`, and the
@@ -388,6 +404,12 @@ const samePath = (a: readonly string[], b: readonly string[]): boolean =>
  */
 export const keyFieldsOf = (schema: Schema | undefined): string[] =>
   typeof schema === "object" ? schema.keyFields ?? [] : [];
+
+/**
+ * The body a read is made through a handle of, and the entry of its
+ * `Body.handles` that is the handle.
+ */
+export type ReadThrough = { body: number; handle: number };
 
 /** A reference to a position of a document. */
 export class Ref {
@@ -687,6 +709,13 @@ export class Store {
   readonly #space: string | undefined;
 
   /**
+   * The space of each document that is in another space than the store's:
+   * one that exists outside the instances of the store, which a reference
+   * leads to.
+   */
+  readonly spaces = new Map<string, string>();
+
+  /**
    * Constructs an instance with no document. `secret` is the secret of
    * the space; without it the store mints one, and its keys of plain
    * values then differ from those of every other store. `space` is the
@@ -766,8 +795,12 @@ export class Store {
   readonly declared = new Map<string, { kind: string; default: unknown }>();
   /** Counts the writes and the evaluations whose value changed. */
   clock = 0;
-  /** Every write: where, and the clock after it. */
-  readonly log: { doc: string; path: readonly string[]; at: number }[] = [];
+  /**
+   * Where a caller sets it: every write since, with where it was made and
+   * the clock after it. Nothing is kept where no caller did, so the store
+   * holds nothing that grows with the number of writes made.
+   */
+  log: { doc: string; path: readonly string[]; at: number }[] | undefined;
   /**
    * The address each container a read gave was read from. A value read
    * from a stored address carries the address, invisibly to the code it
@@ -837,6 +870,16 @@ export class Store {
   onWrite: ((doc: string, path: readonly string[]) => void) | undefined;
 
   /**
+   * Called for a write that leaves the value at its path as it was, with
+   * the document, the path and the schema of the reference the write was
+   * made through. The write is no change: nothing is journaled and no
+   * reader is marked.
+   */
+  onUnchanged:
+    | ((doc: string, path: readonly string[], schema?: Schema) => void)
+    | undefined;
+
+  /**
    * Called after each change of a document, with what changed: whoever
    * keeps an index from a position to its readers marks them
    * (`scheduler-and-serving-loop.md` §3.1). `keyed` is absent where the
@@ -854,8 +897,41 @@ export class Store {
         old: unknown;
         splice?: { start: number; removed: number; inserted: number };
         keyed: { array: object; keys?: readonly string[]; now?: object }[];
+        /**
+         * The shortest path the change covers, where it is shorter than
+         * `path`: a write below a value that held no container replaced that
+         * value with one.
+         */
+        covers?: readonly string[];
+        /** The schema of the reference a write or a splice was made through. */
+        schema?: Schema;
       },
     ) => void)
+    | undefined;
+
+  /**
+   * Called for each position a read goes through, with the document and
+   * the path: the position of each link the read follows, and the
+   * position it ends at. Whoever keeps the documents in a store with a
+   * journal of reads, as the runtime's transactions do, records the read
+   * there. `by` is the body and the entry of its `Body.handles` that the
+   * read is made through, while `reader` names one.
+   */
+  onRead:
+    | ((
+      doc: string,
+      path: readonly string[],
+      by?: ReadThrough,
+    ) => void)
+    | undefined;
+
+  /**
+   * The body and the handle of the read being made through a handle, and
+   * each position that read went through so far (PL §1.1,
+   * `DynamicRead`).
+   */
+  reader:
+    | { by: ReadThrough; seen: { doc: string; path: string[] }[] }
     | undefined;
 
   /**
@@ -865,15 +941,136 @@ export class Store {
    */
   journal: Undo[] | undefined;
 
+  /**
+   * Where a caller sets it: for each stored array whose last changes were
+   * additions at its end, by the text of its document and path, the first
+   * position of the members those additions placed. An array has no entry
+   * once a change removed, moved or replaced a member at or behind that
+   * position, or wrote the array whole with other members.
+   */
+  appended: Map<string, number> | undefined;
+
+  /**
+   * While `appended` is set: the arrays, and the paths above arrays, that
+   * a change other than an addition at the end was made at.
+   */
+  readonly changedOtherwise = new Set<string>();
+
+  /**
+   * Whether a change other than an addition at its end was made of the
+   * stored array at `ref`, or at a path above it, while `appended` was
+   * set.
+   */
+  changedOtherwiseAt(ref: Ref): boolean {
+    const reported = this.onRead;
+    this.onRead = undefined;
+    try {
+      const located = this.locate(ref, true);
+      const key = arrayKey(located.ref.doc, located.ref.path);
+      for (const changed of this.changedOtherwise) {
+        if (key.startsWith(changed)) return true;
+      }
+      return false;
+    } finally {
+      this.onRead = reported;
+    }
+  }
+
+  /**
+   * The first position of the members that additions at the end of the
+   * stored array at `ref` placed, with no member removed, moved or
+   * replaced since (`appended`), or `undefined` where there is none or
+   * nothing keeps track.
+   */
+  appendedFrom(ref: Ref): number | undefined {
+    if (this.appended === undefined) return undefined;
+    const reported = this.onRead;
+    this.onRead = undefined;
+    try {
+      const located = this.locate(ref, true);
+      return located.missing
+        ? undefined
+        : this.appended.get(arrayKey(located.ref.doc, located.ref.path));
+    } finally {
+      this.onRead = reported;
+    }
+  }
+
+  /**
+   * The position a splice that is written as a whole list adds from, while
+   * that write is made.
+   */
+  #adding: number | undefined;
+
+  /** Brings `appended` up to date with one change. */
+  #noteAppended(
+    appended: Map<string, number>,
+    doc: string,
+    path: readonly string[],
+    old: unknown,
+    splice?: { start: number; removed: number; inserted: number },
+  ): void {
+    const key = arrayKey(doc, path);
+    const now = this.peek(doc, path);
+    // The position from which the change is one of additions at the end
+    // of the array at `path` alone, where it is one.
+    let from: number | undefined;
+    if (splice !== undefined) {
+      if (
+        Array.isArray(now) && splice.removed === 0 &&
+        splice.start + splice.inserted === now.length
+      ) from = splice.start;
+    } else if (this.#adding !== undefined && Array.isArray(now)) {
+      from = this.#adding;
+    } else if (
+      Array.isArray(old) && Array.isArray(now) && old.length < now.length &&
+      old.every((member, index) =>
+        JSON.stringify(member) === JSON.stringify(now[index])
+      )
+    ) from = old.length;
+    if (from !== undefined) {
+      if (!appended.has(key)) appended.set(key, from);
+      return;
+    }
+    // A member replaced where it stands, before the members the additions
+    // placed, leaves those as they are.
+    if (splice !== undefined || Array.isArray(old) || Array.isArray(now)) {
+      this.changedOtherwise.add(key);
+    }
+    const kept = splice !== undefined && splice.removed === splice.inserted &&
+      splice.start + splice.removed <= (appended.get(key) ?? 0);
+    for (const other of [...appended.keys()]) {
+      if (other === key ? !kept : other.startsWith(key)) {
+        appended.delete(other);
+      }
+    }
+    // A write of one position of an array replaces the member there.
+    const last = path[path.length - 1];
+    if (splice === undefined && last !== undefined && /^\d+$/.test(last)) {
+      const above = arrayKey(doc, path.slice(0, -1));
+      if (Number(last) >= (appended.get(above) ?? Infinity)) {
+        appended.delete(above);
+      }
+      if (Array.isArray(this.peek(doc, path.slice(0, -1)))) {
+        this.changedOtherwise.add(above);
+      }
+    }
+  }
+
   /** A change was made: the clock, the log, the keys, and the readers. */
   #changed(
     doc: string,
     path: readonly string[],
     old: unknown,
     splice?: { start: number; removed: number; inserted: number },
+    reported: { covers?: readonly string[]; schema?: Schema } = {},
   ): void {
     this.clock += 1;
-    this.log.push({ doc, path, at: this.clock });
+    this.log?.push({ doc, path, at: this.clock });
+    this.#noteChange(doc, path);
+    if (this.appended !== undefined) {
+      this.#noteAppended(this.appended, doc, path, old, splice);
+    }
     const keyed = this.#touch(doc, path, splice, old);
     this.parts?.changed(doc, path, this.docs.get(doc)?.value, old, splice);
     this.onChange?.({
@@ -882,6 +1079,8 @@ export class Store {
       old,
       ...(splice === undefined ? {} : { splice }),
       keyed,
+      ...(reported.covers === undefined ? {} : { covers: reported.covers }),
+      ...(reported.schema === undefined ? {} : { schema: reported.schema }),
     });
   }
 
@@ -1438,8 +1637,9 @@ export class Store {
   addressOf(named: Ref): ElementPart {
     const at = named.path.findLastIndex(isKeySegment);
     if (at < 0) {
+      const space = this.spaces.get(named.doc) ?? this.#space;
       return {
-        ...(this.#space === undefined ? {} : { space: this.#space }),
+        ...(space === undefined ? {} : { space }),
         document: named.doc,
         path: [...named.path],
       };
@@ -1610,6 +1810,7 @@ export class Store {
           };
         }
         reads?.push({ doc, path: at });
+        this.#read(doc, at);
         const below = rest.reduce(schemaBelow, value.$link.schema);
         // The schema of the first link crossed, where the reference has
         // none of its own, and the default of the last link that
@@ -1707,6 +1908,7 @@ export class Store {
       named_ = [...named_, segment];
     }
     reads?.push({ doc, path: at });
+    this.#read(doc, at);
     return {
       ref: new Ref(doc, at, schema),
       value,
@@ -1717,6 +1919,13 @@ export class Store {
       given,
       fallback,
     };
+  }
+
+  /** Reports a position a read went through (`onRead`, `reader`). */
+  #read(doc: string, path: string[]): void {
+    const { reader } = this;
+    reader?.seen.push({ doc, path });
+    this.onRead?.(doc, path, reader?.by);
   }
 
   /**
@@ -1916,6 +2125,11 @@ export class Store {
   ): unknown {
     if (isLink(value)) {
       const { doc, path, schema } = value.$link;
+      // The position of a link the value holds is one the read crossed,
+      // where its path names the position and not an element by its key.
+      if (!at.path.some(isKeySegment)) {
+        reads?.push({ doc: at.doc, path: at.path });
+      }
       return this.#deep(new Ref(doc, path, schema), reads, open, copies);
     }
     if (isStream(value)) return { $stream: true };
@@ -2041,6 +2255,7 @@ export class Store {
       };
       this.docs.set(doc, document);
     } else if (JSON.stringify(located.value) === JSON.stringify(value)) {
+      this.onUnchanged?.(doc, path, located.ref.schema);
       return;
     } else {
       this.onWrite?.(doc, path);
@@ -2051,9 +2266,12 @@ export class Store {
       this.journal?.push({ doc, path, old });
       document.value = value;
     } else {
+      // The shortest path whose value the write replaced with a container.
+      let covers: readonly string[] | undefined;
       if (!isRecord(document.value) && !Array.isArray(document.value)) {
         this.journal?.push({ doc, path: [], old: document.value });
         document.value = {};
+        covers = [];
       }
       let holder = document.value as Record<string, unknown>;
       for (let index = 0; index < path.length - 1; index++) {
@@ -2065,9 +2283,16 @@ export class Store {
             old: next,
           });
           holder[path[index]] = /^\d+$/.test(path[index + 1]) ? [] : {};
+          covers ??= path.slice(0, index + 1);
         }
         holder = holder[path[index]] as Record<string, unknown>;
       }
+      const reported = {
+        ...(covers === undefined ? {} : { covers }),
+        ...(located.ref.schema === undefined
+          ? {}
+          : { schema: located.ref.schema }),
+      };
       const last = path[path.length - 1];
       if (Array.isArray(holder) && last === "length") {
         // The array is stored without the positions past the length.
@@ -2086,15 +2311,23 @@ export class Store {
           start: length,
           removed: taken.length,
           inserted: 0,
-        });
+        }, reported);
       } else {
         old = holder[last];
         this.journal?.push({ doc, path, old });
         holder[last] = value;
-        this.#changed(doc, path, old);
+        this.#changed(doc, path, old, undefined, reported);
       }
     }
-    if (path.length === 0) this.#changed(doc, path, old);
+    if (path.length === 0) {
+      this.#changed(
+        doc,
+        path,
+        old,
+        undefined,
+        located.ref.schema === undefined ? {} : { schema: located.ref.schema },
+      );
+    }
     // A position the write went through by key that holds another key
     // now is re-keyed (ruling Z24).
     for (const { array, key, position } of located.crossed) {
@@ -2134,11 +2367,20 @@ export class Store {
     const held = located.value;
     if (document === undefined || !Array.isArray(held)) {
       const before = Array.isArray(held) ? held : [];
-      this.write(ref, [
-        ...before.slice(0, start),
-        ...members,
-        ...before.slice(start + removed),
-      ]);
+      // A splice that adds at the end of a list no document holds yet is
+      // an addition, written as the whole list.
+      this.#adding = removed === 0 && start === before.length
+        ? start
+        : undefined;
+      try {
+        this.write(ref, [
+          ...before.slice(0, start),
+          ...members,
+          ...before.slice(start + removed),
+        ]);
+      } finally {
+        this.#adding = undefined;
+      }
       return;
     }
     if (removed === 0 && members.length === 0) return;
@@ -2153,7 +2395,7 @@ export class Store {
       start,
       removed: taken.length,
       inserted: members.length,
-    });
+    }, located.ref.schema === undefined ? {} : { schema: located.ref.schema });
   }
 
   /**
@@ -2217,10 +2459,40 @@ export class Store {
     return textOf(this.addressOf(named));
   }
 
+  /**
+   * The time of the last change at each path of each document, and of the
+   * last change at or below it: what `changedSince` reads, so that its work
+   * is the length of a path and not the number of changes made.
+   */
+  readonly #changes = new Map<string, ChangeNode>();
+
+  /** The nodes `changedSince` visited, in all its calls. */
+  changeNodesVisited = 0;
+
+  /** Notes a change at a path in `#changes`. */
+  #noteChange(doc: string, path: readonly string[]): void {
+    let node = this.#changes.get(doc);
+    if (node === undefined) {
+      node = { at: 0, below: 0 };
+      this.#changes.set(doc, node);
+    }
+    node.below = this.clock;
+    for (const segment of path) {
+      node.children ??= new Map();
+      let child = node.children.get(segment);
+      if (child === undefined) {
+        child = { at: 0, below: 0 };
+        node.children.set(segment, child);
+      }
+      child.below = this.clock;
+      node = child;
+    }
+    node.at = this.clock;
+  }
+
   /** Whether a write after `since` is at, above, or below a position. */
   changedSince(since: number, positions: readonly Position[]): boolean {
-    const last = this.log[this.log.length - 1];
-    if (last === undefined || last.at <= since) return false;
+    if (this.clock <= since) return false;
     for (const { keyed } of positions) {
       if (
         keyed !== undefined && canonical(this.read(keyed.ref)) !== keyed.seen
@@ -2228,17 +2500,20 @@ export class Store {
         return true;
       }
     }
-    for (let index = this.log.length - 1; index >= 0; index--) {
-      const entry = this.log[index];
-      if (entry.at <= since) return false;
-      for (const position of positions) {
-        if (
-          position.keyed === undefined && position.doc === entry.doc &&
-          (isPrefix(position.path, entry.path) ||
-            isPrefix(entry.path, position.path))
-        ) {
-          return true;
+    for (const position of positions) {
+      if (position.keyed !== undefined) continue;
+      let node = this.#changes.get(position.doc);
+      let depth = 0;
+      // A change at a path above the position, and then one at or below it.
+      while (node !== undefined) {
+        this.changeNodesVisited += 1;
+        if (depth === position.path.length) {
+          if (node.below > since) return true;
+          break;
         }
+        if (node.at > since) return true;
+        node = node.children?.get(position.path[depth]);
+        depth += 1;
       }
     }
     return false;

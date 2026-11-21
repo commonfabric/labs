@@ -31,10 +31,12 @@ import {
   type WriteRow,
 } from "./harness.ts";
 import { showLabel } from "./scenarios.ts";
-import { argumentOf, ExecutorRun } from "./values.ts";
+import { argumentOf, ExecutorRun, type Stubs } from "./values.ts";
+import { hasWish, homeStubs, memoryHome, withHome } from "./wish-home.ts";
 import {
   type Category,
   categoryOf,
+  type Label,
   namedTemplate,
   type Relation,
   type Template,
@@ -83,6 +85,10 @@ export type ResultRow = {
   /** The `op` of the root of the template. */
   root: string;
   runtime: string;
+  /** The runtime's label, as `runtime` shows it. */
+  runtimeLabel?: Label;
+  /** The runtime's label with each link below the path followed. */
+  runtimeDeepLabel?: Label;
   runtimeWithoutStatic: string;
   template: string;
   confidentiality: Relation;
@@ -153,7 +159,13 @@ export type ModuleResult = {
   decided?: Run["decided"];
   events?: number;
   /** What became of each event, with the event the generator made. */
-  outcomes?: (Run["events"][number] & { event: string; within?: Within })[];
+  outcomes?: (Run["events"][number] & {
+    /** The event as text, cut at 300 characters. */
+    event: string;
+    /** The event as it was sent; absent from a result read from a file. */
+    sent?: unknown;
+    within?: Within;
+  })[];
   /** The kept outputs the run holds no value at. */
   missing?: {
     path: string;
@@ -213,12 +225,41 @@ export const executorOf = (
   pattern: CorpusModule["patterns"][number],
   inputs: Record<string, LabeledInput>,
   artifacts?: (id: string) => Artifact | undefined,
+  stubs?: Stubs,
 ): ExecutorRun | undefined =>
   pattern.code === undefined ? undefined : new ExecutorRun(
     pattern as unknown as Artifact,
     argumentOf({ argument: {}, inputs }),
     artifacts,
+    stubs,
   );
+
+/**
+ * The stubs of the executor of a run of a pattern that has a `wish`: the
+ * seeded home (`wish-home.ts`), and the clock at now. Nothing for a
+ * pattern with no `wish`.
+ */
+export const wishStubs = async (
+  plan: { operations?: { kind?: string }[] },
+): Promise<Stubs | undefined> =>
+  hasWish(plan)
+    ? {
+      completion: () => undefined,
+      now: Date.now(),
+      home: homeStubs(await memoryHome()),
+    }
+    : undefined;
+
+/**
+ * Why a module whose executor resolved a `wish` the home does not simulate
+ * is not run, or `undefined` where it resolved none.
+ */
+export const unsimulatedWish = (record: unknown): string | undefined =>
+  record instanceof ExecutorRun && record.unsimulated.length > 0
+    ? `${NEEDS.wish}: ${
+      record.unsimulated.map((query) => `\`${query}\``).join(", ")
+    } is not simulated`
+    : undefined;
 
 // What a pattern needs that a test process with no server does not have,
 // by the kind of the plan's operation.
@@ -243,6 +284,10 @@ export const resultRow = (
     ...("handler" in row ? { binding: row.binding } : {}),
     root: template?.op ?? "",
     runtime: showLabel(row.runtime),
+    runtimeLabel: row.runtime,
+    ...(row.runtimeDeep === undefined
+      ? {}
+      : { runtimeDeepLabel: row.runtimeDeep }),
     runtimeWithoutStatic: showLabel(row.runtimeByOrigin.withoutStatic),
     template: showLabel(evaluated.label),
     confidentiality: row.comparison.confidentiality,
@@ -334,7 +379,9 @@ export const runModule = async (
   artifacts?: (id: string) => Artifact | undefined,
   /**
    * Whether the run has answers in place of the network (`stubs.ts`): a
-   * module that needs `wish` or requests an effect is then run.
+   * module that requests an effect is then run. A module that needs
+   * `wish` is run either way, in the seeded home of `wish-home.ts`, unless
+   * its executor resolves a `wish` the home does not simulate.
    */
   stubbed = false,
 ): Promise<ModuleResult> => {
@@ -346,6 +393,7 @@ export const runModule = async (
   const { plan, schemas, name } = pattern;
   const base = { module: module.module, pattern: name };
   for (const operation of stubbed ? [] : plan.operations ?? []) {
+    if (operation.kind === "wish") continue;
     const reason = NEEDS[operation.kind ?? ""];
     if (reason !== undefined) return { ...base, skipped: reason };
   }
@@ -368,7 +416,9 @@ export const runModule = async (
     }];
   });
   const inputs = generateInputs(plan, schemas, await scenarioAudience());
-  const record = streams ?? executorOf(pattern, inputs, artifacts);
+  const record = streams ??
+    executorOf(pattern, inputs, artifacts, await wishStubs(plan));
+  const probed = hasWish(plan) ? withHome(probe) : probe;
   let run: Run;
   // What the runtime reports while the scenario runs: a write it refuses
   // is logged and does not fail the run.
@@ -393,10 +443,12 @@ export const runModule = async (
       argument: {},
       inputs,
       events,
-      ...(probe === undefined ? {} : { probe }),
+      ...(probed === undefined ? {} : { probe: probed }),
       ...(record === undefined ? {} : { streams: record }),
     });
   } catch (error) {
+    const unsimulated = unsimulatedWish(record);
+    if (unsimulated !== undefined) return { ...base, skipped: unsimulated };
     // With `COMPARE_TRACE` set, where the run failed.
     if (Deno.env.get("COMPARE_TRACE") !== undefined) {
       consoleError((error as Error)?.stack ?? error);
@@ -407,6 +459,8 @@ export const runModule = async (
     console.error = consoleError;
     console.warn = consoleWarn;
   }
+  const unsimulated = unsimulatedWish(record);
+  if (unsimulated !== undefined) return { ...base, skipped: unsimulated };
   const notCompared: Record<string, number> = {};
   const notComparedOfHandlers: Record<string, Record<string, number>> = {};
   for (const { reason, binding } of run.skipped) {
@@ -458,11 +512,18 @@ export const runModule = async (
     events: events.length,
     outcomes: run.events.map((outcome, index) => {
       const within = withinOf(plan.bindings?.[outcome.binding]?.within);
-      return {
+      const held = {
         ...outcome,
         event: JSON.stringify(events[index]?.event)?.slice(0, 300) ?? "",
         ...(within === undefined ? {} : { within }),
       };
+      // The event itself, for a caller that sends it again. The results
+      // file holds the cut text alone, so the member is not enumerable.
+      Object.defineProperty(held, "sent", {
+        value: events[index]?.event,
+        enumerable: false,
+      });
+      return held;
     }),
     missing: run.missing.map((entry) => ({
       path: entry.path.join("/"),

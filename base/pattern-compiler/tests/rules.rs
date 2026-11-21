@@ -181,8 +181,13 @@ const CASES: &[Case] = &[
         "const Box = pattern<{ fresh: boolean }>(({ fresh }) => ({ label: fresh ? \"fresh\" : \"stale\" }));",
     ),
     case(
-        "removed-form:pattern-tool",
+        "removed-form:pattern-tool-interim",
         "const Search = pattern<{ flavor: string; donuts: string[] }>(({ flavor, donuts }) => donuts.filter((donut) => donut === flavor));\nconst Box = pattern<{ donuts: string[] }>(({ donuts }) => ({ tool: /*!*/patternTool(Search, { donuts }) }));",
+        "const Box = pattern<{ donuts: string[] }>(({ donuts }) => ({ tool: pattern<{ flavor: string }>(({ flavor }) => donuts.filter((donut) => donut === flavor)) }));",
+    ),
+    case(
+        "removed-form:pattern-tool",
+        "const Search = pattern<{ flavor: string; donuts: string[] }>(({ flavor, donuts }) => donuts.filter((donut) => donut === flavor));\nconst Box = pattern<{ more: { donuts: string[] } }>(({ more }) => ({ tool: /*!*/patternTool(Search, { ...more }) }));",
         "const Box = pattern<{ donuts: string[] }>(({ donuts }) => ({ tool: pattern<{ flavor: string }>(({ flavor }) => donuts.filter((donut) => donut === flavor)) }));",
     ),
     case(

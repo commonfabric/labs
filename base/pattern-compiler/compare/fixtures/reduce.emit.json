@@ -14,7 +14,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/reduce.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/reduce.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.reduce(0, 0, ($h) => ((0)), 1, ($h) => (($h.v($h.slot(1)) + $h.v($h.slot(2)))));\n$rt.reduce(1, 2, ($h) => ((0)), 3, ($h) => (($h.v($h.slot(4)) + ($h.v($h.slot(5)) * $h.slot(6)))));\n{\n$rt.element(2, ($h) => (($h.v($h.slot(7)) * (2))));\n}\n$rt.reduce(2, 5, ($h) => ($h.v($h.slot(8))), 6, ($h) => (($h.v($h.slot(9)) + $h.v($h.slot(10)))));\nreturn $rt.thunk(($h) => (({ total: $h.slot(12), weighted: $h.slot(13), doubled: $h.slot(11) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"sha256:3b2c92a26b7404ab6e6c38c8e9094a3b26382138c070c677de8e2faf29f8adbb\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.reduce(0, 0, ($h) => ((0)), 1, ($h) => (($h.v($h.slot(1)) + $h.v($h.slot(2)))));\n$rt.reduce(1, 2, ($h) => ((0)), 3, ($h) => (($h.v($h.slot(4)) + ($h.v($h.slot(5)) * $h.slot(6)))));\n{\n$rt.element(2, ($h) => (($h.v($h.slot(7)) * (2))));\n}\n$rt.reduce(2, 5, ($h) => ($h.v($h.slot(8))), 6, ($h) => (($h.v($h.slot(9)) + $h.v($h.slot(10)))));\nreturn $rt.thunk(($h) => (({ total: $h.slot(12), weighted: $h.slot(13), doubled: $h.slot(11) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -528,7 +528,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/reduce.tsx#default"
+            "sha256:3b2c92a26b7404ab6e6c38c8e9094a3b26382138c070c677de8e2faf29f8adbb"
           ],
           "picks": [],
           "selectors": [],

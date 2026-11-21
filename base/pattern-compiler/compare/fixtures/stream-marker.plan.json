@@ -794,7 +794,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/stream-marker.tsx#default"
+            "sha256:eef498b05fa1381bc4bd12dae624edd9488cb261ee959374ff8bd198d96337cf"
           ],
           "picks": [],
           "selectors": [

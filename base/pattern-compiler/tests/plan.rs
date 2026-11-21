@@ -522,6 +522,75 @@ export const Outer = pattern<{ title: string }>(({ title }) => {
 }
 
 #[test]
+fn a_read_through_the_output_of_a_selected_reference_is_a_dynamic_read_of_the_link() {
+    // PL §1.1, `DynamicReads`: "The links followed from a reference: ...
+    // for a call in the reactive tier, one that is an output of the
+    // instance". A cone that reads below the reference another cone's
+    // `select` passed on, and a kept output at a path below it, read
+    // through the link the output stores, which no slot names: each has a
+    // `dynamic` node of kind `link` through that output, which the
+    // executor does not report, so the runtime bounds it by the join of
+    // the transaction.
+    let analysis = program(
+        r#"import { computed, pattern } from "commonfabric";
+export const P = pattern<{ room?: { messages: string[]; name: string }; other: { messages: string[]; name: string } }>(({ room, other }) => {
+  const chosen = room ?? other;
+  const count = chosen.messages.length;
+  const named = computed(() => chosen.name.toUpperCase());
+  return { count, named };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let reads = plan["dynamicReads"].as_array().expect("dynamicReads");
+    assert_eq!(reads.len(), 1, "{reads:?}");
+    assert_eq!(reads[0]["why"]["kind"], json!("link"));
+    let chosen = reads[0]["why"]["through"]["output"]
+        .as_u64()
+        .expect("an output");
+    assert_eq!(plan["outputs"][chosen as usize]["path"], json!(["count"]));
+    for name in ["count", "named"] {
+        let template = interim_template(&plan, name);
+        assert!(template.contains("dynamic(link)"), "{name}: {template}");
+    }
+}
+
+#[test]
+fn what_a_body_of_another_module_returns_is_resolved_in_that_module() {
+    // A body defined in one module and used in another: the identifiers
+    // of what it returns are resolved in the module it is written in.
+    // Resolved in the module of the call, a reference identifier of the
+    // body's module indexes the other module's tables, which have fewer
+    // entries, and the crate panicked (`pattern-compiler emit --corpus`
+    // over `patterns/system`).
+    let library = format!(
+        "import {{ lift }} from \"commonfabric\";\n{refs}\nconst fallback = v59;\nexport const pick = lift((x: {{ n?: number }}) => {{ return x.n ?? fallback; }});\n",
+        refs = REFS,
+    );
+    let analysis = analyze(&[
+        SourceFile {
+            path: "library.ts".to_string(),
+            text: library,
+        },
+        SourceFile {
+            path: "outer.tsx".to_string(),
+            text: r#"import { pattern } from "commonfabric";
+import { pick } from "./library.ts";
+export const Outer = pattern<{ n?: number }>(({ n }) => {
+  const chosen = pick({ n });
+  return { chosen };
+});
+"#
+            .to_string(),
+        },
+    ]);
+    let plan = plan_of(&analysis, "Outer");
+    assert!(output_named(&plan, "chosen")["template"].is_object());
+}
+
+const REFS: &str = "const v0 = 0;\nconst v1 = 1 + v0;\nconst v2 = 2 + v1;\nconst v3 = 3 + v2;\nconst v4 = 4 + v3;\nconst v5 = 5 + v4;\nconst v6 = 6 + v5;\nconst v7 = 7 + v6;\nconst v8 = 8 + v7;\nconst v9 = 9 + v8;\nconst v10 = 10 + v9;\nconst v11 = 11 + v10;\nconst v12 = 12 + v11;\nconst v13 = 13 + v12;\nconst v14 = 14 + v13;\nconst v15 = 15 + v14;\nconst v16 = 16 + v15;\nconst v17 = 17 + v16;\nconst v18 = 18 + v17;\nconst v19 = 19 + v18;\nconst v20 = 20 + v19;\nconst v21 = 21 + v20;\nconst v22 = 22 + v21;\nconst v23 = 23 + v22;\nconst v24 = 24 + v23;\nconst v25 = 25 + v24;\nconst v26 = 26 + v25;\nconst v27 = 27 + v26;\nconst v28 = 28 + v27;\nconst v29 = 29 + v28;\nconst v30 = 30 + v29;\nconst v31 = 31 + v30;\nconst v32 = 32 + v31;\nconst v33 = 33 + v32;\nconst v34 = 34 + v33;\nconst v35 = 35 + v34;\nconst v36 = 36 + v35;\nconst v37 = 37 + v36;\nconst v38 = 38 + v37;\nconst v39 = 39 + v38;\nconst v40 = 40 + v39;\nconst v41 = 41 + v40;\nconst v42 = 42 + v41;\nconst v43 = 43 + v42;\nconst v44 = 44 + v43;\nconst v45 = 45 + v44;\nconst v46 = 46 + v45;\nconst v47 = 47 + v46;\nconst v48 = 48 + v47;\nconst v49 = 49 + v48;\nconst v50 = 50 + v49;\nconst v51 = 51 + v50;\nconst v52 = 52 + v51;\nconst v53 = 53 + v52;\nconst v54 = 54 + v53;\nconst v55 = 55 + v54;\nconst v56 = 56 + v55;\nconst v57 = 57 + v56;\nconst v58 = 58 + v57;\nconst v59 = 59 + v58;";
+
+#[test]
 fn a_call_of_a_standard_library_function_is_expression_code_that_consumes_its_arguments() {
     // PL §1.4: a cone is expression code over slots; a conversion such as
     // `String(n)` is an operator over its operand (note 91).
@@ -1826,7 +1895,8 @@ fn a_conditional_and_a_logical_operator_are_a_select() {
     // template of `c` and two branches. `a && b` is `select(a, [b, a])`
     // ... `a || b` and `??` are analogous." "The condition's slots have
     // the class the test needs: `value` at the root for a scalar
-    // condition, `shape` at the root for a record or array".
+    // condition, `shape` at the root for a record or array". A branch
+    // that passes a scalar on is its `value` (the next test).
     let analysis = program(
         r#"import { pattern } from "commonfabric";
 export const P = pattern<{ on: boolean; a: string; b: string; box?: { n: number } }>(({ on, a, b, box }) => {
@@ -1840,8 +1910,8 @@ export const P = pattern<{ on: boolean; a: string; b: string; box?: { n: number 
 "#,
     );
     let plan = plan_of(&analysis, "P");
-    let a = "[argument a : identity]";
-    let b = "[argument b : identity]";
+    let a = "[argument a : value]";
+    let b = "[argument b : value]";
     assert_eq!(
         interim_template(&plan, "one"),
         format!("select([argument on : value] ? {a} | {b})")
@@ -1870,6 +1940,75 @@ export const P = pattern<{ on: boolean; a: string; b: string; box?: { n: number 
         plan["selectors"][one["selector"].as_u64().unwrap() as usize],
         json!({ "arity": 2 })
     );
+}
+
+#[test]
+fn the_branch_of_a_select_that_passes_a_scalar_on_is_its_value() {
+    // PL §3.5: "`a ?? b` tests presence, so the condition is `a` read for
+    // `shape`, and the branch that is `a` is the operand passed on: its
+    // `value` where it is a scalar, and the `slot` node of its reference
+    // where it is a container or a handle." The branch of a scalar read
+    // in a `computed`, which the expression code then reads whole, is
+    // its `value` slot: an `identity` slot there leaves the content's
+    // label out.
+    let analysis = program(
+        r#"import { computed, pattern, Writable } from "commonfabric";
+export const P = pattern<{ name?: string; on: boolean; box?: { n: number }; other: { n: number } }>(({ name, on, box, other }) => {
+  const typed = new Writable("");
+  const shout = computed(() => (name ?? "").toUpperCase());
+  const echo = computed(() => (typed.get() ?? "").toUpperCase());
+  const either = computed(() => (on || name) ? 1 : 0);
+  const kept = box ?? other;
+  return { shout, echo, either, kept };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let shout = interim_template(&plan, "shout");
+    assert!(shout.contains("[argument name : value]"), "{shout}");
+    assert!(!shout.contains("identity"), "{shout}");
+    let echo = interim_template(&plan, "echo");
+    assert!(!echo.contains("identity"), "{echo}");
+    assert!(echo.contains(": value]"), "{echo}");
+    // A container passed on is the slot of its reference.
+    assert_eq!(
+        interim_template(&plan, "kept"),
+        "select([argument box : shape] ? [argument box : identity] | [argument other : identity])"
+    );
+}
+
+#[test]
+fn a_read_below_the_reference_a_select_passes_on_observes_the_branch() {
+    // PL §3.5: "The result is the selected operand itself, not a copy: a
+    // reference stays the same reference", and §2.5: a read below a
+    // reference resolves through it. Expression code of the cone of the
+    // `select` that reads the membership, a member, or the content of the
+    // selected container observes the branch's container, as its `value`
+    // at the position the value code reads it, beside the reference.
+    let analysis = program(
+        r#"import { computed, pattern } from "commonfabric";
+export const P = pattern<{ list?: string[]; box?: { n: number }; other: { n: number } }>(({ list, box, other }) => {
+  const count = computed(() => (list ?? []).length);
+  const n = computed(() => (box ?? other).n);
+  const whole = computed(() => JSON.stringify(box ?? other));
+  return { count, n, whole };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let list = "derive(expression) { [argument list : identity] [argument list : value] }";
+    assert_eq!(
+        interim_template(&plan, "count"),
+        format!("select([argument list : shape] ? {list} | const)")
+    );
+    let box_ = "derive(expression) { [argument box : identity] [argument box : value] }";
+    let other = "derive(expression) { [argument other : identity] [argument other : value] }";
+    assert_eq!(
+        interim_template(&plan, "n"),
+        format!("select([argument box : shape] ? {box_} | {other})")
+    );
+    let whole = interim_template(&plan, "whole");
+    assert!(whole.contains(box_) && whole.contains(other), "{whole}");
 }
 
 #[test]
@@ -3205,47 +3344,55 @@ fn a_plan_lists_the_pattern_it_is_compiled_from_and_each_pattern_compiled_in() {
     // others are the patterns compiled into it under a `site` step, each
     // once". §1.5: the record `{ module, binding }`, with `binding` "the
     // name of the `const` the call initializes; `default` for a call that
-    // is the operand of `export default`". The crate has no hash, so an
-    // entry is a placeholder that holds the two members.
-    let plan = plan_of(&program(COMPILED_IN), "Outer");
-    assert_eq!(
-        plan["patterns"],
-        json!([
-            "unhashed:pattern/case.tsx#Outer",
-            "unhashed:pattern/case.tsx#Row"
-        ])
-    );
-    let analysis = analyze(&[
-        SourceFile {
-            path: "row.tsx".to_string(),
-            text: r#"import { pattern } from "commonfabric";
+    // is the operand of `export default`", hashed, with the identity of
+    // the module in it. A pattern has one identity in every plan that
+    // holds its code: the entry of a pattern compiled in is the entry 0 of
+    // that pattern's own plan.
+    let analysis = program(COMPILED_IN);
+    let plan = plan_of(&analysis, "Outer");
+    let patterns = plan["patterns"].as_array().expect("patterns");
+    assert_eq!(patterns.len(), 2, "{plan}");
+    assert!(patterns
+        .iter()
+        .all(|entry| entry.as_str().is_some_and(|e| e.starts_with("sha256:"))));
+    assert_ne!(patterns[0], patterns[1]);
+    assert_eq!(patterns[1], plan_of(&analysis, "Row")["patterns"][0]);
+    let row = r#"import { pattern } from "commonfabric";
 export default pattern<{ title: string }>(({ title }) => {
   return { shout: title + "!" };
 });
-"#
-            .to_string(),
-        },
-        SourceFile {
-            path: "outer.tsx".to_string(),
-            text: r#"import { pattern } from "commonfabric";
+"#;
+    let outer = r#"import { pattern } from "commonfabric";
 import Row from "./row.tsx";
 export const Outer = pattern<{ title: string }>(({ title }) => {
   const first = Row({ title });
   const second = Row({ title });
   return { first, second };
 });
-"#
-            .to_string(),
-        },
-    ]);
-    let plan = plan_of(&analysis, "Outer");
-    assert_eq!(
-        plan["patterns"],
-        json!([
-            "unhashed:pattern/outer.tsx#Outer",
-            "unhashed:pattern/row.tsx#default"
+"#;
+    let files = |row: &str| {
+        analyze(&[
+            SourceFile {
+                path: "row.tsx".to_string(),
+                text: row.to_string(),
+            },
+            SourceFile {
+                path: "outer.tsx".to_string(),
+                text: outer.to_string(),
+            },
         ])
-    );
+    };
+    let analysis = files(row);
+    let plan = plan_of(&analysis, "Outer");
+    let alone = plan_of(&analysis, "default");
+    assert_eq!(plan["patterns"][1], alone["patterns"][0]);
+    assert_ne!(plan["patterns"][0], plan["patterns"][1]);
+    // A change of the callee's module changes the callee's identity and
+    // that of every module that imports it.
+    let changed = files(&row.replace("\"!\"", "\"?\""));
+    let replan = plan_of(&changed, "Outer");
+    assert_ne!(replan["patterns"][1], plan["patterns"][1]);
+    assert_ne!(replan["patterns"][0], plan["patterns"][0]);
 }
 
 #[test]
@@ -3849,7 +3996,13 @@ export const P = pattern<{ items: Item[]; first: Item }>(({ items, first }) => {
             )
         })
         .collect();
-    let callee = r#"{"compiled":"unhashed:pattern/case.tsx#Row"}"#.to_string();
+    let row = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("Row"))
+        .expect("the plan of `Row`");
+    let callee = json!({ "compiled": row.plan["patterns"][0] }).to_string();
     assert_eq!(
         children,
         [
@@ -4720,6 +4873,30 @@ fn the_plan_of_a_pattern_called_at_two_sites_per_level_is_linear_in_the_depth() 
             "the plans are {sizes:?} bytes for 1 to 6 levels"
         );
     }
+}
+
+#[test]
+fn what_a_statement_body_returns_is_its_value() {
+    // The value code of a `computed` with a statement body reads what it
+    // returns, so it stores a copy and not a reference: the template is
+    // the `value` of the place returned. An `identity` slot there leaves
+    // the label of the copied content out (PL §3.5, the operand passed
+    // on is its `value` where it is a scalar or a plain container in
+    // place).
+    let analysis = program(
+        r#"import { computed, pattern } from "commonfabric";
+export const P = pattern<{ box: { a: string } }>(({ box }) => {
+  const local = computed(() => {
+    const held = box;
+    return held;
+  });
+  return { local };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let local = interim_template(&plan, "local");
+    assert_eq!(local, "[argument box : value]");
 }
 
 /// PL §1.3: "Where two declarations of one pattern body have the same

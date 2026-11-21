@@ -20,7 +20,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/self.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"SELF\": SELF, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst keep = handler((_, { self, kept }) => {\n  kept.set(self);\n});\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/self.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\nconst self = $rt.self;\n{\n$rt.element(0, ($h) => (({ title: $h.slot(4), owner: (self), keep: $h.stream(0) })));\n}\n{\n$rt.element(1, ($h) => (({ tag: $h.slot(6), owner: (self), keep: $h.stream(1) })));\n}\nreturn $rt.thunk(($h) => (({ title: $h.slot(7), other: (self), rows: $h.output(0), words: $h.output(4), kept: $h.slot(3), keep: $h.stream(2) })));\n});\n$rt.body(0, ($e, $s) => ((_, { self, kept }) => {\n  kept.set(self);\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"SELF\": SELF, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst keep = handler((_, { self, kept }) => {\n  kept.set(self);\n});\nconst $default = (pattern(\n  \"sha256:1a33ae1e7faca92f4e4304009a0611d9d68bdbe05f7e4436a33417e5e297dc9a\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\nconst self = $rt.self;\n{\n$rt.element(0, ($h) => (({ title: $h.slot(4), owner: (self), keep: $h.stream(0) })));\n}\n{\n$rt.element(1, ($h) => (({ tag: $h.slot(6), owner: (self), keep: $h.stream(1) })));\n}\nreturn $rt.thunk(($h) => (({ title: $h.slot(7), other: (self), rows: $h.output(0), words: $h.output(4), kept: $h.slot(3), keep: $h.stream(2) })));\n});\n$rt.body(0, ($e, $s) => ((_, { self, kept }) => {\n  kept.set(self);\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -452,7 +452,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/self.tsx#default"
+            "sha256:1a33ae1e7faca92f4e4304009a0611d9d68bdbe05f7e4436a33417e5e297dc9a"
           ],
           "picks": [],
           "selectors": [],

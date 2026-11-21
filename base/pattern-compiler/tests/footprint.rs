@@ -390,3 +390,44 @@ fn library_function_given_as_a_callback_is_a_resolved_call() {
     );
     assert_eq!(record.widenings, [] as [&str; 0]);
 }
+
+// ----- cost -----
+
+#[test]
+fn the_work_of_merging_alternatives_and_of_the_normal_form_grows_linearly() {
+    // A body whose value is one of `n` projections, each read at a member,
+    // beside a read of each member whole: the merge of the alternatives and
+    // the normal form each see `n` entries. Doubling `n` at most doubles
+    // the counted work (and a little for the constant part); a merge that
+    // compares each member with every kept one, or a normal form that
+    // visits every entry for each `value` entry, quadruples it.
+    use pattern_compiler::footprint::take_footprint_work;
+    let work = |n: usize| {
+        let fields: Vec<String> = (0..n)
+            .map(|i| format!("k{i}: {{ a: string; b: string }}"))
+            .collect();
+        let members: Vec<String> = (0..n).map(|i| format!("box.k{i}")).collect();
+        let chosen = format!("[{}][c]", members.join(", "));
+        let whole: Vec<String> = (0..n)
+            .map(|i| format!("JSON.stringify(box.k{i}.b)"))
+            .collect();
+        let snippet = format!(
+            "function f(box: {{ {} }}, c: number) {{ const v = {chosen}; return v.a + {}; }}\n",
+            fields.join("; "),
+            whole.join(" + "),
+        );
+        take_footprint_work();
+        record(&snippet, "f");
+        take_footprint_work()
+    };
+    let (small, large) = (work(100), work(200));
+    assert!(small.alternatives > 0 && small.entries > 0, "{small:?}");
+    assert!(
+        large.alternatives <= small.alternatives * 5 / 2,
+        "{small:?} {large:?}"
+    );
+    assert!(
+        large.entries <= small.entries * 5 / 2,
+        "{small:?} {large:?}"
+    );
+}

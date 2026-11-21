@@ -723,6 +723,17 @@ pin. The runtime conforms to it: the pairing joins equal values only, the
 attempt's join is stamped at the length and the indices the diff writes and
 nowhere else, and existence entries stay at their paths.
 
+With the experimental option `compiledPatterns` on, an array whose change a
+compiled pattern's membership record reports is not aligned by value, and
+neither is an array above or beneath it. The record names the runs of members
+the change kept at another index, and `memberEntryPlacement` in
+`cfc/prepare.ts` moves the entries beneath those members and drops the entries
+beneath the members the change removed
+([specs#91](https://github.com/commonfabric/specs/pull/91), pending). The
+record tells two equal members apart, which the values cannot.
+`elementEntryPlacement` there chooses between the two for each stored entry.
+With the option off no array has such a record.
+
 **Residuals, with direction.**
 
 - Containers outside the wildcard scope: schemas mixing named `properties`

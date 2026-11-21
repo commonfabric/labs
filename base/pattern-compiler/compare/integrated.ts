@@ -1,0 +1,782 @@
+/**
+ * Measures what the runtime's storage transactions cost the executor of
+ * `../exec/` (milestone 1 of
+ * `docs/plans/compiled-pattern-language-integration.md`), on the scenario
+ * of each module that a run of today's runtime recorded.
+ *
+ * Each module is run three ways, on the argument and the committed events
+ * of that run:
+ *
+ * - `memory`: the executor alone, with its documents in memory, as the
+ *   table of run times measures it (`values-corpus.ts again`).
+ * - `plain`: the executor with its documents in the runtime's storage
+ *   (`RuntimeTransactions`), one transaction of the runtime for each of
+ *   the executor's, with the argument held in place.
+ * - `labeled`: the same, with each input a cell of its own whose schema
+ *   declares a clause, as today's harness writes an input, and the
+ *   argument a link to each. A transaction that reads one is relevant to
+ *   Contextual Flow Control, and its commit runs the preparation. The
+ *   runtime serves the space and has the experimental option
+ *   `compiledPatterns` on, so the paths the executor's write records cover
+ *   store the labels of their templates.
+ *
+ * A module that has a `wish` runs in the seeded home of `wish-home.ts`, in
+ * each of the three: the two runs in storage write the home into their
+ * storage, so a read of the profile is a read of a labeled document of
+ * another space.
+ *
+ * The storage is the runtime's emulated storage, as in every run of today's
+ * runtime this comparison makes. A figure of `plain` and `labeled` is from
+ * the start of the executor's work to the settlement of every commit it
+ * made. Today's figures are those of `cost.ts run` on the same scenario.
+ *
+ * ```sh
+ * deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts run values.jsonl
+ * deno run -A --no-check base/pattern-compiler/compare/integrated.ts run values.jsonl integrated.jsonl
+ * deno run -A --no-check base/pattern-compiler/compare/cost.ts run run.jsonl
+ * deno run -A --no-check base/pattern-compiler/compare/integrated.ts report integrated.jsonl run.jsonl
+ * ```
+ *
+ * Each command takes `--only=<text>`, which keeps the modules whose path
+ * holds the text.
+ */
+import { Identity } from "@commonfabric/identity";
+
+import {
+  getTimingStatsBreakdown,
+  resetAllTimingStats,
+} from "../../logger/src/logger.ts";
+import type { JSONSchema } from "../../../runtime/runner/src/builder/types.ts";
+import {
+  type MemorySpace,
+  recordRelevantSchemaWritePolicyInput,
+} from "../../../runtime/runner/src/cell.ts";
+import { diffAndUpdate } from "../../../runtime/runner/src/data-updating.ts";
+import { Runtime } from "../../../runtime/runner/src/runtime.ts";
+import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
+import { type Artifact, Instance } from "../exec/executor.ts";
+import { identifierOf, isLink, nameText } from "../exec/store.ts";
+import {
+  artifactsOf,
+  corpusModules,
+  mainPattern,
+  wishStubs,
+} from "./corpus.ts";
+import { generateInputs } from "./generate.ts";
+import { scenarioAudience } from "./harness.ts";
+import {
+  drawing,
+  eventSeed,
+  restoreRandom,
+  scenarioGlobals,
+  seedRandom,
+} from "./random.ts";
+import {
+  type RecordedPlanWrite,
+  RuntimeTransactions,
+} from "./runtime-transactions.ts";
+import { compareValues, outOfFileForm, type Values } from "./values.ts";
+import { hasWish, homeStubs, seedHome } from "./wish-home.ts";
+
+/** The timing counters of the runtime a figure counts, by their key. */
+const COUNTED = {
+  commits: "storage.v2.transaction/commit/commitNative",
+  preparations: "extended-storage-transaction/prepareCfc",
+} as const;
+
+type Counted = Record<keyof typeof COUNTED, number> & {
+  /** Milliseconds the commit preparations took in total. */
+  prepareMs: number;
+};
+
+/** One figure: the wall time, and what the runtime counted in it. */
+export type Figure = Counted & {
+  /** Milliseconds from the start of the work to its last commit. */
+  local: number;
+  /** Milliseconds from the start of the work to every commit settled. */
+  settled: number;
+  /** Positions read through a transaction of the runtime. */
+  reads: number;
+  /** Writes staged in a transaction of the runtime. */
+  writes: number;
+  /** Commits the storage refused, each with its reason. */
+  refused: string[];
+  /**
+   * Selections, picks and reads of a `dynamic` node whose label the
+   * preparation took as its bound, because the write record did not
+   * report them (the runtime's `planLabelBounds`).
+   */
+  planLabelBounds: number;
+  /**
+   * Write records recorded for a write that left the value at its target
+   * as it was (`RuntimeCounts.unchangedRecords`).
+   */
+  unchangedRecords: number;
+  /**
+   * The paths whose label entries changed in a document for which such a
+   * write record was recorded (`RuntimeCounts.labelEntriesChanged`).
+   */
+  labelEntriesChanged: number;
+  /**
+   * The write records the executor gave, and the `plan-write` inputs the
+   * adapter recorded for them (`RuntimeCounts.recordsGiven`,
+   * `RuntimeCounts.recordsRecorded`).
+   */
+  recordsGiven: number;
+  recordsRecorded: number;
+};
+
+/** A run of a module one way. */
+export type Arm = { settle: Figure; events: Figure[] };
+
+/** The results of one module, as the results file holds them. */
+type ModuleTimes = {
+  module: string;
+  pattern?: string;
+  skipped?: string;
+  /** The executor in memory: milliseconds to settle and per event. */
+  memory?: { settle: number; events: number[] };
+  plain?: Arm;
+  labeled?: Arm;
+  /**
+   * Whether each run with the runtime's storage computed the values of the
+   * run in memory, after it settled and after each event, and whether the
+   * storage holds the executor's documents at the end.
+   */
+  agrees?: { plain: string[]; labeled: string[] };
+  /** The values compared with today's run, and how many are equal. */
+  today?: { compared: number; equal: number };
+};
+
+export const counted = (): Counted => {
+  const breakdown = getTimingStatsBreakdown();
+  const count = (key: string) => {
+    const [logger, ...rest] = key.split("/");
+    return breakdown[logger]?.[rest.join("/")]?.count ?? 0;
+  };
+  const [logger, ...rest] = COUNTED.preparations.split("/");
+  return {
+    commits: count(COUNTED.commits),
+    preparations: count(COUNTED.preparations),
+    prepareMs: breakdown[logger]?.[rest.join("/")]?.totalTime ?? 0,
+  };
+};
+
+/**
+ * What a caller of `inStorage` is told while the run goes on, to read the
+ * labels the runtime stored for the executor's documents.
+ */
+export type Inspect = {
+  /** The write records of each commit that settled, as it settles. */
+  committed?(
+    runtime: Runtime,
+    hooks: RuntimeTransactions,
+    writes: readonly RecordedPlanWrite[],
+  ): void;
+  /** The reasons of the commits refused at each settle, as it settles. */
+  refused?(reasons: readonly string[]): void;
+  /**
+   * The instance and its storage once the event at `position` of the
+   * events given was handled.
+   */
+  sent?(
+    runtime: Runtime,
+    hooks: RuntimeTransactions,
+    instance: Instance,
+    position: number,
+  ): void;
+  /** The instance and its storage once every event was handled. */
+  end?(
+    runtime: Runtime,
+    hooks: RuntimeTransactions,
+    instance: Instance,
+  ): void;
+};
+
+/** What an instance shows of its values: the result and its state cells. */
+const snapshot = (instance: Instance): string =>
+  JSON.stringify({
+    result: instance.result(),
+    state: Object.fromEntries(
+      instance.stateCells().filter(({ keys }) => keys.length === 0).map((
+        { name, value },
+      ) => [nameText(name), value]),
+    ),
+  });
+
+/** A value with the schema of each link left out. */
+const withoutSchemas = (value: unknown): unknown => {
+  if (isLink(value)) {
+    return { $link: { doc: value.$link.doc, path: value.$link.path } };
+  }
+  if (Array.isArray(value)) return value.map(withoutSchemas);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([name, member]) => [
+        name,
+        withoutSchemas(member),
+      ]),
+    );
+  }
+  return value;
+};
+
+const signer = () => Identity.fromPassphrase("pattern-compiler-compare");
+
+/** The committed events of a run, each with the elements it was sent at. */
+export type Sent = {
+  index: number;
+  binding: number;
+  event: unknown;
+  at: number[];
+};
+
+const committedEvents = (
+  runtime: NonNullable<RecordedModule["runtime"]>,
+): Sent[] =>
+  runtime.events.flatMap(({ binding, event }, index) => {
+    const outcome = runtime.outcomes[index];
+    if (outcome?.outcome !== "committed") return [];
+    return [{
+      index,
+      binding,
+      event,
+      at: (outcome.elements ?? []).map(({ key }) => Number(key)),
+    }];
+  });
+
+/** A module of a results file of `values-corpus.ts run`. */
+type RecordedModule = {
+  module: string;
+  pattern?: string;
+  runtime?: {
+    argument: Record<string, unknown>;
+    events: { binding: number; event: unknown }[];
+    outcomes: {
+      outcome: string;
+      elements?: { key: string | number }[];
+    }[];
+    values: unknown;
+  };
+};
+
+/** The options every run of an instance of a module takes. */
+export const instanceOptions = (
+  module: string,
+  space: string,
+  artifacts: (id: string) => Artifact | undefined,
+) => ({
+  space,
+  id: identifierOf({ integrated: module }),
+  secret: "the secret of the comparison",
+  artifacts,
+  measure: "patches" as const,
+  // Two runs of one scenario hold the same values.
+  globals: scenarioGlobals,
+});
+
+/** Makes an instance with the draws of its start seeded (`random.ts`). */
+const started = (make: () => Instance): Instance => {
+  seedRandom(eventSeed(-1));
+  try {
+    return drawing(make);
+  } finally {
+    restoreRandom();
+  }
+};
+
+/** Runs a module in memory. */
+const inMemory = (
+  artifact: Artifact,
+  argument: Record<string, unknown>,
+  events: Sent[],
+  options: ReturnType<typeof instanceOptions>,
+) => {
+  const began = performance.now();
+  const instance = started(() =>
+    new Instance(artifact, structuredClone(argument), options)
+  );
+  const settle = performance.now() - began;
+  const snapshots = [snapshot(instance)];
+  const times: number[] = [];
+  for (const { index, binding, event, at } of events) {
+    seedRandom(eventSeed(index));
+    try {
+      const started = performance.now();
+      drawing(() => instance.send(binding, event, at));
+      times.push(performance.now() - started);
+    } finally {
+      restoreRandom();
+    }
+    snapshots.push(snapshot(instance));
+  }
+  return { times: { settle, events: times }, snapshots };
+};
+
+/**
+ * Writes each input that `argument` has a value for as a cell of its own,
+ * under the schema `inputs` gives it, and returns the argument with a link
+ * to each in its place and the documents the executor is to be given for
+ * them. An input is written as the runner writes the result of a `lift`
+ * (`sendValueToBinding` in `runtime/runner/src/pattern-binding.ts`): with
+ * `diffAndUpdate` and no source of anchor identifiers, so the records of an
+ * array stay in place, as the executor holds them, and not as documents of
+ * their own, as `Cell.set` stores them. The schema is recorded for the write,
+ * which stores the labels it declares. `keeper` takes each document as one
+ * the executor is handed (`RuntimeTransactions.external`).
+ */
+export const labeledInputs = async (
+  runtime: Runtime,
+  space: MemorySpace,
+  inputs: Record<string, { schema: unknown }>,
+  argument: Record<string, unknown>,
+  keeper: RuntimeTransactions,
+): Promise<{
+  given: Record<string, unknown>;
+  documents: { id: string; kind: string; value: unknown }[];
+}> => {
+  const tx = runtime.edit();
+  const given = { ...argument };
+  const documents: { id: string; kind: string; value: unknown }[] = [];
+  for (const [name, input] of Object.entries(inputs)) {
+    if (!(name in argument)) continue;
+    const link = runtime.getCell(
+      space,
+      { compareInput: name },
+      input.schema as JSONSchema,
+      tx,
+    ).getAsNormalizedFullLink();
+    recordRelevantSchemaWritePolicyInput(tx, link, input.schema as JSONSchema);
+    diffAndUpdate(runtime, tx, link, argument[name]);
+    keeper.external(link.id);
+    documents.push({ id: link.id, kind: "input", value: argument[name] });
+    given[name] = { $link: { doc: link.id, path: [] } };
+  }
+  const { error } = await tx.commit().settled;
+  if (error !== undefined) throw error;
+  return { given, documents };
+};
+
+/**
+ * Runs a module with its documents in the runtime's storage, and returns
+ * the figures and what differs from the run in memory. The labeled arm
+ * runs in a runtime that serves the space, with the experimental option
+ * `compiledPatterns` as `compiledPatterns` says, so that with it on the
+ * paths the executor's write records cover store the labels of their
+ * templates.
+ */
+export const inStorage = async (
+  artifact: Artifact,
+  argument: Record<string, unknown>,
+  events: Sent[],
+  options: ReturnType<typeof instanceOptions>,
+  memory: string[] | undefined,
+  labeled: boolean,
+  compiledPatterns = labeled,
+  inspect: Inspect = {},
+): Promise<{ arm: Arm; differs: string[] }> => {
+  const identity = await signer();
+  const space = identity.did();
+  const storageManager = StorageManager.emulate({ as: identity });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+    cfcFlowLabels: "persist",
+    ...(labeled
+      ? { experimental: { compiledPatterns }, servingPosture: true }
+      : {}),
+  });
+  const differs: string[] = [];
+  const hooks = new RuntimeTransactions(runtime, space, {
+    owner: options.id,
+    artifact,
+  });
+  const committed = inspect.committed;
+  if (committed !== undefined) {
+    hooks.onCommitted((writes) => committed(runtime, hooks, writes));
+  }
+  try {
+    // The executor changes the values it is handed in place: it is given a
+    // copy, so that the caller's argument starts a later run as it is.
+    argument = structuredClone(argument);
+    // The inputs as cells of their own, each under a schema with a clause.
+    let given = argument;
+    let documents: {
+      id: string;
+      kind: string;
+      value: unknown;
+      space?: string;
+    }[] = [];
+    if (labeled) {
+      const inputs = generateInputs(
+        artifact.plan as Parameters<typeof generateInputs>[0],
+        artifact.schemas as Parameters<typeof generateInputs>[1],
+        await scenarioAudience(),
+      );
+      ({ given, documents } = await labeledInputs(
+        runtime,
+        space,
+        inputs,
+        argument,
+        hooks,
+      ));
+    }
+    // The home a `wish` of the pattern resolves in, which the executor is
+    // handed as documents it did not make (`wish-home.ts`).
+    const home = hasWish(artifact.plan)
+      ? homeStubs(await seedHome(runtime, space))
+      : undefined;
+    for (const { id, space: other } of home?.documents ?? []) {
+      hooks.external(id, other as MemorySpace | undefined);
+    }
+    documents = [...documents, ...home?.documents ?? []];
+    const measure = async (work: () => void): Promise<Figure> => {
+      const before = hooks.counts;
+      const bounds = runtime.getCfcStats().planLabelBounds;
+      resetAllTimingStats();
+      const began = performance.now();
+      work();
+      const local = performance.now() - began;
+      const refused = await hooks.settled();
+      inspect.refused?.(refused);
+      const settled = performance.now() - began;
+      const after = hooks.counts;
+      return {
+        local,
+        settled,
+        ...counted(),
+        reads: after.reads - before.reads,
+        writes: after.writes - before.writes,
+        refused,
+        planLabelBounds: runtime.getCfcStats().planLabelBounds - bounds,
+        unchangedRecords: after.unchangedRecords - before.unchangedRecords,
+        labelEntriesChanged: after.labelEntriesChanged -
+          before.labelEntriesChanged,
+        recordsGiven: after.recordsGiven - before.recordsGiven,
+        recordsRecorded: after.recordsRecorded - before.recordsRecorded,
+      };
+    };
+    resetAllTimingStats();
+    let instance: Instance | undefined;
+    const settle = await measure(() => {
+      instance = started(() =>
+        new Instance(artifact, given, {
+          ...options,
+          transactions: hooks,
+          documents,
+          ...(home === undefined ? {} : { wishes: home.wishes }),
+        })
+      );
+    });
+    if (instance === undefined) throw new Error("no instance");
+    const compare = (point: string, expected: string | undefined) => {
+      if (memory === undefined) return;
+      if (snapshot(instance!) !== expected) differs.push(`values ${point}`);
+    };
+    compare("settled", memory?.[0]);
+    const figures: Figure[] = [];
+    for (const [position, { index, binding, event, at }] of events.entries()) {
+      seedRandom(eventSeed(index));
+      try {
+        figures.push(
+          await measure(() =>
+            drawing(() => instance!.send(binding, event, at))
+          ),
+        );
+      } finally {
+        restoreRandom();
+      }
+      compare(`after event ${index}`, memory?.[position + 1]);
+      inspect.sent?.(runtime, hooks, instance, position);
+    }
+    inspect.end?.(runtime, hooks, instance);
+    const stored = hooks.stored();
+    for (const [doc, held] of instance.store.docs) {
+      if (documents.some(({ id }) => id === doc)) continue;
+      if (
+        JSON.stringify(withoutSchemas(stored.get(doc))) !==
+          JSON.stringify(withoutSchemas(held.value))
+      ) {
+        differs.push(`stored ${held.kind}`);
+      }
+    }
+    return { arm: { settle, events: figures }, differs };
+  } finally {
+    hooks.close();
+    await runtime.dispose();
+    await storageManager.close();
+  }
+};
+
+const lines = async (file: string): Promise<Record<string, unknown>[]> => {
+  try {
+    return (await Deno.readTextFile(file)).split("\n").filter((line) =>
+      line.startsWith("{")
+    ).map((line) => JSON.parse(line));
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return [];
+    throw error;
+  }
+};
+
+const run = async (from: string, to: string, only: string | undefined) => {
+  // A line without a module is the mark of a module the run started.
+  const recorded = (await lines(from)).filter((line) =>
+    typeof line.module === "string"
+  ) as RecordedModule[];
+  const finished = new Set(
+    (await lines(to)).map((line) => line.module as string),
+  );
+  const emitted = await corpusModules();
+  const byModule = new Map(emitted.map((module) => [module.module, module]));
+  const artifacts = artifactsOf(emitted);
+  const space = (await signer()).did();
+  for (const earlier of recorded) {
+    if (finished.has(earlier.module)) continue;
+    if (only !== undefined && !earlier.module.includes(only)) continue;
+    if (earlier.runtime === undefined) continue;
+    const module = byModule.get(earlier.module);
+    const chosen = module === undefined ? undefined : await mainPattern(module);
+    const artifact = chosen?.pattern as Artifact | undefined;
+    const result: ModuleTimes = {
+      module: earlier.module,
+      pattern: earlier.pattern,
+    };
+    if (artifact === undefined || artifact.code.unsupported.length > 0) {
+      result.skipped = "no value code";
+    } else {
+      console.error(earlier.module);
+      const events = committedEvents(earlier.runtime);
+      const stubs = await wishStubs(artifact.plan);
+      const options = {
+        ...instanceOptions(earlier.module, space, artifacts),
+        // The home of the run in memory. A run in storage seeds its own.
+        ...(stubs?.home === undefined ? {} : {
+          documents: stubs.home.documents,
+          wishes: stubs.home.wishes,
+        }),
+      };
+      const { argument } = earlier.runtime;
+      try {
+        const memory = inMemory(artifact, argument, events, options);
+        result.memory = memory.times;
+        const plain = await inStorage(
+          artifact,
+          argument,
+          events,
+          options,
+          memory.snapshots,
+          false,
+        );
+        const labeled = await inStorage(
+          artifact,
+          argument,
+          events,
+          options,
+          memory.snapshots,
+          true,
+        );
+        result.plain = plain.arm;
+        result.labeled = labeled.arm;
+        result.agrees = { plain: plain.differs, labeled: labeled.differs };
+        const comparison = compareValues(
+          artifact,
+          argument,
+          earlier.runtime.events,
+          earlier.runtime.outcomes as Parameters<typeof compareValues>[3],
+          outOfFileForm(earlier.runtime.values) as Values,
+          artifacts,
+          await wishStubs(artifact.plan),
+        );
+        result.today = {
+          compared: comparison.compared,
+          equal: comparison.equal,
+        };
+      } catch (error) {
+        result.skipped = `${(error as Error)?.message ?? error}`.split("\n")[0];
+      }
+    }
+    await Deno.writeTextFile(to, `${JSON.stringify(result)}\n`, {
+      append: true,
+    });
+  }
+};
+
+const sum = (values: number[]) =>
+  values.reduce((total, value) => total + value, 0);
+
+const round = (value: number): string =>
+  value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value
+    .toFixed(2);
+
+/** Prints the totals over the modules with every figure, and each module. */
+const report = async (file: string, todayFile: string, only?: string) => {
+  const today = new Map(
+    (await lines(todayFile)).map((line) => [line.module as string, line]),
+  );
+  type Today = {
+    settle?: {
+      milliseconds: number;
+      transactions: number;
+      preparations: number;
+    };
+    events?: {
+      milliseconds: number;
+      transactions: number;
+      preparations: number;
+      outcome?: string;
+    }[];
+  };
+  const rows = ((await lines(file)) as ModuleTimes[]).filter((row) =>
+    row.plain !== undefined && row.labeled !== undefined &&
+    (only === undefined || row.module.includes(only))
+  );
+  const header = [
+    "Module",
+    "Settle: memory",
+    "plain",
+    "labeled",
+    "today",
+    "Event: memory",
+    "plain",
+    "labeled",
+    "today",
+    "Commits per event: labeled / today",
+    "Preparations per event: labeled / today",
+  ];
+  console.log(`| ${header.join(" | ")} |`);
+  console.log(`| ${header.map(() => "---").join(" | ")} |`);
+  const totals = {
+    memory: [0, 0],
+    plain: [0, 0],
+    labeled: [0, 0],
+    today: [0, 0],
+    events: 0,
+    modules: 0,
+    commits: [0, 0],
+    preparations: [0, 0],
+    settleCommits: [0, 0],
+    settlePreparations: [0, 0],
+    disagree: [] as string[],
+    refused: 0,
+  };
+  for (const row of rows) {
+    const theirs = today.get(row.module)?.measured as Today | undefined;
+    const todayEvents = (theirs?.events ?? []).filter(({ outcome }) =>
+      outcome === "committed"
+    );
+    if (theirs?.settle === undefined) continue;
+    const memoryEvents = row.memory!.events;
+    const plainEvents = row.plain!.events.map(({ settled }) => settled);
+    const labeledEvents = row.labeled!.events.map(({ settled }) => settled);
+    const todayTimes = todayEvents.map(({ milliseconds }) => milliseconds);
+    const mean = (values: number[]) =>
+      values.length === 0 ? "" : round(sum(values) / values.length);
+    const labeledCommits = sum(
+      row.labeled!.events.map(({ commits }) => commits),
+    );
+    const labeledPreparations = sum(
+      row.labeled!.events.map(({ preparations }) => preparations),
+    );
+    const todayCommits = sum(
+      todayEvents.map(({ transactions }) => transactions),
+    );
+    const todayPreparations = sum(
+      todayEvents.map(({ preparations }) => preparations),
+    );
+    console.log(
+      `| \`${row.module}\` | ${round(row.memory!.settle)} | ${
+        round(row.plain!.settle.settled)
+      } | ${round(row.labeled!.settle.settled)} | ${
+        round(theirs.settle.milliseconds)
+      } | ${mean(memoryEvents)} | ${mean(plainEvents)} | ${
+        mean(labeledEvents)
+      } | ${mean(todayTimes)} | ${
+        row.labeled!.events.length === 0
+          ? ""
+          : `${labeledCommits} / ${todayCommits}`
+      } | ${
+        row.labeled!.events.length === 0
+          ? ""
+          : `${labeledPreparations} / ${todayPreparations}`
+      } |`,
+    );
+    totals.modules += 1;
+    totals.memory[0] += row.memory!.settle;
+    totals.plain[0] += row.plain!.settle.settled;
+    totals.labeled[0] += row.labeled!.settle.settled;
+    totals.today[0] += theirs.settle.milliseconds;
+    totals.settleCommits[0] += row.labeled!.settle.commits;
+    totals.settleCommits[1] += theirs.settle.transactions;
+    totals.settlePreparations[0] += row.labeled!.settle.preparations;
+    totals.settlePreparations[1] += theirs.settle.preparations;
+    // Per event only where both sides handled the same number of events.
+    if (todayEvents.length === row.labeled!.events.length) {
+      totals.events += todayEvents.length;
+      totals.memory[1] += sum(memoryEvents);
+      totals.plain[1] += sum(plainEvents);
+      totals.labeled[1] += sum(labeledEvents);
+      totals.today[1] += sum(todayTimes);
+      totals.commits[0] += labeledCommits;
+      totals.commits[1] += todayCommits;
+      totals.preparations[0] += labeledPreparations;
+      totals.preparations[1] += todayPreparations;
+    }
+    const disagree = [...row.agrees!.plain, ...row.agrees!.labeled];
+    if (disagree.length > 0) {
+      totals.disagree.push(`${row.module}: ${disagree.join(", ")}`);
+    }
+    totals.refused += [row.labeled!.settle, ...row.labeled!.events].reduce(
+      (count, figure) => count + figure.refused.length,
+      0,
+    );
+  }
+  console.log();
+  console.log(
+    `Over ${totals.modules} modules, to the settled result: memory ${
+      round(totals.memory[0])
+    } ms, plain ${round(totals.plain[0])} ms, labeled ${
+      round(totals.labeled[0])
+    } ms, today ${round(totals.today[0])} ms; commits labeled ${
+      totals.settleCommits[0]
+    }, today ${totals.settleCommits[1]}; CFC preparations labeled ${
+      totals.settlePreparations[0]
+    }, today ${totals.settlePreparations[1]}.`,
+  );
+  console.log(
+    `${totals.events} events: memory ${round(totals.memory[1])} ms, plain ${
+      round(totals.plain[1])
+    } ms, labeled ${round(totals.labeled[1])} ms, today ${
+      round(totals.today[1])
+    } ms; commits labeled ${totals.commits[0]}, today ${
+      totals.commits[1]
+    }; CFC preparations labeled ${totals.preparations[0]}, today ${
+      totals.preparations[1]
+    }.`,
+  );
+  console.log(
+    `Commits the storage refused in the labeled runs: ${totals.refused}`,
+  );
+  console.log(
+    `Modules where a run in storage differs from the run in memory: ${totals.disagree.length}`,
+  );
+  for (const line of totals.disagree) console.log(`- ${line}`);
+};
+
+if (import.meta.main) {
+  const [command, ...rest] = Deno.args;
+  const only = rest.find((argument) => argument.startsWith("--only="))
+    ?.slice("--only=".length);
+  const operands = rest.filter((argument) => !argument.startsWith("--"));
+  if (command === "run" && operands.length === 2) {
+    await run(operands[0], operands[1], only);
+  } else if (command === "report" && operands.length === 2) {
+    await report(operands[0], operands[1], only);
+  } else {
+    console.error(
+      "usage: integrated.ts run <values.jsonl> <out.jsonl> | report <out.jsonl> <run.jsonl>, each with --only=<text>",
+    );
+    Deno.exit(2);
+  }
+  Deno.exit(0);
+}

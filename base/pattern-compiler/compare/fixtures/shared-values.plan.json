@@ -1271,7 +1271,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/shared-values.tsx#default"
+            "sha256:cb6cb52cd00b0225395c019c66708b3c5f19a4a22343e9dae853be7ead82e217"
           ],
           "picks": [],
           "selectors": [],

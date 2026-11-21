@@ -16,6 +16,7 @@ import type {
 } from "./interface.ts";
 import {
   isInternalVerifierRead,
+  isLabelBasisRead,
   isMergeableOpRead,
   isReadExcludedFromConflict,
   isReadIgnoredForCommit,
@@ -137,9 +138,11 @@ export function commitReadActivities(
       continue;
     }
     // Runtime verifier reads of the CFC label are point-in-time policy
-    // observations, not consumed values.
+    // observations, not consumed values, except one that a stored label
+    // rests on.
     if (
       isInternalVerifierRead(read.meta) &&
+      !isLabelBasisRead(read.meta) &&
       Differential.isCfcEnvelopePath(read.path)
     ) {
       continue;

@@ -189,14 +189,13 @@ pub const CATALOG: &[Entry] = &[
     ),
     done("removed-form:helper", Warning),
     done("removed-form:helper-unsupported", Error),
-    Entry {
-        id: "removed-form:pattern-tool-interim",
-        severity: Some(Warning),
-        status: Status::NotImplemented(
-            "the interim acceptance of `patternTool` (`language-subset.md` §4.4.3) is not \
-             implemented: every call is reported as `removed-form:pattern-tool`",
-        ),
-    },
+    part(
+        "removed-form:pattern-tool-interim",
+        Warning,
+        "reported for a call that is rewritten to a pattern closure; a call whose result \
+         is bound to a name is rewritten also where other code reads the members `pattern` \
+         or `extraParams` of that name, which the closure does not have",
+    ),
     done("removed-form:pattern-tool", Error),
     done("removed-form:builtin", Error),
     Entry {

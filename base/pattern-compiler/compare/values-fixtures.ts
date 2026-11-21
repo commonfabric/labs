@@ -94,6 +94,30 @@ const WRITTEN: Record<string, Written[]> = {
     argument: { note: "n" },
     events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
   }],
+  "computed-row-cone": [{
+    argument: { names: ["a", "b"], suffix: "!" },
+    events: [{ binding: 0, event: { mark: "?" } }],
+  }],
+  "computed-row-state": [{
+    argument: { names: ["a", "b"], suffix: "!" },
+    events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+  }],
+  "literal-state": [{
+    argument: { note: "n" },
+    events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+  }],
+  "set-then-push": [{
+    argument: { extra: "e", words: ["w"] },
+    events: [
+      { binding: 1, event: { word: "x" } },
+      { binding: 0, event: {} },
+      { binding: 1, event: { word: "y" } },
+    ],
+  }],
+  "time-of-day": [{
+    argument: { note: "n" },
+    events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+  }],
   // A pattern instantiated in a function body: two instances.
   "instantiate": [{
     argument: { note: "n" },
@@ -416,6 +440,66 @@ const artifactOf = async (name: string) => {
     artifacts: (id: string) =>
       patterns.find((pattern) => pattern.plan.patterns?.[0] === id),
   };
+};
+
+/** One scenario of a fixture, with the artifact it runs. */
+export type FixtureScenario = {
+  fixture: string;
+  scenario: string;
+  artifact: Artifact & { schemas: Schemas };
+  artifacts: (id: string) => Artifact | undefined;
+  /** The argument, each input in place. */
+  argument: Record<string, unknown>;
+  events: { binding: number; event: unknown }[];
+};
+
+/**
+ * The scenarios `compareFixtures` runs, or those of the named fixture: the
+ * written ones, and for a fixture that has none, the generated one.
+ */
+export const fixtureScenarios = async (
+  only?: string,
+): Promise<FixtureScenario[]> => {
+  const scenarios: FixtureScenario[] = [];
+  const names = [...Object.keys(WRITTEN), ...GENERATED].sort();
+  for (const fixture of names) {
+    if (only !== undefined && fixture !== only) continue;
+    const { artifact, artifacts } = await artifactOf(fixture);
+    const plan = artifact.plan as unknown as Plan;
+    const written = WRITTEN[fixture];
+    if (written !== undefined) {
+      for (const [index, { argument, events }] of written.entries()) {
+        scenarios.push({
+          fixture,
+          scenario: written.length > 1 ? `written ${index}` : "written",
+          artifact,
+          artifacts,
+          argument,
+          events: events ?? [],
+        });
+      }
+      continue;
+    }
+    const inputs = generateInputs(plan, artifact.schemas);
+    scenarios.push({
+      fixture,
+      scenario: "generated",
+      artifact,
+      artifacts,
+      argument: Object.fromEntries(
+        Object.entries(inputs).map(([name, input]) => [name, input.value]),
+      ),
+      events: (plan.bindings ?? []).flatMap((binding, index) =>
+        binding.handler?.body !== undefined
+          ? [{
+            binding: index,
+            event: generateEvent(plan, artifact.schemas, index),
+          }]
+          : []
+      ),
+    });
+  }
+  return scenarios;
 };
 
 /** One compared run of a fixture. */

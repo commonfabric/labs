@@ -24,7 +24,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/index-nodes.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst pickAt = handler((_, { at, chosen }) => {\n  chosen.set(at);\n});\nconst clear = handler(\n  (_, { cleared }) => {\n    cleared.set(1);\n  },\n);\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/index-nodes.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$rt.h(\"b\", { \"onClick\": $h.stream(1) }, [$h.slot(7)])])));\n}\n$rt.value(2, ($h) => ($rt.h(\"ul\", {  }, [$h.output(0)])));\n{\n$rt.element(1, ($h) => (($h.slot(8) + (1))));\n}\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3), numbered: $h.output(5), chosen: $h.slot(4), cleared: $h.slot(6) })));\n});\n$rt.body(0, ($e, $s) => ((_, { at, chosen }) => {\n  chosen.set(at);\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_, { cleared }) => {\n    cleared.set(1);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst pickAt = handler((_, { at, chosen }) => {\n  chosen.set(at);\n});\nconst clear = handler(\n  (_, { cleared }) => {\n    cleared.set(1);\n  },\n);\nconst $default = (pattern(\"sha256:d32ef519c0e78edb1ed6ba6dd5c7869f9427c40df7dfbc9b077e926f21c8e91a\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$rt.h(\"b\", { \"onClick\": $h.stream(1) }, [$h.slot(7)])])));\n}\n$rt.value(2, ($h) => ($rt.h(\"ul\", {  }, [$h.output(0)])));\n{\n$rt.element(1, ($h) => (($h.slot(8) + (1))));\n}\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3), numbered: $h.output(5), chosen: $h.slot(4), cleared: $h.slot(6) })));\n});\n$rt.body(0, ($e, $s) => ((_, { at, chosen }) => {\n  chosen.set(at);\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_, { cleared }) => {\n    cleared.set(1);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -487,7 +487,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/index-nodes.tsx#default"
+            "sha256:d32ef519c0e78edb1ed6ba6dd5c7869f9427c40df7dfbc9b077e926f21c8e91a"
           ],
           "picks": [],
           "selectors": [],

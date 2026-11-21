@@ -28,5 +28,6 @@ pub mod schema;
 pub mod source;
 pub mod syntax;
 pub mod tiers;
+pub mod tool_rewrite;
 pub mod typed;
 pub mod types;

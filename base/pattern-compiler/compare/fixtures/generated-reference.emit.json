@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/generated-reference.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst pick = handler((_, { item, picked }) => {\n  picked.set(item);\n});\nconst Row = pattern(\"unhashed:pattern/compare/fixtures/generated-reference.tsx#Row\");\nconst listed = lift((input) =>\n  input.titles.map((title) => ({ title, stars: title.length + input.bonus }))\n);\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/generated-reference.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ title: $h.slot(0) })));\n});"
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst pick = handler((_, { item, picked }) => {\n  picked.set(item);\n});\nconst Row = pattern(\"sha256:f9fca12f76e7d7f347780332b29e6906ed001be78ca4da9e0dc08c1b6d490176\");\nconst listed = lift((input) =>\n  input.titles.map((title) => ({ title, stars: title.length + input.bonus }))\n);\nconst $default = (pattern(\n  \"sha256:1346c747fd284237eb4e4e8cb546a4f884ff2694859e8e715d0cff0d091583e4\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ title: $h.slot(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -68,7 +68,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/generated-reference.tsx#Row"
+            "sha256:f9fca12f76e7d7f347780332b29e6906ed001be78ca4da9e0dc08c1b6d490176"
           ],
           "picks": [],
           "selectors": [],
@@ -143,7 +143,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/generated-reference.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst pick = handler((_, { item, picked }) => {\n  picked.set(item);\n});\nconst Row = pattern(\"unhashed:pattern/compare/fixtures/generated-reference.tsx#Row\");\nconst listed = lift((input) =>\n  input.titles.map((title) => ({ title, stars: title.length + input.bonus }))\n);\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/generated-reference.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((input) =>\n  input.titles.map((title) => ({ title, stars: title.length + input.bonus })))($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ titles: $h.slot(1), bonus: $h.slot(0) }))));\n{\n$rt.element(0, ($h) => (({ title: $h.slot(7), pick: $h.stream(0) })));\n}\n{\n$rt.child(0, ($h) => (({ item: $h.slot(8) })));\n$rt.element(1, ($h) => ($h.slot(9)));\n}\nreturn $rt.thunk(($h) => (({ picked: $h.slot(6), pickedTitle: $h.slot(10), rows: $h.output(1), made: $h.output(4) })));\n});\n$rt.body(1, ($e, $s) => ((_, { item, picked }) => {\n  picked.set(item);\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst pick = handler((_, { item, picked }) => {\n  picked.set(item);\n});\nconst Row = pattern(\"sha256:f9fca12f76e7d7f347780332b29e6906ed001be78ca4da9e0dc08c1b6d490176\");\nconst listed = lift((input) =>\n  input.titles.map((title) => ({ title, stars: title.length + input.bonus }))\n);\nconst $default = (pattern(\n  \"sha256:1346c747fd284237eb4e4e8cb546a4f884ff2694859e8e715d0cff0d091583e4\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((input) =>\n  input.titles.map((title) => ({ title, stars: title.length + input.bonus })))($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ titles: $h.slot(1), bonus: $h.slot(0) }))));\n{\n$rt.element(0, ($h) => (({ title: $h.slot(7), pick: $h.stream(0) })));\n}\n{\n$rt.child(0, ($h) => (({ item: $h.slot(8) })));\n$rt.element(1, ($h) => ($h.slot(9)));\n}\nreturn $rt.thunk(($h) => (({ picked: $h.slot(6), pickedTitle: $h.slot(10), rows: $h.output(1), made: $h.output(4) })));\n});\n$rt.body(1, ($e, $s) => ((_, { item, picked }) => {\n  picked.set(item);\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -311,7 +311,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/generated-reference.tsx#Row"
+                "compiled": "sha256:f9fca12f76e7d7f347780332b29e6906ed001be78ca4da9e0dc08c1b6d490176"
               },
               "name": "map",
               "within": [
@@ -582,7 +582,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/generated-reference.tsx#default"
+            "sha256:1346c747fd284237eb4e4e8cb546a4f884ff2694859e8e715d0cff0d091583e4"
           ],
           "picks": [],
           "selectors": [],

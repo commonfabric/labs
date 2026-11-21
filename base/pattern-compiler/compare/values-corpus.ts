@@ -20,11 +20,14 @@
  * runs the executor alone on the crate's current output and compares it
  * with the values the earlier run read.
  *
- * `run` leaves out the modules that need `wish` or request an effect.
- * `stubbed <results.jsonl>` runs those, with the answers of `stubs.ts` in
- * place of the network on both sides, and `alone <results.jsonl>` runs
- * them on the executor with no run of today's runtime beside it, so it
- * compares no value. `report` reads the file of either.
+ * `run` runs a module that needs `wish` in the seeded home of
+ * `wish-home.ts`, and leaves out one whose executor resolves a `wish` the
+ * home does not simulate and one that requests an effect.
+ * `stubbed <results.jsonl>` runs the modules that need `wish` or request an
+ * effect, with the answers of `stubs.ts` in place of the network on both
+ * sides, and `alone <results.jsonl>` runs them on the executor with no run
+ * of today's runtime beside it, so it compares no value. `report` reads the
+ * file of either.
  */
 import type { Artifact } from "../exec/executor.ts";
 import {
@@ -35,6 +38,8 @@ import {
   mainPattern,
   NEEDS,
   runModule,
+  unsimulatedWish,
+  wishStubs,
 } from "./corpus.ts";
 import { generateEvent, generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
@@ -80,8 +85,17 @@ export type ModuleValues = {
   };
 };
 
-/** The stubs of a run: the table of `stubs.ts`, and the clock at now. */
-const stubsNow = (): Stubs => ({ completion: stubCompletion, now: Date.now() });
+/**
+ * The stubs of a run: the table of `stubs.ts`, the clock at now, and for a
+ * plan with a `wish` the seeded home.
+ */
+const stubsNow = async (
+  plan: { operations?: { kind?: string }[] },
+): Promise<Stubs> => ({
+  ...await wishStubs(plan),
+  completion: stubCompletion,
+  now: Date.now(),
+});
 
 /** Whether the main pattern of a module needs `wish` or an effect. */
 const needsStubs = async (module: EmittedModule): Promise<boolean> =>
@@ -106,7 +120,12 @@ const runAlone = async (
   const { plan, schemas } = artifact;
   const inputs = generateInputs(plan, schemas, await scenarioAudience());
   const argument = argumentOf({ argument: {}, inputs });
-  const executor = new ExecutorRun(artifact, argument, artifacts, stubsNow());
+  const executor = new ExecutorRun(
+    artifact,
+    argument,
+    artifacts,
+    await stubsNow(plan),
+  );
   executor.start(undefined);
   const events = eventOrder(plan, "outside first").map((binding) => ({
     binding,
@@ -123,6 +142,14 @@ const runAlone = async (
     executor.committed(index, binding, event, held.elements);
     return { outcome: "committed" as const };
   });
+  const unsimulated = unsimulatedWish(executor);
+  if (unsimulated !== undefined) {
+    return {
+      module: module.module,
+      pattern: artifact.name,
+      skipped: unsimulated,
+    };
+  }
   return {
     module: module.module,
     pattern: artifact.name,
@@ -156,7 +183,7 @@ const runOne = async (
     artifact,
     argument,
     artifacts,
-    stubbed ? stubsNow() : undefined,
+    stubbed ? await stubsNow(plan) : await wishStubs(plan),
   );
   const restoreFetch = stubbed ? stubFetch() : undefined;
   let result: Awaited<ReturnType<typeof runModule>>;
@@ -240,6 +267,7 @@ const again = async (file: string, to: string) => {
         outcomes,
         values,
         artifacts,
+        await wishStubs(artifact.plan),
       ),
     }));
   }
