@@ -201,13 +201,20 @@ export const membersCaptureClause = (
     id: run.resultId,
     path,
   };
-  if (!ownedPosition(reads, list, actor)) {
+  // SPIKE(seat-views): a model, not the draft's rule. The draft requires the
+  // position in the run's result and the list it links to both to be the
+  // actor's. A compiled pattern's result holds a link at that position, which
+  // the run's start wrote and which carries no owner claim, so the draft's
+  // rule refuses every compiled pattern. Here a position that holds a link is
+  // judged at its target alone, which is also where the display boundary
+  // reads the entries (`listedInReplica`).
+  const linked = reads.linkTarget(list);
+  if (linked === "none" && !ownedPosition(reads, list, actor)) {
     return {
       refusal:
         "members requires a list position the acting principal owns that declares its writers",
     };
   }
-  const linked = reads.linkTarget(list);
   if (
     linked === undefined ||
     (linked !== "none" && !ownedPosition(reads, linked, actor))
