@@ -347,6 +347,14 @@ export const EnvSchema = z.object({
   MEMORY_SYNC_CID_REFERENCES: z.enum(["true", "1", "false", "0"]).default(
     "true",
   ).transform((v) => v === "true" || v === "1"),
+  // Whether this deployment's memory server respells, once per store as it
+  // opens, every stored confidentiality label naming a principal by bare DID
+  // as `User{subject}`: on unless set to "false" or "0", and any other
+  // spelling refuses startup. See docs/development/EXPERIMENTAL_OPTIONS.md,
+  // `MEMORY_RETIRE_BARE_DID_LABELS`.
+  MEMORY_RETIRE_BARE_DID_LABELS: z.enum(["true", "1", "false", "0"]).default(
+    "true",
+  ).transform((v) => v === "true" || v === "1"),
   // Whether this deployment's memory server stores an admitted commit's reads
   // as a digest where nothing reads them afterward
   // (docs/specs/memory-v2/02-storage.md §3.3); on unless set to "false" or

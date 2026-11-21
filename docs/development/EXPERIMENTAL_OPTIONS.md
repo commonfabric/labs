@@ -59,6 +59,7 @@ was last checked against the code.
 | [`conflictAdmissionMode`](#conflictadmissionmode)                           | `CF_CONFLICT_ADMISSION` env, or `setConflictAdmissionMode()`                                                                                    | `off`                                                                                | William Kelly (#4237); `hold` removed CT-1925 (#5110) | keep `preempt` as a tuning dial or remove after re-measurement                                                                                                                                                                    | implemented, off by default, measured net-negative                              |
 | [`syncSchemaTableV2`](#syncschematablev2)                                   | `setSyncSchemaTableConfig()` (negotiated per connection)                                                                                        | on                                                                                   | Ben Follington (#4292)                                | retire the negotiation once every peer speaks v2                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`messageCompressionV1`](#messagecompressionv1)                             | `setMessageCompressionConfig()` (negotiated per connection)                                                                                     | on                                                                                   | PR #6474                                             | retire the rollback switch after the binary WebSocket envelope has field-soaked                                                                                                                                                   | implemented, on by default                                                      |
+| [`MEMORY_RETIRE_BARE_DID_LABELS`](#memory_retire_bare_did_labels) | `MEMORY_RETIRE_BARE_DID_LABELS` env on toolshed (the memory `Server`'s `retireBareDidLabels` option) | on | alex-claude (top/3324) | once deployed stores hold the `store_migration` row, delete the flag and the respelling | implemented, on by default |
 | [`syncCidReferencesV1`](#synccidreferencesv1) | server: `MEMORY_SYNC_CID_REFERENCES` env on toolshed (the memory `Server`'s `syncCidReferences` option); client: `EXPERIMENTAL_SYNC_CID_REFERENCES` env, or `RuntimeOptions.experimental` (negotiated per connection) | server on, client off | Dan Bornstein (#9719) | measure the bandwidth saved against the extra round trip, then graduate or remove | implemented; servers on, clients off by default |
 | [`ownWriteEcho`](#ownwriteecho)                                             | `setOwnWriteEchoConfig()` (server-side only, not negotiated)                                                                                    | on                                                                                   | Robin McCollum (CT-1965)                              | remove the switch once the echo has field-soaked                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`experimentalConcurrentWatchRefresh`](#experimentalconcurrentwatchrefresh) | `IRemoteStorageProviderSettings`; in the shell, the `commonfabric.concurrentWatchRefresh()` console command (localStorage, per browser profile) | off                                                                                  | Ben Follington (#4937; shell toggle #4974)            | graduate to always-on after live measurement, or remove if superseded                                                                                                                                                             | off by default; acquisition/removal ordering tested; real-latency measurement pending |
@@ -2578,6 +2579,64 @@ the per-epic implementation notes).
 - **Path to removal.** Measure the vote burst and the seed with a cap on both
   served arms, pick the default cap where the counts and the headline agree,
   then delete the knob.
+
+### `MEMORY_RETIRE_BARE_DID_LABELS`
+
+- **Toggle via.** The `MEMORY_RETIRE_BARE_DID_LABELS` environment variable on
+  toolshed, read into the memory `Server`'s `retireBareDidLabels` option:
+  `true`, `1` or no setting leaves it on, `false` or `0` turns it off, and
+  any other spelling refuses startup. A test or tool opening an engine itself
+  calls `retireBareDidLabels()` (`runtime/memory/v2/cfc-bare-did-migration.ts`)
+  on it.
+- **Added by.** alex-claude, for laundry top/3324.
+- **Purpose.** Some stored confidentiality labels name a principal by bare
+  `did:key` string where every current writer names it `User{subject: DID}`.
+  The fit kernel compares atoms structurally, so a reader whose ceiling names
+  the principal as `User` is refused the data the bare string labels,
+  including the principal's own agent reading their own data. Recomputing a
+  document does not rewrite its envelope when the value is unchanged, and a
+  declared entry comes off only by an owner release. The two spellings name
+  one principal, so the stored labels are rewritten once, and no code is
+  kept that tells them apart. With the flag on, the memory server respells,
+  as it opens each store and before serving it, every such atom in every
+  label-map entry of every origin, for the current instances of the default
+  branch at space and user scope, through `system` commits that patch only
+  the `cfc` member. A walk that fails is logged and the store is served as
+  it stands, unmarked, so the walk runs again at the next opening; a bare
+  DID it left behind only refuses more readers than the respelled form
+  would, never fewer. Session-scoped instances are left as they are: a
+  session's instances are read by that session alone, and a client mints a
+  fresh session id for each process. Branches other than the default are
+  left as well. Each batch is read and rewritten under the store's write
+  lock. An instance the store refuses the rewrite of keeps its labels and is
+  logged. A `store_migration` row named `cfc-bare-did-respelling/1`, written
+  once the walk has reached every instance, marks the store done; a run that
+  stops before then runs again at the next opening. Once the row is there, a
+  branch restore respells the labels it writes back.
+- **Current default and planned end state.** On, so that every deployed
+  store is respelled at its first opening after an update, with nothing for
+  its owner to do. The CFC owner asked for this one-time rewrite; the
+  specification's text for it is
+  [specs#107](https://github.com/commonfabric/specs/pull/107). The flag
+  exists to turn the rewrite off on a deployment where it misbehaves.
+- **Status on 2026-11-20.** Implemented and on by default. Covered in
+  `runtime/memory/test/v2-cfc-bare-did-migration.test.ts`. Rehearsed on a
+  copy of a home space's store of 4.79 million current instances: the walk
+  took 23 seconds at the store's first opening, during which that space is
+  not served, and respelled 25,382 instances, refusing none (the walk skips
+  the 4.72 million session instances in its query); documents the
+  owner's agent had been refused then read under a `User` ceiling.
+- **Path to removal.** Once the default has been on for a release that every
+  install has updated past, which `loom update` brings with it, and the stores
+  a deployment serves hold the `cfc-bare-did-respelling/1` row, delete
+  `cfc-bare-did-migration.ts`, its test file, the `Server` option, the
+  environment variable and the respelling in `restoreBranch` (the
+  `store_migration` table may stay, unread), and drop
+  `isActorOwnedAlternative`'s bare-string case
+  (`runtime/memory/v2/cfc-release-authority.ts`) with the specification's
+  `standsForActor` arm. A store that has not opened under the flag by then
+  keeps its bare-DID labels, which a `User` ceiling refuses. Review by
+  2027-02-01.
 
 ## Flag-gated tripwires
 

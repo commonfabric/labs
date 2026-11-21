@@ -4375,12 +4375,29 @@ export interface IndexedCollections<Kinds = Record<string, unknown>>
   ): void;
 }
 
+/** What a collection declares beside its kinds. */
+export interface IndexedCollectionsOptions {
+  /**
+   * A cell every `add()`, `remove()` and `exec()` on the collection also
+   * writes, in the transaction that carries its database write. It is where a
+   * collection says who may write it: declared with a writer policy, as
+   * `new Writable<WriteAuthorizedBy<number, typeof addTopic>>(0)` is, it
+   * refuses the write of any handler the policy does not name, and the
+   * database write goes with it. Without it, every holder of the handle
+   * writes. The runtime's own upkeep of the tables does not write it. It
+   * holds a count: a number, under whatever policy the cell is declared
+   * with.
+   */
+  guard?: AnyCell<number> | AnyCell<Cfc<number, unknown>>;
+}
+
 /**
  * Declares an {@link IndexedCollections}, which lives at the scope of the
  * space, with a declaration per kind of member.
  */
 export type IndexedCollectionsFunction = <Kinds = Record<string, unknown>>(
   kinds: { [K in keyof Kinds & string]: IndexedCollectionOptions<Kinds[K]> },
+  options?: IndexedCollectionsOptions,
 ) => Reactive<IndexedCollections<Kinds>>;
 
 export type SqliteQueryParams = {
