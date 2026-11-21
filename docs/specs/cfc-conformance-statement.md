@@ -709,15 +709,19 @@ a shortest edit script and moves each such entry, existence entries excepted,
 to the element's new index. An element the script removes is paired, in
 order, with an equal element it adds, which is how an element that changes
 places with others is carried, and the entries beneath an element left
-unpaired are dropped. Without the move, an element moved onto an index holding an
-equal value would take the entries of the element that stood there, and its
-own would be lost. Declared entries stay with their position, and link entries
-follow the reference their slot holds. The move implements
-[specs#106](https://github.com/commonfabric/specs/pull/106), which proposes it
-as §8.10.2.3, ahead of its ruling: a nonconforming semantic gap at the strict
-default, whose deciding site carries the `SPEC-PENDING` marker and which
-[`cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
-records.
+unpaired are dropped, except where the new element at its index is unpaired
+too: that element is the old one edited in place, and keeps its entries
+beneath the paths the diff did not write. Where no script within 64 edits
+aligns the arrays between their common prefix and suffix, the elements between
+are paired by value, in order, and the same exception covers the rest. Without
+the move, an element moved onto an index holding an equal value would take the
+entries of the element that stood there, and its own would be lost. Declared
+entries stay with their position, and link entries follow the reference their
+slot holds. This is §8.10.2.3, which specs `main` adopted at `f549c796`
+([specs#106](https://github.com/commonfabric/specs/pull/106)), later than the
+pin. The runtime conforms to it: the pairing joins equal values only, the
+attempt's join is stamped at the length and the indices the diff writes and
+nowhere else, and existence entries stay at their paths.
 
 **Residuals, with direction.**
 
@@ -739,19 +743,9 @@ records.
   counts as one under this runtime's presence semantics is not established.
 - Entries written before classification existed are folded into existence
   conservatively, an over-taint the same section states.
-- An array write persisted index by index leaves an element it keeps, at its
-  index or moved, the entries of its earlier derivation, and stamps the
-  attempt's join only at the indices the diff wrote. §8.12.8 replaces the
-  derived component at a written path and clears it beneath; whether the
-  attempted write of an array set this way is the whole array, whose join
-  would then reach every element, or the indices the diff writes, is the
-  question specs#106 asks. If it is the whole array, an element whose entries lack a
-  clause of the join under-taints. The alignment matches elements by value, so
-  a write that sets an element equal to one stored elsewhere in the array,
-  without reading it, carries that element's entries to it, an over-taint.
-  Where no script within 64 edits aligns the arrays between their common
-  prefix and suffix, the elements between are paired by value, in order, and
-  an element left unpaired by index, as before the alignment existed.
+- The alignment matches elements by value, so a write that sets an element
+  equal to one stored elsewhere in the array, without reading it, carries that
+  element's entries to it, an over-taint §8.10.2.3 accepts.
 - Cross-space label metadata: commitments are probe-able; `Space` ids,
   `Policy` and `Context` names and hashes, and authorship subjects stay
   public; declared entries and carried-forward entries persist verbatim;
