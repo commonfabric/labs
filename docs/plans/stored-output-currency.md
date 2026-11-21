@@ -301,7 +301,7 @@ whether its record was stored not vouched for. A root that would pass but for sl
 that a demanded instance is resolved under, and the judgment names the pieces
 whose slices hold it. Under `skip` it is left unloaded, as a root the store
 can serve is, and is judged again when a slice's record expires as such a
-root is. Under `record` it is loaded, and each of those pieces is then one
+root is, as is a piece that runs and is stale upstream. Under `record` it is loaded, and each of those pieces is then one
 that runs and is stale upstream.
 
 The loop demands the instances those reads name, for the pairs the reads were
@@ -320,11 +320,12 @@ A piece that runs and reads the output of one that does not is found stale the
 same way. The loop advances the cursor on each cycle that drained input while
 such a piece runs, and each piece a commit or a stored record marked, that
 runs, is asked about in the next judgment. A change no input of the space
-reports reaches such a piece through a judgment too: when another space tells
-this one of a change, or a slice's record expires, the loop asks about each
-piece that runs and reads the output of one that does not. A run withdrawn
-for a scoped instance its writer has not produced for the run's viewer
-demands that instance the same way.
+reports, from another space or from a record that expires, reaches such a
+piece at the space's next input and no sooner: asking about every such piece
+at each change from outside was measured at some 18,000 wakes of the loop in
+one FabriChat benchmark run, against 77 without it, and was left out. A run
+withdrawn for a scoped instance its writer has not produced for the run's
+viewer demands that instance the same way.
 
 While a root is held, or a running piece is stale upstream, the watermark does
 not advance. The pieces upstream run, their records are stored, and the

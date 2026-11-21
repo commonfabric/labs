@@ -453,9 +453,9 @@ way: the loop brings the index's marks up to the store's head on each cycle
 that drained input while one does, and asks about each such piece a commit or
 a stored record marked. One that each stored record leaves stale, with
 nothing upstream to start, is asked about once, until a slice of it is newly
-marked. Where the index changed from outside the loop, or a
-slice's record expired, it asks about each such piece in the judgment that
-follows, with or without a root to judge. A run withdrawn for a scoped
+marked. A change from outside the loop, or a record that expires, wakes
+the loop for a piece that is stale upstream already, and reaches one that is
+not at the space's next input. A run withdrawn for a scoped
 instance its writer has not produced for the run's viewer (§3d) demands that
 instance the same way.
 While a root is held, or a running piece is stale, upstream, W does not
@@ -2901,8 +2901,8 @@ clean that wrote an instance they vouched for again, to a value other than
 the one it held, with no input of theirs changed, each one a judgment that
 would have served a stale value; `indexWakes` and `expiryWakes` the times
 the loop was woken to judge a root it had left unloaded, or a piece that
-runs and rests on what the index holds, because the index changed from
-outside the loop or a slice's record expired; `carried` the
+runs and is stale upstream, because the index changed from outside the loop
+or a slice's record expired; `carried` the
 rows of demand the loops offer to carry into other spaces now, and
 `carriedRefused` the rows a space they were sent to refused (§3b);
 `heldUpstream` the roots a `skip` loop left unloaded because what the store

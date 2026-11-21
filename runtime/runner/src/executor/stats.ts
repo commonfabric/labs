@@ -389,15 +389,15 @@ export type ServingLoopStats = {
     rearmed: number;
 
     /** Times the loop was woken to judge a root it had left unloaded, or a
-     * piece that runs and rests on what the index holds, because the index
-     * changed from outside it: a space a slice read told this one of a
-     * change, or a request made for another space marked a slice here. */
+     * piece that runs and is stale upstream, because the index changed
+     * from outside it: a space a slice read told this one of a change, or
+     * a request made for another space marked a slice here. */
     indexWakes: number;
 
     /** Times the loop was woken to judge a root it had left unloaded, or a
-     * piece that runs and rests on what the index holds, because the record
-     * of a slice expired: the next tick of a clock the slice read came,
-     * which no commit reports. */
+     * piece that runs and is stale upstream, because the record of a slice
+     * expired: the next tick of a clock the slice read came, which no
+     * commit reports. */
     expiryWakes: number;
 
     /** Pieces the index held clean that wrote an instance they vouched for

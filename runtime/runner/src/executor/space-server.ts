@@ -2607,10 +2607,10 @@ export class SpaceServer implements TransactionSealDestination {
 
   /**
    * Has the next cycle judge again each root left unloaded because the
-   * store could serve it, and each piece that runs and rests on what the
-   * index holds (serving-loop.md §3b): the space's currency index changed
-   * from outside this loop. A loop with neither, and with no judgment
-   * under way that may leave a root unloaded, does nothing.
+   * store could serve it, and each piece that runs and is stale upstream
+   * (serving-loop.md §3b): the space's currency index changed from outside
+   * this loop. A loop with neither, and with no judgment under way that
+   * may leave a root unloaded, does nothing.
    */
   noteCurrencyChanged(): void {
     if (this.#currency?.noteIndexChanged() !== true) return;
@@ -2622,11 +2622,11 @@ export class SpaceServer implements TransactionSealDestination {
   /**
    * Helper for `#loadDemandedStructure()`, which sets the timer that wakes
    * the loop when the record of a slice expires, for as long as a root is
-   * left unloaded, or a piece that runs is stale upstream or reads the
-   * output of one that does not run (serving-loop.md §3b). A slice that
-   * read a clock goes stale at the clock's next tick with no commit to
-   * report it, so the loop asks for a judgment then. The judgment that
-   * follows sets the timer again, for the next such time.
+   * left unloaded, or a piece that runs is stale upstream
+   * (serving-loop.md §3b). A slice that read a clock goes stale at the
+   * clock's next tick with no commit to report it, so the loop asks for a
+   * judgment then. The judgment that follows sets the timer again, for the
+   * next such time.
    */
   #armCurrencyExpiry(): void {
     const at = this.#currency?.nextExpiry;
@@ -6284,8 +6284,7 @@ export class SpaceServer implements TransactionSealDestination {
     // judged with them, for the pieces to start upstream.
     if (
       this.#currency !== undefined &&
-      (rootKeys.size > 0 || this.#currency.staleUpstream ||
-        this.#currency.runningOwed)
+      (rootKeys.size > 0 || this.#currency.staleUpstream)
     ) {
       const judged = await this.#currency.judge(
         runtime,
