@@ -8,14 +8,16 @@
  * the module rather than an accident of what it happens to need. `lift`,
  * `equals` and `Writable` are ambient declarations that bind nothing at
  * runtime, so a module importing one of them as a value links only inside the
- * pattern runtime. This one instead takes the namespace as the structural
- * `NamesMapCell` and a member as an opaque `unknown` it stores and never
- * reads, so a plain `deno test` can import it and exercise the allocation rule
- * directly. `naming.ts` beside it holds what does take those values, and
- * re-exports everything declared here.
+ * pattern runtime. This one names the cell types in type positions alone,
+ * through an `import type` that the compiler erases, and takes a member as an
+ * opaque `unknown` it stores and never reads, so a plain `deno test` can
+ * import it and exercise the allocation rule directly. `naming.ts` beside it
+ * holds what does take those values, and re-exports everything declared here.
  *
  * `docs/specs/collection-naming.md` is the design this implements.
  */
+
+import type { ReadonlyCell, Writable } from "commonfabric";
 
 /**
  * The namespace: each name to the member it names, held as an unread
@@ -41,19 +43,27 @@ export type NamesMap = Record<string, unknown>;
  * at a time. Nothing here rewrites the map whole, which is what lets two
  * verbs naming different members merge instead of clobbering each other.
  *
- * Declared structurally, with `get()` returning `undefined` for a map nothing
- * has written yet. A verb reads its binding through a schema that carries no
- * default, so on a collection that has never named a member the map is
- * absent inside the verb however the input declares it; the structural
- * declaration is what makes the readers here handle that where the compiler
- * can see it. A `Writable<NamesMap>` satisfies it.
+ * A collection's `Writable<Default<NamesMap, {}>>` input is one: a default
+ * is an annotation on the value type, so the two are the same cell type. The
+ * readers here read it through `readNames()`, which handles a map nothing
+ * has written yet.
  */
-export interface NamesMapCell {
-  /** The map, or `undefined` before the first name is written. */
-  get(): NamesMap | undefined;
+export type NamesMapCell = Writable<NamesMap>;
 
-  /** The entry for `name`, to be set to the member it names. */
-  key(name: string): { set(member: unknown): void };
+/**
+ * The map `names` holds, or an empty one before the first name is written.
+ *
+ * A verb reads its binding through a schema that carries no default, so on a
+ * collection that has never named a member the map is absent inside the verb
+ * however the input declares it. The parameter's value type admits
+ * `undefined`, which is what makes the read handle that where the compiler
+ * can see it. A `NamesMapCell` passes, because a `ReadonlyCell` accepts a
+ * cell whose value type is assignable to its own.
+ */
+export function readNames(
+  names: ReadonlyCell<NamesMap | undefined>,
+): Readonly<NamesMap> {
+  return names.get() ?? {};
 }
 
 /**
@@ -125,7 +135,7 @@ export function createNamed<M>(
   names: NamesMapCell,
   create: (name: string) => M,
 ): { name: string; member: M } {
-  const name = nextNameAmong(Object.keys(names.get() ?? {}));
+  const name = nextNameAmong(Object.keys(readNames(names)));
   const member = create(name);
   names.key(name).set(member);
   return { name, member };

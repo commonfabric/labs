@@ -273,27 +273,31 @@ export interface TopicIndexRow {
  * consumer states.
  *
  * A read taken straight off the cell gets no help from the compiler. `get()` on
- * `ReadonlyCell<TopicMentionSource>` is declared to return a value rather than
- * `T | undefined` — `IReadable` in `base/api/index.ts` — so omitting the
- * second `?.` there type-checks exactly as well as including it, and every gate
- * stays green over a board that silently accepts no new topic. Only a read
- * against a board with an in-flight append tells the two apart.
+ * `ReadonlyCell<TopicMentionSource>` is declared to return a value of the
+ * cell's value type, which excludes `undefined` — `IReadable` in
+ * `base/api/index.ts` — so omitting the second `?.` there type-checks exactly
+ * as well as including it, and every gate stays green over a board that
+ * silently accepts no new topic. Only a read against a board with an in-flight
+ * append tells the two apart.
  *
- * Declaring the source structurally is what changes that. The parameter type
- * says `get(): { mentions: M } | undefined`, so omitting the second `?.` HERE
+ * Declaring each source with a value type that admits `undefined` is what
+ * changes that. The parameter type says
+ * `ReadonlyCell<{ mentions: M } | undefined>`, so omitting the second `?.` HERE
  * is a compile error: `deno task cfcheck` fails with "Object is possibly
  * 'undefined'". `deno task check` passes either way — it walks the
  * hand-maintained path list in `tasks/typecheck.ts`, which this package is not
- * on, and patterns are checked by `cfcheck`. So the structural declaration buys
- * two things rather than one: the read becomes testable, and the optionality
- * moves somewhere the pattern typechecker can see it.
+ * on, and patterns are checked by `cfcheck`. So the declaration buys two things
+ * rather than one: the read becomes testable, and the optionality moves
+ * somewhere the pattern typechecker can see it. A
+ * `ReadonlyCell<TopicMentionSource>` passes, because a `ReadonlyCell` accepts a
+ * cell whose value type is assignable to its own.
  *
  * Whether a cell's `get()` may return undefined against its declared type is a
  * question about the cell contract rather than about this pattern, and it is
  * not answered here.
  */
 export function mentionListsOf<M>(
-  sources: readonly ({ get(): { mentions: M } | undefined } | undefined)[],
+  sources: readonly (ReadonlyCell<{ mentions: M } | undefined> | undefined)[],
 ): (M | undefined)[] {
   return Array.from(sources, (source) => source?.get()?.mentions);
 }
@@ -581,7 +585,10 @@ export interface CardSource {
  * that: reading through the reactive array costs a link resolution per read,
  * and the sort reads every element many times. A topic with nothing behind it
  * yet — appended a moment ago, still mid-sync — reads as `undefined` and gets
- * no card rather than a junk one; it appears on the next run.
+ * no card rather than a junk one; it appears on the next run. The cells' value
+ * type admits `undefined` so that the compiler holds the read to that case,
+ * and a `ReadonlyCell<CardSource>` passes, because a `ReadonlyCell` accepts a
+ * cell whose value type is assignable to its own.
  *
  * The parameter is an array of CELLS, as `mentionableIndex`'s is, so each
  * row's `topic` is the member's identity and writes as a link. Each row is
@@ -593,10 +600,7 @@ export interface CardSource {
  * and writes nothing.
  */
 export function cardRowsOf(
-  topics: readonly (
-    | { get(): CardSource | undefined }
-    | undefined
-  )[],
+  topics: readonly (ReadonlyCell<CardSource | undefined> | undefined)[],
 ): CardRow[] {
   const read: { topic: unknown; value: CardSource }[] = [];
   for (const topic of topics) {
