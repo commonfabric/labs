@@ -114,7 +114,12 @@ separate view with no membership control. Archive and restore use
 the revision embedded in the rendered control's event, so a newer peer choice
 causes a conflict notice instead of being replaced. Opening uses ordinary shell
 space navigation and its configured routing; listing does not fetch target
-roots, add routing hints, grant access, or change the navigation list.
+roots, add routing hints, grant access, or change the navigation list. The
+browser's `shown` input says whether its list is on screen, and is `true` unless
+a host passes `false`. While it is `false` the browser derives no row, so no
+runtime runs anything for each entry. Home passes whether its Social spaces tab
+is the one selected, since a client that draws Home's view demands every panel
+of it, hidden ones included.
 
 ## Identity and routing
 
