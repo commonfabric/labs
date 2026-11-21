@@ -36,6 +36,7 @@ ses-callback:callable-capture error
 removed-form:helper warning
 removed-form:helper-unsupported error
 removed-form:pattern-tool-interim warning
+tool:in-space-factory error
 removed-form:pattern-tool error
 removed-form:builtin error
 removed-form:schema-argument error

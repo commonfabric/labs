@@ -197,6 +197,14 @@ pub const CATALOG: &[Entry] = &[
              implemented: every call is reported as `removed-form:pattern-tool`",
         ),
     },
+    Entry {
+        id: "tool:in-space-factory",
+        severity: Some(Error),
+        status: Status::NotImplemented(
+            "no closure used as a value is translated, so a factory with `inSpace` given as \
+             a tool is not reported",
+        ),
+    },
     done("removed-form:pattern-tool", Error),
     done("removed-form:builtin", Error),
     Entry {
