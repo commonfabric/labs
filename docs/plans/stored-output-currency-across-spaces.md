@@ -696,8 +696,14 @@ A third is ruled:
    access check, their end and the rows the source's index proves current
    left out; the reading loop's set, sent when it changes and withdrawn at
    a park; and activation and parking of the source, which follow from the
-   rows being held among the source's sessions. Still to do: a measurement
-   of what a carried demand costs the source.
+   rows being held among the source's sessions. Measured:
+   [the record](../history/development/performance/2026-11-21-carried-demand-cost.md).
+   A return with nothing changed hands the source no demand. A carried
+   demand costs the source the admission of its rows and the start of its
+   pieces, which it pays for viewers of its own too. The reading loop sends
+   its whole set whenever it changes, and each reading piece is recorded
+   again with every viewer's slice at each start; both are costs still to
+   take out.
 6. **Computations that run without demand.** Envelopes among the write
    rows; a computation recorded as unbounded from what it wrote; the
    unsettled space, settled before a judgment in it or a pull from it
