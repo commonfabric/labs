@@ -205,6 +205,19 @@ class PlanLabelError extends Error {
   }
 }
 
+/**
+ * Thrown inside the pre-pass where a record gives no input for something
+ * its template reaches: a slot with no binding or bound to no position, a
+ * collection with no elements, a choice that was not reported. The writer
+ * had nothing to give, which is no report the transaction contradicts.
+ */
+class PlanInputMissing extends PlanLabelError {
+  constructor(message: string) {
+    super(message);
+    this.name = "PlanInputMissing";
+  }
+}
+
 /** The key a covered path is held under in `PlanLabels.byTarget`. */
 export const planLabelPathKey = (path: readonly string[]): string =>
   encodePointer(canonicalizeLogicalPath(path));
@@ -300,7 +313,26 @@ export const instantiatePlanLabels = (
         return shared;
       }
       const before = stagedTaken;
-      const label = instantiateWrite(input);
+      let label: InternedLabel;
+      try {
+        label = instantiateWrite(input);
+      } catch (error) {
+        // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+        // A record that gives no input for something its template reaches
+        // takes the label of a write with no record, as a record the
+        // writer gives as `bound` does: the transaction's join holds what
+        // the transaction read, so the label is at least what flowed. A
+        // record that names positions the change compared, or that is of a
+        // container's membership, is refused: its label is joined from
+        // more than the template.
+        if (
+          !(error instanceof PlanInputMissing) ||
+          input.decided !== undefined || input.observed !== undefined ||
+          input.enumeration === true
+        ) throw error;
+        bounds++;
+        label = unbacked(input);
+      }
       if (source !== input && stagedTaken === before) {
         sourceLabels.set(source, label);
       }
@@ -428,7 +460,7 @@ export const instantiatePlanLabels = (
       };
     };
     if (chain.length === 0) {
-      throw new PlanLabelError(`slot ${slot} is bound to an empty chain`);
+      throw new PlanInputMissing(`slot ${slot} is bound to an empty chain`);
     }
     // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
     // A read of a value that holds links observes, in the slot's class,
@@ -441,7 +473,7 @@ export const instantiatePlanLabels = (
     let integrity: CfcAtom[] | undefined;
     for (const each of [chain, ...(binding.below ?? [])]) {
       if (each.length === 0) {
-        throw new PlanLabelError(`slot ${slot} is bound to an empty chain`);
+        throw new PlanInputMissing(`slot ${slot} is bound to an empty chain`);
       }
       for (const link of each.slice(0, -1)) {
         for (const clause of at(link, "followRef").confidentiality) {
@@ -541,6 +573,28 @@ export const instantiatePlanLabels = (
     );
   };
 
+  /**
+   * The label of a path whose record gives no inputs for its template: the
+   * transaction's join. For a record whose label alone is formed again
+   * (`PlanWrite.relabel`), the join is joined with what the path stores:
+   * a transaction that forms labels again and evaluates nothing read
+   * nothing, so its join alone would take from the path what its stored
+   * label holds of what flowed into the value.
+   */
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+  const unbacked = (input: PlanWriteInput): InternedLabel => {
+    if (input.relabel !== true) return join;
+    // The label depends on the path, so a record that lists several does
+    // not share it.
+    stagedTaken++;
+    const stored = observed(input.target, "value", true);
+    const atoms = table.intern({ integrity: stored.integrity }).integrity;
+    return table.intern({
+      confidentiality: [...join.confidentiality, ...stored.confidentiality],
+      integrity: join.integrity.filter((atom) => atoms.includes(atom)),
+    });
+  };
+
   /** Throws where the transaction did not write the target of `input`. */
   const requireWritten = (input: PlanWriteInput): void => {
     if (
@@ -588,7 +642,7 @@ export const instantiatePlanLabels = (
       // record does, and not the label of a covered path above it. Behind
       // `compiledPatterns`.
       bounds++;
-      return withDecision(join);
+      return withDecision(unbacked(input));
     }
     const shared = input.decided === undefined && input.observed === undefined
       ? undefined
@@ -753,7 +807,7 @@ export const instantiatePlanLabels = (
         }
         if (binding !== undefined) return slotLabel(binding, slot);
         if (enclosing !== undefined) return enclosing.slotLabel(slot);
-        throw new TemplateInstantiationError(`slot ${slot} has no binding`);
+        throw new PlanInputMissing(`slot ${slot} has no binding`);
       },
       selection: (selector) =>
         place.selections?.[selector] ?? enclosing?.selection(selector),
@@ -763,7 +817,7 @@ export const instantiatePlanLabels = (
           return elementsOf(plan, write, elements, self, at);
         }
         if (enclosing !== undefined) return enclosing.elements(collection);
-        throw new TemplateInstantiationError(
+        throw new PlanInputMissing(
           `collection ${collection} has no elements reported`,
         );
       },
@@ -782,7 +836,7 @@ export const instantiatePlanLabels = (
       },
       children: (pick, from) => {
         if ("collection" in from) return self.elements(from.collection);
-        throw new TemplateInstantiationError(
+        throw new PlanInputMissing(
           `the choice at pick ${pick} was not reported, and it chooses from no collection`,
         );
       },

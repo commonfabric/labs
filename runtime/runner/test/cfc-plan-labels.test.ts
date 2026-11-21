@@ -747,6 +747,53 @@ describe("cfc-plan-labels", () => {
         });
       });
 
+      it("gives a path whose record lacks the binding of a slot the transaction's join, and counts a bound", async () => {
+        await withSources((runtime, tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, { inputs: [{ slots: {} }] }),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "a", 0, 0),
+            runtimeWritePolicyAuthorization,
+          );
+          const before = runtime.getCfcStats().planLabelBounds;
+
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+
+          expect(labels.reasons).toEqual([]);
+          expect(confidentialityAt(labels, target, "a").sort()).toEqual([
+            "secret-a",
+            "secret-b",
+          ]);
+          expect(runtime.getCfcStats().planLabelBounds - before).toBe(1);
+        });
+      });
+
+      it("gives a path whose record binds a slot to no position the transaction's join", async () => {
+        await withSources((_runtime, tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            tablePart(identity, {
+              inputs: [{ slots: { 0: 0 } }],
+              bindings: [{ chain: [], observes: "value" }],
+            }),
+            runtimeWritePolicyAuthorization,
+          );
+          tx.recordCfcWritePolicyInput(
+            writeAt(identity, target, "a", 0, 0),
+            runtimeWritePolicyAuthorization,
+          );
+
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+
+          expect(labels.reasons).toEqual([]);
+          expect(confidentialityAt(labels, target, "a").sort()).toEqual([
+            "secret-a",
+            "secret-b",
+          ]);
+        });
+      });
+
       it("ignores a part of the table recorded without the runtime's authorization", async () => {
         await withSources((_runtime, tx, identity, target) => {
           tx.recordCfcWritePolicyInput(
@@ -2038,13 +2085,20 @@ describe("cfc-plan-labels", () => {
        * bound to source `b`.
        * Then commits a transaction that writes nothing and gives the record
        * of `a` again, bound to source `b`, as one that left the value as it
-       * was; with `relabel`, as one whose label alone is formed again.
+       * was; with `relabel`, as one whose label alone is formed again. With
+       * `lacking`, that transaction reads nothing and the record is given
+       * with what `lacking` holds in the place of its binding.
        * Returns the confidentiality of the target's derived `value` entries,
-       * and the text of the integrity of the one at `a/x`.
+       * the text of the integrity of the one at `a/x`, and the error of the
+       * second commit.
        */
-      const givenAgain = async (relabel: boolean) => {
+      const givenAgain = async (
+        relabel: boolean,
+        lacking?: Partial<NestedWriteInput>,
+      ) => {
         let value: Record<string, unknown[]> = {};
         let integrity = "";
+        let error: unknown;
         await withRuntime(true, async (runtime) => {
           const seed = runtime.edit();
           writeSeedEnvelopeDoc(seed, space);
@@ -2112,7 +2166,9 @@ describe("cfc-plan-labels", () => {
           }, runtimeWritePolicyAuthorization);
           expect((await first.commit().settled).error).toBeUndefined();
           const again = runtime.edit();
-          again.readOrThrow(memoryAddress("of:src-b", ["value"]));
+          if (lacking === undefined) {
+            again.readOrThrow(memoryAddress("of:src-b", ["value"]));
+          }
           recordInput(again, {
             ...planWrite(
               identity,
@@ -2122,8 +2178,10 @@ describe("cfc-plan-labels", () => {
             ),
             unchanged: true,
             ...(relabel ? { relabel: true as const } : {}),
+            ...lacking,
           }, runtimeWritePolicyAuthorization);
-          expect((await again.commit().settled).error).toBeUndefined();
+          ({ error } = await again.commit().settled);
+          if (lacking === undefined) expect(error).toBeUndefined();
           const reader = runtime.edit();
           try {
             const metadata = readStoredCfcMetadata(reader, {
@@ -2152,8 +2210,25 @@ describe("cfc-plan-labels", () => {
             reader.abort();
           }
         });
-        return { value, integrity };
+        return { value, integrity, error };
       };
+
+      it("keeps what the path stored where the record lacks the binding of a slot and the transaction read nothing", async () => {
+        const { value, error } = await givenAgain(true, { slots: {} });
+
+        expect(error).toBeUndefined();
+        expect(value["/a"]).toEqual(["secret-a"]);
+      });
+
+      it("keeps what the path stored where the record is given with no inputs and the transaction read nothing", async () => {
+        const { value, error } = await givenAgain(true, {
+          slots: {},
+          bound: true,
+        });
+
+        expect(error).toBeUndefined();
+        expect(value["/a"]).toEqual(["secret-a"]);
+      });
 
       it("stores the label of the record at its path and keeps the entries below it", async () => {
         const { value } = await givenAgain(true);
