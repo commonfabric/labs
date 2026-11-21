@@ -16,6 +16,7 @@ import {
 import type { HostMemoryServer } from "../../src/executor/host-memory-server.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import { StoreCurrency } from "../../src/executor/store-currency.ts";
+import type { Runtime } from "../../src/runtime.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 
 const SPACE = "did:key:z6Mk-store-currency-test-space" as MemorySpace;
@@ -162,6 +163,223 @@ describe("StoreCurrency", () => {
         expect([...currency.accessForTestingOnly.owed]).toEqual(
           records.map(({ piece }) => piece),
         );
+      });
+    });
+
+    describe("snapshot()", () => {
+      const FAR = "did:key:z6Mk-store-currency-test-far";
+
+      /** The reads the scheduler reports for each piece, by piece. */
+      let reads: Map<string, Array<{ space: string; id: string }>>;
+
+      /** The pieces the scheduler reports as changed, once. */
+      let changed: string[];
+
+      /**
+       * A runtime whose scheduler reports `changed` as the pieces that
+       * changed, each with one user's slice that read what `reads` holds
+       * for it, and no piece that `reads` does not name.
+       */
+      const runtime = {
+        scheduler: {
+          takeChangedPieces: () => changed.splice(0),
+          pieceCurrencySnapshot: (_space: string, piece: string) => {
+            const read = reads.get(piece);
+            return read === undefined ? undefined : {
+              under: [],
+              unvouched: [],
+              writes: [],
+              slices: [{
+                key: "user:alice",
+                unvouched: [],
+                reads: read.map(({ space, id }) => ({
+                  space,
+                  id,
+                  scopeKey: "space",
+                  derived: false,
+                })),
+                vouches: [],
+              }],
+            };
+          },
+        },
+        runner: { pieceCurrencyFacts: () => ({ owned: [] }) },
+        getCellFromLink: () => ({}),
+      } as unknown as Runtime;
+
+      beforeEach(() => {
+        reads = new Map();
+        changed = [];
+      });
+
+      it("keeps what a piece's runs read in another space, with the slice each run belongs to", () => {
+        reads.set("of:piece", [
+          { space: FAR, id: "of:far" },
+          { space: SPACE, id: "of:near" },
+        ]);
+        changed = ["of:piece"];
+
+        currency.snapshot(runtime, 0, []);
+
+        expect([...currency.foreignReads]).toEqual([["of:piece", [{
+          slice: "user:alice",
+          space: FAR,
+          id: "of:far",
+          scopeKey: "space",
+        }]]]);
+        expect(currency.takeForeignReadsChanged()).toBe(true);
+        expect(currency.takeForeignReadsChanged()).toBe(false);
+      });
+
+      it("reports no change for a piece that reads no other space", () => {
+        reads.set("of:piece", [{ space: SPACE, id: "of:near" }]);
+        changed = ["of:piece"];
+
+        currency.snapshot(runtime, 0, []);
+
+        expect(currency.foreignReads.size).toBe(0);
+        expect(currency.takeForeignReadsChanged()).toBe(false);
+      });
+
+      it("drops the reads of a piece that is gone, and reports the change though it returns no record", () => {
+        reads.set("of:piece", [{ space: FAR, id: "of:far" }]);
+        changed = ["of:piece"];
+        currency.snapshot(runtime, 0, []);
+        currency.takeForeignReadsChanged();
+        reads.clear();
+        changed = ["of:piece"];
+
+        expect(currency.snapshot(runtime, 0, [])).toBeUndefined();
+
+        expect(currency.foreignReads.size).toBe(0);
+        expect(currency.takeForeignReadsChanged()).toBe(true);
+      });
+    });
+
+    describe("judge()", () => {
+      it("asks the memory server about the space-scoped roots and the `computed:` roots of any scope, and about no other narrower root", async () => {
+        const asked: string[][] = [];
+        const currency = new StoreCurrency({
+          space: SPACE,
+          server: {
+            judgeCurrencyRoots: (_space, roots) => {
+              asked.push([...roots]);
+              return Promise.resolve({
+                servable: roots.map((root) => ({ root, piece: "of:piece" })),
+                refused: {},
+                marked: [],
+              });
+            },
+          } as Pick<HostMemoryServer, "judgeCurrencyRoots"> as HostMemoryServer,
+          mode: "skip",
+          epoch: "epoch-one",
+          serviceIdentity: "did:key:service",
+          stats: emptyServingLoopStats(),
+          onOwed: () => {},
+          onMarked: () => {},
+        });
+        const idleRuntime = {
+          scheduler: { hasNodesUnderDemandRoot: () => false },
+        } as unknown as Runtime;
+
+        const judged = await currency.judge(
+          idleRuntime,
+          new Map([
+            ["shared", { id: "of:result", scope: "space" }],
+            ["derived", { id: "computed:total", scope: "space" }],
+            ["own-derived", { id: "computed:draft", scope: "user" }],
+            ["own-state", { id: "of:draft", scope: "user" }],
+          ]),
+          () => true,
+          true,
+        );
+
+        expect(asked).toEqual([[
+          "of:result",
+          "computed:total",
+          "computed:draft",
+        ]]);
+        expect(judged.servable).toEqual(["shared", "derived", "own-derived"]);
+      });
+    });
+
+    describe("noteIndexChanged()", () => {
+      /** The root every judgment of these cases is asked about. */
+      const ROOT = "of:root";
+
+      /** How many judgments the memory server was asked for. */
+      let judgments: number;
+
+      /** What holds a judgment back until it is resolved, where one is set. */
+      let held: PromiseWithResolvers<void> | undefined;
+
+      /** A loop that leaves unloaded each root the store can serve. */
+      let skipping: StoreCurrency;
+
+      /** A runtime that runs no piece. */
+      const idleRuntime = {
+        scheduler: { hasNodesUnderDemandRoot: () => false },
+      } as unknown as Runtime;
+
+      beforeEach(() => {
+        judgments = 0;
+        held = undefined;
+        skipping = new StoreCurrency({
+          space: SPACE,
+          server: {
+            judgeCurrencyRoots: async (_space, roots) => {
+              judgments += 1;
+              await held?.promise;
+              return {
+                servable: roots.map((root) => ({ root, piece: root })),
+                refused: {},
+                marked: [],
+              };
+            },
+          } as Pick<HostMemoryServer, "judgeCurrencyRoots"> as HostMemoryServer,
+          mode: "skip",
+          epoch: "epoch-one",
+          serviceIdentity: "did:key:service",
+          stats: emptyServingLoopStats(),
+          onOwed: () => {},
+          onMarked: () => {},
+        });
+      });
+
+      /** Judges `ROOT` with no session's demand changed. */
+      const judge = () =>
+        skipping.judge(
+          idleRuntime,
+          new Map([["key", { id: ROOT, scope: "space" }]]),
+          () => true,
+          false,
+        );
+
+      it("returns `false` while no root is left unloaded and no judgment is under way", () => {
+        expect(skipping.noteIndexChanged()).toBe(false);
+      });
+
+      it("returns `true` once a root is left unloaded, and has the next judgment ask the memory server again", async () => {
+        await judge();
+        await judge();
+        expect(judgments).toBe(1);
+
+        expect(skipping.noteIndexChanged()).toBe(true);
+        await judge();
+
+        expect(judgments).toBe(2);
+      });
+
+      it("returns `true` while a judgment is under way, and has the one after it ask the memory server again", async () => {
+        held = Promise.withResolvers<void>();
+        const judging = judge();
+
+        expect(skipping.noteIndexChanged()).toBe(true);
+        held.resolve();
+        await judging;
+        await judge();
+
+        expect(judgments).toBe(2);
       });
     });
   });

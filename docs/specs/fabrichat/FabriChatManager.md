@@ -49,6 +49,10 @@ that room's roster, in an instance of its own per room, and each notice's
 instance re-types its notice's room the same way. Each instance's argument
 holds the handle, so no list the manager stores types a room as more than a
 handle; a reader that syncs such a list would walk into every room it names.
+The roster instances each run by their room's link, so a room listed,
+forgotten, listed again or adopted from the catalog starts or stops its own
+instance and leaves every other room's as it was, and telling the rooms apart
+reads nothing behind their links.
 The notices' instances run over the notices in the order the manager stores
 them, so a notice dropped moves the instances of the notices after it.
 

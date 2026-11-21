@@ -500,7 +500,8 @@ const declaredStreamSchemas = new WeakMap<object, JSONSchema>();
 export enum KeepAsCell {
   // Strip all asCell entries (cell, opaque, and stream).
   None = "None",
-  // Keep the asCell entry only when it's a stream.
+  // Keep the asCell entry only when it's a stream or a database handle: the
+  // two kinds a result publishes as a capability rather than as a value.
   OnlyStream = "OnlyStream",
   // Keep the entire asCell entry (preserves cell, opaque, and stream).
   All = "All",
@@ -874,9 +875,11 @@ function recursiveStripAsCellFromSchema(
       preservePatternResultCell === true && outerKind === "cell" &&
       (schema.scope !== undefined ||
         (typeof outer === "object" && Object.hasOwn(outer, "scope")));
+    // A database handle is kept as a stream is: neither is a value a result
+    // holds, and a reader that is to be handed one has to be told it is one.
     if (
       (context.keepAsCell === KeepAsCell.OnlyStream &&
-        outerKind === "stream") || keepMarkedCell
+        (outerKind === "stream" || outerKind === "sqlite")) || keepMarkedCell
     ) {
       result = { asCell: asCellValues, ...restSchema };
     } else {

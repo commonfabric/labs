@@ -202,6 +202,11 @@ fixed recipe. The recurring debugging questions and where they resolve:
   `converge <id>
   --all` / `converge-scan --all`, trusting the
   replica-vs-instance label.
+- _"Do pieces in different spaces feed each other in a loop?"_ →
+  `currency-cycles --all`, which reads each store's currency index and prints
+  the pieces, in order, with the document each one writes that the next one
+  reads. A cycle is a path a change can take; whether one is going round is
+  `currencyDelivery` on a running server's `/api/health/stats`.
 - _"I want to explore everything for a space interactively."_ →
   `html <space> --out
   file.html` (self-contained: tree + graph + detail pane

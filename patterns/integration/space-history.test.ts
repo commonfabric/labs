@@ -1,4 +1,9 @@
-import { createTestSpace, env, type Page } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  env,
+  type Page,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
@@ -21,24 +26,30 @@ const waitForCounter = (page: Page, ordinal: string): Promise<void> =>
   );
 
 /**
- * Opens the history panel and returns the seq of the newest step it lists,
- * which is the point of history holding the space as it stands.
+ * Opens the history panel and returns the seq the newest step it lists began
+ * at. A step is named by where it began: its own seq is that of its last
+ * commit, which moves while the step is still growing.
  */
 async function newestStep(page: Page): Promise<string> {
   await page.evaluate("globalThis.app.setConfig('showHistoryView', true)");
-  const step = await page.waitForSelector(".step[data-seq]", {
-    strategy: "pierce",
-  });
-  const seq = await step.evaluate((el: Element) => el.getAttribute("data-seq"));
-  if (seq === null) throw new Error("the newest step names no seq");
+  const seq = await waitForCondition<[], string>(
+    page,
+    (probe) =>
+      probe.collect(".step[data-start-seq]")[0]?.getAttribute(
+        "data-start-seq",
+      ) ||
+      false,
+  );
+  if (seq === undefined) throw new Error("the newest step names no start");
   return seq;
 }
 
-/** Opens, in the history panel, the step whose seq is `seq`. */
-async function openStep(page: Page, seq: string): Promise<void> {
-  const step = await page.waitForSelector(`.step[data-seq="${seq}"]`, {
-    strategy: "pierce",
-  });
+/** Opens, in the history panel, the step that began at `startSeq`. */
+async function openStep(page: Page, startSeq: string): Promise<void> {
+  const step = await page.waitForSelector(
+    `.step[data-start-seq="${startSeq}"]`,
+    { strategy: "pierce" },
+  );
   await step.click();
 }
 
@@ -65,9 +76,9 @@ describe("space history", () => {
   /**
    * Creates a counter, opens it in the shell and increments it three times
    * from the page, opening the history panel after the first. Returns the
-   * page and the seq of the step that left the counter at one. The panel
-   * lists history as it stood when it opened, so that step stays listed
-   * while the space moves on, whichever side computes the space.
+   * page and the seq the step that left the counter at one began at. The
+   * panel keeps the steps it has listed as the space moves on, so that step
+   * stays listed whichever side computes the space.
    */
   async function openCountedToThree(): Promise<{ page: Page; first: string }> {
     const program = await resolveLocalProgram(
@@ -147,6 +158,19 @@ describe("space history", () => {
     await page.evaluate("globalThis.app.setConfig('showHistoryView', true)");
     await clickCfButton(page, ".pattern-restore");
     await waitForCounter(page, "1st");
+  });
+
+  it("lists the steps the space takes while the panel is open", async () => {
+    // The panel opened after the first increment, so a first step that is
+    // not the one it opened on is one it listed as the space moved on.
+    const { page, first } = await openCountedToThree();
+    await page.waitForSelector(
+      `ol > li:first-child > .step:not([data-start-seq="${first}"])`,
+      { strategy: "pierce" },
+    );
+    await page.waitForSelector(`.step[data-start-seq="${first}"]`, {
+      strategy: "pierce",
+    });
   });
 
   it("shows the piece as an earlier step left it, and returns to now", async () => {
