@@ -793,6 +793,7 @@ export class RuntimeTransactions implements TransactionHooks {
         ...(write.relabel ? { relabel: true as const } : {}),
         ...(write.bound ? { bound: true as const } : {}),
         ...(write.membersChanged ? { membersChanged: true as const } : {}),
+        ...(write.membersAppended ? { membersAppended: true as const } : {}),
       });
       if (unchanged) {
         this.#counts.unchangedRecords += 1;

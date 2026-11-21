@@ -89,7 +89,7 @@ const standsAlone = (write: PlanWrite): boolean =>
   write.decided !== undefined || write.observed !== undefined ||
   write.enumeration === true || write.removes === true ||
   write.moves !== undefined || write.start !== undefined ||
-  write.membersChanged === true;
+  write.membersChanged === true || write.membersAppended === true;
 
 /** What a record names beside its target and its element keys, as text. */
 const sameBut = (write: PlanWrite): string =>

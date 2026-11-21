@@ -5604,6 +5604,7 @@ export const planLabelsFor = (
       enumerations: new Map(),
       labelOnly: new Map(),
       membersChanged: new Map(),
+      membersAppended: new Map(),
       reasons: [],
     };
   }
@@ -13081,6 +13082,7 @@ export function* prepareBoundaryCommitSteps(
       enumerations: new Map(),
       labelOnly: new Map(),
       membersChanged: new Map(),
+      membersAppended: new Map(),
       reasons: [],
     };
   for (const reason of planLabels.reasons) reasons.push(reason);
@@ -14255,6 +14257,9 @@ export function* prepareBoundaryCommitSteps(
       )
       : undefined;
     const planLabelsOn = tx.getCfcState().planLabels === true;
+    const membersAppendedKeys = new Set(
+      (planLabels.membersAppended.get(key) ?? []).map(pathKey),
+    );
     const planLabeledPaths = planLabels.byTarget.get(key);
     for (const entry of existing?.labelMap.entries ?? []) {
       const entryPath = canonicalizeLogicalPath(entry.path);
@@ -14439,17 +14444,27 @@ export function* prepareBoundaryCommitSteps(
       // the next declared reconcile. The container-anchored enumerate
       // stamp survives slot writes for exactly the same reason (exact-path
       // never matches a deeper write), so the twins match its discipline.
-      const clearProbePath = isRuntimeMintedTemplate({
-          origin: entry.origin,
-          path: entryPath,
-        }) && entryPath[entryPath.length - 1] === "*"
-        ? entryPath.slice(0, -1)
-        : entryPath;
+      const childTemplate = isRuntimeMintedTemplate({
+        origin: entry.origin,
+        path: entryPath,
+      }) && entryPath[entryPath.length - 1] === "*";
+      const clearProbePath = childTemplate ? entryPath.slice(0, -1) : entryPath;
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // What a container stores once for every position, its `*`-child
+      // templates, says what decided which member stands at each position.
+      // A compiled pattern's write that added members at the end of the
+      // result of a per-element construct (`PlanWrite.membersAppended`),
+      // and a record that forms the container's own label again
+      // (`PlanWrite.relabel`), leave each member where it stood, so the
+      // templates stay. Behind `compiledPatterns`, which defaults off.
+      const templateStands = childTemplate &&
+        (membersAppendedKeys.has(pathKey(clearProbePath)) ||
+          labelOnlyKeys.has(pathKey(clearProbePath)));
       // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
       // A restated data root replaces the derived value entries at and below
       // it (`restatedDataRoot`); its existence entry was carried above.
       if (
-        flowPersist &&
+        flowPersist && !templateStands &&
         (entry.origin === "derived" || entry.origin === "structure") &&
         (valueWrittenPrefixes.hasPrefixOf(clearProbePath) ||
           labelOnlyKeys.has(pathKey(clearProbePath)) ||

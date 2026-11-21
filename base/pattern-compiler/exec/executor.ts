@@ -10093,17 +10093,21 @@ export class Instance {
     // where it would otherwise take the label of a kept output above it.
     // A change of the array a kept output with a collection holds, other
     // than an addition at its end, decides anew which member stands at
-    // each position.
+    // each position, and an addition at its end leaves each member before
+    // it where it stood.
     const appends = splice !== undefined && Array.isArray(held) &&
       splice.removed === 0 && splice.start + splice.inserted === held.length;
     return found.map(({ output, at }) => {
       const write = this.#outputRecord(doc, output, at);
       this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
-      return !appends && this.plan.outputs[output].collection !== undefined &&
-          this.plan.outputs[output].kept && at.length === path.length &&
-          Array.isArray(held)
-        ? { ...write, membersChanged: true as const }
-        : write;
+      if (
+        this.plan.outputs[output].collection === undefined ||
+        !this.plan.outputs[output].kept || at.length !== path.length ||
+        !Array.isArray(held)
+      ) return write;
+      return appends
+        ? { ...write, membersAppended: true as const }
+        : { ...write, membersChanged: true as const };
     });
   }
 

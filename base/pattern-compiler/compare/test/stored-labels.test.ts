@@ -77,17 +77,7 @@ describe("stored-labels", () => {
         for (const line of lines(name, soundness)) found.push(line);
       }
 
-      // `labels` of `key-returns` is the result of a `map` over a `filter`
-      // over plain values in place. A member that returns to the list
-      // after another left it is added at its end: its position stores the
-      // label of the member's own record, which holds nothing of what
-      // decided which member stands there. An addition at the end stores
-      // no membership at the position (ruling Z74), also after a removal.
-      // TODO(seefeld): once a member added after a removal stores at its
-      // position what decided the membership, expect none.
-      expect(found).toEqual([
-        "key-returns (written): output labels/1/memo depends on words",
-      ]);
+      expect(found).toEqual([]);
       expect(dependent).toBeGreaterThan(100);
     });
 
@@ -512,16 +502,17 @@ describe("stored-labels", () => {
       ]);
 
       expect(found).toEqual([]);
+      // The first members of `twice` and of `doubled`, the results of a
+      // `flatMap`, are written as a change of the members other than an
+      // addition at the end, which stores the label of the membership once
+      // for every position. An addition at the end leaves it, so the
+      // positions it writes read it too.
       expect(appended).toEqual([
         "titles/1 note",
         "open/1 note",
-        "twice/2 note",
-        "twice/3 note",
         "cards/1 note",
         "cards/1/name note",
         "shouted/1 note",
-        "doubled/2 note",
-        "doubled/3 note",
         "openTitles/1 note",
         "longShouted/1 note",
         "shoutedTwice/1 note",
@@ -542,7 +533,7 @@ describe("stored-labels", () => {
       expect(appended).toEqual([]);
     });
 
-    it("says of a member appended after a removal that its position differs for another change than additions", async () => {
+    it("finds the clause of the input that decided a removal at the position of a member that was appended after it", async () => {
       const { found, appended } = await check([
         { binding: "add", event: { title: "aa" } },
         { binding: "add", event: { title: "bb" } },
@@ -551,9 +542,7 @@ describe("stored-labels", () => {
       ]);
 
       expect(found).toEqual([]);
-      expect(appended).toContain("titles/1 note after another change");
-      expect(appended.every((line) => line.endsWith("after another change")))
-        .toBe(true);
+      expect(appended).toEqual([]);
     });
   });
 
