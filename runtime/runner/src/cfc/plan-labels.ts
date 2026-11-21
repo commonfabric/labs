@@ -333,13 +333,9 @@ export const instantiatePlanLabels = (
         // writer gives as `bound` does: the transaction's join holds what
         // the transaction read, so the label is at least what flowed. A
         // record that names positions the change compared, or that is of a
-        // container's membership, is refused: its label is joined from
-        // more than the template.
-        if (
-          !(error instanceof PlanInputMissing) ||
-          input.decided !== undefined || input.observed !== undefined ||
-          input.enumeration === true
-        ) throw error;
+        // container's membership, has taken the join where it joins what
+        // it names (`instantiateWrite`).
+        if (!(error instanceof PlanInputMissing)) throw error;
         bounds++;
         label = unbacked(input);
       }
@@ -661,12 +657,29 @@ export const instantiatePlanLabels = (
       work.memoHits++;
       return withDecision(shared.label);
     }
-    const inputs = ownInputs(plan, input);
-    let label = instantiateTemplate(template, inputs, table, work);
-    if (
-      input.decided !== undefined || input.observed !== undefined ||
-      input.enumeration === true
-    ) {
+    const joinsObserved = input.decided !== undefined ||
+      input.observed !== undefined || input.enumeration === true;
+    let label: InternedLabel | typeof NEUTRAL;
+    try {
+      label = instantiateTemplate(
+        template,
+        ownInputs(plan, input),
+        table,
+        work,
+      );
+    } catch (error) {
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // A record that names positions the change compared, or that is of
+      // a container's membership, and gives no input for something its
+      // template reaches, takes the transaction's join in place of the
+      // template's label, as one the writer gives as `bound` does, and is
+      // joined with what it names as that one is. The join holds every
+      // clause the template's label could hold. Behind `compiledPatterns`.
+      if (!(error instanceof PlanInputMissing) || !joinsObserved) throw error;
+      bounds++;
+      return withDecision(unbacked(input));
+    }
+    if (joinsObserved) {
       const own = label === NEUTRAL ? table.empty : label;
       sharedTemplateLabels.set(sharedKey(input), { input, label: own });
       return withDecision(own);

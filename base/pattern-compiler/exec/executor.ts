@@ -9417,7 +9417,8 @@ export class Instance {
    * as `#indexBinding` binds it. An element is bound to the position it is
    * at, for a reference or a plain value in place, and to the output of the
    * upstream element that holds it, for an element of the result of another
-   * per-element construct.
+   * per-element construct. An element of an array a computation returned
+   * is bound to nothing (`#readComputedSource`).
    */
   #placeBinding(
     place: number,
@@ -9430,8 +9431,17 @@ export class Instance {
     const record = this.plan.slots[place];
     if (record.root.kind === "index") return this.#indexBinding(place, keys);
     if (record.root.kind !== "element") return undefined;
+    // An element of an array that a computation returned is at no stored
+    // position, and the handler's transaction read none for it: the slot
+    // stays unbound, and the transaction reads what the computation read,
+    // so that the bound a record with an unbound slot takes, the join of
+    // what the transaction read, holds what the element holds.
+    const computed = (): undefined => {
+      this.#readComputedSource(record.root.collection ?? -1, keys);
+      return undefined;
+    };
     const bound = this.#elementBound(place, new Map(keys));
-    if (bound === undefined) return undefined;
+    if (bound === undefined) return computed();
     if ("upstream" in bound) {
       const output = this.#upstreamOutput(
         bound.upstream.collection,
@@ -9445,14 +9455,100 @@ export class Instance {
       );
       return { output };
     }
-    if (!("at" in bound)) return undefined;
+    if (!("at" in bound)) return computed();
     const [at] = bound.at;
-    if (!(at instanceof Ref)) return undefined;
+    if (!(at instanceof Ref)) return computed();
     const chain = this.#addressesOf(
       [new Ref(at.doc, [...at.path, ...rest])],
       observes !== "identity",
     );
-    return chain.length === 0 ? undefined : this.#chainsOf(chain, observes);
+    return chain.length === 0 ? computed() : this.#chainsOf(chain, observes);
+  }
+
+  /**
+   * Has the transaction in progress read every stored position that the
+   * computation of the array `collection` iterates read: those the cone
+   * instance of the array's output bound, and where that output passes the
+   * elements of another collection on, those the cone instances of each of
+   * its elements bound, with what gives its membership. The work is the
+   * number of those positions, which for an array made from a list grows
+   * with the list.
+   */
+  #readComputedSource(
+    collection: number,
+    keys: readonly [number, string][],
+  ): void {
+    const hooks = this.root.options.transactions;
+    const output = this.plan.collections[collection]?.source.output;
+    if (hooks === undefined || output === undefined) return;
+    const seen = new Set<string>();
+    const read = ({ doc, path }: Address) => {
+      const id = JSON.stringify([doc, path]);
+      if (seen.has(id)) return;
+      seen.add(id);
+      hooks.read(doc, path);
+    };
+    const visited = new Set<ConeInputs>();
+    const outputsSeen = new Set<string>();
+    // The positions a cone instance bound, and those of the cone instances
+    // whose values it read in memory.
+    const readInputs = (inputs: ConeInputs | undefined) => {
+      if (inputs === undefined || visited.has(inputs)) return;
+      visited.add(inputs);
+      for (const bound of inputs.slots.values()) {
+        if ("constant" in bound || "place" in bound) continue;
+        if ("output" in bound) {
+          readOutput(bound.output, []);
+        } else if ("upstream" in bound) {
+          const { collection, keys } = bound.upstream;
+          for (const each of this.#elementCones(collection)) {
+            readInputs(this.#inputsOf(each, this.#keysFor(each, keys)));
+          }
+        } else {
+          for (const at of this.#addressesOf(bound.at)) read(at);
+        }
+      }
+    };
+    const readOutput = (
+      index: number,
+      pairs: readonly [number, string][],
+    ) => {
+      const name = JSON.stringify([index, pairs]);
+      if (outputsSeen.has(name)) return;
+      outputsSeen.add(name);
+      const byCollection = new Map(pairs);
+      const { cone, passesCollection: passed, template } =
+        this.plan.outputs[index];
+      readInputs(this.#inputsOf(cone, this.#keysFor(cone, pairs)));
+      // The outputs the computation read by name bind no slot of its cone.
+      for (
+        const named of reachedBy(template, this.plan.templates ?? []).outputs
+      ) readOutput(named, pairs);
+      if (passed === undefined) return;
+      const around = this.#outerOf(passed).map((step) =>
+        byCollection.get(step) ?? "?"
+      );
+      for (const { slot, source } of this.#membershipSlots(passed)) {
+        const found = (source === undefined
+          ? undefined
+          : this.#sourceBinding(slot, byCollection, [source])) ??
+          this.#positionBinding(slot, pairs);
+        if (found !== undefined && "chain" in found) {
+          for (const at of found.chain) {
+            read(at);
+          }
+        }
+      }
+      const elements = this.#tables.get(
+        this.#name("assembly", passed, around),
+      );
+      for (const key of elements?.byKey.keys() ?? []) {
+        for (const each of this.#elementCones(passed)) {
+          readInputs(this.#inputsOf(each, [...around, key]));
+        }
+      }
+    };
+    readOutput(output, keys);
   }
 
   /**

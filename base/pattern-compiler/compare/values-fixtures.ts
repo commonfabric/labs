@@ -94,6 +94,14 @@ const WRITTEN: Record<string, Written[]> = {
     argument: { note: "n" },
     events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
   }],
+  "computed-row-state": [{
+    argument: { names: ["a", "b"], suffix: "!" },
+    events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+  }],
+  "literal-state": [{
+    argument: { note: "n" },
+    events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+  }],
   "set-then-push": [{
     argument: { extra: "e", words: ["w"] },
     events: [

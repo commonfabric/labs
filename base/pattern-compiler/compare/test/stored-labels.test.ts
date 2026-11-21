@@ -791,6 +791,43 @@ describe("stored-labels", () => {
     });
   });
 
+  // `fixtures/computed-row-state.tsx`: the handler `pick` of each row of a
+  // `map` over an array that a computation returns appends the row's title.
+  describe("soundnessOfScenario() after a handler wrote what its binding takes from an element of an array a computation returned", () => {
+    it("finds the clause of each input the computation read in the stored label of what the handler wrote", async () => {
+      const { soundness, refused } = await soundnessOfScenario(
+        "computed-row-state",
+        await artifactOf("computed-row-state"),
+        () => undefined,
+        { names: ["a", "b"], suffix: "!" },
+        [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+      );
+
+      expect(refused).toEqual([]);
+      expect(lines("computed-row-state", soundness)).toEqual([]);
+      expect(soundness?.sources).toEqual(["names", "suffix"]);
+      expect(soundness?.dependent).toBeGreaterThanOrEqual(6);
+    });
+  });
+
+  // `fixtures/literal-state.tsx`: the state of `put` holds `item`, an object
+  // of two literals, which the handler reads whole. The plan has no state
+  // entry for `item` itself, so the records of `put` bind no position for
+  // its slot. The second `put` appends to a list that holds a member.
+  describe("soundnessOfScenario() after an append by a handler whose records lack the binding of a slot", () => {
+    it("commits the transaction, the records of the number of members and of the membership included", async () => {
+      const { refused } = await soundnessOfScenario(
+        "literal-state",
+        await artifactOf("literal-state"),
+        () => undefined,
+        { note: "n" },
+        [{ binding: 0, event: {} }, { binding: 0, event: {} }],
+      );
+
+      expect(refused).toEqual([]);
+    });
+  });
+
   // `fixtures/input-writes.tsx`: `add` pushes a record onto the input list
   // `items`.
   describe("inStorage()", () => {
