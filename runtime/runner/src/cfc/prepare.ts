@@ -14384,7 +14384,6 @@ export function* prepareBoundaryCommitSteps(
         memberChanges.map(({ path }) => path),
       )
       : undefined;
-    const planLabelsOn = tx.getCfcState().planLabels === true;
     const membersAppendedKeys = new Set(
       (planLabels.membersAppended.get(key) ?? []).map(pathKey),
     );
@@ -14485,7 +14484,8 @@ export function* prepareBoundaryCommitSteps(
       // list does, leaves what the path holds, so the entry stays unless a
       // record gives the path a label. Behind `compiledPatterns`, which
       // defaults off.
-      const derivedValueStands = planLabelsOn && entry.origin === "derived" &&
+      const derivedValueStands = planLabelsOn === true &&
+        entry.origin === "derived" &&
         entry.observes !== "enumerate" && !currentLinkWritePaths.has(key) &&
         !valueWrittenPrefixes.hasPrefixOf(entryPath) &&
         !labelOnlyKeys.has(key) &&
