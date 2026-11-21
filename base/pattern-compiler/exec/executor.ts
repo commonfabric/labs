@@ -9298,7 +9298,7 @@ export class Instance {
   #outputWrites(
     doc: string,
     path: readonly string[],
-    splice: { start: number; inserted: number } | undefined,
+    splice: { start: number; removed: number; inserted: number } | undefined,
   ): PlanWrite[] {
     const outputs = this.#recordedOutputs();
     const found: { output: number; at: string[] }[] = [];
@@ -9356,10 +9356,19 @@ export class Instance {
     // An output the plan has no template for has a record with no inputs:
     // the runtime gives its path the label of a write it has no record of,
     // where it would otherwise take the label of a kept output above it.
+    // A change of the array a kept output with a collection holds, other
+    // than an addition at its end, decides anew which member stands at
+    // each position.
+    const appends = splice !== undefined && Array.isArray(held) &&
+      splice.removed === 0 && splice.start + splice.inserted === held.length;
     return found.map(({ output, at }) => {
       const write = this.#outputRecord(doc, output, at);
       this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
-      return write;
+      return !appends && this.plan.outputs[output].collection !== undefined &&
+          this.plan.outputs[output].kept && at.length === path.length &&
+          Array.isArray(held)
+        ? { ...write, membersChanged: true as const }
+        : write;
     });
   }
 
@@ -9494,14 +9503,42 @@ export class Instance {
     // computation returned: the record is given as bound, and the path
     // takes the label of a write with no record, where the template could
     // only be refused.
-    const unbound = !record.kept && record.template !== undefined &&
-      [...reachedBy(record.template, this.plan.templates ?? []).slots].some(
-        (slot) => {
-          const binding = given.slots[slot];
+    const templates = this.plan.templates ?? [];
+    const lacks = (
+      template: Template | undefined,
+      place: PlanInputs | undefined,
+      depth: number,
+    ): boolean => {
+      // A chain of outputs is as long as the plan is deep.
+      if (template === undefined || depth > 64) return false;
+      switch (template.op) {
+        case "slot": {
+          const binding = place?.slots[template.slot] ??
+            given.slots[template.slot];
           return binding === undefined ||
             ("chain" in binding && binding.chain.length === 0);
-        },
-      );
+        }
+        case "derive":
+          return template.inputs.some((input) =>
+            lacks(input, place, depth + 1)
+          );
+        case "select":
+          return lacks(template.condition, place, depth + 1) ||
+            template.branches.some((branch) => lacks(branch, place, depth + 1));
+        case "shared":
+          return lacks(templates[template.template], place, depth + 1);
+        case "output":
+          return lacks(
+            this.plan.outputs[template.output]?.template,
+            place?.outputs?.[template.output] ??
+              given.outputs?.[template.output],
+            depth + 1,
+          );
+        default:
+          return false;
+      }
+    };
+    const unbound = !record.kept && lacks(record.template, given, 0);
     return {
       target: { doc, path: at },
       record: { output },

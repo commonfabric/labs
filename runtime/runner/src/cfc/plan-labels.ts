@@ -147,6 +147,16 @@ export interface PlanLabels {
    */
   readonly labelOnly: ReadonlyMap<string, readonly (readonly string[])[]>;
 
+  /**
+   * The canonical covered paths that hold the result of a per-element
+   * construct whose members the write changed otherwise than by adding at
+   * the end (`PlanWrite.membersChanged`), by document key.
+   */
+  readonly membersChanged: ReadonlyMap<
+    string,
+    readonly (readonly string[])[]
+  >;
+
   /** Refusal reasons; the commit is refused when there is any. */
   readonly reasons: readonly string[];
 }
@@ -865,6 +875,7 @@ export const instantiatePlanLabels = (
   const paths = new Map<string, (readonly string[])[]>();
   const enumerations = new Map<string, MembershipLabel[]>();
   const labelOnly = new Map<string, (readonly string[])[]>();
+  const membersChanged = new Map<string, (readonly string[])[]>();
   if (reasons.length === 0) {
     for (const [coveringKey, label] of labels) {
       const { documentKey, pathKey, input } = covering.get(coveringKey)!;
@@ -891,6 +902,11 @@ export const instantiatePlanLabels = (
       paths.get(documentKey)!.push(
         canonicalizeLogicalPath(input.target.path),
       );
+      if (input.membersChanged === true) {
+        const held = membersChanged.get(documentKey) ?? [];
+        held.push(canonicalizeLogicalPath(input.target.path));
+        membersChanged.set(documentKey, held);
+      }
       if (input.relabel === true) {
         const held = labelOnly.get(documentKey) ?? [];
         held.push(canonicalizeLogicalPath(input.target.path));
@@ -898,7 +914,14 @@ export const instantiatePlanLabels = (
       }
     }
   }
-  return { byTarget, paths, enumerations, labelOnly, reasons };
+  return {
+    byTarget,
+    paths,
+    enumerations,
+    labelOnly,
+    membersChanged,
+    reasons,
+  };
 };
 
 /**

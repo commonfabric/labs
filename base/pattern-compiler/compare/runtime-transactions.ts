@@ -731,6 +731,8 @@ export class RuntimeTransactions implements TransactionHooks {
         ...(write.moves === undefined ? {} : { moves: write.moves }),
         ...(write.start === undefined ? {} : { start: write.start }),
         ...(write.relabel ? { relabel: true as const } : {}),
+        ...(write.bound ? { bound: true as const } : {}),
+        ...(write.membersChanged ? { membersChanged: true as const } : {}),
       };
       this.#recorded.push(recorded);
       if (unchanged) {

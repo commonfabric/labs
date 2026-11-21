@@ -5206,6 +5206,7 @@ export const planLabelsFor = (
       paths: new Map(),
       enumerations: new Map(),
       labelOnly: new Map(),
+      membersChanged: new Map(),
       reasons: [],
     };
   }
@@ -12666,6 +12667,7 @@ export function* prepareBoundaryCommitSteps(
       paths: new Map(),
       enumerations: new Map(),
       labelOnly: new Map(),
+      membersChanged: new Map(),
       reasons: [],
     };
   for (const reason of planLabels.reasons) reasons.push(reason);
@@ -14477,6 +14479,41 @@ export function* prepareBoundaryCommitSteps(
           persistedLabelEntries.push(markFlowStampEntry({
             path: [...path, "*"],
             label: { confidentiality },
+            origin: "structure",
+            observes,
+          }));
+        }
+      }
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // The result of a per-element construct that a compiled pattern's
+      // write changed otherwise than by adding at its end
+      // (`PlanWrite.membersChanged`): which member stands at each position
+      // was decided anew by what decides the collection's membership, the
+      // label of the record. It is stored once, as the `*`-child templates
+      // of the classes `value`, `shape` and `followRef`, in place of the
+      // ones the path carried, and a read of a position joins it with the
+      // position's own entries (§4.6.3, "Wildcard per-class entries"). An
+      // addition at the end leaves them as they are. Behind
+      // `compiledPatterns`, which defaults off.
+      for (const path of planLabels.membersChanged.get(key) ?? []) {
+        const star = pathKey([...path, "*"]);
+        let kept = 0;
+        for (const candidateEntry of persistedLabelEntries) {
+          if (
+            candidateEntry.origin === "structure" &&
+            candidateEntry.observes !== undefined &&
+            candidateEntry.observes !== "enumerate" &&
+            pathKey(candidateEntry.path) === star
+          ) continue;
+          persistedLabelEntries[kept++] = candidateEntry;
+        }
+        persistedLabelEntries.length = kept;
+        const confidentiality = flowLabelAt(key, path).confidentiality;
+        if (confidentiality.length === 0) continue;
+        for (const observes of ["shape", "value", "followRef"] as const) {
+          persistedLabelEntries.push(markFlowStampEntry({
+            path: [...path, "*"],
+            label: { confidentiality: [...confidentiality] },
             origin: "structure",
             observes,
           }));

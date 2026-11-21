@@ -169,6 +169,11 @@ export type PlanWrite = NamedOutputInputs & {
    */
   relabel?: true;
   /**
+   * The target holds the result of a per-element construct, and the write
+   * changed its members otherwise than by adding at its end.
+   */
+  membersChanged?: true;
+  /**
    * The executor has no inputs that give the label of what the target
    * holds: the label is that of a write with no record, the join of what
    * the transaction read.
