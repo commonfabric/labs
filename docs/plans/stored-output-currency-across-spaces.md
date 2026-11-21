@@ -352,24 +352,79 @@ the depth of the graph.
 
 ### Demand across spaces
 
-Step 2 of the update above needs a rule the specification does not have: a
-read across spaces under a carried actor counts as that actor's demand in
-the source space (OW35 (b)), which touches the demand model and the memory
-server's demand rows, and takes a ruling of its own.
+Step 2 of the update above needs a rule the specification did not have,
+and it is ruled (2026-11-21, `verification-coverage.md` OW35 (b)), in
+full: **a read of an instance in another space by a run under a carried
+actor is that actor's demand in that space.** The demand names the actor,
+and is not the reading space's own, because a `PerUser` cell of the source
+space read from another space is computed for the actor who reads it: the
+source's loop has to run it for that actor, and only a demand that names
+the actor does that.
 
-The demand this plan needs is narrower than that rule in one way and equal
-to it in another. It is registered only for an instance the source reported
-stale. It then stands for as long as the reading space holds a demanded
-piece that reads the instance, so that the producer stays running and
-current while its reader is watched, and it is withdrawn when the last such
-piece is released (the first plan's stage 7).
+**What a carried demand is.** A row in the source space's demand set, of
+the shape a client session's watch gives: the instance that was read, as a
+root, and a demanding pair, which is the actor's principal and session. It
+differs from a client's row in where it comes from, which the row names as
+its origin: the space where that session is a client's, and the session.
+The source's loop treats it as it treats any row. It loads the piece that
+computes the instance, runs it for that pair, and under `skip` judges it
+first and leaves it unstarted while its record proves it current.
+
+**Which pair a read carries.** The slice of the run that read says whose
+it is. A read in a `session` slice carries that slice's pair. A read in a
+`user` slice carries each pair of that user that demands in the reading
+space. A read in the `space` slice was made for everyone, and carries each
+pair that demands in the reading space; a broad demand by a pair is then
+demand for that pair's instance of whatever narrows beneath it in the
+source, as it is for a client (`scopes.md` §2). A pair that reached the
+reading space as a carried demand is carried on with the origin it came
+with, so a chain of spaces passes one actor's demand along it.
+
+**Which reads are carried.** Those of a started piece, for an instance the
+source's index does not prove current. A read of an instance narrower than
+the space is not registered with the source's index, so it is always
+carried. A read of a shared instance is carried while the row the reading
+index was last told for it is stale, or while there is no such row, which
+is every such read where either index is off. So a source whose instance
+is current is not asked to run anything, and a reading space whose piece
+is not started carries nothing: demand travels along stale edges, and
+along the edges no index can vouch for.
+
+**Who may be carried.** A pair is admitted into the source only where its
+actor holds READ there, by the check a named scoped read passes
+(`protocol.md` §2, the grant-scoped read). A row whose actor does not is
+dropped and counted, and the reading run reads what the source's loop last
+derived, as before the rule.
+
+**How long it stands.** The reading loop sends its whole set for a source
+whenever the set changes, and the set is replaced. It changes when a piece
+starts or is released, when a run's reads change, when a pair arrives or
+leaves, and when the reading index is told an instance went stale or
+current. A park of the reading space withdraws everything it carried. The
+memory server drops a carried row when the session it names as its origin
+ends, wherever the row is, so two spaces that read each other do not keep
+each other's demand standing once the client that started it has gone.
+
+**What it does to the source space.** A carried demand counts with client
+sessions for whether the source is served: the host activates a parked
+source that receives one and does not park it idle while one stands. It
+does not count as a connected session for an intent that needs a channel
+to its actor (`builtins.md` §4), since there is none.
 
 A reading piece is started when its slice is stale, as today, and the
-demand it sends upstream brings the new value to it as an ordinary commit.
-Leaving the reader unstarted while its producers recompute, and serving it
-from the store when they come out equal, is a later refinement: it needs a
-decision on what a session is shown in the meantime, since no watermark
-spans spaces.
+demand it carries upstream brings the new value to it as an ordinary
+commit. Leaving the reader unstarted while its producers recompute, and
+serving it from the store when they come out equal, is a later refinement:
+it needs a decision on what a session is shown in the meantime, since no
+watermark spans spaces.
+
+**Not in this step.** A source whose store another memory server holds
+receives no carried demand, as it receives no registration. A piece that
+only a warm request demands carries nothing, since a warm request names no
+session to give as an origin. A read of an instance narrower than the
+space is carried but still leaves the reading slice not vouched for, so
+its piece starts on each demand; registering such an instance with the
+source's index is what would let it rest.
 
 ## Wish
 
@@ -549,9 +604,11 @@ of who reads what, the trigger's fan-out and its retries, sits behind an
 interface of its own, so a service between spaces can take it over without
 a change to the other two.
 
-One is owed:
+A third is ruled and not built:
 
-3. **The demand rule of OW35 (b)**, as above.
+3. **The demand rule of OW35 (b), in full**: a read across spaces under a
+   carried actor is that actor's demand in the source space ("Demand
+   across spaces").
 
 ## Not worked out
 
@@ -607,8 +664,13 @@ One is owed:
    a circle of triggers. `skip` acts on a slice that read
    another space. Which readers are armed is held in memory, and a trigger
    that leaves the process is not built.
-5. **Demand across spaces**, with its ruling, built together with the first
-   plan's stage 5, which is the same mechanism within one space.
+5. **Demand across spaces**, as ruled, built together with the first
+   plan's stage 5, which is the same mechanism within one space. In order:
+   carried rows in the memory server's demand set, with their origin, their
+   access check and their end; the reading loop's set, sent when it
+   changes and withdrawn at a park; activation and parking of the source;
+   and the acceptance tests 11 and 12 below, with one for a `PerUser`
+   instance of the source read under two actors.
 6. **Computations that run without demand.** Envelopes among the write
    rows; a computation recorded as unbounded from what it wrote; the
    unsettled space, settled before a judgment in it or a pull from it

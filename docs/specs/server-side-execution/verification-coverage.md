@@ -3330,10 +3330,14 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   read and registers no identity-bearing demand in the foreign space,
   so the instance it reads is as that space's own loop last derived it
   for the actor; a derivation the actor nothing of theirs demands there
-  goes stale. Owed: a cross-space demand rule — a foreign read under a
-  carried actor counts as that actor's demand in the foreign space —
-  which touches the (d′) demand model and the memory server's demand
-  rows, with its own ruling. Trigger for both: the first pattern whose
+  goes stale. RULED 2026-11-21, in full: a foreign read under a
+  carried actor counts as that actor's demand in the foreign space. The
+  demand names the actor and is not the reading space's own, since a
+  per-actor derivation of the foreign space runs only for a demand that
+  names its actor. Owed: the build, which touches the (d′)
+  demand model and the memory server's demand rows
+  (`docs/plans/stored-output-currency-across-spaces.md`, "Demand across
+  spaces", step 5). Trigger for both: the first pattern whose
   correctness rests on a revocation taking effect without a re-pull, or
   on a foreign per-actor derivation staying current with no demand of
   the actor's own in that space; FabriChat's add-member candidates read
