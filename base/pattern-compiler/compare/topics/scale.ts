@@ -69,6 +69,12 @@
  * to that many array slots and record members, in place of its default of
  * 1,000,000 (`MAX_UNTRUSTED_MESSAGE_SLOTS` of `runtime/memory/v2.ts`).
  *
+ * With `SCALE_BOARD` set to `filing-order` or `sorted-references`, every
+ * arm runs that board in place of `main.tsx` (`BOARDS`): the board with a
+ * card derived for each topic by a `map` over the array of topic
+ * references, in filing order, or by a `map` over the result of a `lift`
+ * that gives the references in the order of last activity.
+ *
  * With `SCALE_LABEL_DUMP` set to the path of a file, the arm `storage`
  * appends to that file, after each step, one line of JSON for each document
  * the step's commits changed: the step, the kind of the document, its
@@ -117,9 +123,37 @@ import { RuntimeTransactions } from "../runtime-transactions.ts";
 
 const repository = fromFileUrl(new URL("../../../../", import.meta.url));
 
+/**
+ * The boards a run can take, by the name `SCALE_BOARD` gives, each as its
+ * module relative to `patterns/`. They differ in how the cards are derived.
+ */
+const BOARDS: Record<string, string> = {
+  // One `lift` over the whole list gives the rows of all cards, sorted.
+  "main": "apps/topics/main.tsx",
+  // A `map` over the array of topic references, in filing order.
+  "filing-order": "apps/topics/board-filing-order.tsx",
+  // A `lift` gives the references in order, and a `map` over its result.
+  "sorted-references": "apps/topics/board-sorted-references.tsx",
+};
+
+/** The module of the board of this run. */
+const BOARD = (() => {
+  const name = Deno.env.get("SCALE_BOARD") ?? "main";
+  const module = BOARDS[name];
+  if (module === undefined) {
+    throw new Error(
+      `SCALE_BOARD names no board: ${name}. The boards are ${
+        Object.keys(BOARDS).join(", ")
+      }.`,
+    );
+  }
+  return module;
+})();
+
 /** The files of the program of Topics, relative to `patterns/`. */
 const TOPICS_FILES = [
-  "apps/topics/main.tsx",
+  ...new Set([BOARD, "apps/topics/main.tsx"]),
+  "apps/topics/card-text.ts",
   "apps/topics/crossref-index.ts",
   "apps/topics/topic.tsx",
   "product/collection-naming/mentionable.ts",
@@ -335,7 +369,7 @@ const emitted = async (): Promise<{
     for (const pattern of patterns) {
       const id = (pattern.plan as { patterns?: string[] }).patterns?.[0];
       if (id !== undefined) known.set(id, pattern);
-      if (module.endsWith("apps/topics/main.tsx")) board = pattern;
+      if (module.endsWith(BOARD)) board = pattern;
     }
   }
   if (board === undefined) throw new Error("the crate emitted no board");
@@ -1081,7 +1115,7 @@ const runToday = async (
     const program = await resolveLocalProgram(
       (resolver) => runtime.harness.resolve(resolver),
       {
-        main: `${repository}patterns/apps/topics/main.tsx`,
+        main: `${repository}patterns/${BOARD}`,
         root: repository,
       },
     );
