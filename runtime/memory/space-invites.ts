@@ -38,6 +38,12 @@ export const INVITE_ACCESS = ["READ", "WRITE", "OWNER"] as const;
  * owners'. Expiry moves nothing, since every reader compares `expiresAt` with
  * the time itself. Only the service writes it: the store refuses it in any
  * commit but a system one, and a branch restore leaves it as it is.
+ *
+ * A memory server whose service writes it advertises `spaceInvitesRevision`
+ * in its handshake (`MemoryProtocolFlags` in `v2.ts`), so a client asks the
+ * server its session is on. One that does not advertise it writes no such
+ * document, and a client that wants to learn of a change it did not make reads
+ * the ledger again itself.
  */
 export const SPACE_INVITES_REVISION_DOC_ID = "of:space-invites-revision";
 
@@ -63,12 +69,6 @@ export type InviteLedgerRevision = { revision: number };
  * response lacks the field refuses a create carrying `spaceName` or
  * `issuerName` with `invalid-request`, and has no `preview` operation, so a
  * client reads the field before it sends either.
- *
- * `revision` names the document the service moves on with its ledger (see
- * {@link SPACE_INVITES_REVISION_DOC_ID}). It was added after version one too: a
- * service whose response lacks the field writes no such document, so a client
- * that wants to learn of a change it did not make reads the ledger again
- * itself.
  */
 export const SPACE_INVITE_CAPABILITY = {
   version: 1,
@@ -77,7 +77,6 @@ export const SPACE_INVITE_CAPABILITY = {
   access: INVITE_ACCESS,
   suggestedProfile: { maxNameLength: 128, maxPictureBytes: 64 * 1024 },
   preview: { maxNameLength: 128 },
-  revision: { document: SPACE_INVITES_REVISION_DOC_ID },
 } as const;
 
 /**

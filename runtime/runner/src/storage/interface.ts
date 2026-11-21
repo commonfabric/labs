@@ -3983,6 +3983,17 @@ export interface ISpaceReplica extends ISpace {
    * its walks follow out of the space (`syncCrossingsV1`). */
   crossingsReported?(): boolean;
 
+  /**
+   * Whether the server this replica's session is on moves the space's
+   * invitation ledger revision document (`SPACE_INVITES_REVISION_DOC_ID`)
+   * with every change to the ledger (`spaceInvitesRevision`), as the
+   * session's latest handshake said. A session replaced on reconnect
+   * (`IStorageManager.subscribeSpaceSessionReplaced()`) is on a server that
+   * may answer otherwise, so a reader whose watch rests on the answer asks
+   * again then.
+   */
+  invitesRevisionWritten?(): boolean;
+
   /** Waits for session restoration before issuing fallback subscriptions. */
   whenSessionRestored?(): Promise<void>;
 

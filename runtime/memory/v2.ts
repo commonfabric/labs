@@ -1633,6 +1633,19 @@ export type MemoryProtocolFlags = {
   spaceInvites?: boolean;
 
   /**
+   * Server capability: the server's invitation service moves a space's
+   * invitation ledger revision document (`SPACE_INVITES_REVISION_DOC_ID` in
+   * `space-invites.ts`) in the transaction that changes the ledger, and tells
+   * its own sessions on the space of the move. A session here learns of each
+   * change to the ledger by watching that document, provided the deployment
+   * runs the space's invitations in the process that holds its sessions.
+   * Build-inherent. Absent (an older server) parses to false: such a server
+   * writes no such document, and a client that wants to learn of a change it
+   * did not make reads the ledger again itself.
+   */
+  spaceInvitesRevision?: boolean;
+
+  /**
    * Server capability: the server records a space's instance-naming mark and
    * enforces INV-16 (04-protocol.md §4.1.1): a marked space admits only
    * sessions, and commits, that declare `instanceNames: true`; the first
@@ -1714,6 +1727,7 @@ export type WireMemoryProtocolFlags = {
   patternLifecycleScopes?: boolean;
   servedRequests?: boolean;
   spaceInvites?: boolean;
+  spaceInvitesRevision?: boolean;
   instanceNameMark?: boolean;
   branches?: boolean;
   routedAuthV1?: boolean;
@@ -3394,6 +3408,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   patternLifecycleOrigins: true,
   // Build-inherent: this build's `setsrc` and `follow` take a scope.
   patternLifecycleScopes: true,
+  // Build-inherent: this build's invitation service moves the ledger's
+  // revision document with every change to the ledger.
+  spaceInvitesRevision: true,
   // Configuration rather than build-inherent: a `Server` advertises each
   // from what it was given (`Server.memoryProtocolFlags()`).
   patternLifecycle: false,
@@ -3477,6 +3494,7 @@ const BOOLEAN_MEMORY_PROTOCOL_FLAGS: Record<BooleanMemoryProtocolFlag, true> = {
   patternLifecycleScopes: true,
   servedRequests: true,
   spaceInvites: true,
+  spaceInvitesRevision: true,
   instanceNameMark: true,
   branches: true,
   syncCrossingsV1: true,
@@ -3581,6 +3599,9 @@ export const parseMemoryProtocolFlags = (
     // treats the owner as unavailable.
     servedRequests: value.servedRequests === true,
     spaceInvites: value.spaceInvites === true,
+    // Absent (an older server) parses to false: a client then reads the
+    // invitation ledger again itself to learn of a change it did not make.
+    spaceInvitesRevision: value.spaceInvitesRevision === true,
     // Absent (an older server) parses to false: the server records no mark
     // and admits a declaring session's commits without one.
     instanceNameMark: value.instanceNameMark === true,
@@ -3658,6 +3679,7 @@ export const wireMemoryProtocolFlags = (
   patternLifecycleScopes: flags.patternLifecycleScopes,
   servedRequests: flags.servedRequests,
   spaceInvites: flags.spaceInvites,
+  spaceInvitesRevision: flags.spaceInvitesRevision,
   instanceNameMark: flags.instanceNameMark,
   branches: flags.branches,
   routedAuthV1: flags.routedAuthV1,

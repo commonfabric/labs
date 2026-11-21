@@ -8003,6 +8003,16 @@ export class SpaceReplica
     return this.#sessionClient?.serverFlags?.syncCrossingsV1 === true;
   }
 
+  /**
+   * Whether the server this replica's session is on moves the space's
+   * invitation ledger revision document with every change to the ledger
+   * (`spaceInvitesRevision`). `false` until a session exists, and refreshed
+   * by each reconnect handshake.
+   */
+  invitesRevisionWritten(): boolean {
+    return this.#sessionClient?.serverFlags?.spaceInvitesRevision === true;
+  }
+
   /** Waits for session authentication and watch restoration after reconnect. */
   async whenSessionRestored(): Promise<void> {
     const { session } = await this.#memoizedSessionHandle();

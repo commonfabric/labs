@@ -129,22 +129,34 @@ describe("space.invite", () => {
   };
 
   describe("hello", () => {
-    it("advertises `spaceInvites` only on a server given an invitation host", async () => {
-      const flagsOf = async (server: Server) => {
-        const sent: ServerMessage[] = [];
-        const connection = server.connect((message) => sent.push(message));
-        await connection.receive(encodeMemoryBoundary({
-          type: "hello",
-          protocol: MEMORY_PROTOCOL,
-          flags: getMemoryProtocolFlags(),
-        }));
-        connection.close();
-        return (sent[0] as HelloOkMessage).flags;
-      };
+    /** The flags `server` answers a `hello` with. */
+    const flagsOf = async (server: Server) => {
+      const sent: ServerMessage[] = [];
+      const connection = server.connect((message) => sent.push(message));
+      await connection.receive(encodeMemoryBoundary({
+        type: "hello",
+        protocol: MEMORY_PROTOCOL,
+        flags: getMemoryProtocolFlags(),
+      }));
+      connection.close();
+      return (sent[0] as HelloOkMessage).flags;
+    };
 
+    it("advertises `spaceInvites` only on a server given an invitation host", async () => {
       expect((await flagsOf(serverWith())).spaceInvites).toBe(false);
       expect(
         (await flagsOf(serverWith({ inviteHost: INVITE_HOST }))).spaceInvites,
+      ).toBe(true);
+    });
+
+    it("advertises `spaceInvitesRevision` on every server of this build", async () => {
+      // The invitation service moves the revision document whatever host it
+      // was given, so the flag is the build's, not the configuration's.
+
+      expect((await flagsOf(serverWith())).spaceInvitesRevision).toBe(true);
+      expect(
+        (await flagsOf(serverWith({ inviteHost: INVITE_HOST })))
+          .spaceInvitesRevision,
       ).toBe(true);
     });
   });

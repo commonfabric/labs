@@ -2533,10 +2533,11 @@ export class Client {
     // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
     // `patternLifecycle`, `patternLifecycleOrigins`,
     // `patternLifecycleScopes`, `servedRequests`, `spaceInvites`,
-    // `instanceNameMark` and `branches` are the server's capabilities alone:
-    // the client reads them from `hello.ok` and never offers them. Other
-    // flags an endpoint does not know are ignored there, since the routed
-    // flag allowlists were removed (infra DEVIATIONS row 41).
+    // `spaceInvitesRevision`, `instanceNameMark` and `branches` are the
+    // server's capabilities alone: the client reads them from `hello.ok` and
+    // never offers them. Other flags an endpoint does not know are ignored
+    // there, since the routed flag allowlists were removed (infra DEVIATIONS
+    // row 41).
     const {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
@@ -2546,6 +2547,7 @@ export class Client {
       patternLifecycleScopes: _lifecycleScopesServerOnly,
       servedRequests: _servedServerOnly,
       spaceInvites: _invitesServerOnly,
+      spaceInvitesRevision: _invitesRevisionServerOnly,
       instanceNameMark: _instanceNameMarkServerOnly,
       branches: _branchesServerOnly,
       ...expectedFlags

@@ -1935,6 +1935,17 @@ the per-epic implementation notes).
 >   session. Only the server advertises it; a client reads it from `hello.ok`
 >   and never offers it. A server that omits it parses as `false`, and
 >   `SpaceInviteClient` then sends administration over HTTP. It is permanent.
+> - **`spaceInvitesRevision`** is a build-inherent capability, hardwired to
+>   `true`. It advertises that the server's invitation service moves a space's
+>   invitation ledger revision document, `of:space-invites-revision`, with
+>   every change to the ledger, and tells its own sessions on the space of the
+>   move (the memory protocol chapter's section 4.1.1). It does not depend on
+>   `inviteHost`, since the ledger also changes through the host's HTTP routes.
+>   Only the server advertises it; a client reads it from `hello.ok` on the
+>   connection its session is on
+>   (`ISpaceReplica.invitesRevisionWritten()`), and never offers it. Older
+>   servers omit it, which parses as `false`, and a client then reads the
+>   ledger again itself to learn of a change it did not make. It is permanent.
 > - **`servedRequests`** is a configuration-derived capability, neither an
 >   experimental toggle nor build-inherent. A memory server advertises it
 >   exactly while its host has installed a served-request handler through

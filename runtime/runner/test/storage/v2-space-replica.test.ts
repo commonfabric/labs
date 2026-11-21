@@ -1283,5 +1283,44 @@ describe("SpaceReplica", () => {
         expect(replicaOver().markedSplices()).toBe(false);
       });
     });
+
+    describe("invitesRevisionWritten()", () => {
+      /**
+       * A replica whose session sits on a connection to a server that
+       * advertises `spaceInvitesRevision` as `advertised` says.
+       */
+      const replicaAdvertising = async (advertised: boolean) => {
+        const replica = replicaOver({
+          createSession: async () => {
+            const { client, session } = await mount();
+            const connection: SessionConnection = {
+              serverFlags: {
+                ...client.serverFlags!,
+                spaceInvitesRevision: advertised,
+              },
+              delivered: () => client.delivered(),
+              close: () => client.close(),
+            };
+            return { session, client: connection };
+          },
+        });
+        await replica.ensureSession();
+        return replica;
+      };
+
+      it("returns `true` for a session on a server that advertises the revision document", async () => {
+        const replica = await replicaAdvertising(true);
+        expect(replica.invitesRevisionWritten()).toBe(true);
+      });
+
+      it("returns `false` for a session on a server that does not advertise it", async () => {
+        const replica = await replicaAdvertising(false);
+        expect(replica.invitesRevisionWritten()).toBe(false);
+      });
+
+      it("returns `false` before a session exists", () => {
+        expect(replicaOver().invitesRevisionWritten()).toBe(false);
+      });
+    });
   });
 });
