@@ -416,6 +416,137 @@ describe("rapids-workflows", () => {
     expect(deploy.with.capture_stdout).toBe(true);
   });
 
+  it("installs Estuary's replica service only from an infra commit on main, behind production approval", async () => {
+    const replica = await workflow("estuary-replica-service.yml");
+    expect(replica.name).toBe("Deploy Estuary replica service");
+    expect(Object.keys(replica.on)).toEqual(["workflow_dispatch"]);
+    const dispatch = z.object({
+      inputs: z.record(
+        z.string(),
+        z.object({ type: z.string(), required: z.boolean() }),
+      ),
+    }).parse(replica.on.workflow_dispatch);
+    expect(dispatch.inputs).toEqual({
+      infra_sha: { type: "string", required: true },
+    });
+    // Not the production deployment's group: a production run waiting for
+    // approval holds that group, and this would wait behind it.
+    expect(replica.concurrency).toEqual({
+      group: "estuary-replica-service-deployment",
+      "cancel-in-progress": false,
+    });
+    expect(replica.permissions).toEqual({ contents: "read" });
+    expect(Object.keys(replica.jobs)).toEqual(["deploy"]);
+    const job = replica.jobs.deploy;
+    expect(job.if).toBe("github.ref == 'refs/heads/main'");
+    expect(job.environment).toBe("estuary");
+    expect(job.permissions).toEqual({ contents: "read" });
+    expect(job.env).toEqual({ INFRA_SHA: "${{ inputs.infra_sha }}" });
+
+    const { steps } = job;
+    expect(steps.map((step) => step.id)).toEqual([
+      "validate-input",
+      "reader",
+      "validate-ancestry",
+      "deploy",
+    ]);
+    // The runner executes no code from any repository.
+    expect(steps.filter((step) => step.uses?.startsWith("actions/checkout@")))
+      .toEqual([]);
+
+    const guard = oneStep(steps, (step) => step.id === "validate-input");
+    expect((await runStep(guard, { INFRA_SHA: infraSha }, {})).code).toBe(0);
+    for (
+      const sha of [
+        "",
+        "main",
+        infraSha.slice(1),
+        `${infraSha}0`,
+        infraSha.toUpperCase(),
+        `${infraSha}\n`,
+        `${infraSha}^`,
+        "$(exit 0)",
+        `${infraSha}; true`,
+      ]
+    ) {
+      expect((await runStep(guard, { INFRA_SHA: sha }, {})).code).not.toBe(0);
+    }
+
+    const ancestry = oneStep(steps, (step) => step.id === "validate-ancestry");
+    expect(ancestry.env.GH_TOKEN).toBe(readerToken);
+    const check = (status: string, code = "0") =>
+      runStep(ancestry, {
+        INFRA_SHA: infraSha,
+        STATUS: status,
+        GH_EXIT: code,
+      }, {
+        gh:
+          'printf "%s\\n" "$@" > "$CALLS"\nprintf "%s\\n" "$STATUS"\nexit "$GH_EXIT"',
+      });
+    for (const status of ["ahead", "identical"]) {
+      const result = await check(status);
+      expect(result.code).toBe(0);
+      expect(result.calls.split("\n")).toEqual([
+        "api",
+        `repos/commonfabric/infra/compare/${infraSha}...main`,
+        "--jq",
+        ".status",
+      ]);
+    }
+    for (const status of ["behind", "diverged", "", "null", "unknown"]) {
+      expect((await check(status)).code).not.toBe(0);
+    }
+    expect((await check("ahead", "42")).code).not.toBe(0);
+  });
+
+  it("gives the replica service's bastion run a token that only reads infra and Loom", async () => {
+    const { steps } = (await workflow("estuary-replica-service.yml")).jobs
+      .deploy;
+    const reader = oneStep(steps, (step) => step.id === "reader");
+    expect(reader.uses).toBe(
+      "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+    );
+    expect(reader.with).toEqual({
+      "app-id": "${{ vars.RAPIDS_APP_ID }}",
+      "private-key": "${{ secrets.RAPIDS_APP_PRIVATE_KEY }}",
+      owner: "commonfabric",
+      repositories: "infra,loom",
+      "permission-contents": "read",
+    });
+    const deploy = oneStep(steps, (step) => step.id === "deploy");
+    expect(deploy.uses).toBe(
+      "appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2",
+    );
+    expect(deploy.env).toEqual({ GH_TOKEN: readerToken });
+    expect(deploy.with.host).toBe("${{ secrets.BASTION_HOST }}");
+    expect(deploy.with.key).toBe("${{ secrets.BASTION_SSH_PRIVATE_KEY }}");
+    expect(deploy.with.username).toBe("bastion");
+    expect(deploy.with.command_timeout).toBe("30m");
+    // The wrapper takes one full infra SHA and nothing else.
+    expect(commandWords(z.string().parse(deploy.with.script))).toEqual([
+      "/opt/cf/deploy-replica-service.sh",
+      '"$INFRA_SHA"',
+    ]);
+    expect(z.string().parse(deploy.with.envs).split(",")).toEqual([
+      "GH_TOKEN",
+      "INFRA_SHA",
+    ]);
+    // Nothing else the repository holds reaches this workflow: no vault
+    // password exists for it to take.
+    const text = await Deno.readTextFile(
+      new URL(
+        "../.github/workflows/estuary-replica-service.yml",
+        import.meta.url,
+      ),
+    );
+    expect([...text.matchAll(/secrets\.([A-Z_]+)/g)].map((m) => m[1]).sort())
+      .toEqual([
+        "BASTION_HOST",
+        "BASTION_SSH_PRIVATE_KEY",
+        "RAPIDS_APP_PRIVATE_KEY",
+      ]);
+  });
+
   it("authenticates manifest reads after trusted checkout and confines the access token to candidate validation", async () => {
     const { steps } = (await workflow("rapids-release.yml")).jobs.deploy;
     const checkout = oneStep(

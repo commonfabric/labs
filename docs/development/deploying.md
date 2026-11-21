@@ -21,6 +21,7 @@ The server deployment entrypoints are:
 | --- | --- | --- | --- |
 | `deploy` | `.github/workflows/rapids-release.yml` | `/opt/cf/deploy-rapids.sh "$INFRA_SHA"` | infra dispatch on Labs `main`, naming the candidate's infra commit |
 | `deploy-estuary` | `.github/workflows/deploy-production.yml` | `/opt/cf/deploy.sh <environment> <Labs SHA>` | dispatch on `main` naming a full SHA, by Loom when its Labs pin changes or by hand |
+| `deploy` | `.github/workflows/estuary-replica-service.yml` | `/opt/cf/deploy-replica-service.sh "$INFRA_SHA"` | dispatch on `main` by hand, naming the infra commit whose selection to install |
 
 The production job reads the environment name from a repository variable rather
 than naming it, because the variable is defined on the GitHub environment the
@@ -303,11 +304,42 @@ a later time still. A toolshed therefore refuses to start with a time more than
 five minutes ahead of its own clock, which allows for skew between the host that
 deploys and the hosts that run.
 
+## Estuary's replica service
+
+Loom's replica service runs on Estuary beside the toolshed and holds owners'
+copies of connector stores for hosted patterns. It is not a Labs artifact: Loom
+builds it, and the infra repository selects which build runs
+(`ansible/vars/replica-service-release.yml` there) and installs it with its
+own play. `estuary-replica-service.yml` exists so that installing a landed
+selection doesn't wait for one person at their own machine: the bastion can
+run that play, and this workflow asks it to.
+
+Dispatch it on `main` with the full infra commit:
+
+```sh
+gh workflow run estuary-replica-service.yml --ref main -f infra_sha=<infra SHA>
+```
+
+The job declares the `estuary` environment, so it waits for the same approval
+as a production deployment and uses the same bastion credentials. Before it
+connects, it checks the SHA's form and asks GitHub whether the commit is on
+infra's `main`. It checks out and runs nothing on the runner. On the bastion,
+`/opt/cf/deploy-replica-service.sh` checks the commit against infra's `main`
+again, runs infra's play from a clean worktree of that commit, and the play
+verifies the build's checksum and provenance before it touches Estuary. The
+bastion receives a short-lived token that reads `infra` and `loom` contents,
+because the play asks whether the pinned Loom commit is on Loom's `main`.
+
+It has its own concurrency group, not the production deployment's: a
+production run waiting for approval holds that group, and an install would
+wait behind it.
+
 ## The wrappers are owned by infra
 
 The [infra repository](https://github.com/commonfabric/infra) generates
-`/opt/cf/deploy.sh` and `/opt/cf/deploy-rapids.sh` in
-`ansible/playbooks/bastion.yml` and installs them on the bastion. Their
+`/opt/cf/deploy.sh`, `/opt/cf/deploy-rapids.sh` and
+`/opt/cf/deploy-replica-service.sh` in `ansible/playbooks/bastion.yml` and
+installs them on the bastion. Their
 implementations and deployment validation tests belong there; Labs checks its
 call sites against their interfaces.
 
@@ -327,7 +359,10 @@ production interface is checked in
 Changes to these interfaces land in order: land the infra implementation,
 apply the bastion playbook so the host has that implementation, then merge the
 Labs call sites. Installing the Rapids wrapper uses the `rapids-deploy-script`
-tag. The deployment transition also blocks the independent `deploy.sh rapids`
+tag, and the replica service's uses `replica-deploy-script`; like the Rapids
+wrapper, that one takes one full infra SHA, and
+[`tasks/rapids-workflows.test.ts`](../../tasks/rapids-workflows.test.ts) checks
+its call site. The deployment transition also blocks the independent `deploy.sh rapids`
 entrypoint so queued CI runs cannot race the coordinated release.
 
 ## The shell inside the binary
