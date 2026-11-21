@@ -8125,7 +8125,9 @@ export class SpaceServer implements TransactionSealDestination {
     // A root the store serves is re-armed here, ahead of the settle, when a
     // commit marked its piece: the re-arm holds the watermark below that
     // commit until the piece has started and derived (serving-loop.md §1).
-    if (this.#currency?.servesFromStore === true) {
+    // A piece that runs here and reads the output of one that does not is
+    // found stale here too, which the demand pass acts on.
+    if (this.#currency?.followsMarks === true) {
       const rearms = await this.#currency.advance(
         Engine.serverSeq(this.#options.engine),
       );

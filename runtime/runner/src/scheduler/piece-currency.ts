@@ -119,6 +119,14 @@ export type PieceCurrencySnapshot = {
    * of them wrote a redirect in. The `space` slice is always among them.
    */
   slices: PieceCurrencySlice[];
+
+  /**
+   * Whether a live computation of the piece read, in its own space, a
+   * derived document that no computation registered on the runtime writes:
+   * the output of a piece that is not started there. Nothing on the runtime
+   * recomputes such a document when its inputs change.
+   */
+  readsUnstarted: boolean;
 };
 
 /** The scheduler state a snapshot reads. */
@@ -387,11 +395,13 @@ export function snapshotPieceCurrency(
     return [...log.reads, ...log.shallowReads];
   };
 
+  let readsUnstarted = false;
   const taken: PieceCurrencySnapshot = {
     piece,
     under,
     unvouched: [...unvouched],
     writes: [...writes],
+    readsUnstarted,
     slices: [...slices].map(([key, slice]) => {
       const reads: PieceCurrencySlice["reads"] = [];
       // A read taken over from a writer that names no piece joins the map
@@ -426,6 +436,10 @@ export function snapshotPieceCurrency(
           slice.expiresAt = Math.min(slice.expiresAt ?? Infinity, expiresAt);
         }
         const { attributed, unattributed } = writersOf(read.id);
+        if (
+          !attributed && unattributed.length === 0 &&
+          entityKindOfIdString(read.id) === "computed"
+        ) readsUnstarted = true;
         const takenOver = unattributed.map(readsOf);
         if (takenOver.includes(undefined)) {
           slice.unvouched.add("unattributed-writer");
@@ -460,6 +474,7 @@ export function snapshotPieceCurrency(
       };
     }),
   };
+  taken.readsUnstarted = readsUnstarted;
   state.nodes.setAnsweredFor(piece, answeredFor);
   return taken;
 }

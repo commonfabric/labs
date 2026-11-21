@@ -90,6 +90,14 @@ export class StoreCurrency {
   /** Whether `#foreignReads` changed since `takeForeignReadsChanged()`. */
   #foreignReadsChanged = false;
 
+  /**
+   * The pieces that run here and read the output of a piece of this space
+   * that is not started here, as each one's latest snapshot found it. The
+   * runtime recomputes nothing upstream of such a read, so only the index
+   * says when it has gone stale.
+   */
+  readonly #readsUnstarted = new Set<string>();
+
   /** Whether `#upstream` changed since `takeUpstreamChanged()`. */
   #upstreamChanged = false;
 
@@ -225,6 +233,15 @@ export class StoreCurrency {
   /** Whether any root is left unloaded on a judgment. */
   get servesFromStore(): boolean {
     return this.#served.size > 0 || this.#held.size > 0;
+  }
+
+  /**
+   * Whether the index's marks are to be brought up to the store's head as
+   * inputs arrive: a root is left unloaded, or a piece that runs here reads
+   * the output of one that does not.
+   */
+  get followsMarks(): boolean {
+    return this.servesFromStore || this.#readsUnstarted.size > 0;
   }
 
   /**
@@ -376,9 +393,11 @@ export class StoreCurrency {
       this.#behindAt.delete(piece);
       // A piece that is gone, or reads no other space any longer, has none.
       if (this.#foreignReads.delete(piece)) this.#foreignReadsChanged = true;
+      this.#readsUnstarted.delete(piece);
       if (!isDocumentId(piece)) continue;
       const taken = runtime.scheduler.pieceCurrencySnapshot(this.#space, piece);
       if (taken === undefined) continue;
+      if (taken.readsUnstarted) this.#readsUnstarted.add(piece);
       const foreign = taken.slices.flatMap((slice) =>
         slice.reads.filter((read) =>
           read.space !== this.#space && read.scopeKey !== ANY_INSTANCE
@@ -766,13 +785,17 @@ export class StoreCurrency {
 
   /**
    * Brings the index's marks up to the store's head, `head`, when any root
-   * is left unloaded and the head has moved since the last call.
+   * is left unloaded, or a piece that runs here reads the output of one
+   * that does not, and the head has moved since the last call.
    *
    * @returns The keys left unloaded that an input has marked, each with a
    * seq at or below that input, which the caller re-arms.
    */
   async advance(head: number): Promise<CurrencyRearm[]> {
-    if (!this.servesFromStore || head <= this.#advancedThrough) return [];
+    if (
+      (!this.servesFromStore && this.#readsUnstarted.size === 0) ||
+      head <= this.#advancedThrough
+    ) return [];
     this.#advancedThrough = head;
     const marked = await this.#server.advanceCurrency(this.#space);
     if (marked.length === 0) return [];

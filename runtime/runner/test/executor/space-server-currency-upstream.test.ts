@@ -10,7 +10,7 @@ import type { Cell } from "../../src/cell.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
 import type { CurrencyIndexMode } from "../../src/executor/store-currency.ts";
 import { readWatermarkSeq } from "../../src/executor/watermark-engine.ts";
-import { waitForSettled } from "../../src/executor/watermark.ts";
+import { waitForSettledThroughHead } from "../../src/executor/watermark.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -203,7 +203,7 @@ describe("SpaceServer", () => {
       { stuckLabel: `the setup client to read ${String(value)}` },
     );
     const engine = await server.engineForSpace(space);
-    await waitForSettled(runtime, space, Engine.serverSeq(engine));
+    await waitForSettledThroughHead(runtime, space, Engine.serverSeq(engine));
     await host!.whenQuiescent();
   };
 
