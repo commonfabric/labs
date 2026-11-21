@@ -314,6 +314,181 @@ describe("v2-server-currency-across-spaces", () => {
         expect(judged.marked.map(({ piece, seq }) => ({ piece, seq })))
           .toEqual([{ piece: "of:producer", seq: changed }]);
       });
+
+      describe("with a space it reads that holds a slice which expires", () => {
+        /** What `Date.now()` returns in these cases. */
+        let now: number;
+        let clock: Stub<DateConstructor>;
+
+        /** The time `SOURCE`'s slice expires at. */
+        const EXPIRES = 1_700_000_060_000;
+
+        beforeEach(() => {
+          now = 1_700_000_000_000;
+          clock = stub(Date, "now", () => now);
+          server = newServer();
+        });
+
+        afterEach(() => {
+          clock.restore();
+        });
+
+        /**
+         * Records `of:clock` of `space` as computing `computed:tick` until
+         * `EXPIRES`.
+         */
+        const storeClock = async (space = SOURCE) =>
+          await store(
+            {
+              piece: "of:clock",
+              under: [],
+              vouched: true,
+              writes: ["computed:tick"],
+              owned: [],
+              slices: [{
+                key: "space",
+                vouched: true,
+                reads: [],
+                vouches: ["computed:tick"],
+                expiresAt: EXPIRES,
+              }],
+            },
+            space,
+          );
+
+        /**
+         * Records `of:after` of `SOURCE` as computing `computed:after` from
+         * `computed:tick`, and `SPACE`'s piece as having read
+         * `computed:after` at its head.
+         */
+        const storeChain = async (): Promise<void> => {
+          await storeClock();
+          await store(
+            {
+              piece: "of:after",
+              under: [],
+              vouched: true,
+              writes: ["computed:after"],
+              owned: [],
+              slices: [{
+                key: "space",
+                vouched: true,
+                reads: [{
+                  space: SOURCE,
+                  id: "computed:tick",
+                  scopeKey: "space",
+                  derived: true,
+                }],
+                vouches: ["computed:after"],
+              }],
+            },
+            SOURCE,
+          );
+          await store(
+            reading(
+              SOURCE,
+              "computed:after",
+              await headOf(SOURCE, "computed:after"),
+            ),
+          );
+        };
+
+        /** What a judgment of `SPACE`'s piece returns. */
+        const judged = async (space = SPACE) =>
+          await server.judgeCurrencyRoots(space, ["of:piece"], {
+            epoch: EPOCH,
+          });
+
+        it("returns the root, and that time as the time to judge it again", async () => {
+          await storeChain();
+
+          expect(await judged()).toMatchObject({
+            servable: [{ root: "of:piece", piece: "of:piece" }],
+            nextExpiry: EXPIRES,
+          });
+        });
+
+        it("asks nothing of that space before the time", async () => {
+          await storeChain();
+          await judged();
+          const { pulls } = server.currencyDelivery();
+          now = EXPIRES - 1;
+
+          expect((await judged()).servable).toHaveLength(1);
+
+          expect(server.currencyDelivery().pulls).toBe(pulls);
+        });
+
+        it("refuses, once the time has come, a root that read what a piece computes from the expired slice's output", async () => {
+          await storeChain();
+          await judged();
+          const { pulls } = server.currencyDelivery();
+          now = EXPIRES;
+
+          const after = await judged();
+
+          expect(after.servable).toEqual([]);
+          expect(after.nextExpiry).toBeUndefined();
+          expect(server.currencyDelivery().pulls).toBe(pulls + 1);
+        });
+
+        it("returns that time for a root two spaces along from the slice", async () => {
+          await storeChain();
+          await store(
+            reading(SPACE, "of:near", await write(SPACE, "of:near")),
+            FAR,
+          );
+
+          expect(await judged(FAR)).toMatchObject({
+            servable: [{ root: "of:piece", piece: "of:piece" }],
+            nextExpiry: EXPIRES,
+          });
+        });
+
+        it("refuses, once the time has come, a root two spaces along that read what the space between computes from it", async () => {
+          await storeChain();
+          await store(
+            {
+              ...reading(
+                SOURCE,
+                "computed:after",
+                await headOf(SOURCE, "computed:after"),
+              ),
+              writes: ["of:near"],
+              slices: [{
+                key: "space",
+                vouched: true,
+                reads: [{
+                  space: SOURCE,
+                  id: "computed:after",
+                  scopeKey: "space",
+                  derived: false,
+                  seq: await headOf(SOURCE, "computed:after"),
+                }],
+                vouches: ["of:near"],
+              }],
+            },
+          );
+          await store(
+            reading(SPACE, "of:near", await headOf(SPACE, "of:near")),
+            FAR,
+          );
+          await judged(FAR);
+          now = EXPIRES;
+
+          expect((await judged(FAR)).servable).toEqual([]);
+        });
+
+        it("tells a space resting on it without a time when a slice that expires is stored in it", async () => {
+          await armed();
+          told = [];
+
+          await storeClock();
+
+          expect(told).toEqual([SPACE]);
+          expect((await judged()).nextExpiry).toBe(EXPIRES);
+        });
+      });
     });
 
     describe("currencyDelivery()", () => {

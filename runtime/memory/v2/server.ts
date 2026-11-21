@@ -3857,13 +3857,19 @@ export class Server {
   #serverExecutionObserver: ServerExecutionObserver | undefined;
 
   /**
-   * The spaces each space has told nothing since they last pulled from it,
-   * each with the position that pull returned (serving-loop.md §3b): the
-   * readers it tells of the next change to an instance they registered. It
-   * is held in memory, so after a restart every reader pulls from a source
-   * before it rests on it.
+   * The spaces each space has told nothing since they last pulled from it
+   * (serving-loop.md §3b): the readers it tells of the next change to an
+   * instance they registered. Each is held with the position its pull
+   * returned, and with the time until which it may rest on hearing nothing,
+   * where the space or one it reads holds a slice that expires: no commit
+   * reports an expiry, so the reader pulls again then. It is held in
+   * memory, so after a restart every reader pulls from a source before it
+   * rests on it.
    */
-  readonly #currencyArmed = new Map<string, Map<string, number>>();
+  readonly #currencyArmed = new Map<
+    string,
+    Map<string, { position: number; until?: number }>
+  >();
 
   /**
    * The position of each space through which its armed readers were told
@@ -12731,12 +12737,45 @@ export class Server {
     this.#currencyToldThrough.set(space, moved.position);
     let step: CurrencyTrailStep | undefined;
     for (const { reader, position } of moved.readers) {
-      const pulledAt = armed.get(reader);
+      const pulledAt = armed.get(reader)?.position;
       if (pulledAt === undefined || position <= pulledAt) continue;
       armed.delete(reader);
       step ??= this.#currencyTrailFrom(space);
       this.#triggerCurrencyReader(reader, step);
     }
+    // A reader armed for longer than `space` now holds was told a later
+    // time, or none, by a pull made before a slice here was recorded as
+    // expiring sooner.
+    const until = this.#currencyRestsUntil(space, engine);
+    if (until === undefined) return;
+    for (const [reader, entry] of [...armed]) {
+      if (entry.until !== undefined && entry.until <= until) continue;
+      armed.delete(reader);
+      this.#triggerCurrencyReader(reader);
+    }
+  }
+
+  /**
+   * The time until which another space may rest on hearing nothing from
+   * `space`, or `undefined` where no time bounds it: the earliest time a
+   * slice of `space` expires at, or `space`'s own arming with a space it
+   * reads runs out. No commit reports either.
+   */
+  #currencyRestsUntil(
+    space: string,
+    engine: Engine.Engine,
+  ): number | undefined {
+    let until = selectCurrencyNextExpiry(engine, { space });
+    const now = Date.now();
+    for (const source of selectCurrencySources(engine, { space })) {
+      const armed = this.#currencyArmed.get(source)?.get(space)?.until;
+      // An arming that ran out bounds nothing: `space` pulls from that
+      // source again before another space rests on it, except round a
+      // circle of spaces, where the time would never move on.
+      if (armed === undefined || armed <= now) continue;
+      if (until === undefined || armed < until) until = armed;
+    }
+    return until;
   }
 
   /**
@@ -12912,7 +12951,8 @@ export class Server {
   /**
    * Helper for `#followCurrencySources()`, which follows one source. A
    * source `space` is armed with has told it nothing since its last pull,
-   * and is not asked. One that cannot be asked, or is held, is forgotten,
+   * and is not asked until the time that arming runs to has come. One that
+   * cannot be asked, or is held, is forgotten,
    * which marks each slice that read it. Any other is pulled from, and arms
    * `space` in the same step. A source that is pulled from or held follows
    * the spaces it reads itself first, so that it hears of a change upstream
@@ -12931,9 +12971,11 @@ export class Server {
       armed?.delete(space);
       return forgetCurrencySource(engine, { space, source }).length > 0;
     }
-    if (armed?.has(space) === true && !this.#currencyHeld(source)) {
-      return false;
-    }
+    const resting = armed?.get(space);
+    if (
+      resting !== undefined && !this.#currencyHeld(source) &&
+      (resting.until === undefined || resting.until > Date.now())
+    ) return false;
     if (!visiting.has(source)) {
       visiting.add(source);
       const marked = await this.#followCurrencySources(
@@ -12967,7 +13009,11 @@ export class Server {
     if (armed.size === 0) {
       this.#currencyToldThrough.set(source, pulled.position);
     }
-    armed.set(space, pulled.position);
+    const until = this.#currencyRestsUntil(source, sourceEngine);
+    armed.set(space, {
+      position: pulled.position,
+      ...(until !== undefined && { until }),
+    });
     // The pull's advance may have moved a row another reader registered.
     this.#tellCurrencyReaders(source, sourceEngine);
     return applyCurrencyImports(engine, {
@@ -13058,8 +13104,9 @@ export class Server {
    * @returns The roots that pass, each with the piece it was judged as, how
    * many roots each reason refused, the slices marked since `space`'s
    * serving loop last asked, and the earliest time a slice of `space`
-   * expires at, where one does: the marks are to be brought up to date then,
-   * since no commit does it.
+   * expires at or its arming with a space it reads runs out, where either
+   * does: the roots are to be judged again then, since no commit reports
+   * it.
    */
   async judgeCurrencyRoots(
     space: string,
@@ -13078,7 +13125,7 @@ export class Server {
     const refused: Partial<Record<CurrencyRefusal, number>> = {};
     /** What every return carries besides the roots that pass. */
     const found = () => {
-      const nextExpiry = selectCurrencyNextExpiry(engine, { space });
+      const nextExpiry = this.#currencyRestsUntil(space, engine);
       return {
         refused,
         marked,

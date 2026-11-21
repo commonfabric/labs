@@ -551,11 +551,6 @@ VALUES (:branch, :slice, :piece, :expires_at)
 SELECT slice, piece FROM currency_expiry
 WHERE branch = :branch AND expires_at <= :now
 `),
-  selectExpiryOfPiece: engine.prepare(`
-SELECT 1 AS found FROM currency_expiry INDEXED BY idx_currency_expiry_piece
-WHERE branch = :branch AND piece = :piece
-LIMIT 1
-`),
   selectNextExpiry: engine.prepare(`
 SELECT MIN(expires_at) AS expires_at FROM currency_expiry
 WHERE branch = :branch
@@ -1550,18 +1545,8 @@ const refreshExport = (
           scope_key: scopeKey,
         }) !== undefined);
   const found = staleInstance(context, { id, scopeKey, derived });
-  // A slice that expires goes stale with no commit, so nothing would tell a
-  // reading space when it does. What a piece with such a slice writes is
-  // reported stale from the start.
-  const expiring = (statements.selectWriters.all({ branch, id }) as Array<
-    { piece: string }
-  >).some(({ piece }) =>
-    statements.selectExpiryOfPiece.get({ branch, piece }) !== undefined
-  );
-  const stale = found.unrecorded || found.unvouched || expiring ||
-      found.producers.length > 0
-    ? 1
-    : 0;
+  const stale =
+    found.unrecorded || found.unvouched || found.producers.length > 0 ? 1 : 0;
   const row = statements.selectExport.get({
     branch,
     id,
@@ -1943,7 +1928,8 @@ export const forgetCurrencySource = (
 /**
  * The earliest time, in milliseconds since the epoch, at which a slice of
  * `space` expires, or `undefined` where none does. The marks are brought up
- * to date at or after that time to mark it.
+ * to date at or after that time to mark it, which a space that reads this
+ * one does by pulling from it.
  */
 export const selectCurrencyNextExpiry = (
   engine: Engine,

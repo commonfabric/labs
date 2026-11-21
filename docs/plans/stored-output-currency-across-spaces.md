@@ -53,7 +53,7 @@ of those, and the home space the fixture reads holds no profile.
 | Any other hashtag, such as `#note` | The favorites of the home space and what the space's own root lists. Headless wishes for one query over the space's own root share one resolver, which the wish registers with the scheduler under no piece. | The read in another space, for a search of the home space. Nothing for a search of the space's own root: the slice takes over the shared resolver's reads. |
 | `/`, `#default`, `#mentionable`, `#summaryIndex`, `#knowledgeGraph`, `#pieceRegistry` | The root of the piece's own space, or of the home space or a named space where the wish's `scope` says so. | Nothing known for the piece's own space; the read in another space otherwise. |
 | `#now` | A capture of the piece's first load time, written once to a document of the piece's space and read from then on. | Nothing: the value does not move. |
-| `#now/N` | A cell one timer per runtime writes at each interval, for every wish of that interval in the space. | Nothing until the clock's next tick, which the slice's record names as the time it expires at. |
+| `#now/N` | A cell one timer per runtime writes at each interval, for every wish of that interval in the space. | Nothing until the tick after the one the cell holds, which the slice's record names as the time it expires at. |
 
 For the home-space targets measured, the read in another space is the only
 thing in the way, and the index follows it where one memory server holds
@@ -395,25 +395,38 @@ space. One scoped to the piece's own space reads only that space.
 
 ### The interval clock
 
-A slice that read the cell of `#now/N` is current until the cell's next
-tick. The wish tells the scheduler which document its clock writes and at
-what interval, and the snapshot gives a slice that read one the next tick
-as the time it expires at, the earliest where it read several. The index
-keeps that time beside the slice (`currency_expiry`). Each call that brings
-the marks up to date marks `2` every slice whose time has come, with what is
+A slice that read the cell of `#now/N` is current until the tick after the
+one the cell holds. The wish tells the scheduler which document its clock
+writes, at what interval, and how to read the tick it holds, and the
+snapshot gives a slice that read one the time of the following tick as the
+time it expires at, the earliest where it read several. The time is counted
+from the tick the cell holds and not from the time of the snapshot, so a
+slice computed from a tick that is late is stored as expired already, and a
+cell that holds no tick gives a time that has passed. The index keeps that
+time beside the slice (`currency_expiry`). Each call that brings the marks
+up to date marks `2` every slice whose time has come, with what is
 downstream of it, and reports it at a seq above the store's head, since no
 input the store holds made it stale. So a judgment refuses a root that
 rests on a slice past its time, and starts the piece, which runs the wish
 and holds the timer from then on.
 
-No commit lands at that time, so a loop that left a root unstarted has to
-ask. A judgment returns the earliest time a slice of the space expires at,
-and the loop sets one timer for it while any root is left unstarted. When
-it fires the loop judges again, which marks the slice and loads the root.
+While no runtime holds the clock, no commit lands at that time, so a loop
+that left a root unstarted has to ask. A judgment returns the time to judge
+again at, and the loop sets one timer for it while any root is left
+unstarted. When it fires the loop judges again, which marks the slice and
+loads the root.
 
-Nothing tells another space when a slice here expires, so what a piece
-with an expiring slice writes is reported to other spaces as stale from the
-start. A piece in another space that reads it is started on each demand.
+No commit tells another space when a slice here expires either, so a pull
+arms the reading space only until then. The time a space may be rested on
+until is the earliest time a slice of it expires at, or the earliest time
+its own arming with a space it reads runs out, so the time holds along a
+chain of spaces. A judgment in the reading space that falls after it pulls
+again, which marks the expired slice in the source and returns what is
+downstream of it as stale. The time a judgment returns is the same one for
+its own space, so the loop of a space that reads an expiring slice two
+spaces along sets its timer for that slice. A record stored in a space that
+makes that time earlier, or gives it one where it had none, tells each
+space armed with it for longer, which pulls again.
 
 ## Computations that run without demand
 
@@ -602,9 +615,8 @@ One is owed:
    returns; the writer's registration for a declared destination in another
    space; and the counts the open question needs. Built on step 5, which
    starts a producer.
-7. **The interval clock's expiry.** Done, within one space. A reader in
-   another space of what a piece with an expiring slice writes is started on
-   each demand.
+7. **The interval clock's expiry.** Done. A space is armed with one it
+   reads only until the earliest slice there expires.
 8. **Measure** a social space whose pieces read each viewer's profile, with
    two viewers and with many, for the starts saved and for what a change to
    one profile costs its readers.
@@ -665,7 +677,10 @@ For the serving loop, in `runtime/runner/test/executor/`:
     interval and started after it, and a root a loop holds unstarted is
     loaded when the interval passes. Both exist in
     `space-server-currency-wish.test.ts`, and the index's side in
-    `v2-currency-index.test.ts`.
+    `v2-currency-index.test.ts`. A root in another space that read what a
+    piece computes from the expiring slice's output is refused once the
+    time has come, one space along and two, in
+    `v2-server-currency-across-spaces.test.ts`.
 14. A piece whose headless wish shares a hashtag resolver is recorded
     clean, with the resolver's read of the space's root among its slice's
     reads. This exists in `space-server-currency-wish.test.ts`; two pieces

@@ -1646,7 +1646,7 @@ describe("currency-index", () => {
     });
 
     describe("registerCurrencyReads()", () => {
-      it("reports stale to another space an instance that a piece with an expiring slice writes", () => {
+      it("reports current to another space what a piece with a slice that expires later writes", () => {
         const head = storeClock();
 
         const registered = registerCurrencyReads(engine, {
@@ -1659,6 +1659,41 @@ describe("currency-index", () => {
           id: "computed:tick",
           scopeKey: "space",
           head,
+          stale: false,
+        }]);
+      });
+    });
+
+    describe("pullCurrencyExports()", () => {
+      it("returns stale, once a slice has expired, what a piece that read its output writes", () => {
+        const asOf = write("of:clock", "of:reader", "computed:tick", "of:out");
+        store(asOf, [
+          record("of:clock", {
+            produces: ["computed:tick"],
+            expiresAt: EXPIRES,
+          }),
+          record("of:reader", {
+            reads: [derived("computed:tick")],
+            produces: ["of:out"],
+          }),
+        ]);
+        registerCurrencyReads(engine, {
+          space: SPACE,
+          reader: SOURCE,
+          reads: [{ id: "of:out", scopeKey: "space" }],
+        });
+        now = EXPIRES;
+
+        const pulled = pullCurrencyExports(engine, {
+          space: SPACE,
+          reader: SOURCE,
+          since: 0,
+        });
+
+        expect(pulled.entries).toEqual([{
+          id: "of:out",
+          scopeKey: "space",
+          head: asOf,
           stale: true,
         }]);
       });

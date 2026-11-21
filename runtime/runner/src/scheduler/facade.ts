@@ -148,6 +148,7 @@ import { SpeculationLineage } from "./lineage.ts";
 import { SchedulerMaterializers } from "./materializers.ts";
 import { NodeRegistry, type SchedulerNode } from "./node-record.ts";
 import {
+  type ClockDocument,
   clockDocumentKey,
   type PieceCurrencySnapshot,
   snapshotPieceCurrency,
@@ -489,10 +490,10 @@ export class Scheduler {
   #writeIndex!: SchedulerWriteIndex;
 
   /**
-   * The documents a clock writes, each with the interval of its ticks in
-   * milliseconds, as `noteClockDocument()` was told of them.
+   * The documents a clock writes, as `noteClockDocument()` was told of
+   * them.
    */
-  readonly #clockDocuments = new Map<string, number>();
+  readonly #clockDocuments = new Map<string, ClockDocument>();
 
   readonly #materializers = new SchedulerMaterializers(
     this.#nodes.effects,
@@ -1689,15 +1690,17 @@ export class Scheduler {
 
   /**
    * Records that a clock writes the document at `address` on each whole
-   * multiple of `intervalMs` since the epoch: something other than a commit
-   * decides when its value is out of date, so the currency index holds a
-   * slice that read it current only until the next tick.
+   * multiple of `intervalMs` since the epoch, and that `read` returns the
+   * tick the document holds: something other than a commit decides when its
+   * value is out of date, so the currency index holds a slice that read it
+   * current only until the tick after that one.
    */
   noteClockDocument(
     address: Pick<IMemorySpaceAddress, "space" | "id">,
     intervalMs: number,
+    read: () => number | undefined,
   ): void {
-    this.#clockDocuments.set(clockDocumentKey(address), intervalMs);
+    this.#clockDocuments.set(clockDocumentKey(address), { intervalMs, read });
   }
 
   /**
@@ -1716,7 +1719,6 @@ export class Scheduler {
         dependencies: this.#dependencies,
         writeIndex: this.#writeIndex,
         clockDocuments: this.#clockDocuments,
-        now: Date.now(),
         sourceSeqOf: ({ space: source, id }) =>
           this.runtime.storageManager.open(source).replica
             .speculationRetirementView?.(id, "space").confirmedSeq,

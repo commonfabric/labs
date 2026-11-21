@@ -1211,13 +1211,13 @@ executing:
   the space or at a seq its replica cannot name, or one whose writer names
   no piece and is not live, not clean, or runs once for each viewer. A
   slice that read a document a clock writes (the interval cell of a `#now/N`
-  wish) is current until the clock's next tick, which no commit reports:
-  its record names that time, each call that brings the marks up to date
-  marks `2` a slice whose time has come, at a seq above the store's head,
-  and a loop that left a root unstarted asks for a judgment at the earliest
-  such time. What a piece with such a slice writes is reported stale to the
-  spaces that read it. A read of another space's shared instance is
-  registered with that space's index when the record is stored, where one
+  wish) is current until the tick after the one that document holds, which
+  no commit reports while no runtime holds the clock: its record names that
+  time, each call that brings the marks up to date marks `2` a slice whose
+  time has come, at a seq above the store's head, and a loop that left a
+  root unstarted asks for a judgment at the earliest such time. A read of
+  another space's shared instance is registered with that space's index
+  when the record is stored, where one
   memory server holds both stores: that index keeps the spaces that read
   each of its instances and what it last told them, the instance's head and
   whether a piece there computes it and does not answer for it at present,
@@ -1234,7 +1234,12 @@ executing:
   told passes the word to each space armed with it, pulling nothing, and
   its loop judges again each root it left unstarted. Which spaces are armed
   is held in the memory server's memory, so after a restart every space
-  pulls before it rests on another. A trigger carries the number of the
+  pulls before it rests on another. An arming lasts only until the earliest
+  time a slice of the space pulled from expires at, or that space's own
+  arming with a space it reads runs out: a judgment after that time pulls
+  again, the time a judgment returns for its loop to judge again at is that
+  one for its own space, and a record that makes the time earlier tells each
+  space armed for longer. A trigger carries the number of the
   change it leads back to, one with no trigger behind it, and how many
   triggers lead from that change. The same change reaching a space through
   more triggers than before has come round a circle of spaces, and at

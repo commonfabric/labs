@@ -62,10 +62,11 @@ describe("piece-currency", () => {
    * identity and holding the reads given for it, of which those in `clean`
    * are current. With none, the computation has no fan-out state, and
    * `reads` is what its one run read. `clocks` are the documents of the
-   * space that a clock writes, and `sourceSeqs` the seq the replica holds
-   * each document of another space at, by id. Each of `unattributed` is a computation that
-   * names no piece, clean and live unless it says otherwise, with the
-   * document it writes and what it read.
+   * space that a clock writes, each with the interval of the clock and the
+   * tick the document holds, and `sourceSeqs` the seq the replica holds
+   * each document of another space at, by id. Each of `unattributed` is a
+   * computation that names no piece, clean and live unless it says
+   * otherwise, with the document it writes and what it read.
    */
   const snapshotOf = (options: {
     declared?: CellScope;
@@ -75,8 +76,7 @@ describe("piece-currency", () => {
     clean?: ScopeKey[];
     status?: NodeStatus;
     reads?: Read[];
-    clocks?: Record<string, number>;
-    now?: number;
+    clocks?: Record<string, { intervalMs: number; tick?: number }>;
     sourceSeqs?: Record<string, number>;
     unattributed?: Array<
       { writes: Read["id"]; reads: Read[]; status?: NodeStatus; live?: boolean }
@@ -152,12 +152,13 @@ describe("piece-currency", () => {
         getSchedulingWrites: (of) => of === action ? surface : [],
       },
       clockDocuments: new Map(
-        Object.entries(options.clocks ?? {}).map(([id, interval]) => [
+        Object.entries(options.clocks ?? {}).map((
+          [id, { intervalMs, tick }],
+        ) => [
           clockDocumentKey({ space: SPACE, id: id as Read["id"] }),
-          interval,
+          { intervalMs, read: () => tick },
         ]),
       ),
-      now: options.now ?? 0,
       sourceSeqOf: ({ id }) => options.sourceSeqs?.[id],
     };
     return snapshotPieceCurrency(state, SPACE, PIECE)!;
@@ -321,14 +322,13 @@ describe("piece-currency", () => {
         ).toEqual([]);
       });
 
-      it("gives a slice that read a document a clock writes the clock's next tick as the time it expires at, and leaves it vouched for", () => {
+      it("gives a slice that read a document a clock writes the tick after the one the document holds as the time it expires at, and leaves it vouched for", () => {
         const taken = snapshotOf({
           instances: [
             { key: user, reads: [{ id: "of:tick" }, { id: "of:shared" }] },
             { key: bobUser, identity: BOB, reads: [{ id: "of:shared" }] },
           ],
-          clocks: { "of:tick": 60_000 },
-          now: 90_000,
+          clocks: { "of:tick": { intervalMs: 60_000, tick: 60_000 } },
         });
 
         expect(sliceOf(taken, user)?.expiresAt).toBe(120_000);
@@ -337,26 +337,27 @@ describe("piece-currency", () => {
         expect(taken.unvouched).toEqual([]);
       });
 
-      it("gives a slice that read two clocks the earlier of their next ticks", () => {
+      it("gives a slice that read two clocks the earlier of the times their ticks are out of date at", () => {
         const taken = snapshotOf({
           instances: [
             { key: user, reads: [{ id: "of:minute" }, { id: "of:hour" }] },
           ],
-          clocks: { "of:minute": 60_000, "of:hour": 3_600_000 },
-          now: 3_590_000,
+          clocks: {
+            "of:minute": { intervalMs: 60_000, tick: 3_480_000 },
+            "of:hour": { intervalMs: 3_600_000, tick: 0 },
+          },
         });
 
-        expect(sliceOf(taken, user)?.expiresAt).toBe(3_600_000);
+        expect(sliceOf(taken, user)?.expiresAt).toBe(3_540_000);
       });
 
-      it("gives a slice that read a clock on its tick the tick after it", () => {
+      it("gives a slice that read a clock's document which holds no tick a time that has passed", () => {
         const taken = snapshotOf({
           instances: [{ key: user, reads: [{ id: "of:tick" }] }],
-          clocks: { "of:tick": 60_000 },
-          now: 120_000,
+          clocks: { "of:tick": { intervalMs: 60_000 } },
         });
 
-        expect(sliceOf(taken, user)?.expiresAt).toBe(180_000);
+        expect(sliceOf(taken, user)?.expiresAt).toBe(0);
       });
 
       it("takes over what a clean writer that names no piece read, and reports the document it wrote as an input", () => {
@@ -437,7 +438,6 @@ describe("piece-currency", () => {
               getSchedulingWrites: () => [],
             },
             clockDocuments: new Map(),
-            now: 0,
             sourceSeqOf: () => undefined,
           },
           SPACE,

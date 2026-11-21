@@ -130,16 +130,12 @@ export type PieceCurrencyState = {
   >;
 
   /**
-   * The documents a clock writes, each as `clockDocumentKey()` gives it,
-   * with the interval of its ticks in milliseconds. A tick falls on each
-   * whole multiple of the interval since the epoch. What a computation
-   * derives from such a document is current only until the next tick, and a
-   * tick takes a runtime that holds the clock.
+   * The documents a clock writes, each as `clockDocumentKey()` gives it.
+   * What a computation derives from such a document is current only until
+   * the tick after the one it read, and a tick takes a runtime that holds
+   * the clock.
    */
-  clockDocuments: ReadonlyMap<string, number>;
-
-  /** The time the snapshot is taken at, in milliseconds since the epoch. */
-  now: number;
+  clockDocuments: ReadonlyMap<string, ClockDocument>;
 
   /**
    * The seq of another space's store at which this runtime's replica of it
@@ -149,6 +145,19 @@ export type PieceCurrencyState = {
   sourceSeqOf: (
     address: Pick<IMemorySpaceAddress, "space" | "id">,
   ) => number | undefined;
+};
+
+/** A document a clock writes, as `PieceCurrencyState.clockDocuments` holds it. */
+export type ClockDocument = {
+  /** The interval of the clock's ticks, in milliseconds. */
+  intervalMs: number;
+
+  /**
+   * Returns the tick the document holds, in milliseconds since the epoch,
+   * or `undefined` where it holds none. With the scheduler idle and a
+   * reading computation clean, that is the tick the computation read.
+   */
+  read: () => number | undefined;
 };
 
 /** The key `PieceCurrencyState.clockDocuments` holds a document under. */
@@ -402,10 +411,15 @@ export function snapshotPieceCurrency(
           });
           continue;
         }
-        const interval = state.clockDocuments.get(clockDocumentKey(read));
-        if (interval !== undefined) {
-          const tick = (Math.floor(state.now / interval) + 1) * interval;
-          slice.expiresAt = Math.min(slice.expiresAt ?? Infinity, tick);
+        const clock = state.clockDocuments.get(clockDocumentKey(read));
+        if (clock !== undefined) {
+          // The time is counted from the tick that was read rather than
+          // from now: a clock whose tick is late holds a value that is out
+          // of date already. A clock that holds no tick vouches for no
+          // time at all.
+          const tick = clock.read();
+          const expiresAt = tick === undefined ? 0 : tick + clock.intervalMs;
+          slice.expiresAt = Math.min(slice.expiresAt ?? Infinity, expiresAt);
         }
         const { attributed, unattributed } = writersOf(read.id);
         const takenOver = unattributed.map(readsOf);

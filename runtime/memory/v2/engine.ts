@@ -528,8 +528,6 @@ CREATE TABLE IF NOT EXISTS currency_expiry (
 );
 CREATE INDEX IF NOT EXISTS idx_currency_expiry_time
   ON currency_expiry (branch, expires_at);
-CREATE INDEX IF NOT EXISTS idx_currency_expiry_piece
-  ON currency_expiry (branch, piece);
 -- The pieces that enclose a recorded piece: a demand for one of theirs is a
 -- demand for it.
 CREATE TABLE IF NOT EXISTS currency_under (
