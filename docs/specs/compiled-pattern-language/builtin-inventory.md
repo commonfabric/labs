@@ -1399,7 +1399,9 @@ counterpart in this inventory.
   protected first-party route gets signed headers. So the egress check
   follows `body` and `schema` in full and each value of `headers`, and
   nothing else.
-- **New design:** class B.
+- **New design:** class B. A `schema` written in the parameters of `fetchJson`
+  is refused (`language-subset.md` §4.4.3); whether the request holds the
+  schema of the type argument is open question 17.
 - **Label rule:** the request slots are the values of `url`, `options`, and
   the schema. The egress check applies the join of exactly those slots,
   and of what following the references in `body` consumes, to the sink's
@@ -1983,6 +1985,10 @@ counterpart in this inventory.
     that cell, and each tick arrives as a cause like any other change from
     storage. The one-shot timestamp is a state cell written once when
     empty, so concurrent first writers converge on one value.
+
+  A `schema` written in the parameters is refused
+  (`language-subset.md` §4.4.3): the result is read under the schema of
+  the type argument.
 - **Label rule:** for path resolution, the reference's identity depends on
   the value of the query and path. For search, the membership of the
   candidates depends on the name and schema of every candidate considered.
@@ -2124,14 +2130,14 @@ Three facts about the builder explain most of the entries.
 
 | Name | Today | New design |
 | --- | --- | --- |
-| `pattern(fn)` | Runs `fn` eagerly to build a graph and returns a `PatternFactory` (`builder/pattern.ts`). | C. The callback is the reactive tier. |
+| `pattern(fn)` | Runs `fn` eagerly to build a graph and returns a `PatternFactory` (`builder/pattern.ts`). | C. The callback is the reactive tier. The form with schemas beside the callback is refused (`language-subset.md` §4.4.3). |
 | `PatternFactory.asScope(scope)`, `.inSpace(space, options)` | Derived copies of a pattern factory that set the instance's scope, or its target space with grants (`noteDerivedCopy`). | C, as modifiers of an instantiation. |
 | `ArrayByKey<T, "field">` | Does not exist. A plain value in place is keyed by its position, and no declaration changes that. The method `keyBy` is unrelated: it builds an index ([`collectionIndex`](#collectionindex-collectionindexmember-collectionindexkeys)). | C, a type-level declaration with no run-time call, by ruling. It is an array type: `ArrayByKey<Repo, "id">` is a `Repo[]` whose elements are plain `Repo`. Written as the type of an array of plain values in place, a plain array generated from scratch included, it makes the element key name the property and hold a salted hash of its value. The second argument can be a union of property names, as `ArrayByKey<Repo, "owner" \| "name">`, and the element then has one key across them. A reference by key is resolved from the key alone, with no schema. The compiler writes the key fields into the schema of the array, beside `items` (*assumed:* under the name `keyFields`). An array of references does not need it, and the result of another per-element construct has the upstream key (`language-subset.md` §4.4.1; [Element keys](#element-keys)). |
 | `PatternFactory.asInstance()` | Does not exist. A pattern called in a pattern body, and each run of a `map` callback, is an instance with a result document of its own. | C, a modifier of an instantiation, by ruling: the call is an instance of its own and is not compiled into the surrounding instance. In an element body it stays when its element leaves the collection (`language-subset.md` §4.4.2). |
-| `handler(fn)` | Mints a `javascript` module with `wrapper: "handler"` (`handlerInternal` in `builder/module.ts`). Applying the factory to its state creates a stream and a node, and returns the stream. | C. Binding a handler to state is legal in the reactive tier and in function bodies. |
+| `handler(fn)` | Mints a `javascript` module with `wrapper: "handler"` (`handlerInternal` in `builder/module.ts`). Applying the factory to its state creates a stream and a node, and returns the stream. | C. Binding a handler to state is legal in the reactive tier and in function bodies. The form with schemas beside the callback is refused (`language-subset.md` §4.4.3). |
 | `action(fn)` | Throws at run time. The transformer lowers it to `handler(fn)(captures)` (`base/ts-transformers/src/closures/utils/capture-scaffold.ts`). | C. A handler whose state is its captures. |
 | `computed(fn)` | The transformer lowers it to `lift(fn)(captures)` (`base/ts-transformers/src/lift/transformer.ts`). | C. Promoted to the reactive tier when its body meets the criterion of `language-subset.md` §6.1: a pure expression that, among other conditions, instantiates no pattern and binds no handler. |
-| `lift(fn)` | Mints a `javascript` module factory; calling the factory creates a node. | C. |
+| `lift(fn)` | Mints a `javascript` module factory; calling the factory creates a node. | C. The form with schemas beside the callback, from `commonfabric/schema`, is refused (`language-subset.md` §4.4.3). |
 | `assert(fn)` | A `javascript` node that returns `{ ok, source, parts }`; used by pattern tests. | C. |
 | Inline JSX event handlers | The transformer lowers `onClick={() => ...}` to a handler with captures. | C. A handler binding, in the reactive tier and in function bodies. |
 | JSX and `h` | `h` in `builder/h.ts` returns a plain view-node object. | C. Value code constructs view nodes. |
@@ -2149,7 +2155,8 @@ export it and the pattern corpus does not call it.
   `new X(value)`, `X.of(value)`, and `X.for(cause)`, and the scoped variants
   `X.perSpace`, `X.perUser`, and `X.perSession`. `Default`, `PerSpace`,
   `PerUser`, and `PerSession` are types only and act through the generated
-  schema.
+  schema. The forms with a schema as a second argument are refused
+  (`language-subset.md` §4.4.3).
 - **Does:** creates an unlinked cell whose initial value becomes the schema's
   default. No node is created. The cell's identifier is derived when a link
   is first needed (`#ensureLink`), from a cause and the frame's cause.

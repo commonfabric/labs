@@ -12430,6 +12430,22 @@ per-element construct.
      prior question, whether an absent declaration is an empty ceiling.
      *Assumed:* nothing changes until the proposal is ruled in the
      specification.
+336. **A result schema that carries a key no type states** (LS question 48;
+     for the owner). By the owner's ruling of 2026-11-20 the forms of the API
+     that take a schema are refused, except a schema given to a language model
+     (`removed-form:schema-argument`, LS §4.4.3). The prototype reads none of
+     the schemas beside a builder's callback: it takes a definition's types
+     from its type arguments and the callback's annotations, types a schema
+     argument as an opaque `JSONSchema`, and emits the handler's body alone.
+     `Home` and `AgentQueue` pass `pattern` a result schema that carries the
+     runner's private key `__ctPreservePatternResultCell` on one property, and
+     no type states the key, so both are refused with no rewrite. *For the
+     owner:* a type of the API that states the key, or a runner that keeps
+     that link without one. Nothing is assumed.
+337. **The `tables` option of `sqliteDatabase`** (LS question 49; for the
+     owner). Whether the schemas built by `table(...)` stay beside the schemas
+     given to a language model. *Assumed:* they stay, since no type of the
+     program declares a table.
 
 ## Open, and not needing the owner
 

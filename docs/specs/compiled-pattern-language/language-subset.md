@@ -155,7 +155,11 @@ function-valued constant declared in the same module. The callback of
 `pattern` is written at the call ([§4.1](#41-pattern-callback)). A callback
 reached through a property, an import, or a call is refused for all three,
 and so is a name as the callback of `pattern`
-(`builder-callback:indirect-reference`).
+(`builder-callback:indirect-reference`). The callback is the builder's
+only argument: the compiler generates every schema of a definition from
+the types the definition declares, and a call that also passes a schema
+is refused (`removed-form:schema-argument`,
+[§4.4.3](#443-removed-call-forms)).
 
 The two differ because of the tiers. A function declared at module scope is
 a tier-F body ([§1](#1-terms)), and so is the callback of a `lift` or a
@@ -320,7 +324,8 @@ the body (§4.2).
 The input type comes from the first type argument of `pattern`, or from the
 parameter's annotation. The result type comes from the second type argument,
 from the callback's return annotation, or is inferred from the returned
-expression.
+expression. Neither comes from a schema: a schema passed beside the
+callback is refused ([§4.4.3](#443-removed-call-forms)).
 
 ### 4.2 Statements
 
@@ -1284,6 +1289,54 @@ refused in every tier, with no interim acceptance
 | `byRef(name)` | The built-in imported by name from `commonfabric` |
 | `nameInstance(value, name)` | `const name = Child({ ... })`. The compiler records the name of the binding |
 | `xs.mapWithPattern(...)` and the other seven `...WithPattern` methods | The method without the suffix, with a callback written at the call that calls the pattern: `xs.map((donut) => DonutRow({ donut }))` |
+
+By the owner's ruling of 2026-11-20, the forms of the API that take a
+schema are not part of the language, except where the schema is given to
+a language model (below). The compiler generates every schema of a
+program from a type: those of a definition from the types the definition
+declares (§3.2, §4.1), that of a state cell from the cell's type (§4.7),
+and the schema the result of a `wish` or a `fetchJson` is read under
+from the type argument of the call. A schema written beside the type is
+a second statement of it, and the two can disagree. Where the compiler
+does not read the written schema, as for a builder or the constructor of
+a state cell in tier R, the program runs under a schema its author did
+not write. Where the compiler passes it on in the request of an
+operation, as for `wish` and `fetchJson`, one value is read under two
+schemas. So a call that passes such a schema is refused, in every tier
+and whatever the schema holds, `toSchema<T>()` of the declared type
+included (`removed-form:schema-argument`). There is no interim
+acceptance: the forms without schemas also run in today's runtime, whose
+transformer generates the schemas from the same types.
+
+| Refused | Write instead |
+| --- | --- |
+| `handler<E, S>(eventSchema, stateSchema, fn)`, with or without a result type argument | `handler<E, S>(fn)`, or `handler<E, S, R>(fn)` |
+| `lift(fn, argumentSchema, resultSchema)` from `commonfabric/schema`, with or without the result schema | `lift<A, R>(fn)` |
+| `pattern(fn, argumentSchema, resultSchema)`, with or without the result schema | `pattern<I, O>(fn)` |
+| `new X(value, schema)` and `X.of(value, schema)`, and both under `X.perSpace`, `X.perUser`, and `X.perSession`, for each cell type `X` of §4.7 | `new X<T>(value)`, `X.of<T>(value)` |
+| `wish({ query, schema })`, and `wish(target, schema)` from `commonfabric/schema` | `wish<T>({ query })` |
+| `fetchJson({ url, schema })` | `fetchJson<T>({ url })` |
+| `cell.getArgumentCell(schema)` | `cell.getArgumentCell<T>()` |
+
+The overloads of `commonfabric/schema` give the code the types its
+schemas describe (`Schema<typeof argumentSchema>`). A call of one is
+rewritten by writing those types. A label written into a schema, under
+`ifc`, is written into the type as an annotation (§8). A schema that
+says something no type of the subset states has no rewrite; the corpus
+holds one such case, in two patterns (question 48). The methods
+`asSchema` and `setSchema` are refused with the undeclared methods
+(`cell:unsupported-method`, §4.7), and the conditional helpers called
+with schemas as removed forms (`removed-form:helper-unsupported`,
+above).
+
+Two kinds of schema stay. A schema given to a language model, the
+`schema` of `generateObject` and the `resultSchema` of `llmDialog` and
+of `agent`, is data the model reads. It is written in the part of JSON
+Schema that the model accepts, not in the schemas of this runtime, and
+`toSchema<T>()` remains the way to write it from a type. *Assumed:* the
+`tables` option of `sqliteDatabase` stays too. Its values are
+`table(...)` calls (§4.7), from which the runtime builds the schema of
+each table, and no type of the program declares a table (question 49).
 
 #### 4.4.4 Pure API functions
 
@@ -4054,6 +4107,7 @@ none of the other eight.
 | `removed-form:pattern-tool-interim` | warning | A direct call of `patternTool` in tier R in a form the interim acceptance covers (§4.4.3). An error once the builder form is retired | The closure the call is compiled as, which the message holds: write it in place of the call, or write an inline `pattern(...)` that captures the bound values | new |
 | `removed-form:pattern-tool` | error | A call of `patternTool` in a form the interim acceptance does not cover, and `patternTool` used as a value (§4.4.3) | Write an inline `pattern(...)` that captures the bound values, and pass it as the tool (§4.4.3) | new (replaces `pattern-context:patterntool-requires-pattern`, which is retired) |
 | `removed-form:builtin` | error | A call, in any tier, of `llm`, `streamData`, `cell`, `byRef`, `nameInstance`, or a `...WithPattern` method (§4.4.3) | The replacement for the form found: `generateText` or `generateObject` for `llm`; a built-in of the fetch family for `streamData`; `Cell.of(value)` for `cell(value)`; the built-in imported by name for `byRef`; a `const` binding of the instance for `nameInstance`; the method without the suffix, with a callback written at the call, for a `...WithPattern` method | new |
+| `removed-form:schema-argument` | error | A schema passed to a form of the API that takes one (§4.4.3): beside the callback of `handler`, `lift`, or `pattern`; as the second argument of a cell constructor; as the `schema` of `wish` or `fetchJson`; as the argument of `getArgumentCell`. In any tier, whatever the schema holds. Not a schema given to a language model, nor the `tables` of `sqliteDatabase` | Delete the schema and declare the type: `handler<E, S>(fn)`, `lift<A, R>(fn)`, `pattern<I, O>(fn)`, `new X<T>(value)`, `wish<T>({ query })`, `fetchJson<T>({ url })`, `getArgumentCell<T>()`. A label goes into the type as an annotation (§8). A schema that says what no type states has no rewrite (§13, question 48) | new |
 | `collection:callback-parameters` | error | A reactive collection callback that is not an arrow function written at the call, a function passed by name included (`xs.filter(Boolean)`, `xs.map(toRow)`); that takes the whole array as a parameter; or that has a default value or a rest element on a parameter or inside a parameter's destructuring pattern (§4.4.1). A parameter that is an object pattern or an array pattern is not reported | Write the arrow at the call, with the element and at most the index: `xs.filter((x) => Boolean(x))`. Capture the array by name if the body needs it. Write a default as an expression in the body | new |
 | `collection:reduce-callback` | error | A `reduce` in tier R whose callback has a block body | Write the step as one expression, `(sum, donut) => sum + donut.price`. A step that needs statements is a loop inside `computed(() => ...)` | new |
 | `collection:reduce-initial` | error | A `reduce` in tier R without an initial value | Pass the initial value as the second argument | new |
@@ -4231,6 +4285,7 @@ and 2 local type declarations, and nothing else.
 | Mapped type | 1 (1) | `patterns/apps/topics/topic.tsx` | Rewrite as `Readonly<Record<K, number \| undefined>>` |
 | `ifElse`, `when`, `str` | 156 (54); 1 (1); 1 (1). No `unless` | for example `patterns/system/self/self.tsx`, `patterns/system/loom/main.tsx`; `when` in `patterns/system/omnibox-fab/omnibox-fab.tsx`; `str` in `patterns/apps/deep-research/deep-research.tsx` | Accepted for the interim with a warning (§4.4.3). The rewrite is mechanical: all 158 are direct calls. That each has the plain arguments is not reproduced |
 | `patternTool` | 31 (12) | pattern bodies | 29 calls in 11 files are accepted for the interim with a warning (`removed-form:pattern-tool-interim`, §4.4.3). 2, both in `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`, are refused: each spreads the result into a record. Rewrite to a pattern closure (§4.4.3) |
+| A schema passed to a form of the API | 27 (6); 1 (1) more in a pattern test file. Counted apart from the rest of this section, on the main branch at `ba103935aa` (2026-11-20), by the method of §11.1 | 26 calls of a builder: `patterns/apps/topics/topic.tsx` (17 `handler`, 1 `lift`), `patterns/system/shared-space/shared-space-catalog.ts` (5 `handler`), and one `pattern` each in `patterns/system/home/home.tsx`, `patterns/system/agent-queue/agent-queue.tsx`, and `patterns/examples/shared-profile-demo/main.tsx`. 1 `new Cell(value, schema)`, in `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`. No `X.of` with a schema, no schema in a `wish` or a `fetchJson`, and no argument of `getArgumentCell`. The test file is `patterns/system/loom/adder-profile.test.tsx` (1 `handler`). Not counted, since they stay: 14 schemas given to a model (9 `generateObject`, 2 `llmDialog`, 3 `agent`) and 3 `tables` options | Refused (`removed-form:schema-argument`, §4.4.3). The Topics schemas are the generated ones with a hand-written reader of older data in place of one property; once the two keys it reads are declared `string` (the row on `topic.tsx` below), each is the schema of the declared type and is deleted. The five in `shared-space-catalog.ts` give the event the schema of `Record<string, any>`, wider than the declared event type; deleted, the handler accepts the declared type. `shared-profile-demo` gives the argument the schema `false`, which accepts no value, and a result schema its result type states. The cell in `cfc-agent-prompt-injection-demo` is given a schema only to carry a confidentiality label (`ifc`), which its type declares instead (§8). The `Home` and `AgentQueue` result schemas carry a key that no type states, and have no rewrite (question 48). The test reads its event under a schema of its own, which declares a property, `admission`, that the declared event type does not have |
 | A collection method called on a cell handle in a handler | 2, as `builtin-inventory.md` counts them (needs types) | handlers | Rewrite by one of the two corrections of §4.7: an inline `pattern(...)` that is instantiated, or `cell.get().map(...)` (`cell:collection-method-in-function`) |
 | A function type in a type used as data | 1 declaration, 35 uses in 10 modules (prototype) | `MentionablePiece` in `patterns/system/backlinks-index/backlinks-index.tsx`, whose property `mentionable` is declared `MentionablePiece[] \| { get?: () => MentionablePiece[] }`. The type is a pattern input, a cell value, and a handler state | Rewrite: the declaration says what the value is, a list or a cell of one (`subset-type:function-in-data`, §7.9) |
 | A cell passed to a parameter declared with a structural type | About 25 arguments (prototype) | Declarations of the kind are `roster: { get(): ... }` in `patterns/system/loom/participants.tsx` and `sources` in `patterns/apps/topics/main.tsx` | Rewrite: declare the parameter `ReadonlyCell<T>`, which accepts every cell the structural type was written to accept (§7.5.1) |
@@ -4792,7 +4847,9 @@ Decided by the project owner:
   code reads as a string is declared `string` (§7.8);
 - a writable view wider than the declaration of a place is refused, with
   no exception for migration code: an input whose stored data has an
-  older or a partial shape declares that shape (§7.5.1).
+  older or a partial shape declares that shape (§7.5.1);
+- the forms of the API that take a schema are refused, except where the
+  schema is given to a language model (§4.4.3).
 
 Decided by `plan-and-label-templates.md`: a dynamic key is a chosen child
 that does not observe the container's enumeration (its §3.18); `reduce` and
@@ -5289,3 +5346,26 @@ use, so that the other numbers stay as other documents cite them.
     new element and that nothing stored under a key is deleted, which
     the report does not change. It is questions 254, 255, 291 and 301
     of the continuation plan.
+48. **A result schema that carries a key no type states** (to the
+    project owner). `Home` and `AgentQueue` pass `pattern` a result
+    schema that is the one generated from the result type with one
+    property set by `withAgentQueueRunLinkSchema`
+    (`patterns/system/agent-queue/agent-queue.tsx`): `run` of
+    `AgentQueueEntry`, a user-scoped cell whose schema carries the
+    private key `__ctPreservePatternResultCell`. The key tells the
+    runner not to materialize that one link as it materializes the
+    other links of a pattern's result. A cell and a scope have types
+    (§7.2, §8.8); the key has none. The schema is refused (§4.4.3), so
+    both patterns are refused with no rewrite. Nothing is assumed. A
+    type of the API that states the key, or a runner that keeps that
+    link without one, would give them a rewrite. It is question 336 of
+    the continuation plan.
+49. **The `tables` option of `sqliteDatabase`** (to the project owner).
+    §4.4.3 refuses the forms of the API that take a schema and keeps
+    the schemas given to a language model. The `tables` option takes a
+    schema for each table, built by `table(columns, rule?, options?)`
+    (§4.7). *Assumed:* it stays: the call declares the table, its
+    columns, and its row labels, the runtime builds the schema from it,
+    and no type of the program declares a table. The alternative is a
+    table declared by a row type, with its labels as annotations (§8).
+    It is question 337 of the continuation plan.
