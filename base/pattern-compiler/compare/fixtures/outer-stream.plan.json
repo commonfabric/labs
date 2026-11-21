@@ -1,0 +1,464 @@
+[
+  {
+    "module": "compare/fixtures/outer-stream.tsx",
+    "patterns": [
+      {
+        "line": 13,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/6",
+              "handler": {
+                "body": 0
+              },
+              "name": "inc",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "count"
+                  ],
+                  "place": {
+                    "slot": 3
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "bump",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "by"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "count"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "count"
+                  ],
+                  "slot": 2
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 1
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 0
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 2
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 5
+              },
+              "name": "map",
+              "source": {
+                "slot": 5
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/outer-stream.tsx",
+                "start": 684
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                6
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/outer-stream.tsx",
+                "start": 603
+              },
+              "bodies": [],
+              "entry": "$UI",
+              "picks": [],
+              "selectors": [
+                0
+              ],
+              "slots": [
+                4
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/outer-stream.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [
+            {
+              "from": 0,
+              "to": 1,
+              "via": {
+                "kind": "output",
+                "output": 0
+              }
+            }
+          ],
+          "operations": [],
+          "outputs": [
+            {
+              "collection": 0,
+              "cone": 0,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "slot",
+                "slot": 5
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*",
+                "children",
+                "0"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "0"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "op": "const"
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "condition": {
+                  "op": "slot",
+                  "slot": 4
+                },
+                "op": "select",
+                "selector": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "1",
+                "children",
+                "0"
+              ],
+              "template": {
+                "op": "output",
+                "output": 0
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "count"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/outer-stream.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [
+            {
+              "arity": 2
+            }
+          ],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "by"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "count"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "count"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "shown"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "count",
+              "schema": "unhashed:schema/7",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "shown": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "items",
+                "shown"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "properties": {
+                "by": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "by"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/7",
+            "schema": {
+              "default": 0
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

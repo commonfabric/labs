@@ -1,0 +1,1028 @@
+[
+  {
+    "module": "compare/fixtures/array-by-key-fields.tsx",
+    "patterns": [
+      {
+        "line": 22,
+        "name": "RepoRow",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/4",
+              "handler": {
+                "body": 0
+              },
+              "name": "note",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "noted"
+                  ],
+                  "place": {
+                    "slot": 2
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "note",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "text"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "noted"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 1
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 0
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-fields.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-fields.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-fields.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-fields.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                5
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "name"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "noted"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 2
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "owner"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 4
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "stars"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 5
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "text"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "noted"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "repo",
+                "name"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "repo",
+                "owner"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "repo",
+                "stars"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "noted",
+              "schema": "unhashed:schema/5",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "repo": {
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "owner": {
+                      "type": "string"
+                    },
+                    "stars": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "owner",
+                    "name",
+                    "stars"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "repo"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "default": ""
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "line": 66,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "fetched",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "bonus"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "names"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "names",
+                    "*"
+                  ],
+                  "slot": 2
+                },
+                {
+                  "at": [
+                    "reversed"
+                  ],
+                  "slot": 3
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "children": [
+            {
+              "asInstance": true,
+              "callee": {
+                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow"
+              },
+              "name": "map",
+              "within": [
+                {
+                  "element": 1
+                }
+              ]
+            },
+            {
+              "asInstance": true,
+              "callee": {
+                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow"
+              },
+              "name": "map",
+              "within": [
+                {
+                  "element": 2
+                }
+              ]
+            }
+          ],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "filter",
+              "keyFields": [
+                "name",
+                "owner"
+              ],
+              "membership": {
+                "op": "shared",
+                "template": 0
+              },
+              "name": "filter",
+              "source": {
+                "output": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 1
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
+              "source": {
+                "collection": 0,
+                "via": "map"
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "keyFields": [
+                "name",
+                "owner"
+              ],
+              "membership": {
+                "op": "slot",
+                "slot": 9
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
+              "source": {
+                "slot": 9
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-fields.tsx",
+                "start": 1941
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "repos",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-fields.tsx",
+                "start": 2019
+              },
+              "bodies": [],
+              "entry": "filter",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                4,
+                5,
+                6
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-fields.tsx",
+                "start": 2057
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                7,
+                8
+              ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "child": 0,
+                    "kind": "argument",
+                    "path": [
+                      "repo"
+                    ]
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/array-by-key-fields.tsx",
+                "start": 2137
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                10,
+                11
+              ],
+              "within": [
+                {
+                  "element": 2
+                }
+              ],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "child": 1,
+                    "kind": "argument",
+                    "path": [
+                      "repo"
+                    ]
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 10
+                  }
+                }
+              ]
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "repos",
+              "kept": false,
+              "keyFields": [
+                "name",
+                "owner"
+              ],
+              "path": [],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "collection": 0,
+              "cone": 1,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "keyFields": [
+                "name",
+                "owner"
+              ],
+              "path": [],
+              "template": {
+                "op": "shared",
+                "template": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            },
+            {
+              "collection": 1,
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "keyFields": [
+                "name",
+                "owner"
+              ],
+              "path": [
+                "starred"
+              ],
+              "template": {
+                "op": "output",
+                "output": 1
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "starred",
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 8
+              }
+            },
+            {
+              "collection": 2,
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "keyFields": [
+                "name",
+                "owner"
+              ],
+              "path": [
+                "kept"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 9
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "kept",
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 11
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "bonus"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "names"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "names",
+                "*"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "reversed"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "stars"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "minStars"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "child": 0,
+                "kind": "child"
+              }
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "saved"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/6"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "child": 1,
+                "kind": "child"
+              }
+            }
+          ],
+          "stateCells": [],
+          "templates": [
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 4
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 5
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 0,
+              "op": "fold"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "bonus": {
+                  "type": "number"
+                },
+                "minStars": {
+                  "type": "number"
+                },
+                "names": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "reversed": {
+                  "type": "boolean"
+                },
+                "saved": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "owner": {
+                        "type": "string"
+                      },
+                      "stars": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "owner",
+                      "name",
+                      "stars"
+                    ],
+                    "type": "object"
+                  },
+                  "keyFields": [
+                    "name",
+                    "owner"
+                  ],
+                  "type": "array"
+                }
+              },
+              "required": [
+                "names",
+                "bonus",
+                "reversed",
+                "minStars",
+                "saved"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "owner": {
+                  "type": "string"
+                },
+                "stars": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "owner",
+                "name",
+                "stars"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "owner": {
+                    "type": "string"
+                  },
+                  "stars": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "owner",
+                  "name",
+                  "stars"
+                ],
+                "type": "object"
+              },
+              "keyFields": [
+                "name",
+                "owner"
+              ],
+              "type": "array"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

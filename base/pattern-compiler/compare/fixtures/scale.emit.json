@@ -1,0 +1,728 @@
+[
+  {
+    "module": "compare/fixtures/scale.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [
+            1,
+            0,
+            2,
+            3,
+            4
+          ],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/scale.tsx",
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/scale.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n{\n$rt.element(1, ($h) => (($h.v($h.slot(2)) + (\"!\"))));\n}\n$rt.element(0, ($h) => (({ name: $h.slot(3), titles: $h.output(0) })));\n}\n{\n$rt.element(2, ($h) => ((!$h.v($h.slot(5)))));\n}\n{\n$rt.element(3, ($h) => (($h.v($h.slot(7)).toUpperCase())));\n}\n{\n$rt.element(4, ($h) => ((`${$h.v($h.slot(8))}:${$h.v($h.slot(9))}`)));\n}\nreturn $rt.thunk(($h) => (({ nested: $h.output(2), labels: $h.output(8), marks: $h.output(10) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0
+            },
+            {
+              "collection": 1,
+              "cone": 0,
+              "output": 0
+            },
+            {
+              "collection": 0,
+              "cone": 1,
+              "output": 2
+            },
+            {
+              "cone": 2
+            },
+            {
+              "collection": 2,
+              "cone": 2,
+              "output": 6
+            },
+            {
+              "cone": 3
+            },
+            {
+              "collection": 3,
+              "cone": 3,
+              "output": 8
+            },
+            {
+              "cone": 4
+            },
+            {
+              "collection": 4,
+              "cone": 4,
+              "output": 10
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 19,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 0
+              },
+              "name": "nested",
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 1
+              },
+              "name": "map",
+              "source": {
+                "slot": 1
+              },
+              "within": [
+                {
+                  "element": 0
+                }
+              ]
+            },
+            {
+              "construct": "filter",
+              "membership": {
+                "op": "shared",
+                "template": 0
+              },
+              "name": "open",
+              "source": {
+                "slot": 4
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 6
+              },
+              "name": "labels",
+              "source": {
+                "collection": 2,
+                "via": "map"
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 4
+              },
+              "name": "marks",
+              "source": {
+                "slot": 4
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/scale.tsx",
+                "start": 697
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [
+                {
+                  "element": 0
+                },
+                {
+                  "element": 1
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/scale.tsx",
+                "start": 629
+              },
+              "bodies": [],
+              "entry": "nested",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/scale.tsx",
+                "start": 764
+              },
+              "bodies": [],
+              "entry": "open",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                5,
+                6
+              ],
+              "within": [
+                {
+                  "element": 2
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/scale.tsx",
+                "start": 813
+              },
+              "bodies": [],
+              "entry": "labels",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                7
+              ],
+              "within": [
+                {
+                  "element": 3
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/scale.tsx",
+                "start": 875
+              },
+              "bodies": [],
+              "entry": "marks",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                8,
+                9
+              ],
+              "within": [
+                {
+                  "element": 4
+                }
+              ],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [
+            {
+              "from": 0,
+              "to": 1,
+              "via": {
+                "kind": "output",
+                "output": 0
+              }
+            }
+          ],
+          "operations": [],
+          "outputs": [
+            {
+              "collection": 1,
+              "cone": 0,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "slot",
+                "slot": 1
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "map",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "collection": 0,
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "nested"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "nested",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "nested",
+                "*",
+                "name"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "nested",
+                "*",
+                "titles"
+              ],
+              "template": {
+                "op": "output",
+                "output": 0
+              }
+            },
+            {
+              "collection": 2,
+              "cone": 2,
+              "constraints": [],
+              "interim": "open",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "shared",
+                "template": 0
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "interim": "open",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            },
+            {
+              "collection": 3,
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "labels"
+              ],
+              "template": {
+                "op": "output",
+                "output": 6
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "labels",
+                "*"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "collection": 4,
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "marks"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 4
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "marks",
+                "*"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 8
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 9
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/scale.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "groups"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "title"
+              ],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "name"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "rows"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "done"
+              ],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "title"
+              ],
+              "root": {
+                "collection": 3,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "title"
+              ],
+              "root": {
+                "collection": 4,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "done"
+              ],
+              "root": {
+                "collection": 4,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/4"
+            }
+          ],
+          "stateCells": [],
+          "templates": [
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 5
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 2,
+              "op": "fold"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "$defs": {
+                "t0": {
+                  "items": {
+                    "properties": {
+                      "done": {
+                        "type": "boolean"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "done"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "properties": {
+                "groups": {
+                  "items": {
+                    "properties": {
+                      "items": {
+                        "$ref": "#/$defs/t0"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "items"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "rows": {
+                  "$ref": "#/$defs/t0"
+                }
+              },
+              "required": [
+                "groups",
+                "rows"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "items": {
+                "properties": {
+                  "items": {
+                    "items": {
+                      "properties": {
+                        "done": {
+                          "type": "boolean"
+                        },
+                        "title": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "title",
+                        "done"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "items"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "items": {
+                "properties": {
+                  "done": {
+                    "type": "boolean"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title",
+                  "done"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "properties": {
+                "done": {
+                  "type": "boolean"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "done"
+              ],
+              "type": "object"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

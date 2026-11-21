@@ -1,0 +1,2272 @@
+[
+  {
+    "module": "compare/fixtures/value-identity.tsx",
+    "patterns": [
+      {
+        "line": 78,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/13",
+              "handler": {
+                "body": 0
+              },
+              "name": "pick",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "center"
+                  ],
+                  "place": {
+                    "slot": 8
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 8
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "selected"
+                  ],
+                  "place": {
+                    "slot": 9
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 9
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "stop"
+                  ],
+                  "place": {
+                    "slot": 10
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 10
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/13",
+              "handler": {
+                "body": 1
+              },
+              "name": "finish",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "stop"
+                  ],
+                  "place": {
+                    "slot": 10
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 10
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/13",
+              "handler": {
+                "body": 2
+              },
+              "name": "finishAndRename",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "stop"
+                  ],
+                  "place": {
+                    "slot": 10
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 10
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/13",
+              "handler": {
+                "body": 3
+              },
+              "name": "update",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "stop"
+                  ],
+                  "place": {
+                    "slot": 10
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 10
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/13",
+              "handler": {
+                "body": 4
+              },
+              "name": "toggle",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "open"
+                  ],
+                  "place": {
+                    "slot": 16
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 16
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/13",
+              "handler": {
+                "body": 5
+              },
+              "name": "choose",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "chosen"
+                  ],
+                  "place": {
+                    "slot": 23
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 23
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "tag"
+                  ],
+                  "place": {
+                    "slot": 20
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 20
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/13",
+              "handler": {
+                "body": 6
+              },
+              "name": "reverse",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "stops"
+                  ],
+                  "place": {
+                    "slot": 30
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 30
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "tags"
+                  ],
+                  "place": {
+                    "slot": 31
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 31
+                  }
+                }
+              ],
+              "within": []
+            },
+            {
+              "eventSchema": "unhashed:schema/13",
+              "handler": {
+                "body": 7
+              },
+              "name": "removeFirst",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "stops"
+                  ],
+                  "place": {
+                    "slot": 30
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 30
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "tags"
+                  ],
+                  "place": {
+                    "slot": 31
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 31
+                  }
+                }
+              ],
+              "within": []
+            },
+            {
+              "eventSchema": "unhashed:schema/14",
+              "handler": {
+                "body": 8
+              },
+              "name": "addTag",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "tags"
+                  ],
+                  "place": {
+                    "slot": 31
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 31
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "pick",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "center"
+                  ],
+                  "slot": 4
+                },
+                {
+                  "at": [
+                    "binding",
+                    "selected"
+                  ],
+                  "slot": 5
+                },
+                {
+                  "at": [
+                    "binding",
+                    "stop"
+                  ],
+                  "slot": 6
+                },
+                {
+                  "at": [
+                    "binding",
+                    "stop",
+                    "position"
+                  ],
+                  "slot": 7
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 4
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                },
+                {
+                  "constraints": [],
+                  "reference": {
+                    "passes": 7
+                  },
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 4
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                },
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 5
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                },
+                {
+                  "constraints": [],
+                  "reference": {
+                    "passes": 6
+                  },
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 5
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "finish",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "stop"
+                  ],
+                  "slot": 11
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "done"
+                    ],
+                    "slot": 11
+                  },
+                  "template": {
+                    "by": {
+                      "body": 1
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 11
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "finishAndRename",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "stop"
+                  ],
+                  "slot": 12
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "done"
+                    ],
+                    "slot": 12
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 1
+                  }
+                },
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "title"
+                    ],
+                    "slot": 12
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 1
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "update",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "stop"
+                  ],
+                  "slot": 13
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 13
+                  },
+                  "template": {
+                    "by": {
+                      "body": 3
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 13
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "toggle",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "open"
+                  ],
+                  "slot": 14
+                },
+                {
+                  "at": [
+                    "binding",
+                    "open"
+                  ],
+                  "slot": 15
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 14
+                  },
+                  "template": {
+                    "by": {
+                      "body": 4
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 14
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 15
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "choose",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "chosen"
+                  ],
+                  "slot": 21
+                },
+                {
+                  "at": [
+                    "binding",
+                    "tag"
+                  ],
+                  "slot": 22
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 21
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 2
+                  }
+                },
+                {
+                  "constraints": [],
+                  "reference": {
+                    "passes": 22
+                  },
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 21
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 2
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "reverse",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "stops"
+                  ],
+                  "slot": 24
+                },
+                {
+                  "at": [
+                    "binding",
+                    "stops"
+                  ],
+                  "slot": 25
+                },
+                {
+                  "at": [
+                    "binding",
+                    "stops",
+                    "*"
+                  ],
+                  "slot": 26
+                },
+                {
+                  "at": [
+                    "binding",
+                    "tags"
+                  ],
+                  "slot": 27
+                },
+                {
+                  "at": [
+                    "binding",
+                    "tags"
+                  ],
+                  "slot": 28
+                },
+                {
+                  "at": [
+                    "binding",
+                    "tags",
+                    "*"
+                  ],
+                  "slot": 29
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 24
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 3
+                  }
+                },
+                {
+                  "constraints": [],
+                  "reference": {
+                    "oneOf": [
+                      26
+                    ]
+                  },
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "*"
+                    ],
+                    "slot": 24
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 3
+                  }
+                },
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 27
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 3
+                  }
+                },
+                {
+                  "constraints": [],
+                  "reference": {
+                    "oneOf": [
+                      29
+                    ]
+                  },
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "*"
+                    ],
+                    "slot": 27
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 3
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "removeFirst",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "stops"
+                  ],
+                  "slot": 32
+                },
+                {
+                  "at": [
+                    "binding",
+                    "stops"
+                  ],
+                  "slot": 33
+                },
+                {
+                  "at": [
+                    "binding",
+                    "stops",
+                    "*"
+                  ],
+                  "slot": 34
+                },
+                {
+                  "at": [
+                    "binding",
+                    "tags"
+                  ],
+                  "slot": 35
+                },
+                {
+                  "at": [
+                    "binding",
+                    "tags"
+                  ],
+                  "slot": 36
+                },
+                {
+                  "at": [
+                    "binding",
+                    "tags",
+                    "*"
+                  ],
+                  "slot": 37
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 32
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 4
+                  }
+                },
+                {
+                  "constraints": [],
+                  "reference": {
+                    "oneOf": [
+                      34
+                    ]
+                  },
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "*"
+                    ],
+                    "slot": 32
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 4
+                  }
+                },
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 35
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 4
+                  }
+                },
+                {
+                  "constraints": [],
+                  "reference": {
+                    "oneOf": [
+                      37
+                    ]
+                  },
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "*"
+                    ],
+                    "slot": 35
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 4
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "addTag",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "tag"
+                  ],
+                  "slot": 38
+                },
+                {
+                  "at": [
+                    "binding",
+                    "tags"
+                  ],
+                  "slot": 39
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "*"
+                    ],
+                    "slot": 39
+                  },
+                  "template": {
+                    "by": {
+                      "body": 8
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 38
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 39
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 0
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 19
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
+              "source": {
+                "slot": 19
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/value-identity.tsx",
+                "start": 2324
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1,
+                2,
+                3,
+                10,
+                16,
+                17,
+                18
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/value-identity.tsx",
+                "start": 2905
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                20
+              ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/value-identity.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                8
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/value-identity.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                23
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/value-identity.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                9
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "collection": 0,
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "check",
+                "props",
+                "$checked"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "isSelected"
+              ],
+              "template": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "open"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 16
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "position"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 17
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "stop"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 10
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "title"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 18
+              }
+            },
+            {
+              "collection": 1,
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "words"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 19
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "words",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "words",
+                "*",
+                "item",
+                "children",
+                "0"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 20
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "center"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 8
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "chosen"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 23
+              }
+            },
+            {
+              "cone": 4,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "selected"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 9
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/value-identity.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "stops"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "resolved": true,
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "resolved": true,
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "done"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "center"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "selected"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "stop"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "stop",
+                "position"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/6"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 1,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "stop"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/7"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "stop"
+              ],
+              "root": {
+                "handler": 2,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/7"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "stop"
+              ],
+              "root": {
+                "handler": 3,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/7"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "open"
+              ],
+              "root": {
+                "handler": 4,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/8"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "open"
+              ],
+              "root": {
+                "handler": 4,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/8"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 3,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "position"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/6"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "title"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/9"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "tags"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/10"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/9"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "chosen"
+              ],
+              "root": {
+                "handler": 5,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/11"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "tag"
+              ],
+              "root": {
+                "handler": 5,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/12"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 2,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "stops"
+              ],
+              "root": {
+                "handler": 6,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "stops"
+              ],
+              "root": {
+                "handler": 6,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "stops",
+                "*"
+              ],
+              "root": {
+                "handler": 6,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "tags"
+              ],
+              "root": {
+                "handler": 6,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/10"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "tags"
+              ],
+              "root": {
+                "handler": 6,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/10"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "tags",
+                "*"
+              ],
+              "root": {
+                "handler": 6,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/9"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "stops"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "tags"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/10"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "stops"
+              ],
+              "root": {
+                "handler": 7,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "stops"
+              ],
+              "root": {
+                "handler": 7,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "stops",
+                "*"
+              ],
+              "root": {
+                "handler": 7,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "tags"
+              ],
+              "root": {
+                "handler": 7,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/10"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "tags"
+              ],
+              "root": {
+                "handler": 7,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/10"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "tags",
+                "*"
+              ],
+              "root": {
+                "handler": 7,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/9"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "tag"
+              ],
+              "root": {
+                "handler": 8,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/9"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "tags"
+              ],
+              "root": {
+                "handler": 8,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/10"
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "selected",
+              "schema": "unhashed:schema/15",
+              "scope": "space",
+              "within": []
+            },
+            {
+              "name": "center",
+              "schema": "unhashed:schema/16",
+              "scope": "space",
+              "within": []
+            },
+            {
+              "name": "chosen",
+              "schema": "unhashed:schema/17",
+              "scope": "space",
+              "within": []
+            },
+            {
+              "name": "open",
+              "schema": "unhashed:schema/18",
+              "scope": "space",
+              "within": [
+                {
+                  "element": 0
+                }
+              ]
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "body": 0
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 4
+                },
+                {
+                  "op": "slot",
+                  "slot": 5
+                },
+                {
+                  "op": "slot",
+                  "slot": 6
+                },
+                {
+                  "op": "slot",
+                  "slot": 7
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 2
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 12
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 5
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 21
+                },
+                {
+                  "op": "slot",
+                  "slot": 22
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 6
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 24
+                },
+                {
+                  "op": "slot",
+                  "slot": 25
+                },
+                {
+                  "op": "slot",
+                  "slot": 26
+                },
+                {
+                  "op": "slot",
+                  "slot": 27
+                },
+                {
+                  "op": "slot",
+                  "slot": 28
+                },
+                {
+                  "op": "slot",
+                  "slot": 29
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 7
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 32
+                },
+                {
+                  "op": "slot",
+                  "slot": 33
+                },
+                {
+                  "op": "slot",
+                  "slot": 34
+                },
+                {
+                  "op": "slot",
+                  "slot": 35
+                },
+                {
+                  "op": "slot",
+                  "slot": 36
+                },
+                {
+                  "op": "slot",
+                  "slot": 37
+                }
+              ],
+              "op": "derive"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "stops": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "properties": {
+                      "done": {
+                        "type": "boolean"
+                      },
+                      "position": {
+                        "properties": {
+                          "lat": {
+                            "type": "number"
+                          },
+                          "lng": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "lat",
+                          "lng"
+                        ],
+                        "type": "object"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "done",
+                      "position"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "tags": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "stops",
+                "tags"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "properties": {
+                  "done": {
+                    "type": "boolean"
+                  },
+                  "position": {
+                    "properties": {
+                      "lat": {
+                        "type": "number"
+                      },
+                      "lng": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "lat",
+                      "lng"
+                    ],
+                    "type": "object"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title",
+                  "done",
+                  "position"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "properties": {
+                "done": {
+                  "type": "boolean"
+                },
+                "position": {
+                  "properties": {
+                    "lat": {
+                      "type": "number"
+                    },
+                    "lng": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "lat",
+                    "lng"
+                  ],
+                  "type": "object"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "done",
+                "position"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "properties": {
+                "lat": {
+                  "type": "number"
+                },
+                "lng": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "lat",
+                "lng"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "properties": {
+                    "done": {
+                      "type": "boolean"
+                    },
+                    "position": {
+                      "properties": {
+                        "lat": {
+                          "type": "number"
+                        },
+                        "lng": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "lat",
+                        "lng"
+                      ],
+                      "type": "object"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "done",
+                    "position"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "asCell": [
+                "cell"
+              ]
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "properties": {
+                "lat": {
+                  "type": "number"
+                },
+                "lng": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "lat",
+                "lng"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/7",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "properties": {
+                "done": {
+                  "type": "boolean"
+                },
+                "position": {
+                  "properties": {
+                    "lat": {
+                      "type": "number"
+                    },
+                    "lng": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "lat",
+                    "lng"
+                  ],
+                  "type": "object"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "done",
+                "position"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/8",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "boolean"
+            }
+          },
+          {
+            "id": "unhashed:schema/9",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/10",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/11",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": [
+                "null",
+                "string"
+              ]
+            }
+          },
+          {
+            "id": "unhashed:schema/12",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/13",
+            "schema": {
+              "type": "unknown"
+            }
+          },
+          {
+            "id": "unhashed:schema/14",
+            "schema": {
+              "properties": {
+                "tag": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tag"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/15",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "properties": {
+                    "done": {
+                      "type": "boolean"
+                    },
+                    "position": {
+                      "properties": {
+                        "lat": {
+                          "type": "number"
+                        },
+                        "lng": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "lat",
+                        "lng"
+                      ],
+                      "type": "object"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "done",
+                    "position"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "default": null
+            }
+          },
+          {
+            "id": "unhashed:schema/16",
+            "schema": {
+              "default": {
+                "lat": 0,
+                "lng": 0
+              },
+              "properties": {
+                "lat": {
+                  "type": "number"
+                },
+                "lng": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "lat",
+                "lng"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/17",
+            "schema": {
+              "default": null,
+              "type": [
+                "null",
+                "string"
+              ]
+            }
+          },
+          {
+            "id": "unhashed:schema/18",
+            "schema": {
+              "default": false
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

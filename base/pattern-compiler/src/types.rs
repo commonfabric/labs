@@ -1,0 +1,3503 @@
+//! The first slice of the subset type checker (`language-subset.md` §7 and
+//! §8): a representation of types, the resolution of written types, and the
+//! declared type of a binding.
+//!
+//! A type is a shape with annotations. The shapes are in one table and the
+//! annotations in a second, keyed by the type, so that nothing that asks for
+//! a shape sees a label (§8.1). Written types are resolved eagerly: an alias
+//! or an interface is instantiated by substitution, an intersection is
+//! computed where it is written (§7.4), and the operators of §7.1 are
+//! applied natively. The types `commonfabric` exports are constructors with
+//! rules of their own (§7.2), and their declarations are never read.
+//!
+//! Nothing here infers the type of an expression, apart from a literal. A
+//! form this slice does not evaluate resolves to [`Shape::Unresolved`], and
+//! no rule refuses a program because of one.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+use oxc_ast::ast::*;
+use oxc_ast::AstKind;
+use oxc_span::{GetSpan, Span};
+use oxc_syntax::symbol::SymbolId;
+use serde::Serialize;
+
+use crate::api::{self, ApiValue, Builder};
+use crate::module::{symbol_of, Binding};
+use crate::program::Resolver;
+use crate::syntax::{static_key_name, unwrap};
+
+/// A type in the table of a [`TypeStore`].
+pub type TypeId = u32;
+
+/// The handle types of §1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum HandleKind {
+    Cell,
+    ReadonlyCell,
+    WriteonlyCell,
+    ComparableCell,
+    OpaqueCell,
+    Stream,
+    Sqlite,
+    /// `AnyCell<T>`: a handle of any kind, with no method of its own.
+    Any,
+}
+
+impl HandleKind {
+    fn of(name: &str) -> Option<Self> {
+        Some(match name {
+            "Cell" | "Writable" => HandleKind::Cell,
+            "ReadonlyCell" => HandleKind::ReadonlyCell,
+            "WriteonlyCell" => HandleKind::WriteonlyCell,
+            "ComparableCell" => HandleKind::ComparableCell,
+            "OpaqueCell" => HandleKind::OpaqueCell,
+            "Stream" => HandleKind::Stream,
+            "SqliteDb" => HandleKind::Sqlite,
+            "AnyCell" => HandleKind::Any,
+            _ => return None,
+        })
+    }
+
+    /// The name of the kind, as the API exports the type.
+    pub fn name(self) -> &'static str {
+        match self {
+            HandleKind::Cell => "Cell",
+            HandleKind::ReadonlyCell => "ReadonlyCell",
+            HandleKind::WriteonlyCell => "WriteonlyCell",
+            HandleKind::ComparableCell => "ComparableCell",
+            HandleKind::OpaqueCell => "OpaqueCell",
+            HandleKind::Stream => "Stream",
+            HandleKind::Sqlite => "Sqlite",
+            HandleKind::Any => "AnyCell",
+        }
+    }
+
+    /// Whether a handle of this kind is a cell handle (§7.5.2): not a
+    /// stream and not a SQLite handle.
+    pub fn is_cell(self) -> bool {
+        !matches!(self, HandleKind::Stream | HandleKind::Sqlite)
+    }
+
+    /// Whether `.get()` reads a handle of this kind (§4.4).
+    pub fn is_readable(self) -> bool {
+        matches!(self, HandleKind::Cell | HandleKind::ReadonlyCell)
+    }
+}
+
+/// Why a written type was not evaluated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Why {
+    /// `any`, which the subset refuses.
+    Any,
+    /// A type form §7.9 refuses.
+    RefusedForm,
+    /// A name the program does not declare.
+    External,
+    /// `typeof` of a value whose type needs expression inference.
+    TypeofValue,
+    /// A reference to a declaration that is being resolved.
+    Recursive,
+    /// A form this slice does not evaluate.
+    NotEvaluated,
+}
+
+/// The shape of a type (§7.1).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Shape {
+    Unknown,
+    Never,
+    Void,
+    Null,
+    Undefined,
+    String,
+    Number,
+    Boolean,
+    BigInt,
+    /// A literal type, as its source text.
+    Literal(String),
+    /// `object`: every value that is not a primitive, `null`, or
+    /// `undefined` (§7.1). It declares no property.
+    NonPrimitive,
+    /// An object type: its properties, and the value type of its index
+    /// signature.
+    Object(Vec<Property>, Option<TypeId>),
+    Array(TypeId),
+    Tuple(Vec<TypeId>),
+    Union(Vec<TypeId>),
+    /// A function type, which is a code type.
+    Function,
+    Handle(HandleKind, TypeId),
+    PatternFactory(TypeId, TypeId),
+    HandlerFactory(TypeId, TypeId),
+    /// A standard-library object type, which is a code type.
+    Code(String),
+    /// A named API type the checker treats as opaque data.
+    Opaque(String),
+    /// A type parameter that is not bound.
+    Parameter(String),
+    Unresolved(Why),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Property {
+    pub name: String,
+    pub ty: TypeId,
+    pub optional: bool,
+    /// Whether the property is declared `readonly` (§7.5).
+    pub readonly: bool,
+}
+
+/// One parameter of a function type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Parameter {
+    pub ty: TypeId,
+    /// Whether a call may leave the argument out.
+    pub optional: bool,
+    /// Whether the parameter is a rest parameter, whose type is an array.
+    pub rest: bool,
+}
+
+/// The signature of a function type (§7.1). A part is `None` where the
+/// declaration the type was made from does not give it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Signature {
+    pub parameters: Option<Vec<Parameter>>,
+    pub result: Option<TypeId>,
+}
+
+/// One annotation on a type node (§8.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Annotation {
+    /// The annotation's key, such as `confidentiality`, `default`, or
+    /// `scope`.
+    pub key: &'static str,
+    /// The source text of the alias's argument.
+    pub argument: String,
+    /// The argument as data, in the canonical form of §8.5, where the
+    /// checker evaluates it: a label list with each alias, constant
+    /// reference and marker type replaced, and for a writer policy the
+    /// binding it names and its UI contract.
+    pub value: Option<serde_json::Value>,
+}
+
+/// A diagnostic a type rule reports, before it is given a position.
+#[derive(Debug, Clone)]
+pub struct TypeReport {
+    pub module: usize,
+    pub id: &'static str,
+    pub span: Span,
+    pub found: String,
+}
+
+/// The table of types, the annotations beside it, and what resolution
+/// reported.
+#[derive(Default)]
+pub struct TypeStore {
+    shapes: Vec<Shape>,
+    annotations: HashMap<TypeId, Vec<Annotation>>,
+    /// The label arguments of the aliases being resolved, innermost
+    /// last: for each type parameter of the alias, the value of the
+    /// argument written for it, where it is a term of §8.5.
+    label_env: Vec<Vec<(String, Option<serde_json::Value>)>>,
+    /// The resolved declarations without type arguments, by module and
+    /// symbol. `None` marks one that is being resolved.
+    declarations: HashMap<(usize, SymbolId), Option<TypeId>>,
+    pub reports: Vec<TypeReport>,
+    /// The number of written types of each module by how far they were
+    /// evaluated.
+    pub written: HashMap<(usize, &'static str), usize>,
+    /// The signature of each function type whose declaration gives one.
+    signatures: HashMap<TypeId, Signature>,
+    /// The type arguments of each standard-library object type.
+    code_arguments: HashMap<TypeId, Vec<TypeId>>,
+    /// The counts of the type rules, by module and name.
+    pub counts: HashMap<(usize, String), usize>,
+    /// The array and tuple types that are read-only (§7.5).
+    readonly: std::collections::HashSet<TypeId>,
+    /// The constraint of each unbound type parameter that declares one.
+    constraints: HashMap<TypeId, TypeId>,
+    /// The number of required elements of each tuple type that has
+    /// optional elements.
+    tuple_required: HashMap<TypeId, usize>,
+    /// The call whose argument is being checked, which a site noted
+    /// inside the argument is listed with.
+    pub(crate) context: Option<Span>,
+    /// The argument being checked is that of a pattern a function body
+    /// instantiates (§7.5.3).
+    pub(crate) instantiating: bool,
+    /// Sites the measurement lists: the module, the category, and the
+    /// span.
+    pub notes: Vec<(usize, String, Span)>,
+    /// Set while a type is computed a second time to find whether its
+    /// `undefined` comes from the read of an optional property alone: the
+    /// read then has the property's declared type.
+    optional_reads_declared: bool,
+    /// Set while the type of a place is asked for: the outermost
+    /// reference is not narrowed (§7.5.2).
+    place_not_narrowed: bool,
+    /// The functions whose return type is being inferred.
+    in_progress: std::collections::HashSet<(usize, u32)>,
+}
+
+impl TypeStore {
+    pub fn shape(&self, ty: TypeId) -> &Shape {
+        &self.shapes[ty as usize]
+    }
+
+    pub fn annotations(&self, ty: TypeId) -> &[Annotation] {
+        self.annotations.get(&ty).map_or(&[], Vec::as_slice)
+    }
+
+    fn add(&mut self, shape: Shape) -> TypeId {
+        self.shapes.push(shape);
+        self.shapes.len() as TypeId - 1
+    }
+}
+
+/// The type parameters in scope, each bound to a type.
+type Env = Vec<(SymbolId, TypeId)>;
+
+const MAX_DEPTH: u32 = 24;
+
+impl<'a> Resolver<'_, 'a> {
+    fn add(&self, shape: Shape) -> TypeId {
+        self.types.borrow_mut().add(shape)
+    }
+
+    /// Adds a type with the given shape and no annotation.
+    pub fn intern(&self, shape: Shape) -> TypeId {
+        self.add(shape)
+    }
+
+    /// Records a report of a type rule.
+    pub fn type_report(&self, module: usize, id: &'static str, span: Span, found: &str) {
+        self.report(module, id, span, found);
+    }
+
+    /// The type of an initializer that is a builder definition or a literal.
+    pub fn initializer_type(&self, module: usize, init: &Expression<'a>) -> TypeId {
+        self.type_of_initializer(module, init, 0)
+    }
+
+    pub fn shape(&self, ty: TypeId) -> Shape {
+        self.types.borrow().shape(ty).clone()
+    }
+
+    fn unresolved(&self, why: Why) -> TypeId {
+        self.add(Shape::Unresolved(why))
+    }
+
+    fn report(&self, module: usize, id: &'static str, span: Span, found: impl Into<String>) {
+        self.types.borrow_mut().reports.push(TypeReport {
+            module,
+            id,
+            span,
+            found: found.into(),
+        });
+    }
+
+    /// A copy of `ty` with one more annotation on its root.
+    fn annotate(&self, ty: TypeId, key: &'static str, argument: String) -> TypeId {
+        let shape = self.shape(ty);
+        let mut annotations = self.types.borrow().annotations(ty).to_vec();
+        annotations.push(Annotation {
+            key,
+            argument,
+            value: None,
+        });
+        let annotated = self.add(shape);
+        let mut types = self.types.borrow_mut();
+        types.annotations.insert(annotated, annotations);
+        if types.readonly.contains(&ty) {
+            types.readonly.insert(annotated);
+        }
+        if let Some(required) = types.tuple_required.get(&ty).copied() {
+            types.tuple_required.insert(annotated, required);
+        }
+        if let Some(signature) = types.signatures.get(&ty).cloned() {
+            types.signatures.insert(annotated, signature);
+        }
+        if let Some(arguments) = types.code_arguments.get(&ty).cloned() {
+            types.code_arguments.insert(annotated, arguments);
+        }
+        annotated
+    }
+
+    /// Whether `ty` declares a default (§7.6.1): `Default<T, V>` or
+    /// `T | Default<V>`, written as the type itself or as the value type
+    /// of the handle the type is.
+    pub(crate) fn declares_default(&self, ty: TypeId) -> bool {
+        match self.shape(ty) {
+            Shape::Handle(_, value) => self.has_annotation(value, "default"),
+            _ => self.has_annotation(ty, "default"),
+        }
+    }
+
+    /// The type the body of a `pattern` sees for its input (§7.6.1): each
+    /// optional property whose type declares a default is read without
+    /// `undefined`, so it is required in this view. A property of a nested
+    /// type is left as it is declared.
+    pub(crate) fn pattern_body_view(&self, input: TypeId) -> TypeId {
+        let Shape::Object(properties, index) = self.shape(input) else {
+            return input;
+        };
+        if !properties
+            .iter()
+            .any(|property| property.optional && self.declares_default(property.ty))
+        {
+            return input;
+        }
+        let properties = properties
+            .into_iter()
+            .map(|property| Property {
+                optional: property.optional && !self.declares_default(property.ty),
+                ..property
+            })
+            .collect();
+        self.add(Shape::Object(properties, index))
+    }
+
+    /// The annotations on the root of `ty` (§8.1).
+    /// `to` with the key fields that `from` declares with `ArrayByKey`,
+    /// and `to` itself where `from` declares none: the type of a
+    /// construct whose result has the elements of its receiver, each
+    /// with the upstream key (PL §1.3).
+    pub(crate) fn with_key_fields_of(&self, from: TypeId, to: TypeId) -> TypeId {
+        let declared = self
+            .types
+            .borrow()
+            .annotations(from)
+            .iter()
+            .find(|annotation| annotation.key == "keyFields")
+            .cloned();
+        let Some(declared) = declared else {
+            return to;
+        };
+        let annotated = self.add(self.shape(to));
+        self.types
+            .borrow_mut()
+            .annotations
+            .insert(annotated, vec![declared]);
+        annotated
+    }
+
+    pub fn annotations_of(&self, ty: TypeId) -> Vec<Annotation> {
+        self.types.borrow().annotations(ty).to_vec()
+    }
+
+    fn has_annotation(&self, ty: TypeId, key: &str) -> bool {
+        self.types
+            .borrow()
+            .annotations(ty)
+            .iter()
+            .any(|annotation| annotation.key == key)
+    }
+
+    fn text(&self, module: usize, span: Span) -> String {
+        self.parsed(module)
+            .map(|parsed| span.source_text(parsed.source).to_string())
+            .unwrap_or_default()
+    }
+
+    /// Resolves a type written in module `module`, with no type parameter
+    /// bound.
+    pub fn resolve_type(&self, module: usize, ty: &TSType<'a>) -> TypeId {
+        self.resolve(module, ty, &Env::new(), 0)
+    }
+
+    fn resolve(&self, module: usize, ty: &TSType<'a>, env: &Env, depth: u32) -> TypeId {
+        if depth > MAX_DEPTH {
+            return self.unresolved(Why::Recursive);
+        }
+        let next = depth + 1;
+        match ty {
+            TSType::TSAnyKeyword(_) => self.unresolved(Why::Any),
+            TSType::TSUnknownKeyword(_) => self.add(Shape::Unknown),
+            TSType::TSNeverKeyword(_) => self.add(Shape::Never),
+            TSType::TSVoidKeyword(_) => self.add(Shape::Void),
+            TSType::TSNullKeyword(_) => self.add(Shape::Null),
+            TSType::TSUndefinedKeyword(_) => self.add(Shape::Undefined),
+            TSType::TSStringKeyword(_) => self.add(Shape::String),
+            TSType::TSNumberKeyword(_) => self.add(Shape::Number),
+            TSType::TSBooleanKeyword(_) => self.add(Shape::Boolean),
+            TSType::TSBigIntKeyword(_) => self.add(Shape::BigInt),
+            TSType::TSObjectKeyword(_) => self.add(Shape::NonPrimitive),
+            TSType::TSLiteralType(literal) => match &literal.literal {
+                TSLiteral::TemplateLiteral(_) => self.unresolved(Why::RefusedForm),
+                other => self.add(Shape::Literal(self.text(module, other.span()))),
+            },
+            TSType::TSParenthesizedType(inner) => {
+                self.resolve(module, &inner.type_annotation, env, next)
+            }
+            TSType::TSArrayType(array) => {
+                let element = self.resolve(module, &array.element_type, env, next);
+                self.add(Shape::Array(element))
+            }
+            TSType::TSTupleType(tuple) => {
+                // The elements, and how many of them are required: an
+                // optional element is trailing (§7.1).
+                let mut required = 0;
+                let mut elements = Vec::new();
+                for element in &tuple.element_types {
+                    let (ty, optional) = match element {
+                        TSTupleElement::TSOptionalType(optional) => (
+                            self.resolve(module, &optional.type_annotation, env, next),
+                            true,
+                        ),
+                        TSTupleElement::TSRestType(rest) => {
+                            (self.resolve(module, &rest.type_annotation, env, next), true)
+                        }
+                        TSTupleElement::TSNamedTupleMember(member) => match &member.element_type {
+                            TSTupleElement::TSOptionalType(_) | TSTupleElement::TSRestType(_) => {
+                                (self.unresolved(Why::NotEvaluated), true)
+                            }
+                            other => (
+                                self.resolve(module, other.to_ts_type(), env, next),
+                                member.optional,
+                            ),
+                        },
+                        other => (self.resolve(module, other.to_ts_type(), env, next), false),
+                    };
+                    if !optional {
+                        required = elements.len() + 1;
+                    }
+                    elements.push(ty);
+                }
+                let count = elements.len();
+                let tuple = self.add(Shape::Tuple(elements));
+                if required < count {
+                    self.types
+                        .borrow_mut()
+                        .tuple_required
+                        .insert(tuple, required);
+                }
+                tuple
+            }
+            TSType::TSUnionType(union) => {
+                let members: Vec<TypeId> = union
+                    .types
+                    .iter()
+                    .map(|member| self.resolve(module, member, env, next))
+                    .collect();
+                self.scope_in_union(module, union.span, &members);
+                // `T | Default<V>`: the member is dropped from the union,
+                // and the union keeps the default it declares (§8.8), so
+                // that §7.6.1 can ask whether a type declares one.
+                let default = members.iter().find_map(|member| {
+                    if self.shape(*member) != Shape::Never {
+                        return None;
+                    }
+                    self.types
+                        .borrow()
+                        .annotations(*member)
+                        .iter()
+                        .find(|annotation| annotation.key == "default")
+                        .map(|annotation| annotation.argument.clone())
+                });
+                let union = self.union(members);
+                match default {
+                    Some(argument) if self.shape(union) != Shape::Never => {
+                        self.annotate(union, "default", argument)
+                    }
+                    _ => union,
+                }
+            }
+            TSType::TSIntersectionType(intersection) => {
+                let mut members = intersection
+                    .types
+                    .iter()
+                    .map(|member| self.resolve(module, member, env, next));
+                let Some(first) = members.next() else {
+                    return self.add(Shape::Never);
+                };
+                let result = members.fold(first, |left, right| self.intersect(left, right, 0));
+                if self.shape(result) == Shape::Never {
+                    self.report(
+                        module,
+                        "subset-type:empty-intersection",
+                        intersection.span,
+                        "An intersection that is `never`",
+                    );
+                }
+                result
+            }
+            TSType::TSTypeLiteral(literal) => self.members(module, &literal.members, env, next),
+            TSType::TSFunctionType(function) => {
+                let result = self.resolve(module, &function.return_type.type_annotation, env, next);
+                let parameters = self.written_parameters(module, &function.params, env, next);
+                self.function_with(Signature {
+                    parameters: Some(parameters),
+                    result: Some(result),
+                })
+            }
+            TSType::TSConstructorType(_) => self.add(Shape::Function),
+            TSType::TSTypeOperatorType(operator) => {
+                let operand = self.resolve(module, &operator.type_annotation, env, next);
+                match operator.operator {
+                    TSTypeOperatorOperator::Readonly => self.read_only(operand, false),
+                    TSTypeOperatorOperator::Keyof => self.keyof(operand),
+                    TSTypeOperatorOperator::Unique => self.unresolved(Why::RefusedForm),
+                }
+            }
+            TSType::TSIndexedAccessType(access) => {
+                let object = self.resolve(module, &access.object_type, env, next);
+                let index = self.resolve(module, &access.index_type, env, next);
+                self.indexed(object, index)
+            }
+            TSType::TSTypeQuery(query) => match &query.expr_name {
+                TSTypeQueryExprName::IdentifierReference(name) => {
+                    self.type_of_value(module, name, next)
+                }
+                _ => self.unresolved(Why::TypeofValue),
+            },
+            TSType::TSTypeReference(reference) => self.reference(module, reference, env, next),
+            // A type predicate is the result type of a function that
+            // returns a boolean (§7.1).
+            TSType::TSTypePredicate(predicate) if !predicate.asserts => self.add(Shape::Boolean),
+            TSType::TSConditionalType(_)
+            | TSType::TSMappedType(_)
+            | TSType::TSTemplateLiteralType(_)
+            | TSType::TSInferType(_)
+            | TSType::TSSymbolKeyword(_)
+            | TSType::TSThisType(_) => self.unresolved(Why::RefusedForm),
+            _ => self.unresolved(Why::NotEvaluated),
+        }
+    }
+
+    /// A union of `members`, flattened where a member is a union without
+    /// annotations of its own (§8.4).
+    fn union(&self, members: Vec<TypeId>) -> TypeId {
+        let mut flat = Vec::new();
+        for member in members {
+            match self.shape(member) {
+                Shape::Union(inner) if self.types.borrow().annotations(member).is_empty() => {
+                    flat.extend(inner);
+                }
+                Shape::Never => {}
+                _ => flat.push(member),
+            }
+        }
+        match flat.len() {
+            0 => self.add(Shape::Never),
+            1 => flat[0],
+            _ => self.add(Shape::Union(flat)),
+        }
+    }
+
+    /// A union of `members` with members of equal text merged.
+    pub(crate) fn union_by_text(&self, members: Vec<TypeId>) -> TypeId {
+        // A union member that is itself a union is taken apart first, so
+        // that equal members of two unions merge.
+        let mut flat = Vec::new();
+        for member in members {
+            match self.shape(member) {
+                Shape::Union(inner) if self.types.borrow().annotations(member).is_empty() => {
+                    flat.extend(inner);
+                }
+                _ => flat.push(member),
+            }
+        }
+        // `unknown` beside any other member is `unknown`.
+        if let Some(unknown) = flat
+            .iter()
+            .copied()
+            .find(|member| self.shape(*member) == Shape::Unknown)
+        {
+            return unknown;
+        }
+        let mut seen: Vec<String> = Vec::new();
+        let mut kept = Vec::new();
+        for member in flat {
+            let text = self.display(member);
+            if !seen.contains(&text) {
+                seen.push(text);
+                kept.push(member);
+            }
+        }
+        // A literal type beside the primitive type it belongs to adds
+        // nothing to the union.
+        let primitives: Vec<Shape> = kept.iter().map(|member| self.shape(*member)).collect();
+        let kept = kept
+            .into_iter()
+            .filter(|member| match self.shape(*member) {
+                Shape::Literal(_) => !primitives.contains(&self.shape(self.widened(*member))),
+                _ => true,
+            })
+            .collect();
+        self.union(kept)
+    }
+
+    /// `scope:union-member`: a scope wrapper on a member of a union that has
+    /// a member other than `null` and `undefined` (§8.8).
+    fn scope_in_union(&self, module: usize, span: Span, members: &[TypeId]) {
+        let scoped = members
+            .iter()
+            .filter(|member| self.has_annotation(**member, "scope"))
+            .count();
+        if scoped == 0 {
+            return;
+        }
+        let others = members.iter().any(|member| {
+            !self.has_annotation(*member, "scope")
+                && !matches!(self.shape(*member), Shape::Null | Shape::Undefined)
+        });
+        if others || scoped > 1 {
+            self.report(
+                module,
+                "scope:union-member",
+                span,
+                "A scope wrapper on a member of a union with other members",
+            );
+        }
+    }
+
+    fn members(&self, module: usize, members: &[TSSignature<'a>], env: &Env, depth: u32) -> TypeId {
+        let mut properties = Vec::new();
+        let mut index = None;
+        for member in members {
+            match member {
+                TSSignature::TSPropertySignature(property) => {
+                    let Some(name) = self.key_name(module, &property.key, property.computed) else {
+                        continue;
+                    };
+                    let ty = match &property.type_annotation {
+                        Some(annotation) => {
+                            self.resolve(module, &annotation.type_annotation, env, depth)
+                        }
+                        None => self.unresolved(Why::Any),
+                    };
+                    properties.push(Property {
+                        name,
+                        ty,
+                        optional: property.optional,
+                        readonly: property.readonly,
+                    });
+                }
+                TSSignature::TSMethodSignature(method) => {
+                    if let Some(name) = self.key_name(module, &method.key, method.computed) {
+                        let result = method.return_type.as_ref().map(|annotation| {
+                            self.resolve(module, &annotation.type_annotation, env, depth)
+                        });
+                        let parameters =
+                            self.written_parameters(module, &method.params, env, depth);
+                        properties.push(Property {
+                            name,
+                            ty: self.function_with(Signature {
+                                parameters: Some(parameters),
+                                result,
+                            }),
+                            optional: method.optional,
+                            readonly: false,
+                        });
+                    }
+                }
+                TSSignature::TSIndexSignature(signature) => {
+                    index = Some(self.resolve(
+                        module,
+                        &signature.type_annotation.type_annotation,
+                        env,
+                        depth,
+                    ));
+                }
+                _ => {}
+            }
+        }
+        self.add(Shape::Object(properties, index))
+    }
+
+    /// The name of a property key: an identifier, a string literal, or a
+    /// well-known key such as `[UI]`, which is written with its brackets.
+    fn key_name(&self, module: usize, key: &PropertyKey<'a>, computed: bool) -> Option<String> {
+        if !computed {
+            return static_key_name(key).map(str::to_string);
+        }
+        match key {
+            PropertyKey::StringLiteral(literal) => Some(literal.value.to_string()),
+            other => Some(format!("[{}]", self.text(module, other.span()))),
+        }
+    }
+
+    fn keyof(&self, operand: TypeId) -> TypeId {
+        match self.shape(operand) {
+            Shape::Object(properties, None) => {
+                let names = properties
+                    .iter()
+                    .map(|property| self.add(Shape::Literal(format!("\"{}\"", property.name))))
+                    .collect();
+                self.union(names)
+            }
+            Shape::Object(_, Some(_)) => self.add(Shape::String),
+            _ => self.unresolved(Why::NotEvaluated),
+        }
+    }
+
+    fn indexed(&self, object: TypeId, index: TypeId) -> TypeId {
+        match (self.shape(object), self.shape(index)) {
+            (Shape::Array(element), Shape::Number) => element,
+            (Shape::Tuple(elements), Shape::Number) => self.union(elements),
+            (Shape::Tuple(elements), Shape::Literal(position)) => position
+                .parse::<usize>()
+                .ok()
+                .and_then(|position| elements.get(position).copied())
+                .unwrap_or_else(|| self.unresolved(Why::NotEvaluated)),
+            (Shape::Object(..), Shape::Literal(key)) => self
+                .property(object, key.trim_matches(['"', '\'']))
+                .unwrap_or_else(|| self.unresolved(Why::NotEvaluated)),
+            (Shape::Object(..), Shape::Union(keys)) => {
+                let members = keys.iter().map(|key| self.indexed(object, *key)).collect();
+                self.union(members)
+            }
+            _ => self.unresolved(Why::NotEvaluated),
+        }
+    }
+
+    /// The declared type of property `name` of `ty`, with `undefined` added
+    /// for an optional property left out.
+    pub fn property(&self, ty: TypeId, name: &str) -> Option<TypeId> {
+        match self.shape(ty) {
+            // A read of an optional property has the property's type or
+            // `undefined` (§7.6).
+            Shape::Object(properties, index) => properties
+                .iter()
+                .find(|property| property.name == name)
+                .map(|property| {
+                    if property.optional && !self.types.borrow().optional_reads_declared {
+                        self.or_absent(property.ty)
+                    } else {
+                        property.ty
+                    }
+                })
+                .or(index),
+            Shape::Union(members) => {
+                let present: Vec<TypeId> = members
+                    .into_iter()
+                    .filter(|member| !matches!(self.shape(*member), Shape::Null | Shape::Undefined))
+                    .collect();
+                match present.as_slice() {
+                    [one] => self.property(*one, name),
+                    // A property every member declares has the union of
+                    // the members' types for it.
+                    several => {
+                        let types = several
+                            .iter()
+                            .map(|member| match self.shape(*member) {
+                                Shape::Object(..) => self.property(*member, name),
+                                _ => None,
+                            })
+                            .collect::<Option<Vec<TypeId>>>()?;
+                        Some(self.union_by_text(types))
+                    }
+                }
+            }
+            Shape::Parameter(_) => self
+                .constraint_of(ty)
+                .and_then(|constraint| self.property(constraint, name)),
+            _ => None,
+        }
+    }
+
+    /// Runs `compute` with the read of an optional property typed as the
+    /// property is declared, without `undefined`. The measurement uses it
+    /// to tell a value that may be absent only because a property is
+    /// optional from one whose type names `undefined`.
+    pub(crate) fn with_optional_reads_declared<T>(&self, compute: impl FnOnce() -> T) -> T {
+        let before = std::mem::replace(&mut self.types.borrow_mut().optional_reads_declared, true);
+        let result = compute();
+        self.types.borrow_mut().optional_reads_declared = before;
+        result
+    }
+
+    /// `compute` with the next reference typed left as declared: the
+    /// outermost identifier or property read is not narrowed.
+    pub(crate) fn without_narrowing<T>(&self, compute: impl FnOnce() -> T) -> T {
+        let before = std::mem::replace(&mut self.types.borrow_mut().place_not_narrowed, true);
+        let result = compute();
+        self.types.borrow_mut().place_not_narrowed = before;
+        result
+    }
+
+    /// Whether the reference being typed is a place left as declared.
+    /// Asking clears the mark, so that the parts of the reference are
+    /// narrowed as usual.
+    pub(crate) fn take_place_not_narrowed(&self) -> bool {
+        std::mem::replace(&mut self.types.borrow_mut().place_not_narrowed, false)
+    }
+
+    /// `ty | undefined`, or `ty` where it has `undefined` or is not
+    /// evaluated.
+    pub(crate) fn or_absent(&self, ty: TypeId) -> TypeId {
+        match self.shape(ty) {
+            Shape::Undefined | Shape::Unknown | Shape::Unresolved(_) => ty,
+            Shape::Union(members)
+                if members
+                    .iter()
+                    .any(|member| self.shape(*member) == Shape::Undefined) =>
+            {
+                ty
+            }
+            _ => self.union(vec![ty, self.add(Shape::Undefined)]),
+        }
+    }
+
+    /// `left & right`, computed (§7.4).
+    fn intersect(&self, left: TypeId, right: TypeId, depth: u32) -> TypeId {
+        if depth > 8 {
+            return self.unresolved(Why::Recursive);
+        }
+        let (a, b) = (self.shape(left), self.shape(right));
+        if a == b {
+            return left;
+        }
+        match (&a, &b) {
+            (Shape::Unknown, _) => right,
+            (_, Shape::Unknown) => left,
+            (Shape::Never, _) | (_, Shape::Never) => self.add(Shape::Never),
+            (Shape::Union(members), _) => {
+                let members = members
+                    .iter()
+                    .map(|member| self.intersect(*member, right, depth + 1))
+                    .collect();
+                self.union(members)
+            }
+            (_, Shape::Union(members)) => {
+                let members = members
+                    .iter()
+                    .map(|member| self.intersect(left, *member, depth + 1))
+                    .collect();
+                self.union(members)
+            }
+            (
+                Shape::Object(left_properties, left_index),
+                Shape::Object(right_properties, right_index),
+            ) => {
+                let mut properties = left_properties.clone();
+                for property in right_properties {
+                    match properties.iter_mut().find(|own| own.name == property.name) {
+                        Some(own) => {
+                            own.ty = self.intersect(own.ty, property.ty, depth + 1);
+                            own.optional = own.optional && property.optional;
+                        }
+                        None => properties.push(property.clone()),
+                    }
+                }
+                self.add(Shape::Object(properties, left_index.or(*right_index)))
+            }
+            (Shape::Literal(literal), primitive) | (primitive, Shape::Literal(literal)) => {
+                let fits = match primitive {
+                    Shape::String => literal.starts_with(['"', '\'']),
+                    Shape::Number => literal.starts_with(|c: char| c.is_ascii_digit() || c == '-'),
+                    Shape::Boolean => literal == "true" || literal == "false",
+                    Shape::Literal(_) => false,
+                    Shape::Object(..) | Shape::Null | Shape::Undefined | Shape::BigInt => false,
+                    _ => return self.unresolved(Why::NotEvaluated),
+                };
+                if fits {
+                    self.add(Shape::Literal(literal.clone()))
+                } else {
+                    self.add(Shape::Never)
+                }
+            }
+            _ if is_plain(&a) && is_plain(&b) => self.add(Shape::Never),
+            // §7.4 does not compute an intersection with a handle, a factory,
+            // a function, or an opaque API type, so one is `never`.
+            _ if is_uncomputed(&a) || is_uncomputed(&b) => self.add(Shape::Never),
+            _ => self.unresolved(Why::NotEvaluated),
+        }
+    }
+
+    fn arguments(
+        &self,
+        module: usize,
+        reference: &TSTypeReference<'a>,
+        env: &Env,
+        depth: u32,
+    ) -> Vec<TypeId> {
+        reference
+            .type_arguments
+            .iter()
+            .flat_map(|arguments| &arguments.params)
+            .map(|argument| self.resolve(module, argument, env, depth))
+            .collect()
+    }
+
+    fn reference(
+        &self,
+        module: usize,
+        reference: &TSTypeReference<'a>,
+        env: &Env,
+        depth: u32,
+    ) -> TypeId {
+        let name = match &reference.type_name {
+            TSTypeName::IdentifierReference(name) => name,
+            // `ns.Donut`, with `ns` bound by `import * as ns`, is the type
+            // the module exports under that name (§7.10).
+            TSTypeName::QualifiedName(qualified) => {
+                let target = (|| {
+                    let TSTypeName::IdentifierReference(namespace) = &qualified.left else {
+                        return None;
+                    };
+                    let parsed = self.parsed(module)?;
+                    let symbol = symbol_of(parsed.semantic.scoping(), namespace)?;
+                    let model = self.model(module)?;
+                    let Some(Binding::Import(import, binding)) = model.binding(symbol) else {
+                        return None;
+                    };
+                    let import = &model.imports[import];
+                    if import.bindings[binding].imported != crate::module::ImportedName::Namespace {
+                        return None;
+                    }
+                    let def = self.resolve_import(
+                        module,
+                        import,
+                        &crate::module::ImportedName::Named(qualified.right.name.to_string()),
+                    )?;
+                    Some((def.module, self.model(def.module)?.defs[def.def].symbol?))
+                })();
+                return match target {
+                    Some((home, symbol)) => {
+                        let arguments = self.arguments(module, reference, env, depth);
+                        self.declaration(home, symbol, arguments, depth)
+                    }
+                    None => self.unresolved(Why::External),
+                };
+            }
+            TSTypeName::ThisExpression(_) => return self.unresolved(Why::RefusedForm),
+        };
+        let Some(parsed) = self.parsed(module) else {
+            return self.unresolved(Why::External);
+        };
+        let Some(symbol) = symbol_of(parsed.semantic.scoping(), name) else {
+            return self.global(module, reference, name.name.as_str(), env, depth);
+        };
+        if let Some((_, bound)) = env.iter().rev().find(|(parameter, _)| *parameter == symbol) {
+            return *bound;
+        }
+        let Some(model) = self.model(module) else {
+            return self.unresolved(Why::External);
+        };
+        if let Some(api) = model.api_ref(symbol) {
+            return self.api_type(module, reference, &api.name, env, depth);
+        }
+        let arguments = self.arguments(module, reference, env, depth);
+        // A label argument that is a type parameter of an alias is the
+        // term written for it where the alias is used (§8.5).
+        let labels = match self.label_term(module, reference) {
+            LabelTerm::Body(_, _, parameters) => {
+                let outer = self.label_scope();
+                let bound = parameters
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, parameter)| {
+                        let value = reference
+                            .type_arguments
+                            .as_ref()
+                            .and_then(|arguments| arguments.params.get(index))
+                            .and_then(|argument| self.label_value(module, argument, &outer, 0));
+                        (parameter, value)
+                    })
+                    .collect();
+                self.types.borrow_mut().label_env.push(bound);
+                true
+            }
+            _ => false,
+        };
+        let named = self.named(module, symbol, arguments, depth);
+        if labels {
+            self.types.borrow_mut().label_env.pop();
+        }
+        named
+    }
+
+    /// The label arguments of the alias being resolved.
+    fn label_scope(&self) -> Vec<(String, Option<serde_json::Value>)> {
+        self.types
+            .borrow()
+            .label_env
+            .last()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The type a declaration of module `module` denotes with `arguments`
+    /// for its type parameters.
+    fn declaration(
+        &self,
+        module: usize,
+        symbol: SymbolId,
+        arguments: Vec<TypeId>,
+        depth: u32,
+    ) -> TypeId {
+        let Some(parsed) = self.parsed(module) else {
+            return self.unresolved(Why::External);
+        };
+        let plain = arguments.is_empty();
+        if plain {
+            let known = self
+                .types
+                .borrow()
+                .declarations
+                .get(&(module, symbol))
+                .copied();
+            match known {
+                Some(Some(known)) => return known,
+                Some(None) => return self.unresolved(Why::Recursive),
+                None => {}
+            }
+            self.types
+                .borrow_mut()
+                .declarations
+                .insert((module, symbol), None);
+        }
+        let scoping = parsed.semantic.scoping();
+        let nodes = parsed.semantic.nodes();
+        let bind = |parameters: Option<&TSTypeParameterDeclaration<'a>>| -> Env {
+            parameters
+                .iter()
+                .flat_map(|parameters| &parameters.params)
+                .enumerate()
+                .filter_map(|(index, parameter)| {
+                    let symbol = parameter.name.symbol_id.get()?;
+                    let bound = match (arguments.get(index), &parameter.default) {
+                        (Some(argument), _) => *argument,
+                        (None, Some(default)) => self.resolve(module, default, &Env::new(), depth),
+                        (None, None) => self.parameter(module, parameter, depth),
+                    };
+                    Some((symbol, bound))
+                })
+                .collect()
+        };
+        let resolved = match nodes.kind(scoping.symbol_declaration(symbol)) {
+            AstKind::TSTypeAliasDeclaration(alias) => {
+                let env = bind(alias.type_parameters.as_deref());
+                self.resolve(module, &alias.type_annotation, &env, depth)
+            }
+            AstKind::TSInterfaceDeclaration(interface) => {
+                let env = bind(interface.type_parameters.as_deref());
+                let mut ty = self.members(module, &interface.body.body, &env, depth);
+                for heritage in &interface.extends {
+                    let Expression::Identifier(base) = &heritage.expression else {
+                        continue;
+                    };
+                    let arguments = heritage
+                        .type_arguments
+                        .iter()
+                        .flat_map(|arguments| &arguments.params)
+                        .map(|argument| self.resolve(module, argument, &env, depth))
+                        .collect();
+                    let base = match symbol_of(scoping, base) {
+                        Some(symbol) => self.named(module, symbol, arguments, depth),
+                        // A native type operator: `extends Omit<T, K>`.
+                        None => {
+                            self.global_of(module, heritage.span, base.name.as_str(), arguments)
+                        }
+                    };
+                    ty = self.intersect(base, ty, 0);
+                }
+                ty
+            }
+            AstKind::TSTypeParameter(parameter) => self.parameter(module, parameter, depth),
+            _ => self.unresolved(Why::NotEvaluated),
+        };
+        if plain {
+            // A type resolved while another declaration is being resolved
+            // may hold a recursive reference to that declaration, so only
+            // the outermost resolution is kept.
+            let mut types = self.types.borrow_mut();
+            types.declarations.remove(&(module, symbol));
+            if types.declarations.values().all(Option::is_some) {
+                types.declarations.insert((module, symbol), Some(resolved));
+            }
+        }
+        resolved
+    }
+
+    /// An unbound type parameter, with its constraint kept beside it: a
+    /// generic function is checked with each parameter replaced by its
+    /// constraint (§7.3), so a property read on the parameter reads the
+    /// constraint.
+    fn parameter(&self, module: usize, parameter: &TSTypeParameter<'a>, depth: u32) -> TypeId {
+        let unbound = self.add(Shape::Parameter(parameter.name.name.to_string()));
+        if let Some(constraint) = &parameter.constraint {
+            if depth < MAX_DEPTH {
+                let constraint = self.resolve(module, constraint, &Env::new(), depth + 1);
+                self.types
+                    .borrow_mut()
+                    .constraints
+                    .insert(unbound, constraint);
+            }
+        }
+        unbound
+    }
+
+    /// The constraint of an unbound type parameter.
+    pub(crate) fn constraint_of(&self, ty: TypeId) -> Option<TypeId> {
+        self.types.borrow().constraints.get(&ty).copied()
+    }
+
+    /// The type a symbol of module `module` names, an import followed.
+    fn named(&self, module: usize, symbol: SymbolId, arguments: Vec<TypeId>, depth: u32) -> TypeId {
+        let Some(model) = self.model(module) else {
+            return self.unresolved(Why::External);
+        };
+        match model.binding(symbol) {
+            Some(Binding::Import(import, binding)) => {
+                let import = &model.imports[import];
+                let def = self.resolve_import(module, import, &import.bindings[binding].imported);
+                let target = def.and_then(|def| {
+                    let symbol = self.model(def.module)?.defs[def.def].symbol?;
+                    Some((def.module, symbol))
+                });
+                match target {
+                    Some((module, symbol)) => self.declaration(module, symbol, arguments, depth),
+                    None => self.unresolved(Why::External),
+                }
+            }
+            _ => self.declaration(module, symbol, arguments, depth),
+        }
+    }
+
+    /// A type `commonfabric` exports, as a constructor with a native rule
+    /// (§7.2, §8.1).
+    fn api_type(
+        &self,
+        module: usize,
+        reference: &TSTypeReference<'a>,
+        name: &str,
+        env: &Env,
+        depth: u32,
+    ) -> TypeId {
+        let arguments = self.arguments(module, reference, env, depth);
+        let first = || {
+            arguments
+                .first()
+                .copied()
+                .unwrap_or_else(|| self.add(Shape::Unknown))
+        };
+        let written = |index: usize| {
+            reference
+                .type_arguments
+                .as_ref()
+                .and_then(|arguments| arguments.params.get(index))
+        };
+        let argument_text =
+            |index: usize| written(index).map_or(String::new(), |ty| self.text(module, ty.span()));
+        if let Some(kind) = HandleKind::of(name) {
+            let value = first();
+            if self.contains_function(value, 0) {
+                self.report(
+                    module,
+                    "subset-type:function-in-data",
+                    reference.span,
+                    "A function type inside the value type of a cell",
+                );
+            }
+            return self.add(Shape::Handle(kind, value));
+        }
+        match name {
+            "Reactive" => first(),
+            "PatternFactory" => {
+                let output = arguments
+                    .get(1)
+                    .copied()
+                    .unwrap_or_else(|| self.add(Shape::Unknown));
+                self.add(Shape::PatternFactory(first(), output))
+            }
+            "HandlerFactory" => {
+                let state = arguments
+                    .get(1)
+                    .copied()
+                    .unwrap_or_else(|| self.add(Shape::Unknown));
+                self.add(Shape::HandlerFactory(first(), state))
+            }
+            "Default" => {
+                // `Default<T, V>`, and `Default<V>` for `T | Default<V>`.
+                let value = arguments.last().copied();
+                let last = arguments.len().saturating_sub(1);
+                // `typeof NAME` names the binding, and the default is the
+                // value of its initializer (§8.8). `typeof NAME.path` names
+                // a part of a constant and is refused.
+                let constant = match written(last) {
+                    Some(TSType::TSTypeQuery(query)) => match &query.expr_name {
+                        TSTypeQueryExprName::IdentifierReference(name) => {
+                            Some(self.static_constant(module, name, 0))
+                        }
+                        _ => Some((Some(false), None)),
+                    },
+                    _ => None,
+                };
+                if let Some(value) = value {
+                    let (literal_like, value) = match constant {
+                        Some((decided, initializer)) => (decided, initializer),
+                        None => (self.is_literal_like(value, 0), Some(value)),
+                    };
+                    // The value has to be assignable to the type it is the
+                    // default of.
+                    let fits = match (value, arguments.len()) {
+                        (Some(value), 2) => self.relate(value, first(), 0),
+                        _ => crate::assign::Verdict::Unsure,
+                    };
+                    if literal_like == Some(false) {
+                        self.report(
+                            module,
+                            "default:not-static",
+                            reference.span,
+                            "A `Default` value that is not literal-like",
+                        );
+                    } else if matches!(fits, crate::assign::Verdict::No(..)) {
+                        self.report(
+                            module,
+                            "default:not-static",
+                            reference.span,
+                            "A `Default` value that is not assignable to its type",
+                        );
+                    }
+                }
+                // `T | Default<V>`: the member gives the union a default and
+                // is not a member of the value's type.
+                if arguments.len() == 1 {
+                    return self.annotate(self.add(Shape::Never), "default", argument_text(0));
+                }
+                self.annotate_once(
+                    module,
+                    reference.span,
+                    first(),
+                    "default",
+                    argument_text(arguments.len().saturating_sub(1)),
+                )
+            }
+            "ArrayByKey" => {
+                // `ArrayByKey<T, "field">` or `ArrayByKey<T, "a" | "b">`:
+                // an array of `T` with a key annotation on the array,
+                // whose value is the names of the key fields in the
+                // order of the names (§4.4.1, "A declared key"; rulings
+                // Z45 and Z49). For assignability it is `T[]`, and the
+                // type of an element carries no key.
+                let fields = self.key_fields(module, reference.span, first(), arguments.get(1));
+                let array = self.add(Shape::Array(first()));
+                let ty = self.annotate(
+                    array,
+                    "keyFields",
+                    serde_json::to_string(&fields).unwrap_or_default(),
+                );
+                if let Some(annotation) = self
+                    .types
+                    .borrow_mut()
+                    .annotations
+                    .get_mut(&ty)
+                    .and_then(|annotations| annotations.last_mut())
+                {
+                    annotation.value = Some(serde_json::json!(fields));
+                }
+                ty
+            }
+            "PerSpace" | "PerUser" | "PerSession" | "PerAny" | "Scoped" => {
+                let scope = match name {
+                    "Scoped" => argument_text(1),
+                    other => other.to_string(),
+                };
+                self.annotate_once(module, reference.span, first(), "scope", scope)
+            }
+            "TrustedActionWrite"
+            | "TrustedActionWriteWithIntegrity"
+            | "TrustedActionUiContract" => {
+                // After the payload: a writer binding for the two write
+                // aliases, then the action and the pattern, then the
+                // required integrity where the alias has the parameter.
+                let mut next = 1;
+                if name != "TrustedActionUiContract" {
+                    if let Some(binding) = written(1) {
+                        self.writer_binding(module, binding, reference.span);
+                    }
+                    next = 2;
+                }
+                for index in [next, next + 1] {
+                    if let Some(literal) = written(index) {
+                        if !self.is_string_literal_type(module, literal, 0) {
+                            self.report(
+                                module,
+                                "cfc-label:not-static",
+                                reference.span,
+                                "An action or a pattern of a trusted-action alias that is not a string literal type",
+                            );
+                        }
+                    }
+                }
+                if let Some(list) = written(next + 2) {
+                    self.label_list(module, list, reference.span);
+                }
+                if name == "TrustedActionUiContract" {
+                    let text = |index: usize| {
+                        written(index)
+                            .and_then(|term| self.label_value(module, term, &[], 0))
+                            .filter(serde_json::Value::is_string)
+                    };
+                    let contract = text(1).zip(text(2)).map(|(action, pattern)| {
+                        let mut contract = serde_json::json!({
+                            "helper": "UiAction",
+                            "action": action,
+                            "trustedPattern": pattern,
+                        });
+                        if let Some(integrity) =
+                            written(3).and_then(|list| self.label_value(module, list, &[], 0))
+                        {
+                            contract["requiredEventIntegrity"] = integrity;
+                        }
+                        contract
+                    });
+                    let annotated = self.annotate(first(), "uiContract", name.to_string());
+                    return self.valued(annotated, contract);
+                }
+                // "`writeAuthorizedBy` and `uiContract`, as the contract
+                // defines" (§8.1): one writer policy.
+                let policy = self.policy_of_alias(module, reference, name, 0);
+                let annotated = self.annotate(first(), "writeAuthorizedBy", argument_text(1));
+                self.valued(annotated, policy)
+            }
+            "WritePolicyAnyOf" => {
+                // "The members of `WritePolicyAnyOf<T, [P, ...]>` are not
+                // a label list. The tuple is written in place ... and
+                // each member is a writer policy written directly or
+                // through an alias" (§8.5).
+                let policies = written(1).and_then(|list| {
+                    let mut list = list;
+                    while let TSType::TSTypeOperatorType(operator) = list {
+                        list = &operator.type_annotation;
+                    }
+                    let TSType::TSTupleType(tuple) = list else {
+                        return None;
+                    };
+                    tuple
+                        .element_types
+                        .iter()
+                        .map(|member| match member {
+                            TSTupleElement::TSRestType(_)
+                            | TSTupleElement::TSOptionalType(_)
+                            | TSTupleElement::TSNamedTupleMember(_) => None,
+                            other => self.policy_value(module, other.to_ts_type(), 0),
+                        })
+                        .collect::<Option<Vec<serde_json::Value>>>()
+                        .map(serde_json::Value::Array)
+                });
+                let annotated = self.annotate(first(), "writePolicyAnyOf", argument_text(1));
+                self.valued(annotated, policies)
+            }
+            "Cfc" => {
+                // "Each key of the record `M`" (§8.1). The label keys
+                // are read as lists, and the other keys keep their text.
+                let mut annotated = first();
+                let mut record = written(1);
+                for _ in 0..8 {
+                    match record {
+                        Some(TSType::TSTypeReference(alias)) => {
+                            match self.label_term(module, alias) {
+                                LabelTerm::Body(_, body, _) => record = Some(body),
+                                _ => break,
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                if let Some(TSType::TSTypeLiteral(literal)) = record {
+                    for member in &literal.members {
+                        let TSSignature::TSPropertySignature(property) = member else {
+                            continue;
+                        };
+                        let key = match static_key_name(&property.key) {
+                            Some("confidentiality") => "confidentiality",
+                            Some("integrity") => "integrity",
+                            Some("addIntegrity") => "addIntegrity",
+                            Some("requiredIntegrity") => "requiredIntegrity",
+                            Some("maxConfidentiality") => "maxConfidentiality",
+                            _ => continue,
+                        };
+                        let Some(term) = &property.type_annotation else {
+                            continue;
+                        };
+                        let value = self
+                            .label_value(module, &term.type_annotation, &[], 0)
+                            .filter(serde_json::Value::is_array);
+                        annotated = self.annotate(
+                            annotated,
+                            key,
+                            self.text(module, term.type_annotation.span()),
+                        );
+                        annotated = self.valued(annotated, value);
+                    }
+                }
+                self.annotate(annotated, "label", name.to_string())
+            }
+            "RepresentsCurrentUser" | "AuthoredByCurrentUser" => {
+                // "`addIntegrity` with the corresponding atom over the
+                // current principal" (§8.1).
+                let kind = if name == "RepresentsCurrentUser" {
+                    "represents-principal"
+                } else {
+                    "authored-by"
+                };
+                let annotated = self.annotate(first(), "addIntegrity", name.to_string());
+                self.valued(
+                    annotated,
+                    Some(serde_json::json!([
+                        { "kind": kind, "subject": { "__ctCurrentPrincipal": true } }
+                    ])),
+                )
+            }
+            "Confidential" | "Integrity" | "AddIntegrity" | "RequiresIntegrity"
+            | "MaxConfidentiality" => {
+                if let Some(list) = written(1) {
+                    self.label_list(module, list, reference.span);
+                }
+                let key = match name {
+                    "Confidential" => "confidentiality",
+                    "Integrity" => "integrity",
+                    "AddIntegrity" => "addIntegrity",
+                    "RequiresIntegrity" => "requiredIntegrity",
+                    _ => "maxConfidentiality",
+                };
+                // The list as data: as written, with each alias and
+                // constant reference replaced, or, for a type parameter
+                // of an alias, as the type the argument resolved to.
+                let scope = self.label_scope();
+                let value = written(1)
+                    .and_then(|list| self.label_value(module, list, &scope, 0))
+                    .or_else(|| {
+                        arguments
+                            .get(1)
+                            .and_then(|list| self.label_value_of_type(*list, 0))
+                    })
+                    .filter(serde_json::Value::is_array);
+                let annotated =
+                    self.annotate_once(module, reference.span, first(), key, argument_text(1));
+                self.valued(annotated, value)
+            }
+            "WriteAuthorizedBy" => {
+                if let Some(binding) = written(1) {
+                    self.writer_binding(module, binding, reference.span);
+                }
+                let policy = self.policy_of_alias(module, reference, name, 0);
+                let annotated = self.annotate_once(
+                    module,
+                    reference.span,
+                    first(),
+                    "writeAuthorizedBy",
+                    argument_text(1),
+                );
+                self.valued(annotated, policy)
+            }
+            _ if api::is_transparent_wrapper(name) => {
+                self.annotate(first(), "label", name.to_string())
+            }
+            _ => self.add(Shape::Opaque(name.to_string())),
+        }
+    }
+
+    /// The value of a label argument that reached the alias as a type:
+    /// a tuple of literal types, of object types of them, and of `null`.
+    fn label_value_of_type(&self, ty: TypeId, depth: u32) -> Option<serde_json::Value> {
+        use serde_json::{json, Map, Value};
+        if depth > 12 {
+            return None;
+        }
+        match self.shape(ty) {
+            Shape::Tuple(elements) => elements
+                .iter()
+                .map(|element| self.label_value_of_type(*element, depth + 1))
+                .collect::<Option<Vec<Value>>>()
+                .map(Value::Array),
+            Shape::Literal(text) => crate::schema::label_term(&text),
+            Shape::Null => Some(Value::Null),
+            Shape::Object(properties, None) => {
+                if properties.len() == 1 && properties[0].name == "__ctCurrentPrincipal" {
+                    return Some(json!({ "__ctCurrentPrincipal": true }));
+                }
+                let mut members = Map::new();
+                for property in properties {
+                    members.insert(
+                        property.name.clone(),
+                        self.label_value_of_type(property.ty, depth + 1)?,
+                    );
+                }
+                Some(Value::Object(members))
+            }
+            _ => None,
+        }
+    }
+
+    /// Gives the annotation last added at the root of `ty` its value.
+    fn valued(&self, ty: TypeId, value: Option<serde_json::Value>) -> TypeId {
+        if let Some(annotation) = self
+            .types
+            .borrow_mut()
+            .annotations
+            .get_mut(&ty)
+            .and_then(|annotations| annotations.last_mut())
+        {
+            annotation.value = value;
+        }
+        ty
+    }
+
+    /// The value of a term of the label-argument language (§8.5): a list
+    /// is an array and an atom is the value it denotes. A reference to
+    /// an alias is replaced by the alias's body with the type arguments
+    /// substituted, `typeof NAME` by the value of the constant's static
+    /// initializer, `AnyOf<list>` by `{ anyOf: list }`, and
+    /// `CurrentPrincipal` by its marker. `None` where the term is outside
+    /// the language or the program does not hold what it names.
+    pub(crate) fn label_value(
+        &self,
+        module: usize,
+        term: &TSType<'a>,
+        env: &[(String, Option<serde_json::Value>)],
+        depth: u32,
+    ) -> Option<serde_json::Value> {
+        use serde_json::{json, Map, Value};
+        if depth > 12 {
+            return None;
+        }
+        match term {
+            TSType::TSParenthesizedType(inner) => {
+                self.label_value(module, &inner.type_annotation, env, depth + 1)
+            }
+            TSType::TSTypeOperatorType(operator)
+                if operator.operator == TSTypeOperatorOperator::Readonly =>
+            {
+                self.label_value(module, &operator.type_annotation, env, depth + 1)
+            }
+            TSType::TSTupleType(tuple) => {
+                let mut members = Vec::new();
+                for element in &tuple.element_types {
+                    match element {
+                        TSTupleElement::TSRestType(rest) => {
+                            match self.label_value(module, &rest.type_annotation, env, depth + 1)? {
+                                Value::Array(spread) => members.extend(spread),
+                                _ => return None,
+                            }
+                        }
+                        TSTupleElement::TSOptionalType(_)
+                        | TSTupleElement::TSNamedTupleMember(_) => return None,
+                        other => members.push(self.label_value(
+                            module,
+                            other.to_ts_type(),
+                            env,
+                            depth + 1,
+                        )?),
+                    }
+                }
+                Some(Value::Array(members))
+            }
+            TSType::TSLiteralType(literal) => match &literal.literal {
+                TSLiteral::StringLiteral(text) => Some(json!(text.value.as_str())),
+                TSLiteral::NumericLiteral(number) => Some(number_value(number.value)),
+                TSLiteral::BooleanLiteral(boolean) => Some(json!(boolean.value)),
+                _ => None,
+            },
+            TSType::TSNullKeyword(_) => Some(Value::Null),
+            TSType::TSTypeLiteral(literal) => {
+                let mut members = Map::new();
+                for member in &literal.members {
+                    let TSSignature::TSPropertySignature(property) = member else {
+                        return None;
+                    };
+                    let name = static_key_name(&property.key)?;
+                    let annotation = property.type_annotation.as_ref()?;
+                    members.insert(
+                        name.to_string(),
+                        self.label_value(module, &annotation.type_annotation, env, depth + 1)?,
+                    );
+                }
+                Some(Value::Object(members))
+            }
+            // A constant reference: the value of the static initializer.
+            TSType::TSTypeQuery(query) => match &query.expr_name {
+                TSTypeQueryExprName::IdentifierReference(name) => {
+                    self.constant_value_of(module, name, depth + 1)
+                }
+                TSTypeQueryExprName::QualifiedName(qualified) => match &qualified.left {
+                    TSTypeName::IdentifierReference(name) => self
+                        .constant_value_of(module, name, depth + 1)?
+                        .get(qualified.right.name.as_str())
+                        .cloned(),
+                    _ => None,
+                },
+                _ => None,
+            },
+            TSType::TSTypeReference(reference) => {
+                let written = |index: usize| {
+                    reference
+                        .type_arguments
+                        .as_ref()
+                        .and_then(|arguments| arguments.params.get(index))
+                };
+                match self.label_term(module, reference) {
+                    LabelTerm::Body(home, body, parameters) => {
+                        // The type arguments, substituted by value.
+                        let bound: Vec<(String, Option<Value>)> = parameters
+                            .iter()
+                            .enumerate()
+                            .map(|(index, name)| {
+                                let value = written(index).and_then(|argument| {
+                                    self.label_value(module, argument, env, depth + 1)
+                                });
+                                (name.clone(), value)
+                            })
+                            .collect();
+                        self.label_value(home, body, &bound, depth + 1)
+                    }
+                    LabelTerm::Api(name) => match name.as_str() {
+                        "AnyOf" => {
+                            let list = self.label_value(module, written(0)?, env, depth + 1)?;
+                            Some(json!({ "anyOf": list }))
+                        }
+                        "CurrentPrincipal" => Some(json!({ "__ctCurrentPrincipal": true })),
+                        "PolicyOf" => {
+                            let TSType::TSTypeQuery(query) = written(0)? else {
+                                return None;
+                            };
+                            let TSTypeQueryExprName::IdentifierReference(rules) = &query.expr_name
+                            else {
+                                return None;
+                            };
+                            Some(json!({ "policyOf": self.binding_value(module, rules)? }))
+                        }
+                        _ => None,
+                    },
+                    LabelTerm::Undecided => {
+                        let TSTypeName::IdentifierReference(name) = &reference.type_name else {
+                            return None;
+                        };
+                        env.iter()
+                            .find(|(parameter, _)| parameter == name.name.as_str())
+                            .and_then(|(_, value)| value.clone())
+                    }
+                    LabelTerm::Other => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The value of a module-scope constant with a static initializer
+    /// (§8.8), as a constant reference `typeof NAME` stands for it.
+    fn constant_value_of(
+        &self,
+        module: usize,
+        name: &IdentifierReference<'a>,
+        depth: u32,
+    ) -> Option<serde_json::Value> {
+        let (home, init) = self.constant_initializer(module, name)?;
+        self.constant_value(home, init?, depth)
+    }
+
+    pub(crate) fn constant_value(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+        depth: u32,
+    ) -> Option<serde_json::Value> {
+        use serde_json::{json, Map, Value};
+        if depth > 12 {
+            return None;
+        }
+        match unwrap(expression) {
+            Expression::StringLiteral(text) => Some(json!(text.value.as_str())),
+            Expression::NumericLiteral(number) => Some(number_value(number.value)),
+            Expression::BooleanLiteral(boolean) => Some(json!(boolean.value)),
+            Expression::NullLiteral(_) => Some(Value::Null),
+            Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+                .quasis
+                .first()
+                .and_then(|quasi| quasi.value.cooked.as_ref())
+                .map(|text| json!(text.as_str())),
+            Expression::UnaryExpression(unary)
+                if unary.operator == oxc_syntax::operator::UnaryOperator::UnaryNegation =>
+            {
+                match unwrap(&unary.argument) {
+                    Expression::NumericLiteral(number) => Some(number_value(-number.value)),
+                    _ => None,
+                }
+            }
+            Expression::ArrayExpression(array) => array
+                .elements
+                .iter()
+                .map(|element| self.constant_value(module, element.as_expression()?, depth + 1))
+                .collect::<Option<Vec<Value>>>()
+                .map(Value::Array),
+            Expression::ObjectExpression(object) => {
+                let mut members = Map::new();
+                for property in &object.properties {
+                    let ObjectPropertyKind::ObjectProperty(property) = property else {
+                        return None;
+                    };
+                    if property.computed || property.method {
+                        return None;
+                    }
+                    members.insert(
+                        static_key_name(&property.key)?.to_string(),
+                        self.constant_value(module, &property.value, depth + 1)?,
+                    );
+                }
+                Some(Value::Object(members))
+            }
+            Expression::Identifier(name) => self.constant_value_of(module, name, depth + 1),
+            _ => None,
+        }
+    }
+
+    /// The declaration a binding reference `typeof name` denotes (§8.5),
+    /// through imports and re-exports: the module that declares it and
+    /// the name it is declared under, which is the record PL §1.5 forms
+    /// `Body.code` from.
+    fn binding_value(
+        &self,
+        module: usize,
+        name: &IdentifierReference<'a>,
+    ) -> Option<serde_json::Value> {
+        let parsed = self.parsed(module)?;
+        let symbol = symbol_of(parsed.semantic.scoping(), name)?;
+        let model = self.model(module)?;
+        let (home, def) = match model.binding(symbol)? {
+            Binding::Def(def) => (module, def),
+            Binding::Import(import, binding) => {
+                let import = &model.imports[import];
+                let def =
+                    self.resolve_import(module, import, &import.bindings[binding].imported)?;
+                (def.module, def.def)
+            }
+        };
+        let declared = &self.model(home)?.defs[def];
+        Some(serde_json::json!({
+            "module": self.parsed(home)?.path,
+            "binding": declared.name,
+        }))
+    }
+
+    /// A writer policy (§8.5; PL §4.4, `WriterPolicy`): the binding a
+    /// `WriteAuthorizedBy` names, and for a trusted-action alias the UI
+    /// contract beside it, written directly or through an alias.
+    pub(crate) fn policy_value(
+        &self,
+        module: usize,
+        policy: &TSType<'a>,
+        depth: u32,
+    ) -> Option<serde_json::Value> {
+        if depth > 12 {
+            return None;
+        }
+        let TSType::TSTypeReference(reference) = policy else {
+            return match policy {
+                TSType::TSParenthesizedType(inner) => {
+                    self.policy_value(module, &inner.type_annotation, depth + 1)
+                }
+                _ => None,
+            };
+        };
+        match self.label_term(module, reference) {
+            LabelTerm::Body(home, body, _) => self.policy_value(home, body, depth + 1),
+            LabelTerm::Api(name) => self.policy_of_alias(module, reference, &name, depth),
+            _ => None,
+        }
+    }
+
+    /// The policy one of the writer aliases states by its own arguments.
+    fn policy_of_alias(
+        &self,
+        module: usize,
+        reference: &TSTypeReference<'a>,
+        name: &str,
+        depth: u32,
+    ) -> Option<serde_json::Value> {
+        use serde_json::{json, Value};
+        let written = |index: usize| {
+            reference
+                .type_arguments
+                .as_ref()
+                .and_then(|arguments| arguments.params.get(index))
+        };
+        let writer = |index: usize| -> Option<Value> {
+            let mut binding = written(index)?;
+            let mut home = module;
+            for _ in 0..8 {
+                match binding {
+                    TSType::TSTypeQuery(query) => {
+                        let TSTypeQueryExprName::IdentifierReference(name) = &query.expr_name
+                        else {
+                            return None;
+                        };
+                        return self.binding_value(home, name);
+                    }
+                    TSType::TSTypeReference(alias) => match self.label_term(home, alias) {
+                        LabelTerm::Body(next, body, _) => {
+                            home = next;
+                            binding = body;
+                        }
+                        _ => return None,
+                    },
+                    _ => return None,
+                }
+            }
+            None
+        };
+        let text = |index: usize| -> Option<Value> {
+            self.label_value(module, written(index)?, &[], depth + 1)
+                .filter(Value::is_string)
+        };
+        match name {
+            "WriteAuthorizedBy" => Some(json!({ "body": writer(1)? })),
+            "TrustedActionWrite" | "TrustedActionWriteWithIntegrity" => {
+                let (action, pattern) = (text(2)?, text(3)?);
+                let integrity = match (name, written(4)) {
+                    ("TrustedActionWriteWithIntegrity", Some(list)) => {
+                        self.label_value(module, list, &[], depth + 1)?
+                    }
+                    _ => json!([pattern]),
+                };
+                Some(json!({
+                    "body": writer(1)?,
+                    "uiContract": {
+                        "helper": "UiAction",
+                        "action": action,
+                        "trustedPattern": pattern,
+                        "requiredEventIntegrity": integrity,
+                    },
+                }))
+            }
+            _ => None,
+        }
+    }
+
+    /// The initializer of the module-scope `const` that `name` denotes, an
+    /// import followed, and the module that declares it. `None` where the
+    /// program does not hold the declaration, and an initializer of `None`
+    /// where the name denotes anything else.
+    fn constant_initializer(
+        &self,
+        module: usize,
+        name: &IdentifierReference<'a>,
+    ) -> Option<(usize, Option<&'a Expression<'a>>)> {
+        let parsed = self.parsed(module)?;
+        let symbol = symbol_of(parsed.semantic.scoping(), name)?;
+        let (module, symbol) = match self.model(module)?.binding(symbol) {
+            Some(Binding::Import(import, binding)) => {
+                let import = &self.model(module)?.imports[import];
+                let def =
+                    self.resolve_import(module, import, &import.bindings[binding].imported)?;
+                (def.module, self.model(def.module)?.defs[def.def].symbol?)
+            }
+            _ => (module, symbol),
+        };
+        let parsed = self.parsed(module)?;
+        let scoping = parsed.semantic.scoping();
+        let declaration = scoping.symbol_declaration(symbol);
+        let AstKind::VariableDeclarator(declarator) = parsed.semantic.nodes().kind(declaration)
+        else {
+            return Some((module, None));
+        };
+        let at_module_scope = scoping.symbol_scope_id(symbol) == scoping.root_scope_id();
+        if declarator.kind != VariableDeclarationKind::Const || !at_module_scope {
+            return Some((module, None));
+        }
+        Some((module, declarator.init.as_ref()))
+    }
+
+    /// Whether `typeof NAME` in a label argument is a legal constant
+    /// reference (§8.5): `NAME` is a module-scope constant with a static
+    /// initializer, and its value is an atom, or a string where `string`
+    /// is set. `None` where the program does not hold the constant.
+    fn constant_reference(
+        &self,
+        module: usize,
+        query: &TSTypeQuery<'a>,
+        string: bool,
+    ) -> Option<bool> {
+        // `typeof NAME.path` names a part of a constant.
+        let TSTypeQueryExprName::IdentifierReference(name) = &query.expr_name else {
+            return Some(false);
+        };
+        let Some((home, init)) = self.constant_initializer(module, name) else {
+            // A name that resolves to nothing in the module is no constant.
+            let unbound = self
+                .parsed(module)
+                .is_some_and(|parsed| symbol_of(parsed.semantic.scoping(), name).is_none());
+            return if unbound { Some(false) } else { None };
+        };
+        let Some(init) = init else {
+            return Some(false);
+        };
+        if !self.is_static_initializer(home, init, 0) {
+            return Some(false);
+        }
+        self.is_atom_value(home, init, string, 0)
+    }
+
+    /// Whether the value of a static initializer is a label atom: a
+    /// string, a number, a boolean, `null`, or an object whose property
+    /// values are atoms or arrays of atoms (§8.5). With `string`, whether
+    /// it is a string.
+    fn is_atom_value(
+        &self,
+        module: usize,
+        value: &Expression<'a>,
+        string: bool,
+        depth: u32,
+    ) -> Option<bool> {
+        if depth > 8 {
+            return Some(false);
+        }
+        let next = depth + 1;
+        Some(match unwrap(value) {
+            Expression::StringLiteral(_) | Expression::TemplateLiteral(_) => true,
+            Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::UnaryExpression(_) => !string,
+            Expression::Identifier(name) => match self.constant_initializer(module, name)? {
+                (home, Some(init)) => return self.is_atom_value(home, init, string, next),
+                (_, None) => false,
+            },
+            Expression::ObjectExpression(object) if !string => {
+                for property in &object.properties {
+                    let ObjectPropertyKind::ObjectProperty(property) = property else {
+                        return Some(false);
+                    };
+                    let atom = match unwrap(&property.value) {
+                        Expression::ArrayExpression(array) => {
+                            let mut all = true;
+                            for element in &array.elements {
+                                let Some(element) = element.as_expression() else {
+                                    return Some(false);
+                                };
+                                if matches!(unwrap(element), Expression::ArrayExpression(_)) {
+                                    return Some(false);
+                                }
+                                all &= self.is_atom_value(module, element, false, next)?;
+                            }
+                            all
+                        }
+                        other => self.is_atom_value(module, other, false, next)?,
+                    };
+                    if !atom {
+                        return Some(false);
+                    }
+                }
+                true
+            }
+            _ => false,
+        })
+    }
+
+    /// Whether the constant `name` has a static initializer (§8.8), and the
+    /// type of the value the initializer denotes where this slice
+    /// evaluates it. `None` where the program does not hold the constant.
+    fn static_constant(
+        &self,
+        module: usize,
+        name: &IdentifierReference<'a>,
+        depth: u32,
+    ) -> (Option<bool>, Option<TypeId>) {
+        let found = (|| {
+            let parsed = self.parsed(module)?;
+            let symbol = symbol_of(parsed.semantic.scoping(), name)?;
+            let (module, symbol) = match self.model(module)?.binding(symbol) {
+                Some(Binding::Import(import, binding)) => {
+                    let import = &self.model(module)?.imports[import];
+                    let def =
+                        self.resolve_import(module, import, &import.bindings[binding].imported)?;
+                    (def.module, self.model(def.module)?.defs[def.def].symbol?)
+                }
+                _ => (module, symbol),
+            };
+            let parsed = self.parsed(module)?;
+            let scoping = parsed.semantic.scoping();
+            let declaration = scoping.symbol_declaration(symbol);
+            let AstKind::VariableDeclarator(declarator) = parsed.semantic.nodes().kind(declaration)
+            else {
+                return None;
+            };
+            // A module-scope `const` only: a local or a `let` is no
+            // constant.
+            let at_module_scope = scoping.symbol_scope_id(symbol) == scoping.root_scope_id();
+            if declarator.kind != VariableDeclarationKind::Const || !at_module_scope {
+                return Some((module, None));
+            }
+            Some((module, declarator.init.as_ref()))
+        })();
+        match found {
+            None => (None, None),
+            Some((_, None)) => (Some(false), None),
+            Some((module, Some(init))) => {
+                let is_static = self.is_static_initializer(module, init, depth);
+                let value = if is_static {
+                    self.literal_type_as(init, true, module)
+                } else {
+                    None
+                };
+                (Some(is_static), value)
+            }
+        }
+    }
+
+    /// A static initializer (§8.8): a literal, a numeric literal with a
+    /// sign, an array or object literal of static initializers with static
+    /// keys, a reference to a module-scope constant whose initializer is
+    /// static, and any of these in parentheses or under `as const`, `as T`,
+    /// or `satisfies T`.
+    fn is_static_initializer(&self, module: usize, init: &Expression<'a>, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        let next = depth + 1;
+        match init {
+            Expression::ParenthesizedExpression(inner) => {
+                self.is_static_initializer(module, &inner.expression, next)
+            }
+            Expression::TSAsExpression(inner) => {
+                self.is_static_initializer(module, &inner.expression, next)
+            }
+            Expression::TSSatisfiesExpression(inner) => {
+                self.is_static_initializer(module, &inner.expression, next)
+            }
+            Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::BigIntLiteral(_) => true,
+            Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+            Expression::UnaryExpression(unary) => {
+                matches!(
+                    unary.operator,
+                    oxc_syntax::operator::UnaryOperator::UnaryNegation
+                        | oxc_syntax::operator::UnaryOperator::UnaryPlus
+                ) && matches!(
+                    unary.argument,
+                    Expression::NumericLiteral(_) | Expression::BigIntLiteral(_)
+                )
+            }
+            Expression::ArrayExpression(array) => array.elements.iter().all(|element| {
+                element
+                    .as_expression()
+                    .is_some_and(|element| self.is_static_initializer(module, element, next))
+            }),
+            Expression::ObjectExpression(object) => object.properties.iter().all(|property| {
+                let ObjectPropertyKind::ObjectProperty(property) = property else {
+                    return false;
+                };
+                !property.computed
+                    && !property.method
+                    && static_key_name(&property.key).is_some()
+                    && self.is_static_initializer(module, &property.value, next)
+            }),
+            Expression::Identifier(name) => {
+                self.static_constant(module, name, next).0 == Some(true)
+            }
+            _ => false,
+        }
+    }
+
+    /// What a reference in a label argument stands for (§8.5).
+    fn label_term(&self, module: usize, reference: &TSTypeReference<'a>) -> LabelTerm<'a> {
+        let TSTypeName::IdentifierReference(name) = &reference.type_name else {
+            return LabelTerm::Other;
+        };
+        let (Some(parsed), Some(model)) = (self.parsed(module), self.model(module)) else {
+            return LabelTerm::Undecided;
+        };
+        let Some(symbol) = symbol_of(parsed.semantic.scoping(), name) else {
+            return LabelTerm::Undecided;
+        };
+        if let Some(api) = model.api_ref(symbol) {
+            return LabelTerm::Api(api.name);
+        }
+        let (home, symbol) = match model.binding(symbol) {
+            Some(Binding::Import(import, binding)) => {
+                let import = &model.imports[import];
+                let target = self
+                    .resolve_import(module, import, &import.bindings[binding].imported)
+                    .and_then(|def| {
+                        Some((def.module, self.model(def.module)?.defs[def.def].symbol?))
+                    });
+                match target {
+                    Some(target) => target,
+                    None => return LabelTerm::Undecided,
+                }
+            }
+            _ => (module, symbol),
+        };
+        let Some(parsed) = self.parsed(home) else {
+            return LabelTerm::Undecided;
+        };
+        let declaration = parsed.semantic.scoping().symbol_declaration(symbol);
+        match parsed.semantic.nodes().kind(declaration) {
+            AstKind::TSTypeAliasDeclaration(alias) => LabelTerm::Body(
+                home,
+                &alias.type_annotation,
+                alias
+                    .type_parameters
+                    .iter()
+                    .flat_map(|parameters| &parameters.params)
+                    .map(|parameter| parameter.name.name.to_string())
+                    .collect(),
+            ),
+            // A type parameter stands for a term that is written where the
+            // alias is used, and is decided there.
+            AstKind::TSTypeParameter(_) => LabelTerm::Undecided,
+            _ => LabelTerm::Other,
+        }
+    }
+
+    /// A label argument is a tuple of atoms (§8.5). A reference to an alias
+    /// is replaced by the alias's body before anything is decided, and the
+    /// report is made at the alias as written.
+    fn label_list(&self, module: usize, list: &TSType<'a>, alias: Span) {
+        self.label_list_at(module, list, alias, 0);
+    }
+
+    fn label_list_at(&self, module: usize, list: &TSType<'a>, alias: Span, depth: u32) {
+        if depth > 8 {
+            return;
+        }
+        let mut list = list;
+        loop {
+            list = match list {
+                TSType::TSParenthesizedType(inner) => &inner.type_annotation,
+                TSType::TSTypeOperatorType(operator)
+                    if operator.operator == TSTypeOperatorOperator::Readonly =>
+                {
+                    &operator.type_annotation
+                }
+                _ => break,
+            };
+        }
+        match list {
+            TSType::TSTupleType(tuple) => {
+                for element in &tuple.element_types {
+                    match element {
+                        TSTupleElement::TSRestType(rest) => {
+                            self.label_list_at(module, &rest.type_annotation, alias, depth + 1);
+                        }
+                        TSTupleElement::TSOptionalType(_)
+                        | TSTupleElement::TSNamedTupleMember(_) => self.report(
+                            module,
+                            "cfc-label:not-static",
+                            alias,
+                            "An optional or named element in a label list",
+                        ),
+                        other => self.label_atom(module, other.to_ts_type(), alias, depth + 1),
+                    }
+                }
+            }
+            TSType::TSTypeReference(reference) => match self.label_term(module, reference) {
+                LabelTerm::Body(home, body, _) => self.label_list_at(home, body, alias, depth + 1),
+                LabelTerm::Undecided => {}
+                LabelTerm::Api(_) | LabelTerm::Other => self.report(
+                    module,
+                    "cfc-label:not-a-list",
+                    alias,
+                    "A label argument that is not a tuple of atoms",
+                ),
+            },
+            _ => self.report(
+                module,
+                "cfc-label:not-a-list",
+                alias,
+                "A label argument that is not a tuple of atoms",
+            ),
+        }
+    }
+
+    /// An atom of the label-argument language (§8.5): a literal, `null`,
+    /// an object type literal of atoms and tuples of atoms, `AnyOf<list>`,
+    /// `PolicyOf<typeof rules>`, a marker type of the API, or an alias
+    /// whose body is an atom.
+    fn label_atom(&self, module: usize, atom: &TSType<'a>, alias: Span, depth: u32) {
+        if depth > 8 {
+            return;
+        }
+        let refuse = || {
+            self.report(
+                module,
+                "cfc-label:not-static",
+                alias,
+                "A label atom outside the constant language",
+            );
+        };
+        match atom {
+            TSType::TSLiteralType(literal) => {
+                if matches!(literal.literal, TSLiteral::TemplateLiteral(_)) {
+                    refuse();
+                }
+            }
+            TSType::TSNullKeyword(_) => {}
+            // A constant reference: `typeof NAME` stands for the value of
+            // a module-scope constant with a static initializer.
+            TSType::TSTypeQuery(query) => {
+                if self.constant_reference(module, query, false) == Some(false) {
+                    self.report(
+                        module,
+                        "cfc-label:not-static",
+                        alias,
+                        "A constant reference `typeof NAME` whose constant has no static initializer, or whose value is not a label atom",
+                    );
+                }
+            }
+            TSType::TSParenthesizedType(inner) => {
+                self.label_atom(module, &inner.type_annotation, alias, depth + 1);
+            }
+            TSType::TSTypeLiteral(literal) => {
+                for member in &literal.members {
+                    let TSSignature::TSPropertySignature(property) = member else {
+                        refuse();
+                        continue;
+                    };
+                    let Some(annotation) = &property.type_annotation else {
+                        refuse();
+                        continue;
+                    };
+                    let mut value = &annotation.type_annotation;
+                    if let TSType::TSTypeOperatorType(operator) = value {
+                        if operator.operator == TSTypeOperatorOperator::Readonly {
+                            value = &operator.type_annotation;
+                        }
+                    }
+                    match value {
+                        TSType::TSTupleType(_) => {
+                            self.label_list_at(module, value, alias, depth + 1);
+                        }
+                        other => self.label_atom(module, other, alias, depth + 1),
+                    }
+                }
+            }
+            TSType::TSTypeReference(reference) => match self.label_term(module, reference) {
+                LabelTerm::Body(home, body, _) => self.label_atom(home, body, alias, depth + 1),
+                LabelTerm::Undecided => {}
+                LabelTerm::Api(name) => match name.as_str() {
+                    "AnyOf" => {
+                        if let Some(list) = reference
+                            .type_arguments
+                            .as_ref()
+                            .and_then(|arguments| arguments.params.first())
+                        {
+                            self.label_list_at(module, list, alias, depth + 1);
+                        }
+                    }
+                    "PolicyOf" => self.policy_of(module, reference),
+                    _ => {}
+                },
+                LabelTerm::Other => refuse(),
+            },
+            _ => refuse(),
+        }
+    }
+
+    /// `cfc-policy-of`: the argument of `PolicyOf` is `typeof rules`
+    /// written in place, with `rules` an exported module-scope constant
+    /// initialized by `exchangeRules([...])`, declared in the module or
+    /// imported from the module that declares it (§8.5).
+    fn policy_of(&self, module: usize, reference: &TSTypeReference<'a>) {
+        let decided = (|| -> Option<bool> {
+            let argument = reference.type_arguments.as_ref()?.params.first()?;
+            let TSType::TSTypeQuery(query) = argument else {
+                return Some(false);
+            };
+            let TSTypeQueryExprName::IdentifierReference(name) = &query.expr_name else {
+                return Some(false);
+            };
+            let parsed = self.parsed(module)?;
+            let model = self.model(module)?;
+            let Some(symbol) = symbol_of(parsed.semantic.scoping(), name) else {
+                return Some(false);
+            };
+            let (home, def) = match model.binding(symbol) {
+                Some(Binding::Def(def)) => (module, def),
+                Some(Binding::Import(import, binding)) => {
+                    let import = &model.imports[import];
+                    // A module the program does not hold, a pinned `cf:`
+                    // specifier included, is not decided here.
+                    let direct = self.module_of(module, &import.specifier)?;
+                    let def =
+                        self.resolve_import(module, import, &import.bindings[binding].imported);
+                    match def {
+                        // A binding reached through a re-export is refused.
+                        Some(def) if def.module == direct => (def.module, def.def),
+                        _ => return Some(false),
+                    }
+                }
+                None => return Some(false),
+            };
+            let def = &self.model(home)?.defs[def];
+            if !def.exported {
+                return Some(false);
+            }
+            let parsed = self.parsed(home)?;
+            let declaration = parsed.semantic.scoping().symbol_declaration(def.symbol?);
+            let AstKind::VariableDeclarator(declarator) = parsed.semantic.nodes().kind(declaration)
+            else {
+                return Some(false);
+            };
+            let Some(Expression::CallExpression(call)) = declarator.init.as_ref().map(unwrap)
+            else {
+                return Some(false);
+            };
+            let callee = self
+                .model(home)?
+                .api_ref_of_callee(parsed.semantic.scoping(), &call.callee);
+            Some(
+                declarator.kind == VariableDeclarationKind::Const
+                    && callee.is_some_and(|api| api.name == "exchangeRules"),
+            )
+        })();
+        if decided == Some(false) {
+            self.report(
+                module,
+                "cfc-policy-of",
+                reference.span,
+                "The argument of `PolicyOf` is not `typeof` of an exported constant initialized by `exchangeRules([...])`",
+            );
+        }
+    }
+
+    /// Whether a written type is a string literal type, or an alias whose
+    /// body is one (§8.5, the trusted-action aliases).
+    fn is_string_literal_type(&self, module: usize, ty: &TSType<'a>, depth: u32) -> bool {
+        match ty {
+            TSType::TSLiteralType(literal) => {
+                matches!(literal.literal, TSLiteral::StringLiteral(_))
+            }
+            TSType::TSParenthesizedType(inner) => {
+                self.is_string_literal_type(module, &inner.type_annotation, depth)
+            }
+            // A constant reference whose value is a string.
+            TSType::TSTypeQuery(query) => {
+                self.constant_reference(module, query, true) != Some(false)
+            }
+            TSType::TSTypeReference(reference) if depth < 8 => {
+                match self.label_term(module, reference) {
+                    LabelTerm::Body(home, body, _) => {
+                        self.is_string_literal_type(home, body, depth + 1)
+                    }
+                    LabelTerm::Undecided => true,
+                    LabelTerm::Api(_) | LabelTerm::Other => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// `cfc-label:conflict`: a second annotation under a key other than
+    /// `confidentiality` that declares the key differently (§8.4), and the
+    /// annotation added.
+    fn annotate_once(
+        &self,
+        module: usize,
+        span: Span,
+        ty: TypeId,
+        key: &'static str,
+        argument: String,
+    ) -> TypeId {
+        let squeezed = |text: &str| text.split_whitespace().collect::<String>();
+        let differs = self
+            .types
+            .borrow()
+            .annotations(ty)
+            .iter()
+            .any(|annotation| {
+                annotation.key == key && squeezed(&annotation.argument) != squeezed(&argument)
+            });
+        if differs && key != "confidentiality" {
+            self.report(
+                module,
+                "cfc-label:conflict",
+                span,
+                format!("Two annotations declare `{key}` differently on one path"),
+            );
+        }
+        self.annotate(ty, key, argument)
+    }
+
+    /// The names of the key fields that the second argument of an
+    /// `ArrayByKey` declares, in the order of the names. The argument is
+    /// a string literal type or a union of them, and each names a
+    /// required top-level property of `value`, the type of an element,
+    /// whose type is `string` or `number`: anything else is reported as
+    /// `array-by-key:declaration` (§4.4.1, assumed there). Nothing is
+    /// reported for a part that is not evaluated.
+    fn key_fields(
+        &self,
+        module: usize,
+        span: Span,
+        value: TypeId,
+        declared: Option<&TypeId>,
+    ) -> Vec<String> {
+        let refuse = |found: String| self.report(module, "array-by-key:declaration", span, found);
+        let Some(declared) = declared else {
+            refuse("An `ArrayByKey` that names no key field".to_string());
+            return Vec::new();
+        };
+        let members = match self.shape(*declared) {
+            Shape::Union(members) => members,
+            _ => vec![*declared],
+        };
+        let mut fields = Vec::new();
+        for member in members {
+            match self.shape(member) {
+                Shape::Literal(text) if is_string_literal(&text) => {
+                    fields.push(text[1..text.len() - 1].to_string());
+                }
+                Shape::Unresolved(_) | Shape::Parameter(_) => {}
+                _ => refuse(
+                    "A key field of `ArrayByKey` that is not a string literal type".to_string(),
+                ),
+            }
+        }
+        fields.sort();
+        fields.dedup();
+        if let Shape::Object(properties, _) = self.shape(value) {
+            for field in &fields {
+                match properties.iter().find(|property| &property.name == field) {
+                    None => refuse(format!(
+                        "A key field `{field}` that is no property of the type"
+                    )),
+                    Some(property) if property.optional => refuse(format!(
+                        "A key field `{field}` that is an optional property"
+                    )),
+                    Some(property) if self.key_value(property.ty) == Some(false) => {
+                        refuse(format!(
+                            "A key field `{field}` whose type is neither `string` nor `number`"
+                        ))
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        fields
+    }
+
+    /// Whether every value of a type is a string or a number, and `None`
+    /// where the type is not evaluated.
+    fn key_value(&self, ty: TypeId) -> Option<bool> {
+        match self.shape(ty) {
+            Shape::String | Shape::Number => Some(true),
+            Shape::Literal(text) => Some(is_string_literal(&text) || text.parse::<f64>().is_ok()),
+            Shape::Union(members) => members
+                .iter()
+                .map(|member| self.key_value(*member))
+                .try_fold(true, |all, member| member.map(|member| all && member)),
+            Shape::Unresolved(_) | Shape::Parameter(_) => None,
+            _ => Some(false),
+        }
+    }
+
+    /// The writer binding of `WriteAuthorizedBy` is `typeof` of a
+    /// module-scope `handler(...)` definition or a function declaration.
+    fn writer_binding(&self, module: usize, binding: &TSType<'a>, alias: Span) {
+        let supported = match binding {
+            TSType::TSTypeQuery(query) => match &query.expr_name {
+                TSTypeQueryExprName::IdentifierReference(name) => {
+                    self.value_def(module, name).is_none_or(|kind| {
+                        matches!(
+                            kind,
+                            crate::module::DefKind::Handler | crate::module::DefKind::Function
+                        )
+                    })
+                }
+                _ => false,
+            },
+            // An alias or a type parameter that stands for a binding.
+            TSType::TSTypeReference(_) => true,
+            _ => false,
+        };
+        if !supported {
+            self.report(
+                module,
+                "cfc-write-authorized-by",
+                alias,
+                "A writer binding that is not `typeof` of a handler definition or a function declaration",
+            );
+        }
+    }
+
+    /// The kind of the module-scope definition a value name denotes, an
+    /// import followed. `None` when the program does not hold it.
+    pub(crate) fn value_def(
+        &self,
+        module: usize,
+        name: &IdentifierReference<'a>,
+    ) -> Option<crate::module::DefKind> {
+        let parsed = self.parsed(module)?;
+        let symbol = symbol_of(parsed.semantic.scoping(), name)?;
+        let model = self.model(module)?;
+        match model.binding(symbol)? {
+            Binding::Def(def) => Some(model.defs[def].kind),
+            Binding::Import(import, binding) => {
+                let import = &model.imports[import];
+                let def =
+                    self.resolve_import(module, import, &import.bindings[binding].imported)?;
+                self.kind(def).map(|(kind, _)| kind)
+            }
+        }
+    }
+
+    /// A type that is not declared in the program: a native operator of
+    /// §7.1, a standard-library object type, or a name the checker does not
+    /// know.
+    fn global(
+        &self,
+        module: usize,
+        reference: &TSTypeReference<'a>,
+        name: &str,
+        env: &Env,
+        depth: u32,
+    ) -> TypeId {
+        let arguments = self.arguments(module, reference, env, depth);
+        self.global_of(module, reference.span, name, arguments)
+    }
+
+    /// [`Self::global`] for a name written at `span` with its type
+    /// arguments resolved.
+    fn global_of(&self, module: usize, span: Span, name: &str, arguments: Vec<TypeId>) -> TypeId {
+        let first = arguments.first().copied();
+        let operand = |checker: &Self| -> Option<(TypeId, Shape)> {
+            let operand = first?;
+            let shape = checker.shape(operand);
+            match shape {
+                Shape::Object(..) => Some((operand, shape)),
+                Shape::Unresolved(_) | Shape::Parameter(_) | Shape::Opaque(_) => None,
+                // A union with a member that is not evaluated is not
+                // decided.
+                Shape::Union(_) if checker.first_unresolved(operand, 0).is_some() => None,
+                _ => {
+                    checker.report(
+                        module,
+                        "subset-type:operator-operand",
+                        span,
+                        format!("`{name}` applied to a type that is not an object type"),
+                    );
+                    None
+                }
+            }
+        };
+        let keys = |checker: &Self| -> Option<Vec<String>> {
+            let keys = *arguments.get(1)?;
+            let members = match checker.shape(keys) {
+                Shape::Union(members) => members,
+                Shape::Literal(_) => vec![keys],
+                _ => return None,
+            };
+            members
+                .iter()
+                .map(|member| match checker.shape(*member) {
+                    Shape::Literal(text) => Some(text.trim_matches(['"', '\'']).to_string()),
+                    _ => None,
+                })
+                .collect()
+        };
+        match name {
+            "Array" | "ReadonlyArray" => match first {
+                Some(element) => {
+                    let array = self.add(Shape::Array(element));
+                    if name == "ReadonlyArray" {
+                        self.types.borrow_mut().readonly.insert(array);
+                    }
+                    array
+                }
+                None => self.unresolved(Why::NotEvaluated),
+            },
+            "Readonly" => match first {
+                Some(operand) => self.read_only(operand, false),
+                None => self.unresolved(Why::NotEvaluated),
+            },
+            "Partial" | "Required" => match operand(self) {
+                Some((_, Shape::Object(mut properties, index))) => {
+                    for property in &mut properties {
+                        property.optional = name == "Partial";
+                    }
+                    self.add(Shape::Object(properties, index))
+                }
+                _ => self.unresolved(Why::NotEvaluated),
+            },
+            "Pick" | "Omit" => {
+                match (operand(self), keys(self)) {
+                    (Some((_, Shape::Object(properties, index))), Some(keys)) => {
+                        if let Some(missing) = keys.iter().find(|key| {
+                            name == "Pick"
+                                && index.is_none()
+                                && !properties.iter().any(|property| property.name == **key)
+                        }) {
+                            self.report(
+                            module,
+                            "subset-type:operator-operand",
+                            span,
+                            format!("`Pick` with the key `{missing}`, which the type does not declare"),
+                        );
+                        }
+                        let kept = properties
+                            .into_iter()
+                            .filter(|property| keys.contains(&property.name) == (name == "Pick"))
+                            .collect();
+                        self.add(Shape::Object(kept, index))
+                    }
+                    (Some(_), None) => {
+                        // The keys are evaluated and are not string literals.
+                        let evaluated = arguments
+                            .get(1)
+                            .is_some_and(|keys| self.first_unresolved(*keys, 0).is_none())
+                            && !arguments.get(1).is_some_and(|keys| {
+                                matches!(self.shape(*keys), Shape::Parameter(_))
+                            });
+                        if evaluated {
+                            self.report(
+                                module,
+                                "subset-type:operator-operand",
+                                span,
+                                format!("`{name}` with keys that are not string literal types"),
+                            );
+                        }
+                        self.unresolved(Why::NotEvaluated)
+                    }
+                    _ => self.unresolved(Why::NotEvaluated),
+                }
+            }
+            "Record" => match (first.map(|key| self.shape(key)), arguments.get(1)) {
+                (Some(Shape::String), Some(value)) => {
+                    self.add(Shape::Object(Vec::new(), Some(*value)))
+                }
+                (Some(Shape::Literal(_) | Shape::Union(_)), Some(value)) => {
+                    match keys_of(self, first) {
+                        Some(names) => {
+                            let properties = names
+                                .into_iter()
+                                .map(|name| Property {
+                                    name,
+                                    ty: *value,
+                                    optional: false,
+                                    readonly: false,
+                                })
+                                .collect();
+                            self.add(Shape::Object(properties, None))
+                        }
+                        None => self.unresolved(Why::NotEvaluated),
+                    }
+                }
+                _ => self.unresolved(Why::NotEvaluated),
+            },
+            "NonNullable" => match first.map(|operand| (operand, self.shape(operand))) {
+                Some((_, Shape::Union(members))) => {
+                    let kept = members
+                        .into_iter()
+                        .filter(|member| {
+                            !matches!(self.shape(*member), Shape::Null | Shape::Undefined)
+                        })
+                        .collect();
+                    self.union(kept)
+                }
+                Some((operand, _)) => operand,
+                None => self.unresolved(Why::NotEvaluated),
+            },
+            "ReturnType" => match first.map(|operand| (operand, self.shape(operand))) {
+                Some((_, Shape::HandlerFactory(event, _))) => {
+                    self.add(Shape::Handle(HandleKind::Stream, event))
+                }
+                Some((_, Shape::PatternFactory(_, output))) => output,
+                Some((function, Shape::Function)) => self
+                    .function_result(function)
+                    .unwrap_or_else(|| self.unresolved(Why::NotEvaluated)),
+                Some((operand, shape)) => {
+                    self.outside_the_table(module, span, name, operand, &shape);
+                    self.unresolved(Why::NotEvaluated)
+                }
+                None => self.unresolved(Why::NotEvaluated),
+            },
+            "Parameters" => match first.map(|operand| (operand, self.shape(operand))) {
+                Some((_, Shape::PatternFactory(input, _))) => self.add(Shape::Tuple(vec![input])),
+                Some((_, Shape::HandlerFactory(_, state))) => self.add(Shape::Tuple(vec![state])),
+                Some((function, Shape::Function)) => match self.signature(function).parameters {
+                    Some(parameters) if parameters.iter().all(|parameter| !parameter.rest) => self
+                        .add(Shape::Tuple(
+                            parameters.iter().map(|parameter| parameter.ty).collect(),
+                        )),
+                    _ => self.unresolved(Why::NotEvaluated),
+                },
+                Some((operand, shape)) => {
+                    self.outside_the_table(module, span, name, operand, &shape);
+                    self.unresolved(Why::NotEvaluated)
+                }
+                None => self.unresolved(Why::NotEvaluated),
+            },
+            "Exclude" | "Extract" => match (first, arguments.get(1)) {
+                (Some(subject), Some(test))
+                    if self.first_unresolved(subject, 0).is_none()
+                        && self.first_unresolved(*test, 0).is_none() =>
+                {
+                    let members = match self.shape(subject) {
+                        Shape::Union(members) => members,
+                        _ => vec![subject],
+                    };
+                    // `boolean` is taken as `true | false` (§7.10).
+                    let members: Vec<TypeId> = members
+                        .into_iter()
+                        .flat_map(|member| match self.shape(member) {
+                            Shape::Boolean => ["true", "false"]
+                                .map(|text| self.add(Shape::Literal(text.to_string())))
+                                .to_vec(),
+                            _ => vec![member],
+                        })
+                        .collect();
+                    let kept = members
+                        .into_iter()
+                        .filter(|member| {
+                            (self.assignable(*member, *test) == Some(true)) == (name == "Extract")
+                        })
+                        .collect();
+                    self.union(kept)
+                }
+                _ => self.unresolved(Why::NotEvaluated),
+            },
+            "PropertyKey" => self.add(Shape::String),
+            "Awaited"
+            | "InstanceType"
+            | "ConstructorParameters"
+            | "ThisParameterType"
+            | "OmitThisParameter"
+            | "ThisType"
+            | "NoInfer"
+            | "Uppercase"
+            | "Lowercase"
+            | "Capitalize"
+            | "Uncapitalize" => {
+                self.report(
+                    module,
+                    "stdlib:unsupported-member",
+                    span,
+                    format!("The utility type `{name}` is not part of the subset"),
+                );
+                self.unresolved(Why::RefusedForm)
+            }
+            _ if matches!(api::global(name), api::Global::Refused(_)) => {
+                self.report(
+                    module,
+                    "function-body:unsupported-global",
+                    span,
+                    format!("The type of the global `{name}` is not available"),
+                );
+                self.unresolved(Why::RefusedForm)
+            }
+            "Date" | "RegExp" | "Error" | "TypeError" | "RangeError" | "Map" | "Set"
+            | "ReadonlyMap" | "ReadonlySet" | "URL" | "Uint8Array" | "Iterable" => {
+                self.code_type(name, arguments)
+            }
+            // A type name of the browser (§7.10). No DOM object reaches a
+            // pattern.
+            _ if api::is_dom_type_name(name) => {
+                self.note(
+                    module,
+                    format!("a type name of the DOM library: {name}"),
+                    span,
+                );
+                self.report(
+                    module,
+                    "stdlib:unsupported-member",
+                    span,
+                    format!(
+                        "`{name}` is a type name of the DOM library, which is not part of the subset. An event arrives as data: declare the shape of the event the handler reads, such as `{{ detail: {{ value: string }} }}`"
+                    ),
+                );
+                self.unresolved(Why::RefusedForm)
+            }
+            _ => {
+                // A name that resolves to no declaration of the program, no
+                // API type, and no standard-library type (§7.10).
+                self.report(
+                    module,
+                    "subset-type:mismatch",
+                    span,
+                    format!("The type name `{name}` resolves to nothing"),
+                );
+                self.unresolved(Why::External)
+            }
+        }
+    }
+
+    /// `subset-type:operator-operand` for `ReturnType` or `Parameters`
+    /// applied to a type that is evaluated and is neither a function type
+    /// nor a factory type (§7.10).
+    fn outside_the_table(
+        &self,
+        module: usize,
+        span: Span,
+        name: &str,
+        operand: TypeId,
+        shape: &Shape,
+    ) {
+        if matches!(shape, Shape::Parameter(_)) || self.first_unresolved(operand, 0).is_some() {
+            return;
+        }
+        self.report(
+            module,
+            "subset-type:operator-operand",
+            span,
+            format!("`{name}` applied to a type that is not a function type or a factory type"),
+        );
+    }
+
+    /// `typeof name`: the declared type of a value binding (§7.1). A
+    /// `handler(...)` or `pattern(...)` definition has a factory type, and a
+    /// constant initialized by a literal has the type of the literal.
+    fn type_of_value(&self, module: usize, name: &IdentifierReference<'a>, depth: u32) -> TypeId {
+        let Some(parsed) = self.parsed(module) else {
+            return self.unresolved(Why::External);
+        };
+        let scoping = parsed.semantic.scoping();
+        let Some(symbol) = symbol_of(scoping, name) else {
+            return self.unresolved(Why::External);
+        };
+        let (module, symbol) = match self.model(module).and_then(|model| model.binding(symbol)) {
+            Some(Binding::Import(import, binding)) => {
+                let model = self.model(module).expect("the model was just read");
+                let import = &model.imports[import];
+                let target = self
+                    .resolve_import(module, import, &import.bindings[binding].imported)
+                    .and_then(|def| {
+                        Some((def.module, self.model(def.module)?.defs[def.def].symbol?))
+                    });
+                match target {
+                    Some(target) => target,
+                    None => return self.unresolved(Why::External),
+                }
+            }
+            _ => (module, symbol),
+        };
+        let Some(parsed) = self.parsed(module) else {
+            return self.unresolved(Why::External);
+        };
+        let declaration = parsed.semantic.scoping().symbol_declaration(symbol);
+        match parsed.semantic.nodes().kind(declaration) {
+            AstKind::VariableDeclarator(declarator) => {
+                if let Some(annotation) = &declarator.type_annotation {
+                    return self.resolve(module, &annotation.type_annotation, &Env::new(), depth);
+                }
+                let known = match &declarator.init {
+                    Some(init) => self.type_of_initializer(module, init, depth),
+                    None => self.unresolved(Why::TypeofValue),
+                };
+                match self.shape(known) {
+                    // The inferred type of the binding (§7.1).
+                    Shape::Unresolved(Why::TypeofValue) => self
+                        .declared_symbol_type(module, symbol, depth)
+                        .unwrap_or(known),
+                    _ => known,
+                }
+            }
+            AstKind::Function(_) => self
+                .declared_symbol_type(module, symbol, depth)
+                .unwrap_or_else(|_| self.unresolved(Why::TypeofValue)),
+            _ => self.unresolved(Why::TypeofValue),
+        }
+    }
+
+    /// The type of an initializer, where it is a builder definition or a
+    /// literal.
+    fn type_of_initializer(&self, module: usize, init: &Expression<'a>, depth: u32) -> TypeId {
+        let init = unwrap(init);
+        if let Expression::CallExpression(call) = init {
+            let parsed = self.parsed(module).expect("the module is parsed");
+            let builder = self
+                .model(module)
+                .and_then(|model| model.api_ref_of_callee(parsed.semantic.scoping(), &call.callee))
+                .map(|api| api.value());
+            let argument = |index: usize| {
+                call.type_arguments
+                    .as_ref()
+                    .and_then(|arguments| arguments.params.get(index))
+                    .map_or_else(
+                        || self.add(Shape::Unknown),
+                        |ty| self.resolve(module, ty, &Env::new(), depth),
+                    )
+            };
+            return match builder {
+                Some(ApiValue::Builder(Builder::Handler)) => {
+                    self.add(Shape::HandlerFactory(argument(0), argument(1)))
+                }
+                Some(ApiValue::Builder(Builder::Pattern)) => {
+                    self.add(Shape::PatternFactory(argument(0), argument(1)))
+                }
+                _ => self.unresolved(Why::TypeofValue),
+            };
+        }
+        self.literal_type_as(init, true, module)
+            .unwrap_or_else(|| self.unresolved(Why::TypeofValue))
+    }
+
+    /// Whether an array or tuple type is read-only.
+    pub fn is_read_only(&self, ty: TypeId) -> bool {
+        self.types.borrow().readonly.contains(&ty)
+    }
+
+    /// The number of elements a value of the tuple type `ty` has at least.
+    pub(crate) fn tuple_required(&self, ty: TypeId) -> usize {
+        if let Some(required) = self.types.borrow().tuple_required.get(&ty) {
+            return *required;
+        }
+        match self.shape(ty) {
+            Shape::Tuple(elements) => elements.len(),
+            _ => 0,
+        }
+    }
+
+    /// The read-only counterpart of `ty`: of an array or a tuple, and of an
+    /// object type with every property `readonly`. Any other type is
+    /// unchanged. With `deep`, the parts of the type are read-only too, as
+    /// `as const` makes them (§7.5).
+    pub(crate) fn read_only(&self, ty: TypeId, deep: bool) -> TypeId {
+        let inner = |ty: TypeId| if deep { self.read_only(ty, true) } else { ty };
+        let annotations = self.types.borrow().annotations(ty).to_vec();
+        let made = match self.shape(ty) {
+            Shape::Array(element) => {
+                let array = self.add(Shape::Array(inner(element)));
+                self.types.borrow_mut().readonly.insert(array);
+                array
+            }
+            Shape::Tuple(elements) => {
+                let required = self.tuple_required(ty);
+                let count = elements.len();
+                let tuple = self.add(Shape::Tuple(elements.into_iter().map(inner).collect()));
+                self.types.borrow_mut().readonly.insert(tuple);
+                if required < count {
+                    self.types
+                        .borrow_mut()
+                        .tuple_required
+                        .insert(tuple, required);
+                }
+                tuple
+            }
+            Shape::Object(properties, index) => {
+                let properties = properties
+                    .into_iter()
+                    .map(|property| Property {
+                        ty: inner(property.ty),
+                        readonly: true,
+                        ..property
+                    })
+                    .collect();
+                self.add(Shape::Object(properties, index))
+            }
+            _ => return ty,
+        };
+        if !annotations.is_empty() {
+            self.types
+                .borrow_mut()
+                .annotations
+                .insert(made, annotations);
+        }
+        made
+    }
+
+    /// `ty` with a literal type replaced by the primitive type it belongs
+    /// to, as a `let` binding and a mutable property widen it (§7.5).
+    pub(crate) fn widened(&self, ty: TypeId) -> TypeId {
+        match self.shape(ty) {
+            Shape::Literal(text) => {
+                let quoted = text.starts_with(['"', '\'', '`']);
+                self.add(if quoted {
+                    Shape::String
+                } else if text == "true" || text == "false" {
+                    Shape::Boolean
+                } else if text.ends_with('n') {
+                    Shape::BigInt
+                } else {
+                    Shape::Number
+                })
+            }
+            Shape::Union(members)
+                if members
+                    .iter()
+                    .any(|member| matches!(self.shape(*member), Shape::Literal(_))) =>
+            {
+                let members = members
+                    .into_iter()
+                    .map(|member| self.widened(member))
+                    .collect();
+                self.union_by_text(members)
+            }
+            _ => ty,
+        }
+    }
+
+    /// The type of a literal expression with its literal types kept and
+    /// every part read-only: the type of `expression as const` (§7.5).
+    pub(crate) fn constant_type(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+    ) -> Option<TypeId> {
+        self.literal_type_as(expression, true, module)
+            .map(|ty| self.read_only(ty, true))
+    }
+
+    /// The literal type of a primitive literal expression (§7.5).
+    pub(crate) fn exact_literal_type(
+        &self,
+        module: usize,
+        expression: &Expression<'a>,
+    ) -> Option<TypeId> {
+        self.literal_type_as(expression, true, module)
+    }
+
+    /// The type of a literal expression: a primitive, or an object or array
+    /// literal of literals.
+    pub fn literal_type(&self, expression: &Expression<'a>) -> Option<TypeId> {
+        self.literal_type_as(expression, false, 0)
+    }
+
+    /// The type of a literal expression. With `exact`, a primitive literal
+    /// has its literal type and not the primitive type it widens to, which
+    /// is what `typeof` of a constant needs to give a default value (§8.8).
+    fn literal_type_as(
+        &self,
+        expression: &Expression<'a>,
+        exact: bool,
+        module: usize,
+    ) -> Option<TypeId> {
+        let primitive = |shape: Shape| {
+            if exact {
+                self.add(Shape::Literal(self.text(module, expression.span())))
+            } else {
+                self.add(shape)
+            }
+        };
+        Some(match unwrap(expression) {
+            Expression::StringLiteral(_) => primitive(Shape::String),
+            Expression::TemplateLiteral(template) if template.expressions.is_empty() => {
+                primitive(Shape::String)
+            }
+            Expression::NumericLiteral(_) => primitive(Shape::Number),
+            Expression::UnaryExpression(unary)
+                if unary.operator == oxc_syntax::operator::UnaryOperator::UnaryNegation
+                    && matches!(unary.argument, Expression::NumericLiteral(_)) =>
+            {
+                primitive(Shape::Number)
+            }
+            Expression::BooleanLiteral(_) => primitive(Shape::Boolean),
+            Expression::NullLiteral(_) => self.add(Shape::Null),
+            Expression::BigIntLiteral(_) => primitive(Shape::BigInt),
+            Expression::ArrayExpression(array) => {
+                let elements = array
+                    .elements
+                    .iter()
+                    .map(|element| self.literal_type_as(element.as_expression()?, exact, module))
+                    .collect::<Option<Vec<TypeId>>>()?;
+                self.add(Shape::Tuple(elements))
+            }
+            Expression::ObjectExpression(object) => {
+                let properties = object
+                    .properties
+                    .iter()
+                    .map(|property| {
+                        let ObjectPropertyKind::ObjectProperty(property) = property else {
+                            return None;
+                        };
+                        Some(Property {
+                            name: static_key_name(&property.key)?.to_string(),
+                            ty: self.literal_type_as(&property.value, exact, module)?,
+                            optional: false,
+                            readonly: false,
+                        })
+                    })
+                    .collect::<Option<Vec<Property>>>()?;
+                self.add(Shape::Object(properties, None))
+            }
+            _ => return None,
+        })
+    }
+
+    /// Whether a type is literal-like in the sense of §8.8. `None` when the
+    /// type was not evaluated.
+    fn is_literal_like(&self, ty: TypeId, depth: u32) -> Option<bool> {
+        if depth > 8 {
+            return None;
+        }
+        Some(match self.shape(ty) {
+            Shape::Literal(_) | Shape::Null | Shape::Undefined => true,
+            Shape::Tuple(elements) => {
+                for element in elements {
+                    if !self.is_literal_like(element, depth + 1)? {
+                        return Some(false);
+                    }
+                }
+                true
+            }
+            Shape::Object(properties, index) => {
+                if index.is_some_and(|index| self.shape(index) != Shape::Never) {
+                    return Some(false);
+                }
+                for property in properties {
+                    if !self.is_literal_like(property.ty, depth + 1)? {
+                        return Some(false);
+                    }
+                }
+                true
+            }
+            Shape::Unresolved(_) | Shape::Parameter(_) => return None,
+            _ => false,
+        })
+    }
+
+    /// Whether a type contains a function type, a handle's value type not
+    /// followed.
+    pub fn contains_function(&self, ty: TypeId, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        match self.shape(ty) {
+            Shape::Function => true,
+            Shape::Object(properties, index) => properties
+                .iter()
+                .map(|property| property.ty)
+                .chain(index)
+                .any(|ty| self.contains_function(ty, depth + 1)),
+            Shape::Array(element) => self.contains_function(element, depth + 1),
+            Shape::Tuple(members) | Shape::Union(members) => members
+                .iter()
+                .any(|member| self.contains_function(*member, depth + 1)),
+            _ => false,
+        }
+    }
+
+    /// `left & right`, computed (§7.4).
+    pub fn intersection(&self, left: TypeId, right: TypeId) -> TypeId {
+        self.intersect(left, right, 0)
+    }
+
+    /// Why some part of a type was not evaluated, if a part was not. A
+    /// recursive reference inside a type that is otherwise evaluated is not
+    /// counted.
+    pub fn first_unresolved(&self, ty: TypeId, depth: u32) -> Option<Why> {
+        if depth > 6 {
+            return None;
+        }
+        let next = depth + 1;
+        match self.shape(ty) {
+            Shape::Unresolved(Why::Recursive) if depth > 0 => None,
+            Shape::Unresolved(why) => Some(why),
+            Shape::Object(properties, index) => properties
+                .iter()
+                .map(|property| property.ty)
+                .chain(index)
+                .find_map(|ty| self.first_unresolved(ty, next)),
+            Shape::Array(inner) | Shape::Handle(_, inner) => self.first_unresolved(inner, next),
+            Shape::Tuple(members) | Shape::Union(members) => members
+                .iter()
+                .find_map(|member| self.first_unresolved(*member, next)),
+            Shape::PatternFactory(a, b) | Shape::HandlerFactory(a, b) => self
+                .first_unresolved(a, next)
+                .or_else(|| self.first_unresolved(b, next)),
+            _ => None,
+        }
+    }
+
+    /// Counts one written type of module `module` under `label`.
+    pub fn count_written(&self, module: usize, label: &'static str) {
+        *self
+            .types
+            .borrow_mut()
+            .written
+            .entry((module, label))
+            .or_insert(0) += 1;
+    }
+
+    /// Records a site the measurement lists under `category`.
+    pub(crate) fn note(&self, module: usize, category: impl Into<String>, span: Span) {
+        self.types
+            .borrow_mut()
+            .notes
+            .push((module, category.into(), span));
+    }
+
+    /// Adds one to the count `key` of module `module`.
+    pub(crate) fn count(&self, module: usize, key: String) {
+        *self
+            .types
+            .borrow_mut()
+            .counts
+            .entry((module, key))
+            .or_insert(0) += 1;
+    }
+
+    /// A function type with the signature `signature`.
+    pub(crate) fn function_with(&self, signature: Signature) -> TypeId {
+        let function = self.add(Shape::Function);
+        self.types
+            .borrow_mut()
+            .signatures
+            .insert(function, signature);
+        function
+    }
+
+    /// The signature of a function type. It is empty for a function type
+    /// made with none.
+    pub fn signature(&self, function: TypeId) -> Signature {
+        self.types
+            .borrow()
+            .signatures
+            .get(&function)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The result type of a function type, where its signature gives one.
+    pub(crate) fn function_result(&self, function: TypeId) -> Option<TypeId> {
+        self.signature(function).result
+    }
+
+    /// The parameter types a written parameter list declares. A parameter
+    /// without an annotation has a type that is not evaluated.
+    pub(crate) fn written_parameters(
+        &self,
+        module: usize,
+        parameters: &FormalParameters<'a>,
+        env: &[(SymbolId, TypeId)],
+        depth: u32,
+    ) -> Vec<Parameter> {
+        let env = env.to_vec();
+        let mut written: Vec<Parameter> = parameters
+            .items
+            .iter()
+            .map(|parameter| Parameter {
+                ty: match &parameter.type_annotation {
+                    Some(annotation) => {
+                        self.resolve(module, &annotation.type_annotation, &env, depth)
+                    }
+                    None => self.unresolved(Why::NotEvaluated),
+                },
+                optional: parameter.optional || parameter.initializer.is_some(),
+                rest: false,
+            })
+            .collect();
+        if let Some(rest) = &parameters.rest {
+            written.push(Parameter {
+                ty: match &rest.type_annotation {
+                    Some(annotation) => {
+                        self.resolve(module, &annotation.type_annotation, &env, depth)
+                    }
+                    None => self.unresolved(Why::NotEvaluated),
+                },
+                optional: true,
+                rest: true,
+            });
+        }
+        written
+    }
+
+    /// A standard-library object type with its type arguments, such as
+    /// `Map<K, V>`.
+    pub(crate) fn code_type(&self, name: &str, arguments: Vec<TypeId>) -> TypeId {
+        let code = self.add(Shape::Code(name.to_string()));
+        if !arguments.is_empty() {
+            self.types
+                .borrow_mut()
+                .code_arguments
+                .insert(code, arguments);
+        }
+        code
+    }
+
+    /// The type arguments of a standard-library object type.
+    pub(crate) fn code_arguments(&self, code: TypeId) -> Vec<TypeId> {
+        self.types
+            .borrow()
+            .code_arguments
+            .get(&code)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// A union of `members`.
+    pub(crate) fn union_of(&self, members: Vec<TypeId>) -> TypeId {
+        self.union(members)
+    }
+
+    /// Resolves a type written in module `module` with type parameters
+    /// bound.
+    pub(crate) fn resolve_with(
+        &self,
+        module: usize,
+        ty: &TSType<'a>,
+        env: &[(SymbolId, TypeId)],
+    ) -> TypeId {
+        self.resolve(module, ty, &env.to_vec(), 0)
+    }
+
+    /// Marks the function at `key` as being inferred. Returns false when it
+    /// already is, which is a recursive call.
+    pub(crate) fn enter(&self, key: (usize, u32)) -> bool {
+        self.types.borrow_mut().in_progress.insert(key)
+    }
+
+    pub(crate) fn leave(&self, key: (usize, u32)) {
+        self.types.borrow_mut().in_progress.remove(&key);
+    }
+
+    /// A type as text, for reports.
+    pub fn display(&self, ty: TypeId) -> String {
+        self.display_at(ty, 0)
+    }
+
+    fn display_at(&self, ty: TypeId, depth: u32) -> String {
+        if depth > 3 {
+            return "...".to_string();
+        }
+        let show = |ty: TypeId| self.display_at(ty, depth + 1);
+        let shape = match self.shape(ty) {
+            Shape::Unknown => "unknown".to_string(),
+            Shape::Never => "never".to_string(),
+            Shape::Void => "void".to_string(),
+            Shape::Null => "null".to_string(),
+            Shape::Undefined => "undefined".to_string(),
+            Shape::String => "string".to_string(),
+            Shape::Number => "number".to_string(),
+            Shape::Boolean => "boolean".to_string(),
+            Shape::BigInt => "bigint".to_string(),
+            Shape::Literal(text) => text,
+            Shape::NonPrimitive => "object".to_string(),
+            Shape::Object(properties, index) => {
+                let mut parts: Vec<String> = properties
+                    .iter()
+                    .map(|property| {
+                        let mark = if property.optional { "?" } else { "" };
+                        format!("{}{mark}: {}", property.name, show(property.ty))
+                    })
+                    .collect();
+                if let Some(index) = index {
+                    parts.push(format!("[key: string]: {}", show(index)));
+                }
+                format!("{{ {} }}", parts.join("; "))
+            }
+            Shape::Array(element) => format!("{}[]", show(element)),
+            Shape::Tuple(elements) => {
+                format!(
+                    "[{}]",
+                    elements
+                        .iter()
+                        .map(|ty| show(*ty))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+            Shape::Union(members) => members
+                .iter()
+                .map(|ty| show(*ty))
+                .collect::<Vec<_>>()
+                .join(" | "),
+            Shape::Function => {
+                let signature = self.signature(ty);
+                match (signature.parameters, signature.result) {
+                    (None, None) => "(function)".to_string(),
+                    (parameters, result) => format!(
+                        "({}) => {}",
+                        parameters.map_or_else(
+                            || "...".to_string(),
+                            |parameters| parameters
+                                .iter()
+                                .map(|parameter| format!(
+                                    "{}{}",
+                                    if parameter.rest { "..." } else { "" },
+                                    show(parameter.ty)
+                                ))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        result.map_or_else(|| "(not inferred)".to_string(), show)
+                    ),
+                }
+            }
+            Shape::Handle(kind, value) => format!("{}<{}>", kind.name(), show(value)),
+            Shape::PatternFactory(input, output) => {
+                format!("PatternFactory<{}, {}>", show(input), show(output))
+            }
+            Shape::HandlerFactory(event, state) => {
+                format!("HandlerFactory<{}, {}>", show(event), show(state))
+            }
+            Shape::Code(name) | Shape::Opaque(name) | Shape::Parameter(name) => name,
+            Shape::Unresolved(why) => format!("(unresolved: {why:?})"),
+        };
+        let annotations = self.types.borrow().annotations(ty).to_vec();
+        annotations.iter().fold(shape, |shape, annotation| {
+            format!("{shape} @{}", annotation.key)
+        })
+    }
+}
+
+fn keys_of(resolver: &Resolver<'_, '_>, keys: Option<TypeId>) -> Option<Vec<String>> {
+    let keys = keys?;
+    let members = match resolver.shape(keys) {
+        Shape::Union(members) => members,
+        _ => vec![keys],
+    };
+    members
+        .iter()
+        .map(|member| match resolver.shape(*member) {
+            Shape::Literal(text) => Some(text.trim_matches(['"', '\'']).to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether a shape is one §7.4 computes no intersection for.
+fn is_uncomputed(shape: &Shape) -> bool {
+    matches!(
+        shape,
+        Shape::Handle(..)
+            | Shape::PatternFactory(..)
+            | Shape::HandlerFactory(..)
+            | Shape::Function
+            | Shape::Opaque(_)
+    )
+}
+
+/// Whether a shape is a primitive, a literal, or an object type: the shapes
+/// whose intersections §7.4 defines.
+fn is_plain(shape: &Shape) -> bool {
+    matches!(
+        shape,
+        Shape::String
+            | Shape::Number
+            | Shape::Boolean
+            | Shape::BigInt
+            | Shape::Null
+            | Shape::Undefined
+            | Shape::Literal(_)
+            | Shape::Object(..)
+    )
+}
+
+/// What a reference in a label argument stands for.
+enum LabelTerm<'a> {
+    /// An alias of the program: the module that declares it, and its body.
+    Body(usize, &'a TSType<'a>, Vec<String>),
+    /// A type `commonfabric` exports.
+    Api(String),
+    /// A type parameter, or a name the program does not hold.
+    Undecided,
+    /// A declaration that is not an alias.
+    Other,
+}
+
+/// The store a [`Resolver`] keeps its types in.
+pub type Types = RefCell<TypeStore>;
+
+/// A number as JSON: an integer where it is one.
+fn number_value(value: f64) -> serde_json::Value {
+    if value.fract() == 0.0 && value.abs() < 9.0e15 {
+        serde_json::json!(value as i64)
+    } else {
+        serde_json::json!(value)
+    }
+}
+
+/// Whether the source text of a literal type is that of a string literal.
+fn is_string_literal(text: &str) -> bool {
+    let quoted = |quote: char| text.len() >= 2 && text.starts_with(quote) && text.ends_with(quote);
+    quoted('"') || quoted('\'') || quoted('`')
+}

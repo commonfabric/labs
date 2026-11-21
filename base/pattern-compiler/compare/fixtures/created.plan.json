@@ -1,0 +1,232 @@
+[
+  {
+    "module": "compare/fixtures/created.tsx",
+    "patterns": [
+      {
+        "line": 29,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [
+                {
+                  "identifiedBy": "cause",
+                  "kind": "createCell",
+                  "scope": "space"
+                }
+              ],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "make",
+              "outputs": [],
+              "reads": [],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "call": 0,
+                    "kind": "created",
+                    "path": []
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [
+                {
+                  "at": [
+                    "arg0",
+                    "value"
+                  ],
+                  "observes": "identity",
+                  "template": {
+                    "op": "output",
+                    "output": 0
+                  }
+                }
+              ],
+              "envelopes": [],
+              "handles": [],
+              "kind": "function",
+              "name": "Card",
+              "outputs": [],
+              "reads": [],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/created.tsx",
+                "start": 726
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "made",
+              "picks": [],
+              "selectors": [],
+              "sideWrites": "materializer",
+              "slots": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/created.tsx",
+                "start": 805
+              },
+              "bodies": [
+                1
+              ],
+              "entry": "$UI",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [
+            {
+              "from": 0,
+              "to": 1,
+              "via": {
+                "kind": "output",
+                "output": 0
+              }
+            }
+          ],
+          "operations": [
+            {
+              "implementation": {
+                "body": 0
+              },
+              "input": {
+                "op": "shared",
+                "template": 0
+              },
+              "kind": "materializer",
+              "name": "make",
+              "within": []
+            }
+          ],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "made",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "shared",
+                "template": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "0",
+                "props",
+                "$value"
+              ],
+              "template": {
+                "op": "output",
+                "output": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "$UI",
+                "children",
+                "1"
+              ],
+              "template": {
+                "by": {
+                  "body": 1
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/created.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [],
+          "stateCells": [],
+          "templates": [
+            {
+              "by": {
+                "body": 0
+              },
+              "inputs": [],
+              "op": "derive"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "note"
+              ],
+              "type": "object"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

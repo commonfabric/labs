@@ -1,0 +1,1176 @@
+[
+  {
+    "module": "compare/fixtures/state-below.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "handlers": {
+            "0": {
+              "captures": [],
+              "named": true
+            },
+            "1": {
+              "captures": [],
+              "named": true
+            }
+          },
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/state-below.tsx",
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst retitle = handler(\n  (event, { draft }) => {\n    draft.key(\"text\").set(event.text);\n  },\n);\nconst add = handler(\n  (event, { marks }) => {\n    marks.push(event.tag);\n  },\n);\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/state-below.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ title: $h.slot(4), memo: $h.slot(3), retitle: $h.stream(0) })));\n}\n{\n$rt.element(1, ($h) => (({ word: $h.slot(7), memo: $h.slot(6), retitle: $h.stream(1) })));\n}\n{\n$rt.element(2, ($h) => (($h.v($h.slot(8)) !== (\"skip\"))));\n}\n{\n$rt.element(3, ($h) => (({ word: $h.slot(11), memo: $h.slot(10), retitle: $h.stream(2) })));\n}\nreturn $rt.thunk(($h) => (({ draft: $h.slot(12), marks: $h.slot(15), rows: $h.output(0), labels: $h.output(4), kept: $h.output(10), retitle: $h.stream(3), add: $h.stream(4) })));\n});\n$rt.body(0, ($e, $s) => ((event, { draft }) => {\n    draft.key(\"text\").set(event.text);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((event, { marks }) => {\n    marks.push(event.tag);\n  })($e, $s));"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "collection": 0,
+              "cone": 0,
+              "output": 0
+            },
+            {
+              "collection": 1,
+              "cone": 1,
+              "output": 4
+            },
+            {
+              "cone": 2
+            },
+            {
+              "collection": 2,
+              "cone": 2,
+              "output": 8
+            },
+            {
+              "collection": 3,
+              "cone": 3,
+              "output": 10
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 34,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/6",
+              "handler": {
+                "body": 0
+              },
+              "name": "retitle",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "draft"
+                  ],
+                  "place": {
+                    "slot": 3
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/6",
+              "handler": {
+                "body": 0
+              },
+              "name": "retitle",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "draft"
+                  ],
+                  "place": {
+                    "slot": 6
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 6
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/6",
+              "handler": {
+                "body": 0
+              },
+              "name": "retitle",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "draft"
+                  ],
+                  "place": {
+                    "slot": 10
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 10
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "element": 3
+                }
+              ]
+            },
+            {
+              "eventSchema": "unhashed:schema/6",
+              "handler": {
+                "body": 0
+              },
+              "name": "retitle",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "draft"
+                  ],
+                  "place": {
+                    "slot": 12
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 12
+                  }
+                }
+              ],
+              "within": []
+            },
+            {
+              "eventSchema": "unhashed:schema/7",
+              "handler": {
+                "body": 1
+              },
+              "name": "add",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "marks"
+                  ],
+                  "place": {
+                    "slot": 15
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 15
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "retitle",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "text"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "draft"
+                  ],
+                  "slot": 2
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "text"
+                    ],
+                    "slot": 2
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 2
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "add",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "tag"
+                  ],
+                  "slot": 13
+                },
+                {
+                  "at": [
+                    "binding",
+                    "marks"
+                  ],
+                  "slot": 14
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "*"
+                    ],
+                    "slot": 14
+                  },
+                  "template": {
+                    "by": {
+                      "body": 1
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 13
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 14
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 0
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 1
+              },
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "slot",
+                "slot": 5
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 2
+              },
+              "source": {
+                "slot": 5
+              },
+              "within": []
+            },
+            {
+              "construct": "filter",
+              "membership": {
+                "op": "shared",
+                "template": 0
+              },
+              "name": "filter",
+              "source": {
+                "slot": 5
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 8
+              },
+              "name": {
+                "name": "map",
+                "ordinal": 3
+              },
+              "source": {
+                "collection": 2,
+                "via": "map"
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/state-below.tsx",
+                "start": 1258
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3,
+                4
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/state-below.tsx",
+                "start": 1453
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                6,
+                7
+              ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/state-below.tsx",
+                "start": 1638
+              },
+              "bodies": [],
+              "entry": "filter",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                8,
+                9
+              ],
+              "within": [
+                {
+                  "element": 2
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/state-below.tsx",
+                "start": 1669
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                10,
+                11
+              ],
+              "within": [
+                {
+                  "element": 3
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/state-below.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                12
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/state-below.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                15
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "collection": 0,
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "memo"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            },
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows",
+                "*",
+                "title"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 4
+              }
+            },
+            {
+              "collection": 1,
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "labels"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 5
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "labels",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "labels",
+                "*",
+                "memo"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "labels",
+                "*",
+                "word"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 7
+              }
+            },
+            {
+              "collection": 2,
+              "cone": 2,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "shared",
+                "template": 0
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "interim": "filter",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 9
+              }
+            },
+            {
+              "collection": 3,
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "kept"
+              ],
+              "template": {
+                "op": "output",
+                "output": 8
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "kept",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "kept",
+                "*",
+                "memo"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 10
+              }
+            },
+            {
+              "cone": 3,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "kept",
+                "*",
+                "word"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 11
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "draft"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 12
+              }
+            },
+            {
+              "cone": 5,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "marks"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 15
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/state-below.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "text"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "draft"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 2,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "title"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "enumeration",
+              "path": [
+                "words"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 3,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 2,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 4,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 3,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "tag"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "marks"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 1,
+                "kind": "state"
+              }
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "draft",
+              "schema": "unhashed:schema/8",
+              "scope": "space",
+              "within": []
+            },
+            {
+              "name": "marks",
+              "schema": "unhashed:schema/9",
+              "scope": "space",
+              "within": []
+            },
+            {
+              "name": "memo",
+              "schema": "unhashed:schema/10",
+              "scope": "space",
+              "within": [
+                {
+                  "element": 0
+                }
+              ]
+            },
+            {
+              "name": "memo",
+              "schema": "unhashed:schema/11",
+              "scope": "space",
+              "within": [
+                {
+                  "element": 1
+                }
+              ]
+            },
+            {
+              "name": "memo",
+              "schema": "unhashed:schema/12",
+              "scope": "space",
+              "within": [
+                {
+                  "element": 3
+                }
+              ]
+            }
+          ],
+          "templates": [
+            {
+              "body": {
+                "by": {
+                  "expression": true
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 8
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "op": "derive"
+              },
+              "collection": 2,
+              "op": "fold"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "items": {
+                  "items": {
+                    "properties": {
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "words": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "items",
+                "words"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "items": {
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "properties": {
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "tags"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/7",
+            "schema": {
+              "properties": {
+                "tag": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tag"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/8",
+            "schema": {
+              "default": {
+                "tags": [
+                  "new"
+                ],
+                "text": ""
+              },
+              "properties": {
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "tags"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/9",
+            "schema": {
+              "default": [
+                "first"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/10",
+            "schema": {
+              "default": {
+                "tags": [
+                  "row"
+                ],
+                "text": ""
+              },
+              "properties": {
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "tags"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/11",
+            "schema": {
+              "default": {
+                "tags": [
+                  "label"
+                ],
+                "text": ""
+              },
+              "properties": {
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "tags"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/12",
+            "schema": {
+              "default": {
+                "tags": [
+                  "kept"
+                ],
+                "text": ""
+              },
+              "properties": {
+                "tags": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "tags"
+              ],
+              "type": "object"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

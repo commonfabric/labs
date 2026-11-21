@@ -1,0 +1,154 @@
+[
+  {
+    "module": "compare/fixtures/state-declared.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/state-declared.tsx",
+              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/state-declared.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ pinned: $h.slot(0) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [],
+          "valuesWithoutOutput": []
+        },
+        "line": 16,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/state-declared.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "writerFit"
+            }
+          ],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [
+                0
+              ],
+              "kept": true,
+              "path": [
+                "pinned"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/state-declared.tsx#default"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "pinned",
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "note"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "pinned": {
+                  "ifc": {
+                    "confidentiality": [
+                      "alice"
+                    ]
+                  },
+                  "type": "string"
+                }
+              },
+              "required": [
+                "pinned"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "default": "",
+              "ifc": {
+                "confidentiality": [
+                  "alice"
+                ]
+              },
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

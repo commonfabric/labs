@@ -1,0 +1,951 @@
+[
+  {
+    "module": "compare/fixtures/action-constant.tsx",
+    "patterns": [
+      {
+        "line": 13,
+        "name": "Counter",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "handler": {
+                "body": 0
+              },
+              "name": "increment",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "max"
+                  ],
+                  "place": {
+                    "slot": 6
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 6
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "step"
+                  ],
+                  "place": {
+                    "slot": 7
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "value"
+                  ],
+                  "place": {
+                    "slot": 8
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 8
+                  }
+                }
+              ],
+              "within": []
+            },
+            {
+              "handler": {
+                "body": 1
+              },
+              "name": "widen",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "step"
+                  ],
+                  "place": {
+                    "slot": 7
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "action",
+              "name": "increment",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "max"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "max"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "step"
+                  ],
+                  "slot": 2
+                },
+                {
+                  "at": [
+                    "binding",
+                    "step"
+                  ],
+                  "slot": 3
+                },
+                {
+                  "at": [
+                    "binding",
+                    "value"
+                  ],
+                  "slot": 4
+                },
+                {
+                  "at": [
+                    "binding",
+                    "value"
+                  ],
+                  "slot": 5
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 4
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 0
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 2
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 3
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 4
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 5
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "action",
+              "name": "widen",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "step"
+                  ],
+                  "slot": 9
+                },
+                {
+                  "at": [
+                    "binding",
+                    "step"
+                  ],
+                  "slot": 10
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 9
+                  },
+                  "template": {
+                    "by": {
+                      "body": 1
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 9
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 10
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/action-constant.tsx",
+                "start": 804
+              },
+              "bodies": [],
+              "entry": "stepNow",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                7
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "stepNow"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 7
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/action-constant.tsx#Counter"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [
+                "max"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "max"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "step"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "step"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "value"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "value"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "max"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "step"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "value"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "step"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "step"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "max": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "default": null,
+                  "type": [
+                    "null",
+                    "number"
+                  ]
+                },
+                "step": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "default": 1,
+                  "type": "number"
+                },
+                "value": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "default": 0,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "value",
+                "step",
+                "max"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "default": null,
+              "type": [
+                "null",
+                "number"
+              ]
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "default": 0,
+              "type": "number"
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "line": 29,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "handler": {
+                "body": 0
+              },
+              "name": "increment",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "max"
+                  ],
+                  "place": {
+                    "constant": null
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "step"
+                  ],
+                  "place": {
+                    "constant": 5
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                },
+                {
+                  "capture": "link",
+                  "default": 0,
+                  "path": [
+                    "value"
+                  ],
+                  "place": {
+                    "slot": 6
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 6
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "site": "counter"
+                }
+              ]
+            },
+            {
+              "handler": {
+                "body": 1
+              },
+              "name": "widen",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "step"
+                  ],
+                  "place": {
+                    "constant": 5
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                }
+              ],
+              "within": [
+                {
+                  "site": "counter"
+                }
+              ]
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "action",
+              "name": "increment",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "max"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "max"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "step"
+                  ],
+                  "slot": 2
+                },
+                {
+                  "at": [
+                    "binding",
+                    "step"
+                  ],
+                  "slot": 3
+                },
+                {
+                  "at": [
+                    "binding",
+                    "value"
+                  ],
+                  "slot": 4
+                },
+                {
+                  "at": [
+                    "binding",
+                    "value"
+                  ],
+                  "slot": 5
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 4
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 0
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 2
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 3
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 4
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 5
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "action",
+              "name": "widen",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "step"
+                  ],
+                  "slot": 7
+                },
+                {
+                  "at": [
+                    "binding",
+                    "step"
+                  ],
+                  "slot": 8
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 7
+                  },
+                  "template": {
+                    "by": {
+                      "body": 1
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 7
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 8
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/action-constant.tsx",
+                "start": 804
+              },
+              "bodies": [],
+              "entry": "stepNow",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [
+                {
+                  "site": "counter"
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/action-constant.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                6
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "stepNow"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "score"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 6
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/action-constant.tsx#default",
+            "unhashed:pattern/compare/fixtures/action-constant.tsx#Counter"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [
+                "max"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "max"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "step"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "step"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "value"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "value"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "score"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "step"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "step"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "score": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "type": "number"
+                }
+              },
+              "required": [
+                "score"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "default": null,
+              "type": [
+                "null",
+                "number"
+              ]
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "default": 0,
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "number"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

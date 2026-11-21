@@ -1,0 +1,8609 @@
+//! Plan emission, first slice (`plan-and-label-templates.md`, cited as PL):
+//! the data plan of each pattern of a module, as JSON.
+//!
+//! The emitter walks the reactive tier of a pattern body and fills in the
+//! records of PL §1.1 as far as they are determined without label
+//! templates: slots, state cells, collections, the bodies with their
+//! footprint for each use, bindings, operations, cones, outputs, and the
+//! edges between cones. A member that holds a `Template`, a `Hash`, or a
+//! `Constraint` is left out, and `SPEC-NOTES.md` lists the readings this
+//! module chose.
+//!
+//! A construct the emitter does not translate is listed in
+//! [`PatternPlan::unsupported`] by kind, and the plan is emitted without
+//! it.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
+use oxc_ast::ast::*;
+use oxc_ast::AstKind;
+use oxc_span::GetSpan;
+use serde_json::{json, Map, Value};
+
+use crate::footprint::{
+    bind_use, body_functions, parameter_names, BindRec, Class, HandleAt, Record, RefName, Seg,
+    UseRecord, WriteRec, WriteTarget,
+};
+use crate::module::{symbol_of, Binding, DefKind};
+use crate::program::Resolver;
+use crate::syntax::{static_key_name, unwrap, FunctionLike};
+use crate::tiers::{Body, BodyKind};
+use crate::types::{Annotation, Property, Shape, TypeId};
+use oxc_syntax::symbol::SymbolId;
+
+/// The plan of one pattern.
+#[derive(Debug, Clone)]
+pub struct PatternPlan {
+    /// The name the pattern is defined under, when it has one.
+    pub name: Option<String>,
+    pub line: u32,
+    /// The `Plan` record of PL §1.1.
+    pub plan: Value,
+    /// The constructs the emitter did not translate: the kind, and the
+    /// offset of the construct in the module's text.
+    pub unsupported: Vec<(String, u32)>,
+    /// The static side-writes that are on a cycle of `Plan.edges`: the
+    /// offset of the side-write, and the names of the cones on the cycle.
+    pub cycles: Vec<(u32, Vec<String>)>,
+    /// What the plan costs that a hint names: the kind, and the offset.
+    pub hints: Vec<(String, u32)>,
+    /// The constraints that fail at compile time (PL §4.4): the
+    /// identifier of the diagnostic, the offset in the module of the
+    /// pattern, and what was found.
+    pub flows: Vec<(&'static str, u32, String)>,
+    /// The handles of a binding's state that are bound to a computed
+    /// value, by case (ruling T3).
+    pub handle_writes: Vec<HandleWrite>,
+    /// The schemas of the pattern's argument and of its result, where
+    /// the pattern declares the type (PL §1.1, `Child.argumentSchema` and
+    /// `Child.resultSchema` are their content addresses).
+    pub argument_schema: Option<Value>,
+    pub result_schema: Option<Value>,
+    /// The schema documents the plan names, each once, with the
+    /// identifier the plan holds in its place (PL §1.5, "Schemas"). PL
+    /// has the hash of the document in canonical form there, under a
+    /// tagged hash it names by a runtime function and no tag for a
+    /// schema, so the identifier is a placeholder, `unhashed:schema/`
+    /// and the position of the document in this list.
+    pub schemas: Vec<(String, Value)>,
+    /// The value code of the plan and what the executor needs beside the
+    /// plan (`crate::emit`), where the emitter was asked for it.
+    pub code: Option<Value>,
+}
+
+/// Moves the schema documents of a plan beside it: `Slot.schema`,
+/// `Binding.eventSchema`,
+/// `Plan.argumentSchema` and `Plan.resultSchema` hold the identifier of
+/// the document, and an output has no schema member (PL §1.1).
+fn name_schemas(
+    plan: &mut Value,
+    argument: Option<&Value>,
+    result: Option<&Value>,
+) -> Vec<(String, Value)> {
+    let mut schemas: Vec<(String, Value)> = Vec::new();
+    let mut name = |document: &Value| -> Value {
+        let position = schemas
+            .iter()
+            .position(|(_, other)| other == document)
+            .unwrap_or_else(|| {
+                schemas.push((
+                    format!("unhashed:schema/{}", schemas.len()),
+                    document.clone(),
+                ));
+                schemas.len() - 1
+            });
+        json!(schemas[position].0)
+    };
+    if let Some(argument) = argument {
+        plan["argumentSchema"] = name(argument);
+    }
+    if let Some(result) = result {
+        plan["resultSchema"] = name(result);
+    }
+    for slot in plan["slots"].as_array_mut().into_iter().flatten() {
+        if let Some(document) = slot.get("schema").cloned() {
+            slot["schema"] = name(&document);
+        }
+    }
+    for output in plan["outputs"].as_array_mut().into_iter().flatten() {
+        if let Some(output) = output.as_object_mut() {
+            output.remove("schema");
+        }
+    }
+    for binding in plan["bindings"].as_array_mut().into_iter().flatten() {
+        if let Some(document) = binding.get("eventSchema").cloned() {
+            binding["eventSchema"] = name(&document);
+        }
+    }
+    for cell in plan["stateCells"].as_array_mut().into_iter().flatten() {
+        if let Some(document) = cell.get("schema").cloned() {
+            cell["schema"] = name(&document);
+        }
+    }
+    schemas
+}
+
+/// The slots of the caller in the argument of a call of a pattern
+/// compiled in, each with the default the schema of the callee's argument
+/// declares at the path the slot is bound to.
+fn slot_defaults(place: &Place, schema: &Value, found: &mut Vec<(Root, Vec<String>, Value)>) {
+    match place {
+        Place::Slot(root, path) => {
+            if let Some(default) = schema.get("default") {
+                found.push((root.clone(), path.clone(), default.clone()));
+            }
+        }
+        Place::Record(fields) => {
+            for (name, member) in fields {
+                if let Some(below) = schema
+                    .get("properties")
+                    .and_then(|properties| properties.get(name))
+                {
+                    slot_defaults(member, below, found);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The default a callee declares for a slot of the caller, or for a path
+/// below one: the default of the nearest listed slot at or above the
+/// path, at the rest of the path.
+pub(crate) fn default_for(
+    listed: &[(Root, Vec<String>, Value)],
+    root: &Root,
+    path: &[String],
+) -> Option<Value> {
+    listed
+        .iter()
+        .filter(|(other, at, _)| other == root && path.starts_with(at))
+        .max_by_key(|(_, at, _)| at.len())
+        .and_then(|(_, at, default)| {
+            let mut found = default;
+            for segment in &path[at.len()..] {
+                found = found.get(segment)?;
+            }
+            Some(found.clone())
+        })
+}
+
+/// One handle of a binding's state that is bound to a computed value
+/// (ruling T3 of 2026-11-14).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandleWrite {
+    /// `reference`: the value at the bound path refers to a stored place,
+    /// and the handler writes through it. `computed: written` and
+    /// `computed: read`: the instance produces the value. `mixed: written`
+    /// and `mixed: read`: a selection with a branch of each kind.
+    pub case: &'static str,
+    /// Where the bound value is written, in the module of the pattern.
+    pub at: u32,
+    /// The state path, the handler, and the text of the bound value.
+    pub what: String,
+}
+
+/// What a place is, for a write through a handle bound to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    /// A path of an input, of a state cell, or of an element of a stored
+    /// collection.
+    Stored,
+    /// A reference to a stored place that a computation passed on.
+    Reference,
+    /// A value the instance produces.
+    Produced,
+    /// A selection between a reference and a produced value.
+    Mixed,
+    /// The result of an operation, of a child, or of something this slice
+    /// does not classify.
+    Other,
+}
+
+/// What a computed value is said to hold, where its template does not
+/// show it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Declared {
+    /// The value itself is a reference to a stored place.
+    Whole,
+    /// The value is an array the instance made, and its elements are
+    /// references to stored places.
+    Elements,
+    Produced,
+    Mixed,
+}
+
+fn combine(found: impl IntoIterator<Item = Option<Declared>>) -> Option<Declared> {
+    let mut all: Option<Declared> = None;
+    for one in found.into_iter().flatten() {
+        all = Some(match (all, one) {
+            (None, one) => one,
+            (Some(a), b) if a == b => a,
+            (Some(Declared::Whole | Declared::Elements), Declared::Whole | Declared::Elements) => {
+                Declared::Elements
+            }
+            _ => Declared::Mixed,
+        });
+    }
+    all
+}
+
+/// Where the data of a slot lives (`SlotRoot`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum Root {
+    Argument,
+    State(usize),
+    Event(usize),
+    Element(usize),
+    /// "The position of the current element in the order a collection
+    /// iterates" (PL §1.1): a slot with the empty path that observes
+    /// `value`.
+    Index(usize),
+    Operation(usize),
+    Binding(usize),
+    Cause,
+    /// The result of a child instance (`Plan.children`): "it refers to
+    /// the child's result through slots with root `child`" (PL §3.15).
+    Child(usize),
+}
+
+/// What a name or an expression of the reactive tier denotes.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Place {
+    /// A path of an input.
+    Slot(Root, Vec<String>),
+    /// A read of a path of an input under one class, whatever the reader
+    /// does with the result: `.length` of a collection is its membership,
+    /// the `enumeration` slot at the collection, and of a string its
+    /// `value` (PL §3.8).
+    Read(Root, Vec<String>, &'static str),
+    /// A path of a value the instance computed.
+    Value(usize, Vec<String>),
+    /// A record written in the reactive tier.
+    Record(BTreeMap<String, Place>),
+    /// The stream of a binding.
+    Stream(usize),
+    /// The accumulator of a `reduce`, or a path of it: the step cone
+    /// receives it through a slot with root `operation`, and it is
+    /// `const` in the step's template (PL §3.13).
+    Accumulator(usize, Vec<String>),
+    /// A literal, a constant of the module, or a definition.
+    Const,
+    /// Something the emitter does not follow.
+    Unknown,
+}
+
+/// A value the instance computed.
+struct Computed {
+    name: String,
+    cone: usize,
+    /// The result paths the value is kept at.
+    kept: Vec<Vec<String>>,
+    /// The collection the value is the assembled result of.
+    collection: Option<usize>,
+    /// The collection whose assembled result the value is on every
+    /// evaluation, passed on unchanged (ruling Z13; PL §1.1,
+    /// `Output.passesCollection`).
+    passes: Option<usize>,
+    /// The value is the result of a scan of the collection (PL §3.13),
+    /// and not an array of its elements.
+    scan: bool,
+    /// Whether a record of the plan refers to the value.
+    referred: bool,
+    /// The label of the value in symbolic form (PL §1.1, `Template`),
+    /// where this slice builds it: for expression code of an operator, and
+    /// for a use of a body.
+    template: Option<Value>,
+    /// For the assembled result of a `map`, a `filter`, or a `flatMap`:
+    /// the template of one element of it, where it has one. The plan has
+    /// a per-element output beside the assembled one (PL §1.4).
+    element: Option<Option<Value>>,
+    /// For a constructed value, a record or an array written in place
+    /// and a JSX element: its entries, the container entry first (PL
+    /// §3.4, "The entries of a constructed value").
+    entries: Option<Entries>,
+    /// For a `pick` over a container slot: the root and the path of the
+    /// chosen child, `*` at the position of the key. The body of the
+    /// node is the slot at the path a reader reads below the child, with
+    /// the class of that read (PL §3.18).
+    chosen: Option<(Root, Vec<String>)>,
+    /// For the assembled result of a `map` whose callback returns a
+    /// constructed value: the entries of one element.
+    element_entries: Option<Entries>,
+    /// The paths below the value that a collection has as its source: each
+    /// is an interim output of its own (PL §1.1, `Output.path`).
+    below: Vec<Vec<String>>,
+    /// The value is what the step of a `reduce` returns: an output whose
+    /// path has `*`, and no assembled entry (PL §3.13).
+    step: bool,
+    /// What the value holds, where the emitter decided it (ruling T3).
+    origin: Option<Declared>,
+    order: usize,
+}
+
+/// The children that an expression written among the children of a view
+/// node stands for: the members of an array literal with no spread and no
+/// elision, which the JSX factory flattens where the tree is built, and
+/// otherwise the expression itself, as one child (ruling Z31).
+pub(crate) fn written_children<'b, 'a>(expression: &'b Expression<'a>) -> Vec<&'b Expression<'a>> {
+    if let Expression::ArrayExpression(array) = crate::syntax::unwrap(expression) {
+        let members: Option<Vec<&Expression<'a>>> = array
+            .elements
+            .iter()
+            .map(|element| match element {
+                ArrayExpressionElement::SpreadElement(_) | ArrayExpressionElement::Elision(_) => {
+                    None
+                }
+                element => element.as_expression(),
+            })
+            .collect();
+        if let Some(members) = members {
+            return members.into_iter().flat_map(written_children).collect();
+        }
+    }
+    vec![expression]
+}
+
+struct ConeOut {
+    entry: String,
+    at: u32,
+    /// Where the cone's code is written (`Cone.within`, ruling Z10): the
+    /// `element` step of each element body around it, outermost first,
+    /// and the `site` step of each pattern compiled in.
+    within: Vec<Value>,
+    slots: BTreeSet<usize>,
+    bodies: Vec<usize>,
+    writes: Vec<Value>,
+    selectors: Vec<usize>,
+    picks: Vec<usize>,
+    /// The values of other cones the cone uses.
+    uses: BTreeSet<usize>,
+    /// For a `value` slot a body of the cone reads: the type the body
+    /// declares at the slot's position, where the emitter has it. It
+    /// stands for `Slot.schema` in the rule for which slots read a
+    /// `handle` target (PL §3.11).
+    views: BTreeMap<usize, Vec<Option<TypeId>>>,
+}
+
+pub(crate) type SlotKey = (Root, Vec<String>, &'static str, bool, bool);
+
+/// The entries of a constructed value: the path below the value, and
+/// the template there, where it has one.
+type Entries = Vec<(Vec<String>, Option<Value>)>;
+
+/// The template of the nearest entry at or above a path (PL §3.4).
+fn entry_at(entries: &Entries, path: &[String]) -> Option<Value> {
+    entries
+        .iter()
+        .filter(|(at, _)| path.starts_with(at))
+        .max_by_key(|(at, _)| at.len())
+        .map_or_else(
+            || Some(json!({ "op": "const" })),
+            |(_, template)| template.clone(),
+        )
+}
+
+/// A constructed value observed whole: the join of the templates of its
+/// entries at and below a path (PL §3.4).
+fn entries_whole(entries: &Entries, path: &[String]) -> Option<Value> {
+    let below: Option<Vec<Value>> = entries
+        .iter()
+        .filter(|(at, _)| at.starts_with(path))
+        .map(|(_, template)| template.clone())
+        .collect();
+    Some(joined(below?))
+}
+
+/// A static target of a side-write: the slot of the handle, its root and
+/// path, the path below the cell, `resolved`, the module and the offset
+/// of the write, and whether the body reads its own target there.
+struct Target {
+    slot: usize,
+    root: Root,
+    at: Vec<String>,
+    below: Vec<String>,
+    resolved: bool,
+    site: Option<(usize, u32)>,
+    reads_own: bool,
+}
+type Names = HashMap<(String, Vec<Seg>, bool), Value>;
+
+struct Emitter<'r, 'm, 'a> {
+    resolver: &'r Resolver<'m, 'a>,
+    module: usize,
+    bodies: &'r [Vec<Body>],
+    records: &'r [Vec<(usize, Record)>],
+    functions: HashMap<usize, HashMap<u32, FunctionLike<'a, 'a>>>,
+    body_starts: HashMap<usize, HashMap<u32, usize>>,
+    env: HashMap<String, Place>,
+    within: Vec<Value>,
+    cone: Option<usize>,
+    slots: Vec<SlotKey>,
+    values: Vec<Computed>,
+    cones: Vec<ConeOut>,
+    /// The number of selection points and of choice points of the plan.
+    selectors: Vec<u32>,
+    picks: Vec<&'static str>,
+    collections: Vec<Value>,
+    plan_bodies: Vec<Value>,
+    body_facts: Vec<BodyFact>,
+    dynamic_reads: Vec<Value>,
+    state_cells: Vec<Value>,
+    operations: Vec<Value>,
+    children: Vec<Value>,
+    bindings: Vec<Value>,
+    /// The plan body of each handler, by the module and the start of its
+    /// function.
+    handlers: HashMap<(usize, u32), usize>,
+    /// The result paths that hold an input passed through.
+    passed: Vec<(Vec<String>, usize)>,
+    unsupported: Vec<(String, u32)>,
+    /// The templates of what the expression code being evaluated
+    /// observed, and whether it observed something with no template.
+    operands: Vec<Value>,
+    opaque: bool,
+    /// The entries of `Plan.dynamicReads` of each body of the plan.
+    body_dynamic: Vec<Vec<usize>>,
+    /// The declared type of each formal input of the body whose record
+    /// is being written.
+    formal_types: HashMap<String, TypeId>,
+    /// For each collection, the membership of what it iterates.
+    iterated: Vec<Option<Value>>,
+    /// Where each entry of `collections` is written.
+    collection_starts: Vec<u32>,
+    /// What the compiler reports as a hint: a `wish` whose query is not
+    /// a constant (PL §3.19, question 48).
+    hints: Vec<(String, u32)>,
+    /// The handles bound to a computed value (ruling T3).
+    handle_writes: Vec<HandleWrite>,
+    /// The names a pattern binds to `[SELF]` of its parameter: each is a
+    /// reference to the result of the instance (ruling Z17).
+    self_names: BTreeSet<String>,
+    /// The literals that the call of a pattern compiled in writes for
+    /// properties of its argument, by the property: set by the call for
+    /// the pattern it compiles in next.
+    literal_values: HashMap<String, Value>,
+    /// The same for the pattern being compiled in, by the name its
+    /// parameter binds the property to: the constant of a state path of
+    /// a binding that is bound to the name (PL §1.1, `Binding.state`).
+    callee_literals: HashMap<String, Value>,
+    /// The patterns whose source the plan holds code of, by the module
+    /// and the start of the function: the pattern the plan is compiled
+    /// from, then each pattern compiled in, in the order of its first
+    /// site (PL §1.1, `Plan.patterns`).
+    patterns: Vec<(usize, u32)>,
+    /// Where each pattern being compiled in is called, outermost first.
+    inline_at: Vec<u32>,
+    /// The parameters of the pattern being compiled in that the call
+    /// gives as a literal, by the name the pattern's
+    /// parameter binds: `value` for `Counter({ value: 5 })`. A property
+    /// the call leaves out is not among them.
+    given_constants: HashSet<String>,
+    /// The names of the parameter of the pattern being compiled in whose
+    /// path the call leaves out, each with the default the callee's
+    /// argument type declares for the path: the name is bound to that
+    /// constant (ruling Z4).
+    callee_defaults: HashMap<String, Value>,
+    /// In a pattern compiled in: each slot of the caller that a call
+    /// around the code bound a path of a callee's argument to, with the
+    /// default that callee declares for the path (rulings Z4 and Z16).
+    /// Where two calls on the way bound one slot, the outer one's
+    /// default is listed: its place is nearer the end of the chain a read
+    /// resolves through (ruling Z8).
+    bound_defaults: Vec<(Root, Vec<String>, Value)>,
+    /// The properties the call of the pattern about to be compiled in
+    /// writes as a literal.
+    literal_keys: HashSet<String>,
+    /// The parameters of the function whose returns are being classified.
+    formal_names: Vec<String>,
+    /// The patterns compiled in as a tag: the module, and the span of the
+    /// function (PL §4.4: the chain of a tag is followed).
+    tags: Vec<(usize, u32, u32)>,
+    /// The declared type of the data at a slot root, where the emitter
+    /// has it: the pattern's input, the element of a collection, and the
+    /// event and the state of a named handler.
+    root_types: HashMap<Root, TypeId>,
+    /// The key fields that the type of a computed value declares with
+    /// `ArrayByKey`, by the value and a path of it, noted where the
+    /// value is given to a pattern compiled in: the parameter of that
+    /// pattern can declare a plain array type, and a collection over it
+    /// then has the key fields of the array it is given (PL §8, question
+    /// 143, assumed there).
+    value_keys: HashMap<(usize, Vec<String>), Value>,
+    /// The type the pattern declares for its result.
+    result_type: Option<TypeId>,
+    /// The value type of a state cell, where its constructor is written
+    /// with one (PL §1.5, `StateCell.schema`).
+    state_types: HashMap<usize, TypeId>,
+    /// The argument type of a child, where the emitter has the type of
+    /// its factory (PL §1.5, `Child.argumentSchema`).
+    child_types: HashMap<usize, TypeId>,
+    /// The input constraints of each body of the plan (PL §1.5, "At an
+    /// input").
+    body_guards: Vec<Vec<Value>>,
+    /// The elements that enclose the JSX being evaluated, outermost
+    /// first (PL §4.4, "The chain of an element"). `None` stands for
+    /// something whose rendered tree the emitter does not have at this
+    /// place: the tree of a pattern around the children written between
+    /// its tags, and whatever a tree built outside the `[UI]` value is
+    /// placed under.
+    ui_chain: Vec<Option<UiElement>>,
+    /// The elements that bind a handler on an `on*` attribute: the
+    /// binding, the chain of the element where its surface is decided,
+    /// and the offset of the attribute.
+    ui_bound: Vec<(usize, Option<Vec<UiElement>>, u32)>,
+    /// The entries of the constructed value the expression code being
+    /// built computes, for the value `build` makes.
+    pending_entries: Option<Entries>,
+    /// Each call of a pattern compiled in, in source order: the `within`
+    /// that the call is written under, as text, and the name of the call.
+    site_steps: Vec<(String, String)>,
+    /// What the value-code emitter reads of this walk (`crate::emit`).
+    facts: crate::emit::Facts,
+}
+
+/// What a host element of the rendered tree says of its surface (PL
+/// §4.4, "The surface of an element"): the value of each of the
+/// attributes the renderer reads, `None` where it is not a constant,
+/// and whether the element has a spread attribute.
+#[derive(Debug, Clone, Default)]
+struct UiElement {
+    attributes: BTreeMap<&'static str, Option<String>>,
+    spread: bool,
+}
+
+const UI_CONTRACT_ATTRIBUTES: &[&str] = &[
+    "data-ui-action",
+    "data-ui-surface",
+    "data-ui-role",
+    "data-ui-disclosure-kind",
+];
+
+/// Whether the element with this chain, outermost first, satisfies a
+/// `uiContract` of the helper `UiAction` (PL §4.4, "An element
+/// satisfies a `uiContract`").
+fn satisfies_contract(chain: &[UiElement], contract: &Value) -> bool {
+    let nearest = |name: &str| {
+        chain
+            .iter()
+            .rev()
+            .find_map(|element| element.attributes.get(name).cloned().flatten())
+    };
+    if let Some(pattern) = contract["trustedPattern"].as_str() {
+        if nearest("data-ui-pattern").as_deref() != Some(pattern) {
+            return false;
+        }
+    }
+    let names: Vec<&str> = chain
+        .iter()
+        .filter_map(|element| {
+            element
+                .attributes
+                .get("data-ui-event-integrity")?
+                .as_deref()
+        })
+        .flat_map(|value| value.split(|ch: char| ch.is_whitespace() || ch == ','))
+        .collect();
+    let required = contract["requiredEventIntegrity"].as_array();
+    if !required
+        .into_iter()
+        .flatten()
+        .all(|name| name.as_str().is_some_and(|name| names.contains(&name)))
+    {
+        return false;
+    }
+    let attributes = chain.iter().rev().find(|element| {
+        UI_CONTRACT_ATTRIBUTES
+            .iter()
+            .any(|name| element.attributes.contains_key(name))
+    });
+    match contract["action"].as_str() {
+        Some(action) => attributes.is_some_and(|element| {
+            element
+                .attributes
+                .get("data-ui-action")
+                .cloned()
+                .flatten()
+                .as_deref()
+                == Some(action)
+        }),
+        None => true,
+    }
+}
+
+/// What the edges of the plan need of a body.
+#[derive(Default)]
+struct BodyFact {
+    /// Whether the body is a computation whose side-writes are all static.
+    side_writes: bool,
+    /// For a computation with side-writes, which of the two kinds of
+    /// ruling Z7 it is, by its tier (FA §6.3): `static` where every write
+    /// target is one the compiler names, and `materializer` where a
+    /// target is reached through data.
+    kind: Option<&'static str>,
+    at: u32,
+    targets: Vec<Target>,
+}
+
+fn root_json(root: &Root) -> Value {
+    match root {
+        Root::Argument => json!({ "kind": "argument" }),
+        Root::State(cell) => json!({ "kind": "state", "cell": cell }),
+        Root::Event(handler) => json!({ "kind": "event", "handler": handler }),
+        Root::Element(collection) => json!({ "kind": "element", "collection": collection }),
+        Root::Index(collection) => json!({ "kind": "index", "collection": collection }),
+        Root::Operation(operation) => json!({ "kind": "operation", "operation": operation }),
+        Root::Binding(handler) => json!({ "kind": "binding", "handler": handler }),
+        Root::Cause => json!({ "kind": "cause" }),
+        Root::Child(child) => json!({ "kind": "child", "child": child }),
+    }
+}
+
+/// The path of a slot: the keys and `*`, across the links (PL §2.5).
+fn slot_path(base: &[String], path: &[Seg]) -> Vec<String> {
+    let mut out = base.to_vec();
+    for segment in path {
+        match segment {
+            Seg::Key(key) => out.push(key.clone()),
+            Seg::Star => out.push("*".to_string()),
+            Seg::Hop => {}
+        }
+    }
+    out
+}
+
+fn class_name(class: Class) -> &'static str {
+    match class {
+        Class::Enumeration => "enumeration",
+        Class::Identity | Class::Resolved => "identity",
+        Class::LabelMetadata => "labelMetadata",
+        Class::Shape => "shape",
+        Class::Value => "value",
+    }
+}
+
+/// The methods of a string, a number, or an array that compute a value
+/// from the receiver and the arguments.
+const SCALAR_METHODS: [&str; 24] = [
+    "trim",
+    "toFixed",
+    "join",
+    "includes",
+    "slice",
+    "toUpperCase",
+    "toLowerCase",
+    "startsWith",
+    "endsWith",
+    "toString",
+    "padStart",
+    "padEnd",
+    "split",
+    "replace",
+    "replaceAll",
+    "indexOf",
+    "at",
+    "concat",
+    "toLocaleString",
+    "toLocaleDateString",
+    "toLocaleTimeString",
+    "toISOString",
+    "substring",
+    "charAt",
+];
+
+/// The deepest nesting of patterns compiled into a plan.
+const MAX_SITES: usize = 8;
+
+const EFFECTS: [&str; 12] = [
+    "fetchBinary",
+    "fetchText",
+    "fetchJson",
+    "fetchJsonUnchecked",
+    "fetchProgram",
+    "generateText",
+    "generateObject",
+    "llmDialog",
+    "agent",
+    "sqliteQuery",
+    "navigateTo",
+    "compileAndRun",
+];
+
+fn name_of(names: &Names, input: &str, path: &[Seg], resolved: bool) -> Option<Value> {
+    names
+        .get(&(input.to_string(), path.to_vec(), resolved))
+        .or_else(|| names.get(&(input.to_string(), path.to_vec(), !resolved)))
+        .cloned()
+}
+
+/// `passes` or `oneOf` over the names of the entries a reference is.
+fn reference_json(names: &Names, passes: bool, listed: &[RefName]) -> Option<Value> {
+    let found: Vec<Value> = listed
+        .iter()
+        .filter_map(|name| name_of(names, &name.input, &name.path, name.resolved))
+        .collect();
+    if found.len() != listed.len() {
+        return None;
+    }
+    Some(if passes && found.len() == 1 {
+        json!({ "passes": found[0] })
+    } else {
+        json!({ "oneOf": found })
+    })
+}
+
+impl<'a> Emitter<'_, '_, 'a> {
+    fn unsupported(&mut self, kind: impl Into<String>, at: u32) {
+        self.unsupported.push((kind.into(), at));
+    }
+
+    // ----- tables -----
+
+    fn slot(&mut self, root: &Root, path: &[String], class: &'static str) -> usize {
+        self.slot_with(root, path, class, false, false)
+    }
+
+    fn slot_with(
+        &mut self,
+        root: &Root,
+        path: &[String],
+        class: &'static str,
+        resolved: bool,
+        in_place: bool,
+    ) -> usize {
+        // "A slot with this root has the empty path and observes
+        // `value`" (PL §1.1, `SlotRoot`).
+        let key = match root {
+            Root::Index(_) => (root.clone(), Vec::new(), "value", false, false),
+            _ => (root.clone(), path.to_vec(), class, resolved, in_place),
+        };
+        match self.slots.iter().position(|other| *other == key) {
+            Some(index) => index,
+            None => {
+                self.slots.push(key);
+                self.slots.len() - 1
+            }
+        }
+    }
+
+    fn function_at(&mut self, module: usize, start: u32) -> Option<FunctionLike<'a, 'a>> {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.functions.entry(module) {
+            let mut found = HashMap::new();
+            if let Some(parsed) = self.resolver.parsed(module) {
+                for node in parsed.semantic.nodes().iter() {
+                    match node.kind() {
+                        AstKind::ArrowFunctionExpression(arrow) => {
+                            found.insert(arrow.span.start, FunctionLike::Arrow(arrow));
+                        }
+                        AstKind::Function(function) => {
+                            found.insert(function.span.start, FunctionLike::Function(function));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            entry.insert(found);
+        }
+        self.functions.get(&module)?.get(&start).copied()
+    }
+
+    /// The index of the body whose function starts at `start`.
+    fn body_at(&mut self, module: usize, start: u32) -> Option<usize> {
+        if !self.body_starts.contains_key(&module) {
+            let mut found = HashMap::new();
+            for (index, at) in body_functions(self.resolver, module, &self.bodies[module]) {
+                found.entry(at).or_insert(index);
+            }
+            self.body_starts.insert(module, found);
+        }
+        self.body_starts.get(&module)?.get(&start).copied()
+    }
+
+    fn record_at(&mut self, module: usize, start: u32) -> Option<(BodyKind, Record)> {
+        let index = self.body_at(module, start)?;
+        let kind = self.bodies[module][index].kind;
+        let record = self.records[module]
+            .iter()
+            .find(|(other, _)| *other == index)
+            .map(|(_, record)| record.clone())?;
+        Some((kind, record))
+    }
+
+    /// The function a module-scope name is defined as, an import followed:
+    /// the module, the start of the function, and the kind of definition.
+    fn def_function(
+        &mut self,
+        identifier: &IdentifierReference<'a>,
+    ) -> Option<(usize, u32, DefKind)> {
+        let kind = self.resolver.value_def(self.module, identifier)?;
+        let parsed = self.resolver.parsed(self.module)?;
+        let symbol = symbol_of(parsed.semantic.scoping(), identifier)?;
+        if let Some(found) = self.default_export(symbol) {
+            return Some((found.0, found.1, kind));
+        }
+        let (home, symbol) = self.resolver.origin(self.module, symbol)?;
+        let parsed = self.resolver.parsed(home)?;
+        let declaration = parsed.semantic.scoping().symbol_declaration(symbol);
+        let start = match parsed.semantic.nodes().kind(declaration) {
+            AstKind::Function(function) => function.span.start,
+            AstKind::VariableDeclarator(declarator) => {
+                let init = unwrap(declarator.init.as_ref()?);
+                match FunctionLike::of(init) {
+                    Some(function) => function.span().start,
+                    None => {
+                        let Expression::CallExpression(call) = init else {
+                            return None;
+                        };
+                        call.arguments
+                            .iter()
+                            .rev()
+                            .find_map(FunctionLike::of_argument)?
+                            .span()
+                            .start
+                    }
+                }
+            }
+            _ => return None,
+        };
+        Some((home, start, kind))
+    }
+
+    /// The function of a definition that is `export default <call>`, which
+    /// has no name in its module: the module and the start of the last
+    /// function written as an argument of the call.
+    fn default_export(&mut self, symbol: SymbolId) -> Option<(usize, u32)> {
+        let model = self.resolver.model(self.module)?;
+        let Binding::Import(import, binding) = model.binding(symbol)? else {
+            return None;
+        };
+        let import = &model.imports[import];
+        let def = self.resolver.resolve_import(
+            self.module,
+            import,
+            &import.bindings[binding].imported,
+        )?;
+        let found = self.resolver.model(def.module)?.defs.get(def.def)?;
+        if found.symbol.is_some() {
+            return None;
+        }
+        let (from, to) = found.span;
+        let parsed = self.resolver.parsed(def.module)?;
+        // The outermost call of the exported expression.
+        let call = parsed
+            .semantic
+            .nodes()
+            .iter()
+            .filter_map(|node| match node.kind() {
+                AstKind::CallExpression(call) if from <= call.span.start && call.span.end <= to => {
+                    Some(call)
+                }
+                _ => None,
+            })
+            .max_by_key(|call| call.span.end - call.span.start)?;
+        let function = call
+            .arguments
+            .iter()
+            .rev()
+            .find_map(FunctionLike::of_argument)?;
+        Some((def.module, function.span().start))
+    }
+
+    /// An entry of `Plan.dynamicReads`: one entry for one set of reads.
+    fn dynamic(&mut self, read: Value) -> usize {
+        match self.dynamic_reads.iter().position(|other| *other == read) {
+            Some(index) => index,
+            None => {
+                self.dynamic_reads.push(read);
+                self.dynamic_reads.len() - 1
+            }
+        }
+    }
+
+    // ----- types -----
+
+    /// Records the declared type of the data at a slot root, from the
+    /// parameter of module `module` that is bound to it.
+    fn root_type(&mut self, module: usize, root: Root, parameter: &FormalParameter<'a>) {
+        if let Ok(ty) = self.resolver.formal_parameter_type(module, parameter) {
+            self.root_types.insert(root, ty);
+        }
+    }
+
+    /// The type of the state of a handler written in place: an object
+    /// with a property for each name the function refers to that is
+    /// declared outside it, of the type the name is declared with. A name
+    /// whose declared type is not evaluated has no property.
+    fn captured_types(&self, module: usize, function: FunctionLike<'a, 'a>) -> TypeId {
+        let mut properties: Vec<Property> = Vec::new();
+        let span = function.span();
+        if let Some(parsed) = self.resolver.parsed(module) {
+            let scoping = parsed.semantic.scoping();
+            let mut seen = HashSet::new();
+            for node in parsed.semantic.nodes().iter() {
+                let AstKind::IdentifierReference(identifier) = node.kind() else {
+                    continue;
+                };
+                if !(span.start <= identifier.span.start && identifier.span.end <= span.end) {
+                    continue;
+                }
+                let Some(symbol) = symbol_of(scoping, identifier) else {
+                    continue;
+                };
+                let declared = scoping.symbol_span(symbol);
+                if (span.start <= declared.start && declared.end <= span.end)
+                    || !seen.insert(symbol)
+                {
+                    continue;
+                }
+                if let Ok(ty) = self.resolver.declared_symbol_type(module, symbol, 0) {
+                    properties.push(Property {
+                        name: identifier.name.to_string(),
+                        ty,
+                        optional: false,
+                        readonly: false,
+                    });
+                }
+            }
+        }
+        self.resolver.intern(Shape::Object(properties, None))
+    }
+
+    /// The types on the way from the type of a slot root to a path of
+    /// it, the root first. A handle on the way is crossed, and counts as
+    /// two nodes: the handle and its value.
+    fn slot_types(&self, root: &Root, path: &[String]) -> Option<Vec<TypeId>> {
+        let mut nodes = vec![*self.root_types.get(root)?];
+        let cross = |nodes: &mut Vec<TypeId>| {
+            for _ in 0..4 {
+                let last = nodes[nodes.len() - 1];
+                match self.resolver.shape(self.resolver.present(last)) {
+                    Shape::Handle(_, value) => nodes.push(value),
+                    _ => break,
+                }
+            }
+        };
+        for segment in path {
+            cross(&mut nodes);
+            let last = nodes[nodes.len() - 1];
+            nodes.push(self.type_below(last, segment)?);
+        }
+        Some(nodes)
+    }
+
+    /// The key fields that a type declares with `ArrayByKey`, as the
+    /// value of the keyword `keyFields`. A handle of the array is crossed.
+    fn key_fields_of_type(&self, ty: TypeId) -> Option<Value> {
+        let mut ty = ty;
+        for _ in 0..4 {
+            ty = self.resolver.present(ty);
+            match self.resolver.shape(ty) {
+                Shape::Handle(_, value) => ty = value,
+                _ => break,
+            }
+        }
+        self.resolver
+            .annotations_of(ty)
+            .into_iter()
+            .find(|annotation| annotation.key == "keyFields")
+            .and_then(|annotation| annotation.value)
+    }
+
+    /// Notes the key fields that the declared type of `expression`
+    /// declares, for the computed value it evaluated to.
+    fn note_key_fields(&mut self, expression: &Expression<'a>, place: &Place) {
+        let Place::Value(value, path) = place else {
+            return;
+        };
+        let fields = self
+            .resolver
+            .declared(self.module, expression)
+            .ok()
+            .and_then(|ty| self.key_fields_of_type(ty));
+        if let Some(fields) = fields {
+            self.value_keys.insert((*value, path.clone()), fields);
+        }
+    }
+
+    /// The key fields of the array at a place, from the declared type
+    /// of the slot root it is a path of, or from what was noted for a
+    /// computed value.
+    fn place_key_fields(&self, place: &Place) -> Option<Value> {
+        match place {
+            Place::Slot(root, path) => self
+                .slot_types(root, path)
+                .and_then(|nodes| nodes.last().copied())
+                .and_then(|ty| self.key_fields_of_type(ty)),
+            Place::Value(value, path) => self.value_keys.get(&(*value, path.clone())).cloned(),
+            _ => None,
+        }
+    }
+
+    /// The type one segment below a type: a property, or for `*` an
+    /// element of an array or a child of a record.
+    fn type_below(&self, ty: TypeId, segment: &str) -> Option<TypeId> {
+        let ty = self.resolver.present(ty);
+        if segment == "*" {
+            return match self.resolver.shape(ty) {
+                Shape::Object(_, index) => index,
+                _ => self.resolver.element_of(ty),
+            };
+        }
+        self.resolver
+            .with_optional_reads_declared(|| self.resolver.property(ty, segment))
+    }
+
+    /// The type at a path of a formal input.
+    fn entry_type(&self, ty: TypeId, path: &[Seg]) -> Option<TypeId> {
+        let mut ty = ty;
+        for segment in path {
+            ty = match segment {
+                Seg::Key(key) => self.type_below(ty, key)?,
+                Seg::Star => self.type_below(ty, "*")?,
+                Seg::Hop => match self.resolver.shape(self.resolver.present(ty)) {
+                    Shape::Handle(_, value) => value,
+                    _ => return None,
+                },
+            };
+        }
+        Some(ty)
+    }
+
+    /// Whether a `value` read under type `view` continues through the
+    /// link stored at the position `rest` below it: `Some(false)` where
+    /// the type has a handle type or a reference type on the way or
+    /// there, and `None` where the emitter cannot tell (PL §3.11).
+    fn reaches_cell(&self, view: TypeId, rest: &[String]) -> Option<bool> {
+        let mut ty = self.resolver.present(view);
+        // The slot's own position: a `value` slot resolves through a link
+        // at its last segment (PL §2.5).
+        if let Shape::Handle(_, value) = self.resolver.shape(ty) {
+            ty = value;
+        }
+        for segment in rest {
+            ty = self.resolver.present(self.type_below(ty, segment)?);
+            match self.resolver.shape(ty) {
+                Shape::Handle(..) | Shape::Unknown => return Some(false),
+                Shape::Unresolved(_) | Shape::Parameter(_) => return None,
+                _ => {}
+            }
+        }
+        Some(true)
+    }
+
+    // ----- cones and values -----
+
+    /// The cone the expression being evaluated belongs to, made where
+    /// there is none.
+    fn computing(&mut self, name: &str, at: u32) -> (usize, bool) {
+        match self.cone {
+            Some(cone) => (cone, false),
+            None => {
+                self.cones.push(ConeOut {
+                    entry: written_at(name).to_string(),
+                    at,
+                    within: self.within.clone(),
+                    slots: BTreeSet::new(),
+                    bodies: Vec::new(),
+                    writes: Vec::new(),
+                    selectors: Vec::new(),
+                    picks: Vec::new(),
+                    uses: BTreeSet::new(),
+                    views: BTreeMap::new(),
+                });
+                let cone = self.cones.len() - 1;
+                self.cone = Some(cone);
+                (cone, true)
+            }
+        }
+    }
+
+    fn value(&mut self, name: &str, cone: usize) -> usize {
+        let order = self.values.len();
+        self.values.push(Computed {
+            name: written_at(name).to_string(),
+            cone,
+            kept: Vec::new(),
+            collection: None,
+            passes: None,
+            scan: false,
+            template: None,
+            element: None,
+            entries: None,
+            chosen: None,
+            element_entries: None,
+            below: Vec::new(),
+            step: false,
+            referred: false,
+            origin: None,
+            order,
+        });
+        order
+    }
+
+    /// A selection point of the cone being evaluated: the selector of a
+    /// `select` with `arity` branches (PL §3.5).
+    fn selector(&mut self, arity: u32) -> usize {
+        let selector = self.selectors.len();
+        if let Some(cone) = self.cone {
+            self.cones[cone].selectors.push(selector);
+        }
+        self.selectors.push(arity);
+        selector
+    }
+
+    /// Evaluates expression code that computes one value, which has the
+    /// template `evaluate` returns.
+    fn build(
+        &mut self,
+        hint: &str,
+        at: u32,
+        evaluate: impl FnOnce(&mut Self, usize) -> Option<Value>,
+    ) -> Place {
+        let saved = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        let outer = self.pending_entries.take();
+        let mut template = None;
+        let place = self.in_cone(hint, at, |emitter, cone| {
+            template = evaluate(emitter, cone);
+        });
+        self.operands = saved.0;
+        self.opaque = saved.1;
+        let entries = std::mem::replace(&mut self.pending_entries, outer);
+        if let Place::Value(value, _) = &place {
+            self.values[*value].template = template;
+            self.values[*value].entries = entries;
+        }
+        place
+    }
+
+    /// The template of one operand of a `select` or a `pick`, with what
+    /// `evaluate` observed while it evaluated the operand: the template
+    /// of the place, and where the evaluation made a further observation,
+    /// as `a?.b` observes whether `a` is present, their join.
+    fn one(
+        &mut self,
+        class: &'static str,
+        evaluate: impl FnOnce(&mut Self) -> Place,
+    ) -> (Place, Option<Value>) {
+        let saved = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        let place = evaluate(self);
+        self.observe(&place, class);
+        let mut inputs: Vec<Value> = Vec::new();
+        for input in std::mem::replace(&mut self.operands, saved.0) {
+            if !inputs.contains(&input) {
+                inputs.push(input);
+            }
+        }
+        let opaque = std::mem::replace(&mut self.opaque, saved.1);
+        let template = if opaque {
+            None
+        } else {
+            // A constructed value observed whole is the join of the
+            // templates of its entries (PL §3.4).
+            Some(joined(inputs))
+        };
+        (place, template)
+    }
+
+    /// The class a test of truthiness needs (PL §3.5): "`value` at the
+    /// root for a scalar condition, `shape` at the root for a record or
+    /// array, whose truthiness is its existence".
+    fn test_class(&self, expression: &Expression<'a>) -> &'static str {
+        let Ok(ty) = self.resolver.typed_at(self.module, expression, 0) else {
+            return "value";
+        };
+        let ty = self.resolver.present(ty);
+        match self.resolver.shape(ty) {
+            Shape::Object(..)
+            | Shape::Array(_)
+            | Shape::Tuple(_)
+            | Shape::NonPrimitive
+            | Shape::Handle(..)
+            | Shape::Unknown
+            | Shape::Opaque(_)
+            | Shape::Code(_) => "shape",
+            _ => "value",
+        }
+    }
+
+    /// A `select` over the condition `test` and two branches (PL §3.5).
+    /// `first` and `second` say what each branch is: an expression, or
+    /// the condition itself.
+    fn select(
+        &mut self,
+        hint: &str,
+        at: u32,
+        test: &Expression<'a>,
+        class: Option<&'static str>,
+        branches: [Option<&Expression<'a>>; 2],
+    ) -> Place {
+        let mut origins: Vec<Option<Declared>> = Vec::new();
+        let place = self.select_in(hint, at, test, class, branches, &mut origins);
+        // A selection passes the selected branch on: it is a reference
+        // where every branch is one (ruling T3).
+        if let Place::Value(value, _) = &place {
+            self.values[*value].origin = combine(origins);
+        }
+        place
+    }
+
+    fn select_in(
+        &mut self,
+        hint: &str,
+        at: u32,
+        test: &Expression<'a>,
+        class: Option<&'static str>,
+        branches: [Option<&Expression<'a>>; 2],
+        origins: &mut Vec<Option<Declared>>,
+    ) -> Place {
+        self.build(hint, at, |emitter, _| {
+            let selector = emitter.selector(2);
+            let class = class.unwrap_or_else(|| emitter.test_class(test));
+            let (tested, condition) = emitter.one(class, |emitter| emitter.eval(test, "condition"));
+            let mut templates = Vec::new();
+            let mut constructed = Vec::new();
+            for branch in branches {
+                let (place, template) = match branch {
+                    Some(branch) => {
+                        emitter.one("identity", |emitter| emitter.eval(branch, "branch"))
+                    }
+                    // "When the selected arm of `&&` or `||` is the
+                    // condition, the result carries that operand's full
+                    // template, not only its truthiness."
+                    None => emitter.one("identity", |_| tested.clone()),
+                };
+                origins.push(emitter.declared_of(&place));
+                constructed.push((emitter.entries_of(&place), template.clone()));
+                templates.push(template);
+            }
+            emitter.per_path(&constructed, |at| {
+                select_node(selector, condition.clone(), at)
+            });
+            select_node(selector, condition, templates)
+        })
+    }
+
+    /// A dynamic key in the reactive tier: a `pick` whose choice the value
+    /// code reports (PL §3.18).
+    fn pick(&mut self, object: &Place, key: &Place, hint: &str, at: u32) -> Place {
+        let object = object.clone();
+        let key = key.clone();
+        if let Place::Record(fields) = &object {
+            // "When `a` is a constructed object with a static key set,
+            // the compiler emits a `select` over its keys in place of a
+            // `pick`, and each branch is the template of that member."
+            // The last branch is the one for a key that names no member.
+            let fields = fields.clone();
+            return self.build(hint, at, |emitter, _| {
+                let selector = emitter.selector(fields.len() as u32 + 1);
+                let condition = emitter.one("value", |_| key).1;
+                let mut branches: Vec<Option<Value>> = Vec::new();
+                let mut constructed = Vec::new();
+                for member in fields.values() {
+                    let template = emitter.one("identity", |_| member.clone()).1;
+                    constructed.push((emitter.entries_of(member), template.clone()));
+                    branches.push(template);
+                }
+                branches.push(Some(json!({ "op": "const" })));
+                constructed.push((None, Some(json!({ "op": "const" }))));
+                emitter.per_path(&constructed, |at| {
+                    select_node(selector, condition.clone(), at)
+                });
+                select_node(selector, condition, branches)
+            });
+        }
+        let chosen = match &object {
+            Place::Slot(root, path) => {
+                let mut child = path.clone();
+                child.push("*".to_string());
+                Some((root.clone(), child))
+            }
+            _ => None,
+        };
+        let place = self.build(hint, at, |emitter, cone| {
+            let pick = emitter.picks.len();
+            emitter.cones[cone].picks.push(pick);
+            emitter.picks.push("valueCode");
+            let choice = emitter.one("value", |_| key).1;
+            match &object {
+                Place::Slot(root, path) => {
+                    // The chosen child is one of the container's: its
+                    // `shape` slot, which `choice` joins, and the slot of
+                    // what is read of it.
+                    let mut child = path.clone();
+                    child.push("*".to_string());
+                    // The body's slot is the one at the path a reader
+                    // reads below the child (`value_template`).
+                    let shape = emitter.slot(root, &child, "shape");
+                    let value = emitter.slot(root, &child, "value");
+                    emitter.cones[cone].slots.insert(shape);
+                    let choice = joined(vec![choice?, json!({ "op": "slot", "slot": shape })]);
+                    Some(json!({
+                        "op": "pick",
+                        "pick": pick,
+                        "from": { "container": shape },
+                        "choice": choice,
+                        "body": { "op": "slot", "slot": value },
+                    }))
+                }
+                Place::Value(value, path) => {
+                    // A container the instance computed: `from` names its
+                    // output, and `body` is the template of the chosen
+                    // child, which for one opaque call is the call's.
+                    emitter.values[*value].referred = true;
+                    if emitter.values[*value].cone != cone {
+                        emitter.cones[cone].uses.insert(*value);
+                    }
+                    let output = if path.is_empty() {
+                        json!({ "$value": value })
+                    } else {
+                        if !emitter.values[*value].below.contains(path) {
+                            emitter.values[*value].below.push(path.clone());
+                        }
+                        json!({ "$value": value, "$path": path })
+                    };
+                    let body = emitter.template_by_reference(*value)?;
+                    Some(json!({
+                        "op": "pick",
+                        "pick": pick,
+                        "from": { "output": output },
+                        "choice": choice?,
+                        "body": body,
+                    }))
+                }
+                other => {
+                    emitter.pass(other);
+                    None
+                }
+            }
+        });
+        if let Place::Value(value, _) = &place {
+            self.values[*value].chosen = chosen;
+        }
+        place
+    }
+
+    /// The cone being evaluated reads a place in full.
+    fn consume(&mut self, place: &Place) {
+        self.observe(place, "value");
+    }
+
+    /// The cone being evaluated passes a place on by reference.
+    fn pass(&mut self, place: &Place) {
+        self.observe(place, "identity");
+    }
+
+    /// The cone being evaluated observes a reference after resolution: the
+    /// `identity` slot, resolved (PL §2.5).
+    fn resolve(&mut self, place: &Place) {
+        match place {
+            Place::Slot(root, path) => {
+                let slot = self.slot_with(root, path, "identity", true, false);
+                if let Some(cone) = self.cone {
+                    self.cones[cone].slots.insert(slot);
+                }
+                self.operands.push(json!({ "op": "slot", "slot": slot }));
+            }
+            Place::Record(fields) => {
+                for member in fields.values() {
+                    self.resolve(member);
+                }
+            }
+            other => self.pass(other),
+        }
+    }
+
+    /// Whether the checker types an expression as a string.
+    fn is_string(&self, expression: &Expression<'a>) -> bool {
+        self.resolver
+            .typed_at(self.module, expression, 0)
+            .is_ok_and(|ty| {
+                matches!(
+                    self.resolver.shape(ty),
+                    crate::types::Shape::String | crate::types::Shape::Literal(_)
+                )
+            })
+    }
+
+    /// An operand of the expression code being evaluated: its template,
+    /// or that it has none.
+    fn operand(&mut self, template: Option<Value>) {
+        match template {
+            Some(template) => self.operands.push(template),
+            None => self.opaque = true,
+        }
+    }
+
+    /// Expression code of an operator: a `derive` over the templates of
+    /// what it observes (PL §1.1, §3.19).
+    fn derived(&mut self, hint: &str, at: u32, evaluate: impl FnOnce(&mut Self, usize)) -> Place {
+        self.build(hint, at, |emitter, cone| {
+            evaluate(emitter, cone);
+            (!emitter.opaque).then(|| join(std::mem::take(&mut emitter.operands)))
+        })
+    }
+
+    /// The template of a place that is one value: a slot passed through,
+    /// a value the instance computed, or a constant.
+    fn template_of(&mut self, place: &Place, class: &'static str) -> Option<Value> {
+        match place {
+            Place::Slot(root, path) => {
+                let slot = self.slot(root, path, class);
+                Some(json!({ "op": "slot", "slot": slot }))
+            }
+            Place::Read(root, path, class) => {
+                let slot = self.slot(root, path, class);
+                Some(json!({ "op": "slot", "slot": slot }))
+            }
+            // Every path of what one opaque call or one expression
+            // computed has its template (PL §3.3).
+            Place::Value(value, path) => self.value_template(*value, path, class),
+            // The stream of a binding of the reactive tier is named by
+            // constants of the plan (PL §3.14).
+            Place::Const | Place::Stream(_) | Place::Accumulator(..) => {
+                Some(json!({ "op": "const" }))
+            }
+            _ => None,
+        }
+    }
+
+    /// The template of a path of a value the instance computed. A path
+    /// of a constructed value has the template of the nearest entry at
+    /// or above it, and where the value is observed whole there, the
+    /// join of the entries at and below it. An observation of class
+    /// `shape`, `enumeration` or `identity` at a container has the
+    /// container entry's template alone (PL §3.4).
+    fn value_template(
+        &mut self,
+        value: usize,
+        path: &[String],
+        class: &'static str,
+    ) -> Option<Value> {
+        if let Some(slot) = self.chosen_slot(value, path, class) {
+            let mut node = self.values[value].template.clone()?;
+            node["body"] = json!({ "op": "slot", "slot": slot });
+            return Some(node);
+        }
+        let Some(entries) = &self.values[value].entries else {
+            return self.template_by_reference(value);
+        };
+        if path.is_empty() && class == "value" {
+            return self.values[value].template.clone();
+        }
+        let below = entries
+            .iter()
+            .any(|(at, _)| at.len() > path.len() && at.starts_with(path));
+        if !below {
+            return entry_at(entries, path);
+        }
+        if class == "value" {
+            return entries_whole(entries, path);
+        }
+        match entries.iter().find(|(at, _)| at == path) {
+            Some((_, template)) => template.clone(),
+            None => Some(json!({ "op": "const" })),
+        }
+    }
+
+    /// The template of a value the instance computed, as the template of
+    /// what reads it holds it: the reference to the output of the value,
+    /// and no copy of its template (ruling Z58). The reference is written
+    /// with the index of the value, and `resolve_templates` gives it the
+    /// index of the output when the outputs are listed. A constant is
+    /// written as the constant it is. A constructed value has a template
+    /// per path and no output whose template is the join of them, so its
+    /// template is given as it is.
+    fn template_by_reference(&self, value: usize) -> Option<Value> {
+        let template = self.values[value].template.as_ref()?;
+        if template["op"] == "const" || self.values[value].entries.is_some() {
+            return Some(template.clone());
+        }
+        Some(json!({ "op": "output", "$template": value }))
+    }
+
+    /// The child slot of a `pick` over a container slot that a read of
+    /// a path below the chosen child observes (PL §3.18).
+    fn chosen_slot(&mut self, value: usize, path: &[String], class: &'static str) -> Option<usize> {
+        let (root, child) = self.values[value].chosen.clone()?;
+        let mut at = child;
+        at.extend(path.iter().cloned());
+        // A child passed on whole is read for `value`: what a later
+        // reader observes through the reference is not followed, so the
+        // slot covers all of the child.
+        let class = if class == "identity" { "value" } else { class };
+        Some(self.slot(&root, &at, class))
+    }
+
+    /// The entries of a constructed value (PL §3.4): a container entry
+    /// at its own path, and one entry for each member that is not
+    /// constructed in place and whose template is not `const`. `None`
+    /// for a place that is no constructed value.
+    fn entries_of(&mut self, place: &Place) -> Option<Entries> {
+        match place {
+            Place::Record(fields) => {
+                // The key set is static, or decided by what the
+                // positions from a spread on hold.
+                let container = match fields.get("*") {
+                    Some(star) => self.template_of(star, "identity"),
+                    None => Some(json!({ "op": "const" })),
+                };
+                let mut entries: Entries = vec![(Vec::new(), container)];
+                for (name, member) in fields {
+                    match self.entries_of(member) {
+                        Some(below) => {
+                            for (at, template) in below {
+                                if at.is_empty()
+                                    && template.as_ref().is_some_and(|t| t["op"] == "const")
+                                {
+                                    continue;
+                                }
+                                let mut path = vec![name.clone()];
+                                path.extend(at);
+                                entries.push((path, template));
+                            }
+                        }
+                        None => {
+                            let template = self.template_of(member, "identity");
+                            if template.as_ref().is_some_and(|t| t["op"] == "const") {
+                                continue;
+                            }
+                            entries.push((vec![name.clone()], template));
+                        }
+                    }
+                }
+                Some(entries)
+            }
+            Place::Value(value, path) => {
+                let entries = self.values[*value].entries.as_ref()?;
+                if !entries
+                    .iter()
+                    .any(|(at, _)| at.len() > path.len() && at.starts_with(path))
+                {
+                    return None;
+                }
+                let mut found: Entries = entries
+                    .iter()
+                    .filter(|(at, _)| at.starts_with(path))
+                    .map(|(at, template)| (at[path.len()..].to_vec(), template.clone()))
+                    .collect();
+                if !found.iter().any(|(at, _)| at.is_empty()) {
+                    found.insert(0, (Vec::new(), Some(json!({ "op": "const" }))));
+                }
+                Some(found)
+            }
+            _ => None,
+        }
+    }
+
+    /// A node whose result is a constructed value is written once per
+    /// path (PL §3.4): for each path at which some branch has an entry,
+    /// the node over the template each branch has at the path.
+    fn per_path(
+        &mut self,
+        branches: &[(Option<Entries>, Option<Value>)],
+        node: impl Fn(Vec<Option<Value>>) -> Option<Value>,
+    ) {
+        if branches.iter().all(|(entries, _)| entries.is_none()) {
+            return;
+        }
+        let mut paths: Vec<Vec<String>> = Vec::new();
+        for (entries, _) in branches {
+            for (at, _) in entries.iter().flatten() {
+                if !paths.contains(at) {
+                    paths.push(at.clone());
+                }
+            }
+        }
+        paths.sort();
+        let entries = paths
+            .into_iter()
+            .map(|path| {
+                let at: Vec<Option<Value>> = branches
+                    .iter()
+                    .map(|(entries, whole)| match entries {
+                        Some(entries) => entry_at(entries, &path),
+                        None => whole.clone(),
+                    })
+                    .collect();
+                let template = node(at);
+                (path, template)
+            })
+            .collect();
+        self.pending_entries = Some(entries);
+    }
+
+    fn observe(&mut self, place: &Place, class: &'static str) {
+        if !matches!(place, Place::Record(_)) {
+            let template = self.template_of(place, class);
+            self.operand(template);
+        }
+        match place {
+            Place::Slot(root, path) => {
+                let slot = self.slot(root, path, class);
+                if let Some(cone) = self.cone {
+                    self.cones[cone].slots.insert(slot);
+                }
+            }
+            Place::Read(root, path, class) => {
+                let slot = self.slot(root, path, class);
+                if let Some(cone) = self.cone {
+                    self.cones[cone].slots.insert(slot);
+                }
+            }
+            Place::Value(value, path) => {
+                if let Some(cone) = self.cone {
+                    if self.values[*value].cone != cone {
+                        self.cones[cone].uses.insert(*value);
+                        self.values[*value].referred = true;
+                    }
+                }
+                // The cone that reads a path of a chosen child has the
+                // slot at that path.
+                if let Some(slot) = self.chosen_slot(*value, path, class) {
+                    let cone = self.cone.unwrap_or(self.values[*value].cone);
+                    self.cones[cone].slots.insert(slot);
+                }
+            }
+            Place::Record(fields) => {
+                for member in fields.values() {
+                    self.observe(member, class);
+                }
+            }
+            Place::Accumulator(operation, path) => {
+                let slot = self.slot(&Root::Operation(*operation), path, class);
+                if let Some(cone) = self.cone {
+                    self.cones[cone].slots.insert(slot);
+                }
+            }
+            Place::Stream(_) | Place::Const | Place::Unknown => {}
+        }
+    }
+
+    /// The index of the current element of a collection: the slot of
+    /// root `index` that names it, read as a `value` whatever the reader
+    /// does with it (PL §1.3, "The index is a slot").
+    fn index_of(collection: usize) -> Place {
+        Place::Read(Root::Index(collection), Vec::new(), "value")
+    }
+
+    fn extend(place: &Place, key: &str) -> Place {
+        match place {
+            Place::Slot(root, path) => {
+                let mut path = path.clone();
+                path.push(key.to_string());
+                Place::Slot(root.clone(), path)
+            }
+            Place::Value(value, path) => {
+                let mut path = path.clone();
+                path.push(key.to_string());
+                Place::Value(*value, path)
+            }
+            Place::Accumulator(operation, path) => {
+                let mut path = path.clone();
+                path.push(key.to_string());
+                Place::Accumulator(*operation, path)
+            }
+            Place::Record(fields) => fields.get(key).cloned().unwrap_or(Place::Const),
+            Place::Const => Place::Const,
+            // A member of the number a length is reads no more.
+            Place::Read(..) => place.clone(),
+            _ => Place::Unknown,
+        }
+    }
+
+    /// The member `name` of what `written` denotes. `.length` of an input
+    /// collection is "the collection's membership" (PL §3.8), and of an
+    /// input string the string's `value`; neither is a path below it.
+    fn member(&mut self, object: &Place, written: &Expression<'a>, name: &str) -> Place {
+        if let (Place::Slot(root, path), "length") = (object, name) {
+            let shape = self
+                .resolver
+                .typed_at(self.module, written, 0)
+                .map(|ty| self.resolver.shape(self.resolver.present(ty)));
+            let class = match shape {
+                Ok(crate::types::Shape::Array(_) | crate::types::Shape::Tuple(_)) => {
+                    Some("enumeration")
+                }
+                Ok(crate::types::Shape::String | crate::types::Shape::Literal(_)) => Some("value"),
+                _ => None,
+            };
+            if let Some(class) = class {
+                let read = Place::Read(root.clone(), path.clone(), class);
+                if self.cone.is_some() {
+                    return read;
+                }
+                // Written in the reactive tier outside expression code: a
+                // value the instance computes, with that template.
+                let at = written.span().start;
+                return self.build("length", at, |emitter, _| {
+                    emitter.observe(&read, class);
+                    emitter.operands.pop()
+                });
+            }
+        }
+        Self::extend(object, name)
+    }
+
+    // ----- the reactive tier -----
+
+    fn bind_pattern(&mut self, pattern: &BindingPattern<'a>, place: Place) {
+        match pattern {
+            BindingPattern::BindingIdentifier(identifier) => {
+                self.facts.bound(identifier.span.start, place.clone());
+                self.env.insert(identifier.name.to_string(), place);
+            }
+            BindingPattern::ObjectPattern(object) => {
+                for property in &object.properties {
+                    match static_key_name(&property.key).filter(|_| !property.computed) {
+                        Some(name) => {
+                            let member = Self::extend(&place, name);
+                            self.bind_pattern(&property.value, member);
+                        }
+                        None => {
+                            // `[SELF]: name`: no record holds the name,
+                            // and a binding that captures it has a place
+                            // that names the result (ruling Z28).
+                            let own = matches!(
+                                property.key.as_expression().map(|key| unwrap(key)),
+                                Some(Expression::Identifier(key)) if key.name == "SELF"
+                            );
+                            if let (true, BindingPattern::BindingIdentifier(identifier)) =
+                                (own, &property.value)
+                            {
+                                self.self_names.insert(identifier.name.to_string());
+                            }
+                            self.bind_pattern(&property.value, Place::Unknown)
+                        }
+                    }
+                }
+                if let Some(rest) = &object.rest {
+                    self.unsupported("a rest element in the reactive tier", rest.span.start);
+                    self.bind_pattern(&rest.argument, Place::Unknown);
+                }
+            }
+            BindingPattern::ArrayPattern(array) => {
+                for (index, element) in array.elements.iter().enumerate() {
+                    if let Some(element) = element {
+                        let member = Self::extend(&place, &index.to_string());
+                        self.bind_pattern(element, member);
+                    }
+                }
+            }
+            BindingPattern::AssignmentPattern(assignment) => {
+                self.bind_pattern(&assignment.left, place);
+            }
+        }
+    }
+
+    fn statements(&mut self, statements: &[Statement<'a>]) -> Option<Place> {
+        for statement in statements {
+            match statement {
+                Statement::VariableDeclaration(declaration) => {
+                    for declarator in &declaration.declarations {
+                        let hint = match &declarator.id {
+                            BindingPattern::BindingIdentifier(identifier) => {
+                                identifier.name.to_string()
+                            }
+                            _ => "value".to_string(),
+                        };
+                        let place = match &declarator.init {
+                            Some(init) => self.eval(init, &hint),
+                            None => Place::Const,
+                        };
+                        self.bind_pattern(&declarator.id, place);
+                    }
+                }
+                Statement::ExpressionStatement(statement) => {
+                    self.eval(&statement.expression, "statement");
+                }
+                Statement::ReturnStatement(statement) => {
+                    return statement
+                        .argument
+                        .as_ref()
+                        .map(|argument| self.eval(argument, "result"));
+                }
+                Statement::FunctionDeclaration(_)
+                | Statement::TSTypeAliasDeclaration(_)
+                | Statement::TSInterfaceDeclaration(_)
+                | Statement::EmptyStatement(_) => {}
+                other => {
+                    self.unsupported("a statement in the reactive tier", other.span().start);
+                }
+            }
+        }
+        None
+    }
+
+    /// The statements of expression code: a promoted `computed` with a
+    /// statement body (`language-subset.md` §6.1). The result is the
+    /// template of what the statements return: `Err` where they do not
+    /// return on every path, and `Ok(None)` where the value returned has
+    /// no template. An `if` is a `select` over what its two paths return
+    /// (PL §3.5).
+    fn code_block(&mut self, statements: &[Statement<'a>]) -> Result<Option<Value>, ()> {
+        for (index, statement) in statements.iter().enumerate() {
+            match statement {
+                Statement::VariableDeclaration(declaration) => {
+                    for declarator in &declaration.declarations {
+                        let place = match &declarator.init {
+                            Some(init) => self.eval(init, "value"),
+                            None => Place::Const,
+                        };
+                        self.bind_pattern(&declarator.id, place);
+                    }
+                }
+                Statement::IfStatement(statement) => {
+                    let selector = self.selector(2);
+                    let class = self.test_class(&statement.test);
+                    let (_, condition) =
+                        self.one(class, |emitter| emitter.eval(&statement.test, "condition"));
+                    let saved = self.env.clone();
+                    let consequent = self.code_block(std::slice::from_ref(&statement.consequent));
+                    self.env = saved.clone();
+                    let alternate = match &statement.alternate {
+                        Some(alternate) => self.code_block(std::slice::from_ref(alternate)),
+                        None => Err(()),
+                    };
+                    self.env = saved;
+                    if let (Ok(first), Ok(second)) = (&consequent, &alternate) {
+                        return Ok(select_node(
+                            selector,
+                            condition,
+                            vec![first.clone(), second.clone()],
+                        ));
+                    }
+                    // A path that does not return goes on with the
+                    // statements after the `if`.
+                    let rest = self.code_block(&statements[index + 1..]);
+                    let branch = |path: Result<Option<Value>, ()>| match path {
+                        Ok(template) => Ok(template),
+                        Err(()) => rest.clone(),
+                    };
+                    return match (branch(consequent), branch(alternate)) {
+                        (Ok(first), Ok(second)) => {
+                            Ok(select_node(selector, condition, vec![first, second]))
+                        }
+                        // A path that returns nothing returns `undefined`.
+                        (Ok(first), Err(())) => Ok(select_node(
+                            selector,
+                            condition,
+                            vec![first, Some(json!({ "op": "const" }))],
+                        )),
+                        (Err(()), Ok(second)) => Ok(select_node(
+                            selector,
+                            condition,
+                            vec![Some(json!({ "op": "const" })), second],
+                        )),
+                        (Err(()), Err(())) => Err(()),
+                    };
+                }
+                Statement::BlockStatement(block) => {
+                    let saved = self.env.clone();
+                    let returned = self.code_block(&block.body);
+                    self.env = saved;
+                    if returned.is_ok() {
+                        return returned;
+                    }
+                }
+                Statement::ReturnStatement(statement) => {
+                    return Ok(match &statement.argument {
+                        Some(argument) => {
+                            self.one("identity", |emitter| emitter.eval(argument, "branch"))
+                                .1
+                        }
+                        None => Some(json!({ "op": "const" })),
+                    });
+                }
+                Statement::EmptyStatement(_) => {}
+                other => {
+                    self.unsupported("a statement of expression code", other.span().start);
+                }
+            }
+        }
+        Err(())
+    }
+
+    /// A call, in the reactive tier, of a pattern the compiler can see:
+    /// the pattern is compiled into this plan, under a `site` step (PL
+    /// §1.1, §1.3).
+    fn inline_pattern(
+        &mut self,
+        home: usize,
+        start: u32,
+        name: &str,
+        arguments: &[&Expression<'a>],
+        at: u32,
+    ) -> Place {
+        let argument = match arguments.first() {
+            Some(argument) => self.eval(argument, name),
+            None => Place::Const,
+        };
+        self.literal_values.clear();
+        // The properties the call writes as a literal. A property bound to
+        // a path the caller's own argument leaves out is a constant here
+        // too, and is not one of them.
+        if let Some(Expression::ObjectExpression(object)) = arguments.first().map(|a| unwrap(a)) {
+            for property in &object.properties {
+                if let ObjectPropertyKind::ObjectProperty(property) = property {
+                    let literal = matches!(
+                        unwrap(&property.value),
+                        Expression::StringLiteral(_)
+                            | Expression::NumericLiteral(_)
+                            | Expression::BooleanLiteral(_)
+                            | Expression::NullLiteral(_)
+                            | Expression::TemplateLiteral(_)
+                            | Expression::UnaryExpression(_)
+                            | Expression::ObjectExpression(_)
+                            | Expression::ArrayExpression(_)
+                    );
+                    if let (true, Some(key)) = (
+                        literal && !property.computed,
+                        static_key_name(&property.key),
+                    ) {
+                        self.literal_keys.insert(key.to_string());
+                    }
+                    let value = self
+                        .resolver
+                        .constant_value(self.module, &property.value, 0);
+                    if let (false, Some(key), Some(value)) =
+                        (property.computed, static_key_name(&property.key), value)
+                    {
+                        self.literal_values.insert(key.to_string(), value);
+                    }
+                }
+            }
+        }
+        self.inline_argument(home, start, name, argument, at)
+    }
+
+    /// The identity of a pattern (PL §1.5): the record `{ module,
+    /// binding }`, where `binding` is the name of the `const` the
+    /// `pattern(...)` call initializes, `default` for the operand of
+    /// `export default`, and for an inline pattern the binding of the
+    /// enclosing pattern and its own position. PL has the hash of the
+    /// record there, and the module's identity in it. The crate has
+    /// neither, so the entry is a placeholder, `unhashed:pattern/`, the
+    /// path of the module, `#`, and the binding.
+    fn pattern_identity(&self, home: usize, start: u32) -> String {
+        let path = self
+            .resolver
+            .parsed(home)
+            .map(|parsed| parsed.path.clone())
+            .unwrap_or_default();
+        let bodies = &self.bodies[home];
+        let found = body_functions(self.resolver, home, bodies)
+            .into_iter()
+            .find(|(index, other)| *other == start && bodies[*index].kind == BodyKind::Pattern)
+            .map(|(index, _)| index);
+        let mut binding = String::new();
+        let mut body = found;
+        while let Some(index) = body {
+            let step = match (&bodies[index].name, bodies[index].parent) {
+                (Some(name), _) => name.clone(),
+                (None, None) => "default".to_string(),
+                (None, Some(_)) => format!("{}:{}", bodies[index].line, bodies[index].column),
+            };
+            binding = match binding.is_empty() {
+                true => step,
+                false => format!("{step}/{binding}"),
+            };
+            if bodies[index].name.is_some() {
+                break;
+            }
+            body = bodies[index].parent;
+        }
+        if binding.is_empty() {
+            binding = "default".to_string();
+        }
+        format!("unhashed:pattern/{path}#{binding}")
+    }
+
+    /// The same, with the argument as the place it is bound to.
+    fn inline_argument(
+        &mut self,
+        home: usize,
+        start: u32,
+        name: &str,
+        argument: Place,
+        at: u32,
+    ) -> Place {
+        let sites = self
+            .within
+            .iter()
+            .filter(|step| step.get("site").is_some())
+            .count();
+        let Some(function) = self.function_at(home, start).filter(|_| sites < MAX_SITES) else {
+            self.unsupported("a call of a pattern nested too deep to compile in", at);
+            return Place::Unknown;
+        };
+        let saved_context = self
+            .facts
+            .enter(at, home, start, argument.clone(), self.cone);
+        let saved_env = std::mem::take(&mut self.env);
+        let saved_module = std::mem::replace(&mut self.module, home);
+        // The step holds the call's own number until the plan is finished,
+        // which tells two calls of one name apart (`name_sites`).
+        let enclosing = Value::Array(self.within.clone()).to_string();
+        self.within
+            .push(json!({ "site": name, "$site": self.site_steps.len() }));
+        self.site_steps.push((enclosing, name.to_string()));
+        let pattern = self
+            .patterns
+            .iter()
+            .position(|known| *known == (home, start))
+            .unwrap_or_else(|| {
+                self.patterns.push((home, start));
+                self.patterns.len() - 1
+            });
+        let saved_pattern = WRITTEN_IN.replace(pattern);
+        self.inline_at.push(at);
+        let literal_keys = std::mem::take(&mut self.literal_keys);
+        let literal_values = std::mem::take(&mut self.literal_values);
+        let mut literals: HashMap<String, Value> = HashMap::new();
+        let mut given: HashSet<String> = HashSet::new();
+        let mut defaults: HashMap<String, Value> = HashMap::new();
+        let mut saved_bound = None;
+        if let Some(parameter) = function.params().items.first() {
+            // The schema of the callee's declared argument: its defaults
+            // are what a path the call leaves out is bound to, as a
+            // constant, and what a path bound to an empty slot of the
+            // caller reads (ruling Z4).
+            let schema = self
+                .resolver
+                .formal_parameter_type(home, parameter)
+                .ok()
+                .map(|ty| self.resolver.schema_of(ty));
+            if let (BindingPattern::ObjectPattern(object), Place::Record(fields), Some(schema)) =
+                (&parameter.pattern, &argument, &schema)
+            {
+                for property in &object.properties {
+                    let key = static_key_name(&property.key).filter(|_| !property.computed);
+                    let bound = match &property.value {
+                        BindingPattern::AssignmentPattern(assignment) => &assignment.left,
+                        other => other,
+                    };
+                    if let (Some(key), BindingPattern::BindingIdentifier(identifier)) = (key, bound)
+                    {
+                        let declared = schema
+                            .get("properties")
+                            .and_then(|properties| properties.get(key))
+                            .and_then(|member| member.get("default"));
+                        if let (None, Some(declared)) = (fields.get(key), declared) {
+                            defaults.insert(identifier.name.to_string(), declared.clone());
+                        }
+                    }
+                }
+            }
+            // A property of the argument that is written at the call as a
+            // literal or a constant (PL §3.15; LS §10.2).
+            if let (BindingPattern::ObjectPattern(object), Place::Record(fields)) =
+                (&parameter.pattern, &argument)
+            {
+                for property in &object.properties {
+                    let key = static_key_name(&property.key).filter(|_| !property.computed);
+                    let bound = match &property.value {
+                        BindingPattern::AssignmentPattern(assignment) => &assignment.left,
+                        other => other,
+                    };
+                    if let (Some(key), BindingPattern::BindingIdentifier(identifier)) = (key, bound)
+                    {
+                        if matches!(fields.get(key), Some(Place::Const))
+                            && literal_keys.contains(key)
+                        {
+                            given.insert(identifier.name.to_string());
+                        }
+                        if let Some(value) = literal_values.get(key) {
+                            literals.insert(identifier.name.to_string(), value.clone());
+                        }
+                    }
+                }
+            }
+            let mut bound = self.bound_defaults.clone();
+            if let Some(schema) = &schema {
+                let mut found = Vec::new();
+                slot_defaults(&argument, schema, &mut found);
+                for (root, path, default) in found {
+                    if !bound
+                        .iter()
+                        .any(|(other, at, _)| *other == root && *at == path)
+                    {
+                        bound.push((root, path, default));
+                    }
+                }
+            }
+            self.facts.bound_defaults(bound.clone());
+            saved_bound = Some(std::mem::replace(&mut self.bound_defaults, bound));
+            if let Some(schema) = schema {
+                self.facts.argument_schema(schema);
+            }
+            self.bind_pattern(&parameter.pattern, argument);
+        }
+        let saved_given = std::mem::replace(&mut self.given_constants, given);
+        let saved_defaults = std::mem::replace(&mut self.callee_defaults, defaults);
+        let saved_literals = std::mem::replace(&mut self.callee_literals, literals);
+        let result = match function.expression_body() {
+            Some(expression) => Some(self.eval(expression, name)),
+            None => function
+                .block_body()
+                .and_then(|statements| self.statements(statements)),
+        };
+        self.given_constants = saved_given;
+        self.callee_defaults = saved_defaults;
+        self.callee_literals = saved_literals;
+        if let Some(saved) = saved_bound {
+            self.bound_defaults = saved;
+        }
+        self.facts.leave(saved_context, result.clone());
+        self.inline_at.pop();
+        WRITTEN_IN.set(saved_pattern);
+        self.within.pop();
+        self.module = saved_module;
+        self.env = saved_env;
+        result.unwrap_or(Place::Const)
+    }
+
+    /// Evaluates an expression that computes in a cone, which is made
+    /// under `hint` where the expression is not inside one already.
+    fn in_cone(&mut self, hint: &str, at: u32, evaluate: impl FnOnce(&mut Self, usize)) -> Place {
+        let (cone, made) = self.computing(hint, at);
+        evaluate(self, cone);
+        if made {
+            self.cone = None;
+        }
+        Place::Value(self.value(hint, cone), Vec::new())
+    }
+
+    /// Evaluates an expression, and records for the value-code emitter
+    /// what it denotes and which records its evaluation made.
+    fn eval(&mut self, expression: &Expression<'a>, hint: &str) -> Place {
+        let span = unwrap(expression).span();
+        let before = (self.values.len(), self.state_cells.len());
+        let place = self.eval_inner(expression, hint);
+        // The key fields go with the computed value from wherever an
+        // expression of a type that declares them denotes it, so a
+        // reader finds them by whichever way the value reaches it.
+        self.note_key_fields(expression, &place);
+        self.facts.expression(
+            (span.start, span.end),
+            crate::emit::ExprFact {
+                place: place.clone(),
+                values: (before.0, self.values.len()),
+                states: (before.1, self.state_cells.len()),
+            },
+        );
+        place
+    }
+
+    fn eval_inner(&mut self, expression: &Expression<'a>, hint: &str) -> Place {
+        let expression = unwrap(expression);
+        let at = expression.span().start;
+        match expression {
+            Expression::Identifier(identifier) => {
+                if let Some(place) = self.env.get(identifier.name.as_str()) {
+                    return place.clone();
+                }
+                match identifier.name.as_str() {
+                    "undefined" | "NaN" | "Infinity" => Place::Const,
+                    name if crate::api::is_global_namespace(name) => Place::Const,
+                    _ if self.resolver.value_def(self.module, identifier).is_some() => Place::Const,
+                    _ => {
+                        let api = self.resolver.parsed(self.module).and_then(|parsed| {
+                            self.resolver
+                                .model(self.module)?
+                                .api_ref_of_callee(parsed.semantic.scoping(), expression)
+                        });
+                        if api.is_some() {
+                            Place::Const
+                        } else {
+                            Place::Unknown
+                        }
+                    }
+                }
+            }
+            Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::BigIntLiteral(_)
+            | Expression::RegExpLiteral(_) => Place::Const,
+            Expression::TemplateLiteral(template) if template.expressions.is_empty() => {
+                Place::Const
+            }
+            Expression::StaticMemberExpression(member) => {
+                let object = self.eval(&member.object, hint);
+                self.member(&object, &member.object, member.property.name.as_str())
+            }
+            Expression::ComputedMemberExpression(member) => {
+                let object = self.eval(&member.object, hint);
+                match unwrap(&member.expression) {
+                    Expression::StringLiteral(key) => Self::extend(&object, key.value.as_str()),
+                    Expression::NumericLiteral(index) => {
+                        Self::extend(&object, &index.value.to_string())
+                    }
+                    key => {
+                        let key = self.eval(key, hint);
+                        if matches!(object, Place::Const) && matches!(key, Place::Const) {
+                            return Place::Const;
+                        }
+                        self.pick(&object, &key, hint, at)
+                    }
+                }
+            }
+            Expression::ChainExpression(chain) => match &chain.expression {
+                ChainElement::ComputedMemberExpression(member) => {
+                    let object = self.eval(&member.object, hint);
+                    if member.optional {
+                        self.observe(&object, "shape");
+                    }
+                    match unwrap(&member.expression) {
+                        Expression::StringLiteral(key) => Self::extend(&object, key.value.as_str()),
+                        key => {
+                            let key = self.eval(key, hint);
+                            self.pick(&object, &key, hint, at)
+                        }
+                    }
+                }
+                ChainElement::StaticMemberExpression(member) => {
+                    let object = self.eval(&member.object, hint);
+                    // `a?.b` observes whether `a` is present.
+                    if member.optional {
+                        self.observe(&object, "shape");
+                    }
+                    self.member(&object, &member.object, member.property.name.as_str())
+                }
+                ChainElement::CallExpression(call) => self.call(call, hint),
+                _ => {
+                    self.unsupported("an optional chain in the reactive tier", at);
+                    Place::Unknown
+                }
+            },
+            Expression::ObjectExpression(object) => {
+                let mut fields = BTreeMap::new();
+                for property in &object.properties {
+                    match property {
+                        ObjectPropertyKind::ObjectProperty(property) => {
+                            let name = match static_key_name(&property.key) {
+                                Some(name) if !property.computed => name.to_string(),
+                                _ => match property.key.as_expression().map(unwrap) {
+                                    Some(Expression::Identifier(key)) => {
+                                        format!("${}", key.name)
+                                    }
+                                    // "A key that is static ... is the
+                                    // name it evaluates to" (PL §3.4).
+                                    Some(Expression::StringLiteral(key)) => key.value.to_string(),
+                                    Some(Expression::NumericLiteral(key)) => key.value.to_string(),
+                                    Some(Expression::TemplateLiteral(key))
+                                        if key.expressions.is_empty() =>
+                                    {
+                                        key.quasis
+                                            .first()
+                                            .and_then(|quasi| quasi.value.cooked.as_ref())
+                                            .map(|text| text.to_string())
+                                            .unwrap_or_default()
+                                    }
+                                    _ => {
+                                        self.unsupported(
+                                            "a computed key of a record in the reactive tier",
+                                            property.span.start,
+                                        );
+                                        continue;
+                                    }
+                                },
+                            };
+                            let member = self.eval(&property.value, &format!("@{name}"));
+                            fields.insert(name, member);
+                        }
+                        ObjectPropertyKind::SpreadProperty(spread) => {
+                            let place = self.eval(&spread.argument, hint);
+                            let declared = match &place {
+                                Place::Slot(..) | Place::Value(..) => {
+                                    self.declared_members(&spread.argument)
+                                }
+                                _ => None,
+                            };
+                            match (place, declared) {
+                                (Place::Record(members), _) => fields.extend(members),
+                                (Place::Const, _) => {}
+                                // PL §3.4, "A spread in an object
+                                // literal": each path the type of `a`
+                                // declares has the template of `a.p`. A
+                                // member written before the spread stays
+                                // where the type does not declare its
+                                // path, is replaced where the path is
+                                // required, and is one branch of a
+                                // `select` on the `shape` of `a.p` where
+                                // it is optional.
+                                (place, Some(declared)) => {
+                                    for (name, optional) in declared {
+                                        let member = Self::extend(&place, &name);
+                                        let earlier =
+                                            fields.get(&name).cloned().filter(|_| optional);
+                                        let member = match earlier {
+                                            Some(earlier) => self.build(
+                                                &format!("@{name}"),
+                                                spread.span.start,
+                                                |emitter, _| {
+                                                    let selector = emitter.selector(2);
+                                                    let condition =
+                                                        emitter.one("shape", |_| member.clone()).1;
+                                                    let branches = vec![
+                                                        emitter
+                                                            .one("identity", |_| member.clone())
+                                                            .1,
+                                                        emitter.one("identity", |_| earlier).1,
+                                                    ];
+                                                    select_node(selector, condition, branches)
+                                                },
+                                            ),
+                                            None => member,
+                                        };
+                                        fields.insert(name, member);
+                                    }
+                                }
+                                _ => self.unsupported(
+                                    "a spread into a record in the reactive tier",
+                                    spread.span.start,
+                                ),
+                            }
+                        }
+                    }
+                }
+                Place::Record(fields)
+            }
+            Expression::ArrayExpression(array) => {
+                let mut fields = BTreeMap::new();
+                // The members up to the first spread whose positions are
+                // not static. "A spread of a value of tuple type has
+                // static positions and is the members written out", and a
+                // hole "holds nothing, has no template" (PL §3.4).
+                let mut position = 0usize;
+                let mut rest = array.elements.len();
+                for (index, element) in array.elements.iter().enumerate() {
+                    match element {
+                        ArrayExpressionElement::Elision(_) => position += 1,
+                        ArrayExpressionElement::SpreadElement(spread) => {
+                            let written = match unwrap(&spread.argument) {
+                                Expression::ArrayExpression(inner)
+                                    if inner
+                                        .elements
+                                        .iter()
+                                        .all(|element| element.as_expression().is_some()) =>
+                                {
+                                    Some(inner)
+                                }
+                                _ => None,
+                            };
+                            let Some(written) = written else {
+                                rest = index;
+                                break;
+                            };
+                            for element in written.elements.iter().filter_map(|e| e.as_expression())
+                            {
+                                let member = self.eval(element, hint);
+                                fields.insert(position.to_string(), member);
+                                position += 1;
+                            }
+                        }
+                        element => {
+                            if let Some(element) = element.as_expression() {
+                                let member = self.eval(element, hint);
+                                fields.insert(position.to_string(), member);
+                            }
+                            position += 1;
+                        }
+                    }
+                }
+                if rest < array.elements.len() {
+                    // "Every position from the first spread on is at the
+                    // path `*`, and the template there is the join of the
+                    // template of each spread operand at `*`, of the
+                    // templates of the members written after the first
+                    // spread, and of the array's `enumeration`", which is
+                    // "`derive` by expression code over the `enumeration`
+                    // of each spread operand".
+                    let later = &array.elements[rest..];
+                    let star = self.build(hint, at, |emitter, cone| {
+                        let mut inputs: Vec<Option<Value>> = Vec::new();
+                        let mut enumerations: Vec<Option<Value>> = Vec::new();
+                        for element in later {
+                            match element {
+                                ArrayExpressionElement::Elision(_) => {}
+                                ArrayExpressionElement::SpreadElement(spread) => {
+                                    let place = emitter.eval(&spread.argument, hint);
+                                    match &place {
+                                        Place::Slot(root, path) => {
+                                            let slot = emitter.slot(root, path, "enumeration");
+                                            emitter.cones[cone].slots.insert(slot);
+                                            enumerations
+                                                .push(Some(json!({ "op": "slot", "slot": slot })));
+                                            let member = Self::extend(&place, "*");
+                                            inputs.push(emitter.one("identity", |_| member).1);
+                                        }
+                                        Place::Const => {}
+                                        other => {
+                                            // A collection the instance
+                                            // computed: its template is
+                                            // its membership, and that of
+                                            // one value its own.
+                                            let template =
+                                                emitter.one("identity", |_| other.clone()).1;
+                                            enumerations.push(template.clone());
+                                            inputs.push(template);
+                                        }
+                                    }
+                                }
+                                element => {
+                                    if let Some(element) = element.as_expression() {
+                                        let template = emitter
+                                            .one("identity", |emitter| emitter.eval(element, hint))
+                                            .1;
+                                        inputs.push(template);
+                                    }
+                                }
+                            }
+                        }
+                        let enumerations: Option<Vec<Value>> = enumerations.into_iter().collect();
+                        let mut inputs: Vec<Value> =
+                            inputs.into_iter().collect::<Option<Vec<Value>>>()?;
+                        inputs.push(joined(enumerations?));
+                        Some(joined(inputs))
+                    });
+                    fields.insert("*".to_string(), star);
+                }
+                Place::Record(fields)
+            }
+            Expression::CallExpression(call) => self.call(call, hint),
+            Expression::NewExpression(new) => self.construct(new, hint),
+            Expression::JSXElement(_) | Expression::JSXFragment(_) => {
+                // A rendered tree has a template per path (PL §3.4), and
+                // none as one value.
+                // A tree written anywhere but as the `[UI]` value is
+                // placed by whatever uses it, under elements the
+                // emitter does not follow.
+                let placed = self.ui_chain.is_empty() && hint != "@$UI";
+                if placed {
+                    self.ui_chain.push(None);
+                }
+                let built = self.build(hint, at, |emitter, _| {
+                    let tree = match expression {
+                        Expression::JSXElement(element) => emitter.jsx_element(element),
+                        Expression::JSXFragment(fragment) => {
+                            emitter.jsx_node(None, &fragment.children)
+                        }
+                        _ => Place::Const,
+                    };
+                    emitter.constructed(&tree)
+                });
+                if placed {
+                    self.ui_chain.pop();
+                }
+                built
+            }
+            Expression::ConditionalExpression(conditional) => self.select(
+                hint,
+                at,
+                &conditional.test,
+                None,
+                [Some(&conditional.consequent), Some(&conditional.alternate)],
+            ),
+            // "`a && b` is `select(a, [b, a])` ... `a || b` and `??` are
+            // analogous" (PL §3.5). `??` tests whether `a` is present.
+            Expression::LogicalExpression(logical) => match logical.operator {
+                LogicalOperator::And => {
+                    self.select(hint, at, &logical.left, None, [Some(&logical.right), None])
+                }
+                LogicalOperator::Or => {
+                    self.select(hint, at, &logical.left, None, [None, Some(&logical.right)])
+                }
+                LogicalOperator::Coalesce => self.select(
+                    hint,
+                    at,
+                    &logical.left,
+                    Some("shape"),
+                    [None, Some(&logical.right)],
+                ),
+            },
+            Expression::BinaryExpression(binary) => self.derived(hint, at, |emitter, _| {
+                let equality = matches!(
+                    binary.operator,
+                    BinaryOperator::Equality
+                        | BinaryOperator::Inequality
+                        | BinaryOperator::StrictEquality
+                        | BinaryOperator::StrictInequality
+                );
+                let absent = |operand: &Expression<'a>| match unwrap(operand) {
+                    Expression::Identifier(identifier) => identifier.name == "undefined",
+                    Expression::NullLiteral(_) => true,
+                    _ => false,
+                };
+                let kind_test = |operand: &Expression<'a>| match unwrap(operand) {
+                    Expression::UnaryExpression(unary) => unary.operator == UnaryOperator::Typeof,
+                    _ => false,
+                };
+                for (operand, other) in
+                    [(&binary.left, &binary.right), (&binary.right, &binary.left)]
+                {
+                    // A test of presence, `x === undefined`, observes
+                    // whether `x` holds anything, and a test of kind,
+                    // `typeof x === "string"`, observes `x` for `shape`
+                    // and nothing of the name it is compared with.
+                    if equality && absent(operand) && !absent(other) {
+                        continue;
+                    }
+                    if equality
+                        && kind_test(other)
+                        && matches!(unwrap(operand), Expression::StringLiteral(_))
+                    {
+                        continue;
+                    }
+                    if let (true, Expression::UnaryExpression(unary)) =
+                        (equality && kind_test(operand), unwrap(operand))
+                    {
+                        let place = emitter.eval(&unary.argument, "operand");
+                        emitter.observe(&place, "shape");
+                        continue;
+                    }
+                    let place = emitter.eval(operand, "operand");
+                    if equality && absent(other) {
+                        emitter.observe(&place, "shape");
+                    } else {
+                        emitter.consume(&place);
+                    }
+                }
+            }),
+            Expression::UnaryExpression(unary) => self.derived(hint, at, |emitter, _| {
+                let place = emitter.eval(&unary.argument, "operand");
+                if unary.operator == UnaryOperator::Typeof {
+                    emitter.observe(&place, "shape");
+                } else {
+                    emitter.consume(&place);
+                }
+            }),
+            Expression::TemplateLiteral(template) => self.derived(hint, at, |emitter, _| {
+                for operand in &template.expressions {
+                    let place = emitter.eval(operand, "operand");
+                    emitter.consume(&place);
+                }
+            }),
+            Expression::ArrowFunctionExpression(_) | Expression::FunctionExpression(_) => {
+                self.unsupported("a function written as a value in the reactive tier", at);
+                Place::Unknown
+            }
+            _ => {
+                self.unsupported("an expression form in the reactive tier", at);
+                Place::Unknown
+            }
+        }
+    }
+
+    fn within_json(&self) -> Value {
+        Value::Array(self.within.clone())
+    }
+
+    /// A state cell (`Plan.stateCells`), from a cell constructor.
+    fn state_cell(&mut self, scope: &str, hint: &str) -> Place {
+        self.state_cells.push(json!({
+            "name": written_at(hint),
+            "scope": scope,
+            "within": self.within_json(),
+        }));
+        Place::Slot(Root::State(self.state_cells.len() - 1), Vec::new())
+    }
+
+    /// Records the value type of the state cell made last: the first
+    /// type argument of its constructor.
+    fn state_type(&mut self, arguments: Option<&TSTypeParameterInstantiation<'a>>) {
+        if let Some(ty) = arguments.and_then(|arguments| arguments.params.first()) {
+            let ty = self.resolver.resolve_type(self.module, ty);
+            self.state_types.insert(self.state_cells.len() - 1, ty);
+        }
+    }
+
+    /// The types on the way from a type to a path below it, each with
+    /// the path it is at. A handle on the way is crossed, and its value
+    /// is a node of its own at the handle's path followed by `@`.
+    fn typed_way(&self, start: TypeId, path: &[String]) -> Option<Vec<(Vec<String>, TypeId)>> {
+        let mut nodes = vec![(Vec::new(), start)];
+        let cross = |nodes: &mut Vec<(Vec<String>, TypeId)>| {
+            for _ in 0..4 {
+                let (at, last) = nodes[nodes.len() - 1].clone();
+                match self.resolver.shape(self.resolver.present(last)) {
+                    Shape::Handle(_, value) => {
+                        let mut at = at;
+                        at.push("@".to_string());
+                        nodes.push((at, value));
+                    }
+                    _ => break,
+                }
+            }
+        };
+        for segment in path {
+            cross(&mut nodes);
+            let (mut at, last) = nodes[nodes.len() - 1].clone();
+            at.push(segment.clone());
+            nodes.push((at, self.type_below(last, segment)?));
+        }
+        Some(nodes)
+    }
+
+    /// The annotations written on a type node, around it and on the
+    /// type that is present.
+    fn node_annotations(&self, node: TypeId) -> Vec<Annotation> {
+        let mut found = self.resolver.annotations_of(node);
+        let present = self.resolver.present(node);
+        if present != node {
+            found.extend(self.resolver.annotations_of(present));
+        }
+        found
+    }
+
+    /// The nodes below a type that carry an input annotation, each with
+    /// its path below the type.
+    fn annotated_below(
+        &self,
+        ty: TypeId,
+        cross: bool,
+        at: &mut Vec<String>,
+        seen: &mut Vec<TypeId>,
+        found: &mut Vec<(Vec<String>, TypeId)>,
+    ) {
+        let present = self.resolver.present(ty);
+        if at.len() > 6 || seen.contains(&present) {
+            return;
+        }
+        seen.push(present);
+        let mut below: Vec<(String, TypeId)> = Vec::new();
+        match self.resolver.shape(present) {
+            Shape::Object(properties, index) => {
+                below.extend(
+                    properties
+                        .iter()
+                        .map(|property| (property.name.clone(), property.ty)),
+                );
+                below.extend(index.map(|index| ("*".to_string(), index)));
+            }
+            Shape::Array(element) => below.push(("*".to_string(), element)),
+            // A slot that observes a reference does not read through
+            // the handle below it.
+            Shape::Handle(_, value) if cross => below.push(("@".to_string(), value)),
+            _ => {}
+        }
+        for (segment, ty) in below {
+            at.push(segment);
+            let input = self.node_annotations(ty).iter().any(|annotation| {
+                matches!(annotation.key, "requiredIntegrity" | "maxConfidentiality")
+            });
+            if input {
+                found.push((at.clone(), ty));
+            }
+            self.annotated_below(ty, cross, at, seen, found);
+            at.pop();
+        }
+        seen.pop();
+    }
+
+    /// The input constraints of one use of a body (PL §1.5, "At an
+    /// input"; §4.4, "What an input constraint lists"): one per
+    /// `requiredIntegrity` and `maxConfidentiality` annotation of the
+    /// types of the formal inputs, over the entries of the footprint
+    /// whose path overlaps the annotated path in either prefix
+    /// direction. An entry is a slot of `Body.reads`, an entry of
+    /// `Body.computed`, or an entry of `Body.handles` with the annotated
+    /// path below the handle's cell.
+    fn input_guards(
+        &self,
+        body: usize,
+        inputs: &HashMap<String, Place>,
+        placed: &[(crate::footprint::Entry, Result<usize, usize>)],
+        handles: &[(usize, String, Vec<Seg>)],
+    ) -> Vec<Value> {
+        // The annotated node, the key and the list, and what is listed.
+        type Listed = (Vec<usize>, Vec<usize>, Vec<(usize, Vec<String>)>);
+        type Guard = ((String, Vec<String>), &'static str, Value, Listed);
+        // A formal input's root, and the type at each path on the way.
+        type Way = (String, Vec<(Vec<String>, TypeId)>);
+        let mut guards: Vec<Guard> = Vec::new();
+        // The way to a position of a formal input: under the type the
+        // body declares for the input where the emitter has it, and
+        // otherwise under the type of the slot root the input is bound
+        // to.
+        let way = |input: &str, path: &[Seg]| -> Option<Way> {
+            if let Some(ty) = self.formal_types.get(input) {
+                return Some((
+                    input.to_string(),
+                    self.typed_way(*ty, &slot_path(&[], path))?,
+                ));
+            }
+            match self.bound(inputs, input, path) {
+                Place::Slot(root, full) => {
+                    let ty = *self.root_types.get(&root)?;
+                    Some((format!("{root:?}"), self.typed_way(ty, &full)?))
+                }
+                _ => None,
+            }
+        };
+        let mut list =
+            |anchor: (String, Vec<String>), node: TypeId, add: &dyn Fn(&mut Listed, &[String])| {
+                for annotation in self.node_annotations(node) {
+                    let key = match annotation.key {
+                        "requiredIntegrity" => "requiredIntegrity",
+                        "maxConfidentiality" => "maxConfidentiality",
+                        _ => continue,
+                    };
+                    let Some(value) = crate::schema::label_list(&annotation) else {
+                        continue;
+                    };
+                    let position = guards.iter().position(|(at, other, list, _)| {
+                        *at == anchor && *other == key && *list == value
+                    });
+                    let position = position.unwrap_or_else(|| {
+                        guards.push((anchor.clone(), key, value, Listed::default()));
+                        guards.len() - 1
+                    });
+                    add(&mut guards[position].3, &anchor.1);
+                }
+            };
+        for (entry, at) in placed {
+            let Some((base, nodes)) = way(&entry.input, &entry.path) else {
+                continue;
+            };
+            let add = |listed: &mut Listed, _: &[String]| match at {
+                Ok(slot) if !listed.0.contains(slot) => listed.0.push(*slot),
+                Err(computed) if !listed.1.contains(computed) => listed.1.push(*computed),
+                _ => {}
+            };
+            for (path, node) in &nodes {
+                list((base.clone(), path.clone()), *node, &add);
+            }
+            if let Some((path, last)) = nodes.last() {
+                let mut found = Vec::new();
+                let cross = entry.class == Class::Value;
+                self.annotated_below(*last, cross, &mut path.clone(), &mut Vec::new(), &mut found);
+                for (path, node) in found {
+                    list((base.clone(), path), node, &add);
+                }
+            }
+        }
+        for (handle, input, path) in handles {
+            let Some((base, nodes)) = way(input, path) else {
+                continue;
+            };
+            let Some((cell, last)) = nodes.last().cloned() else {
+                continue;
+            };
+            let add = |listed: &mut Listed, annotated: &[String]| {
+                let below: Vec<String> = annotated
+                    .strip_prefix(cell.as_slice())
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter(|segment| *segment != "@")
+                    .cloned()
+                    .collect();
+                if !listed.2.contains(&(*handle, below.clone())) {
+                    listed.2.push((*handle, below));
+                }
+            };
+            for (path, node) in &nodes {
+                list((base.clone(), path.clone()), *node, &add);
+            }
+            let mut found = Vec::new();
+            self.annotated_below(last, true, &mut cell.clone(), &mut Vec::new(), &mut found);
+            for (path, node) in found {
+                list((base.clone(), path), node, &add);
+            }
+        }
+        guards
+            .into_iter()
+            .map(|(_, key, value, (slots, computed, handles))| {
+                let member = if key == "requiredIntegrity" { "patterns" } else { "ceiling" };
+                let mut constraint = Map::new();
+                constraint.insert("kind".to_string(), json!(key));
+                constraint.insert(member.to_string(), value);
+                constraint.insert("slots".to_string(), json!(slots));
+                if !handles.is_empty() {
+                    let handles: Vec<Value> = handles
+                        .iter()
+                        .map(|(handle, path)| json!({ "body": body, "handle": handle, "path": path }))
+                        .collect();
+                    constraint.insert("handles".to_string(), json!(handles));
+                }
+                if !computed.is_empty() {
+                    let computed: Vec<Value> = computed
+                        .iter()
+                        .map(|computed| json!({ "body": body, "computed": computed }))
+                        .collect();
+                    constraint.insert("computed".to_string(), json!(computed));
+                }
+                Value::Object(constraint)
+            })
+            .collect()
+    }
+
+    /// The scope a cell constructor names: `X`, `X.perUser`, and so on.
+    fn constructor_scope(&self, callee: &Expression<'a>) -> Option<&'static str> {
+        let (object, scope) = match unwrap(callee) {
+            Expression::StaticMemberExpression(member) => {
+                let scope = match member.property.name.as_str() {
+                    "perSpace" => "space",
+                    "perUser" => "user",
+                    "perSession" => "session",
+                    _ => return None,
+                };
+                (unwrap(&member.object), scope)
+            }
+            other => (other, "space"),
+        };
+        let Expression::Identifier(identifier) = object else {
+            return None;
+        };
+        (crate::api::is_cell_type(identifier.name.as_str()) || identifier.name.as_str() == "Stream")
+            .then_some(scope)
+            .filter(|_| self.resolver.value_def(self.module, identifier).is_none())
+    }
+
+    /// The first value a declaration gives the state cell made last
+    /// (ruling Z3; PL §1.3, "The first value of a state cell"). A value
+    /// that is a constant is the default of the cell's schema, and
+    /// nothing is written when the cell is created. Any other value is
+    /// computed by a cone of its own and written once, through a write
+    /// edge of that cone with target `state`, which `StateCell.first`
+    /// names.
+    /// The cone reads what the value is computed from by its value: the
+    /// cell holds the value, and no reference to an input.
+    fn first_value(&mut self, argument: &Expression<'a>, hint: &str) {
+        let cell = self.state_cells.len() - 1;
+        if matches!(unwrap(argument), Expression::Identifier(name) if name.name == "undefined") {
+            return;
+        }
+        // A name of the reactive tier is no constant, whatever a
+        // declaration of the module with the same name holds.
+        let bound = matches!(
+            unwrap(argument),
+            Expression::Identifier(name) if self.env.contains_key(name.name.as_str())
+        );
+        let constant = match bound {
+            true => None,
+            false => self.resolver.constant_value(self.module, argument, 0),
+        };
+        if let Some(constant) = constant {
+            self.state_cells[cell]["$default"] = constant;
+            return;
+        }
+        let saved = self.cone.take();
+        let at = argument.span().start;
+        let mut written = None;
+        let place = self.build(hint, at, |emitter, _| {
+            let (_, template) = emitter.one("value", |emitter| emitter.eval(argument, hint));
+            written = template.clone();
+            template
+        });
+        self.cone = saved;
+        let Place::Value(value, _) = place else {
+            return;
+        };
+        let cone = self.values[value].cone;
+        let mut write = Map::new();
+        write.insert(
+            "target".to_string(),
+            json!({ "kind": "state", "cell": cell, "path": [] }),
+        );
+        if let Some(template) = written {
+            write.insert("template".to_string(), template);
+        }
+        write.insert("constraints".to_string(), json!([]));
+        self.cones[cone].writes.push(Value::Object(write));
+        self.state_cells[cell]["first"] = json!({
+            "$cone": cone,
+            "write": self.cones[cone].writes.len() - 1,
+        });
+    }
+
+    fn construct(&mut self, new: &NewExpression<'a>, hint: &str) -> Place {
+        match self.constructor_scope(&new.callee) {
+            Some(scope) => {
+                let place = self.state_cell(scope, hint);
+                self.state_type(new.type_arguments.as_deref());
+                if let Some(argument) = new.arguments.first().and_then(Argument::as_expression) {
+                    self.first_value(argument, hint);
+                }
+                place
+            }
+            None => {
+                self.unsupported("a constructor in the reactive tier", new.span.start);
+                Place::Unknown
+            }
+        }
+    }
+
+    fn call(&mut self, call: &CallExpression<'a>, hint: &str) -> Place {
+        let at = call.span.start;
+        let arguments: Vec<&Expression<'a>> = call
+            .arguments
+            .iter()
+            .filter_map(Argument::as_expression)
+            .collect();
+        if arguments.len() != call.arguments.len() {
+            self.unsupported("a spread argument in the reactive tier", at);
+            return Place::Unknown;
+        }
+        if let Some(api) = self.resolver.api_callee(self.module, call) {
+            return self.api_call(call, api.as_str(), &arguments, hint);
+        }
+        match unwrap(&call.callee) {
+            Expression::Identifier(identifier) => {
+                if let Some(Place::Value(..) | Place::Slot(..) | Place::Unknown) =
+                    self.env.get(identifier.name.as_str())
+                {
+                    self.unsupported("a call of a factory value in the reactive tier", at);
+                    return Place::Unknown;
+                }
+                match self.def_function(identifier) {
+                    Some((home, start, DefKind::Handler)) => {
+                        self.bind_handler(home, start, identifier.name.as_str(), &arguments, hint)
+                    }
+                    Some((home, start, DefKind::Lift | DefKind::Function)) => {
+                        let name = identifier.name.to_string();
+                        self.use_body(home, start, &name, &arguments, hint, at)
+                    }
+                    Some((home, start, DefKind::Pattern)) => {
+                        let name = base_name(hint, identifier.name.as_str()).to_string();
+                        // The tree of a pattern called as a function is
+                        // placed by whatever uses its result.
+                        self.ui_chain.push(None);
+                        let result = self.inline_pattern(home, start, &name, &arguments, at);
+                        self.ui_chain.pop();
+                        result
+                    }
+                    _ => {
+                        let global = self.resolver.parsed(self.module).is_some_and(|parsed| {
+                            symbol_of(parsed.semantic.scoping(), identifier).is_none()
+                        });
+                        if global {
+                            // A function of the standard library, such as
+                            // `String`: expression code over its
+                            // arguments.
+                            return self.derived(hint, at, |emitter, _| {
+                                for argument in &arguments {
+                                    let place = emitter.eval(argument, "operand");
+                                    emitter.consume(&place);
+                                }
+                            });
+                        }
+                        self.unsupported("a call of a name the emitter does not resolve", at);
+                        Place::Unknown
+                    }
+                }
+            }
+            Expression::StaticMemberExpression(member) => {
+                let name = member.property.name.as_str();
+                // `X.of(value)` and `X.for(cause)`.
+                if matches!(name, "of" | "for") {
+                    if let Some(scope) = self.constructor_scope(&member.object) {
+                        let cause = match (name, arguments.first().map(|first| unwrap(first))) {
+                            ("for", Some(Expression::StringLiteral(cause))) => {
+                                cause.value.to_string()
+                            }
+                            ("for", _) => {
+                                self.unsupported(
+                                    "a cause that is not a string literal in the reactive tier",
+                                    at,
+                                );
+                                fallback_name(hint, "cell").to_string()
+                            }
+                            _ => fallback_name(hint, "cell").to_string(),
+                        };
+                        let place = self.state_cell(scope, &cause);
+                        self.state_type(call.type_arguments.as_deref());
+                        if let ("of", Some(argument)) = (name, arguments.first()) {
+                            self.first_value(argument, hint);
+                        }
+                        return place;
+                    }
+                }
+                let receiver = self.eval(&member.object, hint);
+                self.method(call, &receiver, name, &arguments, hint)
+            }
+            Expression::CallExpression(inner) if self.as_instance(inner).is_some() => {
+                let (home, start, callee) = self.as_instance(inner).expect("checked above");
+                let name = base_name(hint, &callee).to_string();
+                self.child_instance(home, start, &name, &arguments, at)
+            }
+            Expression::CallExpression(inner) if self.resolver.is_lift_call(self.module, inner) => {
+                match inner.arguments.first().and_then(FunctionLike::of_argument) {
+                    Some(function) => {
+                        let start = function.span().start;
+                        let name = fallback_name(hint, "lift");
+                        self.use_body(self.module, start, name, &arguments, hint, at)
+                    }
+                    None => {
+                        self.unsupported("a `lift` of a function not written in place", at);
+                        Place::Unknown
+                    }
+                }
+            }
+            _ => {
+                self.unsupported("a call form in the reactive tier", at);
+                Place::Unknown
+            }
+        }
+    }
+
+    /// The pattern that the callee of a call names through the factory
+    /// modifier `asInstance()`, alone or composed with `asScope(scope)`
+    /// and `inSpace(space, options)`: where the pattern is written, and
+    /// its name (ruling Z36). `None` where `asInstance()` is not among
+    /// the modifiers, or the modified value is not a pattern the compiler
+    /// can see.
+    fn as_instance(&mut self, modifier: &CallExpression<'a>) -> Option<(usize, u32, String)> {
+        let mut call = modifier;
+        let mut marked = false;
+        loop {
+            let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
+                return None;
+            };
+            match member.property.name.as_str() {
+                "asInstance" => marked = true,
+                "asScope" | "inSpace" => {}
+                _ => return None,
+            }
+            match unwrap(&member.object) {
+                Expression::CallExpression(inner) => call = inner,
+                Expression::Identifier(identifier) => {
+                    if !marked || self.env.contains_key(identifier.name.as_str()) {
+                        return None;
+                    }
+                    return match self.def_function(identifier) {
+                        Some((home, start, DefKind::Pattern)) => {
+                            Some((home, start, identifier.name.to_string()))
+                        }
+                        _ => None,
+                    };
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// A call of a pattern through `asInstance()` (PL §3.15, "A call
+    /// through `asInstance()`"; rulings Z35 and Z36): a `Child` with the
+    /// mark, whose callee is the compiled pattern. Nothing of the callee
+    /// is compiled into this plan, and no `site` step stands for the
+    /// call. The `within` of the record is that of the site, so in an
+    /// element body the instance is identified by the site, the
+    /// collection and the element key. The cone the call is written in
+    /// has one write edge with target `argument` per path of the
+    /// argument, and the result is read through slots of root `child`.
+    /// The record is the same over an array of references, over an array
+    /// of plain values in place, and over the result of another
+    /// per-element construct.
+    fn child_instance(
+        &mut self,
+        home: usize,
+        start: u32,
+        name: &str,
+        arguments: &[&Expression<'a>],
+        at: u32,
+    ) -> Place {
+        let argument = match arguments.first() {
+            Some(argument) => self.eval(argument, name),
+            None => Place::Const,
+        };
+        let child = self.children.len();
+        self.children.push(json!({
+            "callee": { "compiled": self.pattern_identity(home, start) },
+            "asInstance": true,
+            "name": name,
+            "within": self.within_json(),
+        }));
+        let (cone, made) = self.computing(name, at);
+        let mut paths = Vec::new();
+        request_paths(&argument, &mut Vec::new(), &mut paths);
+        for (path, member) in paths {
+            let template = self.one("identity", |_| member).1;
+            let mut write = Map::new();
+            write.insert(
+                "target".to_string(),
+                json!({ "kind": "argument", "child": child, "path": path }),
+            );
+            if let Some(template) = template {
+                write.insert("template".to_string(), template);
+            }
+            write.insert("constraints".to_string(), json!([]));
+            self.cones[cone].writes.push(Value::Object(write));
+        }
+        if made {
+            self.cone = None;
+        }
+        Place::Slot(Root::Child(child), Vec::new())
+    }
+
+    fn method(
+        &mut self,
+        call: &CallExpression<'a>,
+        receiver: &Place,
+        name: &str,
+        arguments: &[&Expression<'a>],
+        hint: &str,
+    ) -> Place {
+        let at = call.span.start;
+        match name {
+            // A read through a handle is a slot whose path crosses the
+            // link (PL §2.5).
+            "get" | "sample" if arguments.is_empty() => receiver.clone(),
+            "key" => match arguments.first().map(|first| unwrap(first)) {
+                Some(Expression::StringLiteral(key)) => Self::extend(receiver, key.value.as_str()),
+                Some(key) => {
+                    let key = self.eval(key, hint);
+                    self.pick(receiver, &key, hint, at)
+                }
+                None => receiver.clone(),
+            },
+            "map" | "filter" | "flatMap" | "some" | "every" | "findIndex" | "find" => {
+                match arguments.first().and_then(|first| FunctionLike::of(first)) {
+                    Some(function) => self.collection(call, receiver, name, function, hint, at),
+                    None => {
+                        self.unsupported("an element construct with no callback in place", at);
+                        Place::Unknown
+                    }
+                }
+            }
+            "reduce" => match arguments.first().and_then(|first| FunctionLike::of(first)) {
+                Some(function) => {
+                    self.reduce(receiver, function, arguments.get(1).copied(), hint, at)
+                }
+                None => {
+                    self.unsupported("an element construct with no callback in place", at);
+                    Place::Unknown
+                }
+            },
+            // "`db.query(...)` holds the handle by value as an operand
+            // of a `sqliteQuery` request" (PL §3.14).
+            "query" if matches!(receiver, Place::Slot(..) | Place::Value(..)) => {
+                let receiver = receiver.clone();
+                self.effect(
+                    "sqliteQuery",
+                    Some(("db", &receiver)),
+                    arguments,
+                    &["sql"],
+                    hint,
+                    at,
+                )
+            }
+            "for" | "asSchema" | "withTx" => receiver.clone(),
+            // The method forms of `equals` and `equalLinks` (LS §4.7, PL
+            // §3.16): on a handle, or on a cell constructor with both
+            // operands as arguments.
+            "equals" | "equalLinks" => {
+                let receiver = receiver.clone();
+                self.derived(hint, at, |emitter, _| {
+                    let mut operands = vec![receiver];
+                    for argument in arguments {
+                        operands.push(emitter.eval(argument, "operand"));
+                    }
+                    for operand in &operands {
+                        if name == "equals" {
+                            emitter.resolve(operand);
+                        } else {
+                            emitter.pass(operand);
+                        }
+                    }
+                })
+            }
+            // A method of a string, a number, or an array that takes no
+            // function, and a function of a global object of the standard
+            // library: expression code over the receiver and the
+            // arguments.
+            _ if arguments
+                .iter()
+                .all(|argument| FunctionLike::of(argument).is_none())
+                && (matches!(receiver, Place::Const) || SCALAR_METHODS.contains(&name)) =>
+            {
+                let receiver = receiver.clone();
+                let mut places = Vec::new();
+                for argument in arguments {
+                    places.push(self.eval(argument, hint));
+                }
+                if matches!(receiver, Place::Const)
+                    && places.iter().all(|place| matches!(place, Place::Const))
+                {
+                    return Place::Const;
+                }
+                self.derived(hint, at, |emitter, _| {
+                    emitter.consume(&receiver);
+                    for place in &places {
+                        emitter.consume(place);
+                    }
+                })
+            }
+            _ => {
+                if matches!(receiver, Place::Unknown) {
+                    // Reported where the receiver was lost.
+                    return Place::Unknown;
+                }
+                self.unsupported(format!("the method `{name}` in the reactive tier"), at);
+                for argument in arguments {
+                    if FunctionLike::of(argument).is_none() {
+                        self.eval(argument, hint);
+                    }
+                }
+                Place::Unknown
+            }
+        }
+    }
+
+    /// `xs.reduce((acc, x) => expr, init)` (PL §3.13, "The record"): an
+    /// `Operation` of kind `reduce` whose implementation is the cone of
+    /// the step, a `Collection` of its own named `reduce`, the
+    /// accumulator as a slot with root `operation`, and the initial value
+    /// written at the path `initial`.
+    fn reduce(
+        &mut self,
+        receiver: &Place,
+        function: FunctionLike<'_, 'a>,
+        initial: Option<&Expression<'a>>,
+        hint: &str,
+        at: u32,
+    ) -> Place {
+        let Some(step) = function.expression_body() else {
+            // "The callback of `reduce` is an expression"
+            // (`language-subset.md` §4.4.1).
+            self.unsupported("a `reduce` whose callback is not an expression", at);
+            return Place::Unknown;
+        };
+        let (source, iterated) = self.source_of(receiver, "reduce", true, "reduce", at);
+        let operation = self.operations.len();
+        self.operations.push(json!({
+            "kind": "reduce",
+            "name": base_name(hint, "reduce"),
+            "within": self.within_json(),
+        }));
+        let collection = self.collections.len();
+        let parameters = &function.params().items;
+        let mut record = json!({
+            "name": "reduce",
+            "within": self.within_json(),
+            "construct": "operation",
+            "source": source,
+        });
+        if let Some(membership) = &iterated {
+            record["membership"] = membership.clone();
+        }
+        self.collections.push(record);
+        self.iterated.push(iterated.clone());
+        self.collection_starts.push(at);
+        // The cone the `reduce` is written in computes `init`.
+        let initial = initial.map(|initial| {
+            let (cone, made) = self.computing(hint, at);
+            let template = self.operand_template(initial, hint);
+            let mut write = Map::new();
+            write.insert(
+                "target".to_string(),
+                json!({ "kind": "request", "of": { "operation": operation }, "path": ["initial"] }),
+            );
+            if let Some(template) = &template {
+                write.insert("template".to_string(), template.clone());
+            }
+            write.insert("constraints".to_string(), json!([]));
+            self.cones[cone].writes.push(Value::Object(write));
+            if made {
+                self.cone = None;
+            }
+            template
+        });
+        // The step: one cone, which the runtime evaluates once per
+        // position, in order.
+        let saved_env = self.env.clone();
+        let saved_cone = self.cone.take();
+        let saved_operands = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        self.within.push(json!({ "element": collection }));
+        if let Some(accumulator) = parameters.first() {
+            self.bind_pattern(
+                &accumulator.pattern,
+                Place::Accumulator(operation, Vec::new()),
+            );
+        }
+        if let Some(element) = parameters.get(1) {
+            self.root_type(self.module, Root::Element(collection), element);
+            self.bind_pattern(
+                &element.pattern,
+                Place::Slot(Root::Element(collection), Vec::new()),
+            );
+        }
+        if let Some(index) = parameters.get(2) {
+            // "A step that uses the index lists the slot of root `index`
+            // that names it" (PL §3.13).
+            self.root_type(self.module, Root::Index(collection), index);
+            self.bind_pattern(&index.pattern, Self::index_of(collection));
+        }
+        let name = base_name(hint, "reduce").to_string();
+        let (cone, _) = self.computing(&name, function.span().start);
+        let (_, template) = self.one("identity", |emitter| emitter.eval(step, &name));
+        self.within.pop();
+        self.cone = saved_cone;
+        self.env = saved_env;
+        self.operands = saved_operands.0;
+        self.opaque = saved_operands.1;
+        let value = self.value(&name, cone);
+        self.values[value].step = true;
+        self.values[value].template = template.clone();
+        self.operations[operation]["implementation"] = json!({ "$cone": cone });
+        // "`Operation.input` is the `fold` over the collection of the
+        // step's template, joined with the template of `init`", and with
+        // the collection's membership (the template of the same section).
+        let input = (|| {
+            // The `fold` joins the membership its collection iterates
+            // by its own rule (PL §3.2).
+            let mut inputs = vec![fold_node(collection, template?, None)];
+            iterated?;
+            if let Some(initial) = initial {
+                inputs.push(initial?);
+            }
+            Some(joined(inputs))
+        })();
+        if let Some(input) = input {
+            self.operations[operation]["input"] = input;
+        }
+        Place::Slot(Root::Operation(operation), Vec::new())
+    }
+
+    /// The `source` of the collection of an element construct, and the
+    /// membership of what the construct iterates. A scan and a `reduce`
+    /// name their receiver, which for a collection of the plan is its
+    /// assembled output (PL §3.13).
+    fn source_of(
+        &mut self,
+        receiver: &Place,
+        via: &str,
+        scan: bool,
+        name: &str,
+        at: u32,
+    ) -> (Value, Option<Value>) {
+        // The membership of what the construct iterates: for an input
+        // collection its `enumeration` slot, and for a collection the
+        // instance computed the producing template (PL §3.6).
+        let mut iterated: Option<Value> = None;
+        let source = match receiver {
+            Place::Slot(root, path) => {
+                let slot = self.slot(root, path, "enumeration");
+                iterated = Some(json!({ "op": "slot", "slot": slot }));
+                json!({ "slot": slot })
+            }
+            Place::Value(value, path) => {
+                self.values[*value].referred = true;
+                iterated = self.template_by_reference(*value);
+                match self.values[*value].collection {
+                    Some(collection) if !scan && !self.values[*value].scan => {
+                        json!({ "collection": collection, "via": via })
+                    }
+                    _ if path.is_empty() => json!({ "output": { "$value": value } }),
+                    _ => {
+                        // A path of a value another expression computed,
+                        // as `facts.main` is: an interim output at that
+                        // path.
+                        if !self.values[*value].below.contains(path) {
+                            self.values[*value].below.push(path.clone());
+                        }
+                        json!({ "output": { "$value": value, "$path": path } })
+                    }
+                }
+            }
+            Place::Unknown => json!({}),
+            Place::Record(_) | Place::Const => {
+                // An array written in the reactive tier is an array the
+                // instance computed (PL §1.1, `Collection.source`). A cone
+                // of its own computes it, so that a cone that uses the
+                // assembled result does not come before the body.
+                let receiver = receiver.clone();
+                let saved = self.cone.take();
+                // "For a constant, the membership template ... [is]
+                // `const`. For a literal written in place, the
+                // membership is the literal's `enumeration`" (PL §3.6),
+                // which is `const` for a static set of keys (§3.4).
+                // An array written with a spread has the membership its
+                // positions from the spread on have, which joins the
+                // `enumeration` of each spread operand.
+                let membership = match &receiver {
+                    Place::Record(fields) => match fields.get("*") {
+                        Some(Place::Value(value, _)) => self.template_by_reference(*value),
+                        _ => Some(json!({ "op": "const" })),
+                    },
+                    _ => Some(json!({ "op": "const" })),
+                };
+                let array = self.build(name, at, |emitter, _| {
+                    emitter.pass(&receiver);
+                    membership.clone()
+                });
+                self.cone = saved;
+                iterated = membership;
+                match array {
+                    Place::Value(value, _) => {
+                        self.values[value].referred = true;
+                        json!({ "output": { "$value": value } })
+                    }
+                    _ => json!({}),
+                }
+            }
+            _ => {
+                self.unsupported("an element construct over a stream or an index", at);
+                json!({})
+            }
+        };
+        (source, iterated)
+    }
+
+    /// An element construct: a collection, and the cone of its body.
+    fn collection(
+        &mut self,
+        call: &CallExpression<'a>,
+        receiver: &Place,
+        via: &str,
+        function: FunctionLike<'_, 'a>,
+        hint: &str,
+        at: u32,
+    ) -> Place {
+        let name = base_name(hint, via);
+        // A scan (PL §3.13): the predicate is the body, the runtime
+        // evaluates it in order, and a selector holds the position the
+        // scan stopped at.
+        let scan = matches!(via, "some" | "every" | "findIndex" | "find");
+        let (source, iterated) = self.source_of(receiver, via, scan, name, at);
+        let collection = self.collections.len();
+        self.collections.push(json!({
+            "name": name,
+            "within": self.within_json(),
+            "construct": via,
+            "source": source,
+        }));
+        self.iterated.push(iterated.clone());
+        self.collection_starts.push(at);
+        // The body: one cone, evaluated once per element key.
+        let saved_env = self.env.clone();
+        let saved_cone = self.cone.take();
+        let saved_operands = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        self.within.push(json!({ "element": collection }));
+        let parameters = &function.params().items;
+        if let Some(element) = parameters.first() {
+            self.root_type(self.module, Root::Element(collection), element);
+            // `Collection.keyFields`: a copy of the key fields that the
+            // type of the receiver declares with `ArrayByKey`, for a
+            // source that is a slot or an output (PL §1.1; rulings Z45
+            // and Z49). Where the receiver is typed as a plain array,
+            // they are the key fields of the array the place holds (PL
+            // §8, question 143, assumed there). A construct over
+            // another collection has none: its elements have the
+            // upstream key.
+            let written = match unwrap(&call.callee) {
+                Expression::StaticMemberExpression(member) => self
+                    .resolver
+                    .declared(self.module, &member.object)
+                    .ok()
+                    .and_then(|ty| self.key_fields_of_type(ty)),
+                _ => None,
+            };
+            let declared = written.or_else(|| self.place_key_fields(receiver));
+            let derived = self.collections[collection]["source"]
+                .get("collection")
+                .is_some();
+            if let (Some(fields), false) = (declared, derived) {
+                self.collections[collection]["keyFields"] = fields;
+            }
+            self.bind_pattern(
+                &element.pattern,
+                Place::Slot(Root::Element(collection), Vec::new()),
+            );
+        }
+        if let Some(index) = parameters.get(1) {
+            // "A node of the body that reads the index reads a slot of
+            // root `index` that names the collection" (PL §1.3). The
+            // name is bound to the slot, and each node that reads the
+            // name lists it; a callback that declares the index and does
+            // not use it adds it to no template (§3.6).
+            self.root_type(self.module, Root::Index(collection), index);
+            self.bind_pattern(&index.pattern, Self::index_of(collection));
+        }
+        // The cones of an element body (PL §1.4): each declaration of
+        // the callback that computes is a cone of its own, as in a
+        // pattern body, and the expression the callback returns is one
+        // cone, whether or not it computes.
+        let before = function.block_body().map(|statements| {
+            let end = statements
+                .iter()
+                .position(|statement| matches!(statement, Statement::ReturnStatement(_)))
+                .unwrap_or(statements.len());
+            &statements[..end]
+        });
+        if let Some(before) = before {
+            self.statements(before);
+        }
+        let (cone, _) = self.computing(name, function.span().start);
+        // The expression the callback returns, for the class a test of
+        // its truthiness needs.
+        let returned = function.expression_body().or_else(|| {
+            function.block_body().and_then(|statements| {
+                statements.iter().find_map(|statement| match statement {
+                    Statement::ReturnStatement(statement) => statement.argument.as_ref(),
+                    _ => None,
+                })
+            })
+        });
+        let tests = scan || via == "filter";
+        let class = match (tests, returned) {
+            (true, Some(returned)) => self.test_class(returned),
+            (true, None) => "value",
+            (false, _) => "identity",
+        };
+        let (result, body) = self.one(class, |emitter| match returned {
+            Some(expression) => emitter.eval(expression, name),
+            None => Place::Const,
+        });
+        let element_entries = self.entries_of(&result);
+        // The element as the source has it, passed through.
+        let source_element = |emitter: &mut Self| {
+            let slot = emitter.slot(&Root::Element(collection), &[], "identity");
+            emitter.cones[cone].slots.insert(slot);
+            json!({ "op": "slot", "slot": slot })
+        };
+        let fold = |body: Option<Value>, through: Option<usize>| -> Option<Value> {
+            Some(fold_node(collection, body?, through))
+        };
+        let joined = |fold: Option<Value>, iterated: &Option<Value>| -> Option<Value> {
+            // "A `fold` of `t`, joined with membership" is the `fold`
+            // alone (PL §3.2).
+            iterated.as_ref()?;
+            fold
+        };
+        // The membership of the result, the template of an element of
+        // it, and for a scan the template of its value.
+        let mut predicate: Option<Option<Value>> = None;
+        let (membership, element, scanned) = match via {
+            "map" => (iterated.clone(), body, None),
+            // PL §3.7: "`fold` over the source with body the template of
+            // `pred`, joined with the source's membership", and "an
+            // element of the result is the source element, passed
+            // through".
+            "filter" => (
+                joined(fold(body, None), &iterated),
+                Some(source_element(self)),
+                None,
+            ),
+            // "`fold` over the source with body the `enumeration` of the
+            // segment `body` returns".
+            "flatMap" => {
+                let segment = match &result {
+                    Place::Slot(root, path) => {
+                        let slot = self.slot(root, path, "enumeration");
+                        self.cones[cone].slots.insert(slot);
+                        Some(json!({ "op": "slot", "slot": slot }))
+                    }
+                    Place::Value(value, _) => self.template_by_reference(*value),
+                    Place::Record(_) | Place::Const => Some(json!({ "op": "const" })),
+                    _ => None,
+                };
+                (joined(fold(segment, None), &iterated), body, None)
+            }
+            // A scan (PL §3.13): a `fold` of the predicate's template
+            // through the deciding element, joined with the membership.
+            // The runtime supplies the `through`, and no value function
+            // reports it.
+            _ => {
+                let through = self.selectors.len();
+                self.selectors.push(0);
+                predicate = Some(body.clone());
+                let choice = joined(fold(body, Some(through)), &iterated);
+                let scanned = if via == "find" {
+                    let pick = self.picks.len();
+                    self.picks.push("runtime");
+                    let element = source_element(self);
+                    choice.map(|choice| {
+                        json!({
+                            "op": "pick",
+                            "pick": pick,
+                            "from": { "collection": collection },
+                            "choice": choice,
+                            "body": element,
+                        })
+                    })
+                } else {
+                    choice
+                };
+                (iterated.clone(), None, scanned)
+            }
+        };
+        if let Some(membership) = &membership {
+            self.collections[collection]["membership"] = membership.clone();
+        }
+        self.within.pop();
+        self.cone = saved_cone;
+        self.env = saved_env;
+        self.operands = saved_operands.0;
+        self.opaque = saved_operands.1;
+        let value = self.value(name, cone);
+        self.values[value].collection = Some(collection);
+        if scan {
+            self.values[value].scan = true;
+            self.values[value].template = scanned;
+            // "What the callback returns is an output whose path has
+            // `*`" (PL §3.13, "The record of a scan").
+            self.values[value].element = predicate;
+        } else {
+            // The assembled result has the membership template (PL §1.4).
+            self.values[value].template = membership;
+            self.values[value].element = Some(element);
+            if via == "map" {
+                self.values[value].element_entries = element_entries;
+            }
+        }
+        let place = Place::Value(value, Vec::new());
+        // A cone outside the construct that uses the collection reads its
+        // assembled result.
+        self.pass(&place);
+        place
+    }
+
+    fn api_call(
+        &mut self,
+        call: &CallExpression<'a>,
+        name: &str,
+        arguments: &[&Expression<'a>],
+        hint: &str,
+    ) -> Place {
+        let at = call.span.start;
+        match name {
+            "computed" => {
+                let Some(function) = arguments.first().and_then(|first| FunctionLike::of(first))
+                else {
+                    self.unsupported("a `computed` of a function not written in place", at);
+                    return Place::Unknown;
+                };
+                let start = function.span().start;
+                if self.record_at(self.module, start).is_some() {
+                    // Not promoted: a body, with what it captures as its
+                    // formal inputs.
+                    let name = fallback_name(hint, "computed");
+                    let origin = if self.returns_handle(function) {
+                        Some(Declared::Whole)
+                    } else {
+                        self.returned_origin(function)
+                    };
+                    let place = self.use_body(self.module, start, name, &[], hint, at);
+                    if let Place::Value(value, _) = &place {
+                        self.values[*value].origin = origin;
+                    }
+                    return place;
+                }
+                // Promoted: expression code.
+                match function.expression_body() {
+                    Some(expression) => {
+                        // A promoted `computed` is its expression, and
+                        // has the expression's template.
+                        let mut origin = None;
+                        let mut passes = None;
+                        let built = self.build(hint, at, |emitter, _| {
+                            let (place, template) =
+                                emitter.one("identity", |emitter| emitter.eval(expression, hint));
+                            // The expression is the assembled result of
+                            // an element construct, or an output that
+                            // passes one on (ruling Z13).
+                            if let Place::Value(value, path) = &place {
+                                let passed = &emitter.values[*value];
+                                if path.is_empty() && !passed.scan {
+                                    passes = passed.collection.or(passed.passes);
+                                }
+                            }
+                            origin = emitter.declared_of(&place);
+                            emitter.pending_entries = emitter.entries_of(&place);
+                            template
+                        });
+                        if self.returns_handle(function) {
+                            origin = Some(Declared::Whole);
+                        }
+                        if let Place::Value(value, _) = &built {
+                            self.values[*value].origin = origin;
+                            if self.values[*value].collection.is_none() {
+                                self.values[*value].passes = passes;
+                            }
+                        }
+                        built
+                    }
+                    None => {
+                        let statements = function.block_body().unwrap_or(&[]);
+                        let saved = self.env.clone();
+                        let place = self.build(hint, at, |emitter, _| {
+                            match emitter.code_block(statements) {
+                                Ok(template) => template,
+                                // Statements that return nothing.
+                                Err(()) => Some(json!({ "op": "const" })),
+                            }
+                        });
+                        self.env = saved;
+                        if let Place::Value(value, _) = &place {
+                            self.values[*value].origin = self.returned_origin(function);
+                        }
+                        place
+                    }
+                }
+            }
+            "action" => match arguments.first().and_then(|first| FunctionLike::of(first)) {
+                Some(function) => {
+                    self.bind_inline(function, BodyKind::Action, fallback_name(hint, "action"))
+                }
+                None => {
+                    self.unsupported("an `action` of a function not written in place", at);
+                    Place::Unknown
+                }
+            },
+            // The callable forms map to the operation of `?:`, `&&`,
+            // `||`, and a template literal (PL §3.5, §3.19).
+            "ifElse" | "when" | "unless" if !arguments.is_empty() => {
+                let branch = |index: usize| arguments.get(index).copied();
+                let branches = match name {
+                    "ifElse" => [branch(1), branch(2)],
+                    "when" => [branch(1), None],
+                    _ => [None, branch(1)],
+                };
+                if name == "ifElse" && (branches[0].is_none() || branches[1].is_none()) {
+                    self.unsupported("an `ifElse` with fewer than three arguments", at);
+                    return Place::Unknown;
+                }
+                self.select(hint, at, arguments[0], None, branches)
+            }
+            "ifElse" | "when" | "unless" | "str" => self.derived(hint, at, |emitter, _| {
+                for argument in arguments {
+                    let place = emitter.eval(argument, hint);
+                    emitter.consume(&place);
+                }
+            }),
+            "wish" => self.wish(arguments, hint, at),
+            // `cellFromUrl` is one `Operation` of kind `effect`, whose
+            // parsing half needs no resolution (PL §3.19).
+            _ if EFFECTS.contains(&name) || name == "cellFromUrl" => {
+                self.effect(name, None, arguments, &[], hint, at)
+            }
+
+            // The context reads (PL §3.16).
+            "spaceOf" | "equals" => self.derived(hint, at, |emitter, _| {
+                for argument in arguments {
+                    let place = emitter.eval(argument, "operand");
+                    emitter.resolve(&place);
+                }
+            }),
+            "principalOf" | "principalsOf" | "profileOwnerOf" => {
+                self.derived(hint, at, |emitter, _| {
+                    if let Some(first) = arguments.first() {
+                        let place = emitter.eval(first, "operand");
+                        emitter.resolve(&place);
+                        emitter.observe(&place, "labelMetadata");
+                    }
+                    for argument in arguments.iter().skip(1) {
+                        let place = emitter.eval(argument, "operand");
+                        emitter.consume(&place);
+                    }
+                })
+            }
+            "spaceAccess" | "spaceAccessOf" | "spaceMembers" | "spaceDeleted" => {
+                self.derived(hint, at, |emitter, _| {
+                    let Some(first) = arguments.first() else {
+                        return;
+                    };
+                    let place = emitter.eval(first, "operand");
+                    match &place {
+                        Place::Slot(root, path) => {
+                            // A cell operand by its `identity` slot,
+                            // resolved; an operand that names a space by
+                            // its `value` slot.
+                            let names_space = name == "spaceDeleted" && emitter.is_string(first);
+                            let slot = if names_space {
+                                emitter.slot(root, path, "value")
+                            } else {
+                                emitter.slot_with(root, path, "identity", true, false)
+                            };
+                            if let Some(cone) = emitter.cone {
+                                emitter.cones[cone].slots.insert(slot);
+                            }
+                            emitter.operands.push(json!({ "op": "slot", "slot": slot }));
+                            let reads =
+                                emitter.dynamic(json!({ "why": { "kind": "space", "of": slot } }));
+                            emitter
+                                .operands
+                                .push(json!({ "op": "dynamic", "reads": reads }));
+                        }
+                        Place::Const => {}
+                        _ => emitter.unsupported(
+                            "a dynamic read of kind `space` whose operand the emitter cannot name",
+                            at,
+                        ),
+                    }
+                    for argument in arguments.iter().skip(1) {
+                        let place = emitter.eval(argument, "operand");
+                        emitter.consume(&place);
+                    }
+                })
+            }
+            "linksOf" => self.derived(hint, at, |emitter, _| {
+                if let Some(first) = arguments.first() {
+                    let place = emitter.eval(first, "operand");
+                    emitter.observe(&place, "enumeration");
+                    emitter.pass(&Self::extend(&place, "*"));
+                }
+            }),
+            // A rendering as text reads every operand by `value`, over its
+            // whole subtree (BI, "Debug strings").
+            "toIndentedDebugString" | "toCompactDebugString" => {
+                self.derived(hint, at, |emitter, _| {
+                    for argument in arguments {
+                        let place = emitter.eval(argument, "operand");
+                        emitter.consume(&place);
+                    }
+                })
+            }
+            "getPatternEnvironment" => Place::Const,
+            _ => {
+                self.unsupported(format!("the built-in `{name}` in the reactive tier"), at);
+                for argument in arguments {
+                    if FunctionLike::of(argument).is_none() {
+                        self.eval(argument, hint);
+                    }
+                }
+                Place::Unknown
+            }
+        }
+    }
+
+    /// A request of an effect in the reactive tier: one `Operation` of
+    /// kind `effect`, and one write edge with target `request` per path
+    /// of the request (PL §3.14). `held` is an operand the request holds
+    /// by value at a path of its own, as `db.query(...)` holds the handle
+    /// of the database, and `named` gives the path of each argument that
+    /// is not the record of the request.
+    fn effect(
+        &mut self,
+        builtin: &str,
+        held: Option<(&str, &Place)>,
+        arguments: &[&Expression<'a>],
+        named: &[&str],
+        hint: &str,
+        at: u32,
+    ) -> Place {
+        let operation = self.operations.len();
+        self.operations.push(json!({
+            "kind": "effect",
+            "implementation": { "builtin": builtin },
+            "name": base_name(hint, builtin),
+            "within": self.within_json(),
+        }));
+        let (cone, made) = self.computing(hint, at);
+        let saved = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        // The templates of the request, and whether each path has one.
+        let mut request: Option<Vec<Value>> = Some(Vec::new());
+        let mut operands: Vec<(Vec<String>, Place, &'static str)> = Vec::new();
+        if let Some((name, place)) = held {
+            operands.push((vec![name.to_string()], place.clone(), "value"));
+        }
+        for (index, argument) in arguments.iter().enumerate() {
+            let place = self.eval(argument, hint);
+            let prefix: Vec<String> = named
+                .get(index)
+                .map(|name| name.to_string())
+                .into_iter()
+                .collect();
+            operands.push((prefix, place, "identity"));
+        }
+        for (prefix, place, class) in operands {
+            // One write edge per path of the request, with the template
+            // of what is written there.
+            let mut paths = Vec::new();
+            request_paths(&place, &mut prefix.clone(), &mut paths);
+            for (path, member) in paths {
+                let template = self.one(class, |_| member).1;
+                let mut write = Map::new();
+                write.insert(
+                    "target".to_string(),
+                    json!({
+                        "kind": "request",
+                        "of": { "operation": operation },
+                        "path": path,
+                    }),
+                );
+                match template {
+                    Some(template) => {
+                        write.insert("template".to_string(), template.clone());
+                        if let Some(request) = &mut request {
+                            request.push(template);
+                        }
+                    }
+                    None => request = None,
+                }
+                write.insert("constraints".to_string(), json!([]));
+                self.cones[cone].writes.push(Value::Object(write));
+            }
+        }
+        self.operands = saved.0;
+        self.opaque = saved.1;
+        // "For an effect, the join of the templates of its request" (PL
+        // §1.1, `Operation.input`).
+        if let Some(mut request) = request {
+            let input = joined(std::mem::take(&mut request));
+            self.operations[operation]["input"] = input;
+        }
+        if made {
+            self.cone = None;
+        }
+        Place::Slot(Root::Operation(operation), Vec::new())
+    }
+
+    /// The properties the type of an expression declares, each with
+    /// whether it is optional: for an object type with no index
+    /// signature, and for a union of such types, where a property that
+    /// one alternative lacks is optional.
+    fn declared_members(&self, expression: &Expression<'a>) -> Option<Vec<(String, bool)>> {
+        let ty = self.resolver.typed_at(self.module, expression, 0).ok()?;
+        let ty = self.resolver.present(ty);
+        let alternatives = match self.resolver.shape(ty) {
+            Shape::Union(alternatives) => alternatives.clone(),
+            _ => vec![ty],
+        };
+        let mut members: Vec<(String, bool)> = Vec::new();
+        let mut seen: Vec<Vec<String>> = Vec::new();
+        for alternative in &alternatives {
+            let Shape::Object(properties, None) = self.resolver.shape(*alternative) else {
+                return None;
+            };
+            for property in &properties {
+                match members.iter_mut().find(|(name, _)| *name == property.name) {
+                    Some(member) => member.1 |= property.optional,
+                    None => members.push((property.name.clone(), property.optional)),
+                }
+            }
+            seen.push(
+                properties
+                    .iter()
+                    .map(|property| property.name.clone())
+                    .collect(),
+            );
+        }
+        for member in &mut members {
+            if seen.iter().any(|names| !names.contains(&member.0)) {
+                member.1 = true;
+            }
+        }
+        Some(members)
+    }
+
+    /// The template of an operand of a request as one value: the
+    /// template of its expression, and for a record or an array written
+    /// in place the join over its members (PL §3.4, §3.14).
+    fn operand_template(&mut self, expression: &Expression<'a>, hint: &str) -> Option<Value> {
+        let saved = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        let place = self.eval(expression, hint);
+        self.observe(&place, "identity");
+        let mut inputs: Vec<Value> = Vec::new();
+        for input in std::mem::replace(&mut self.operands, saved.0) {
+            if !inputs.contains(&input) {
+                inputs.push(input);
+            }
+        }
+        let opaque = std::mem::replace(&mut self.opaque, saved.1);
+        if opaque {
+            return None;
+        }
+        Some(joined(inputs))
+    }
+
+    /// A `wish` (PL §3.19): one `Operation` of kind `wish`, whose
+    /// operands a cone writes by edges with target `request`, whose
+    /// result a reader reads through slots with root `operation`, and
+    /// whose reads of what no slot names are one entry of
+    /// `Plan.dynamicReads` of kind `search`. A path of the result has
+    /// the label `C(Operation.input) ⊔ C(dynamic, kind search)` and no
+    /// integrity, which the runtime instantiates for a slot of the
+    /// operation. A constant query gives the row of its key: the scope,
+    /// the state cell of the one-shot clock, and the sidecars.
+    fn wish(&mut self, arguments: &[&Expression<'a>], hint: &str, at: u32) -> Place {
+        const OPERANDS: [&str; 6] = ["query", "path", "schema", "scope", "context", "headless"];
+        let operation = self.operations.len();
+        self.operations.push(json!({
+            "kind": "wish",
+            "implementation": { "builtin": "wish" },
+            "name": base_name(hint, "wish"),
+            "within": self.within_json(),
+        }));
+        let (cone, made) = self.computing(hint, at);
+        let mut written: Vec<(&'static str, &Expression<'a>)> = Vec::new();
+        match arguments.first().map(|first| unwrap(first)) {
+            Some(Expression::ObjectExpression(object)) => {
+                for property in &object.properties {
+                    let operand = match property {
+                        ObjectPropertyKind::ObjectProperty(property) if !property.computed => {
+                            static_key_name(&property.key).and_then(|name| {
+                                OPERANDS
+                                    .iter()
+                                    .find(|operand| **operand == name)
+                                    .map(|operand| (*operand, &property.value))
+                            })
+                        }
+                        _ => None,
+                    };
+                    match operand {
+                        Some(operand) => written.push(operand),
+                        None => self.unsupported(
+                            "an operand of `wish` that is not written by its name",
+                            property.span().start,
+                        ),
+                    }
+                }
+            }
+            // The form with the query as the one argument.
+            Some(query) if constant_of(query).is_some() || self.is_string(query) => {
+                written.push(("query", query));
+            }
+            Some(other) => self.unsupported(
+                "a `wish` whose operands are not written in place",
+                other.span().start,
+            ),
+            None => {}
+        }
+        let mut templates: Option<Vec<Value>> = Some(Vec::new());
+        for (name, expression) in &written {
+            let template = self.operand_template(expression, hint);
+            let mut write = Map::new();
+            write.insert(
+                "target".to_string(),
+                json!({ "kind": "request", "of": { "operation": operation }, "path": [name] }),
+            );
+            match template {
+                Some(template) => {
+                    write.insert("template".to_string(), template.clone());
+                    if let Some(templates) = &mut templates {
+                        templates.push(template);
+                    }
+                }
+                None => templates = None,
+            }
+            write.insert("constraints".to_string(), json!([]));
+            self.cones[cone].writes.push(Value::Object(write));
+        }
+        if let Some(mut templates) = templates {
+            self.operations[operation]["input"] = joined(std::mem::take(&mut templates));
+        }
+        self.dynamic(json!({ "why": { "kind": "search", "operation": operation } }));
+        if made {
+            self.cone = None;
+        }
+        // The row of the constant query.
+        let operand = |name: &str| {
+            written
+                .iter()
+                .find(|(operand, _)| *operand == name)
+                .map(|(_, expression)| unwrap(expression))
+        };
+        // "The `query`, `scope` and `headless` operands are constants
+        // where each is a literal written at the call, or a name that
+        // resolves to a module-scope constant with a static initializer
+        // ... whose value the compiler reads" (PL §3.19).
+        let constant = |expression: &Expression<'a>| -> Option<Value> {
+            self.resolver.constant_value(self.module, expression, 0)
+        };
+        let strings = |expression: &Expression<'a>| -> Option<Vec<String>> {
+            constant(expression)?
+                .as_array()?
+                .iter()
+                .map(|element| element.as_str().map(str::to_string))
+                .collect()
+        };
+        let headless = operand("headless").and_then(constant) == Some(json!(true));
+        // The `path` operand "is appended to the path the query names":
+        // `None` where it is computed.
+        let extra: Option<Vec<String>> = match operand("path") {
+            None => Some(Vec::new()),
+            Some(path) => strings(path),
+        };
+        let query = operand("query")
+            .and_then(constant)
+            .and_then(|query| query.as_str().map(|query| query.trim().to_string()));
+        // "A `wish` whose `query`, or whose `path` with the key `#now` or
+        // `#profile`, is not a constant" (LS §10.2).
+        let decided_by_path = extra.is_none()
+            && query
+                .as_deref()
+                .is_some_and(|query| matches!(query.strip_prefix('#'), Some("now" | "profile")));
+        if decided_by_path {
+            self.hints.push((
+                "a `wish` whose path decides the target and is not a constant".to_string(),
+                at,
+            ));
+        }
+        // What the plan has beside the operation: the scope `user`, the
+        // state cell of the one-shot clock, and the sidecars.
+        let (user, clock, sidecars): (bool, bool, &[&str]) = match query.as_deref() {
+            None => {
+                self.hints
+                    .push(("a `wish` whose query is not a constant".to_string(), at));
+                (
+                    true,
+                    true,
+                    &["suggestion", "profileCreate", "profilePicker"],
+                )
+            }
+            Some(query) if query.starts_with('/') => (false, false, &[]),
+            Some(query) if query.starts_with('#') => {
+                let mut segments = query[1..].split('/').filter(|segment| !segment.is_empty());
+                let key = segments.next().unwrap_or("");
+                let below: Vec<&str> = segments.collect();
+                let first = below.first().copied().or_else(|| {
+                    extra
+                        .as_ref()
+                        .and_then(|extra| extra.first().map(String::as_str))
+                });
+                let computed_path = extra.is_none() && below.is_empty();
+                match key {
+                    "default" | "mentionable" | "summaryIndex" | "knowledgeGraph"
+                    | "pieceRegistry" => (false, false, &[]),
+                    // The target is refused.
+                    "profilePicture" | "profileAvatar" => (false, false, &[]),
+                    "profile" if matches!(first, Some("picture" | "avatar")) => (false, false, &[]),
+                    "profile" | "profileName" | "profileBio" | "profileSpace" => {
+                        if headless {
+                            (true, false, &[])
+                        } else {
+                            (true, false, &["profileCreate", "profilePicker"])
+                        }
+                    }
+                    "favorites" | "journal" | "learned" | "learnedSummary" | "agent_queue"
+                    | "chatManager" => (true, false, &[]),
+                    // The path decides between the two clocks.
+                    "now" => (false, first.is_none() || computed_path, &[]),
+                    _ => {
+                        // `wishTargetMayUseHomeSpace`.
+                        let local = operand("scope").and_then(strings).is_some_and(|scope| {
+                            !scope.iter().any(|name| name == "~" || name == "profile")
+                        });
+                        let sidecars: &[&str] = if headless { &[] } else { &["suggestion"] };
+                        (!local, false, sidecars)
+                    }
+                }
+            }
+            // A suggestion for the situation the query describes.
+            Some(_) => (true, false, &["suggestion"]),
+        };
+        if user {
+            self.operations[operation]["scope"] = json!("user");
+        }
+        if clock {
+            self.state_cells.push(json!({
+                "name": "now",
+                "$ofOperation": [operation, "now"],
+                "scope": "space",
+                "within": self.within_json(),
+            }));
+        }
+        for sidecar in sidecars {
+            self.children.push(json!({
+                "callee": { "compiled": null },
+                "sidecar": sidecar,
+                "name": sidecar,
+                "$ofOperation": [operation, sidecar],
+                "within": self.within_json(),
+            }));
+        }
+        Place::Slot(Root::Operation(operation), Vec::new())
+    }
+
+    // ----- JSX -----
+
+    /// The argument a tag gives the pattern it names: its attributes are
+    /// the paths of the argument, and its children the path `children`
+    /// (PL §1.1, `language-subset.md` §4.5).
+    fn tag_argument(&mut self, element: &JSXElement<'a>) -> Place {
+        let mut fields: BTreeMap<String, Place> = BTreeMap::new();
+        // The attributes written as a literal, for the pattern the tag
+        // names, where it is compiled in.
+        let mut literals: HashMap<String, Value> = HashMap::new();
+        for attribute in &element.opening_element.attributes {
+            match attribute {
+                JSXAttributeItem::Attribute(attribute) => {
+                    let name = match &attribute.name {
+                        JSXAttributeName::Identifier(identifier) => identifier.name.to_string(),
+                        JSXAttributeName::NamespacedName(name) => name.name.name.to_string(),
+                    };
+                    let literal = match &attribute.value {
+                        Some(JSXAttributeValue::StringLiteral(text)) => {
+                            Some(json!(text.value.as_str()))
+                        }
+                        Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                            container.expression.as_expression().and_then(|written| {
+                                self.resolver.constant_value(self.module, written, 0)
+                            })
+                        }
+                        _ => None,
+                    };
+                    if let Some(literal) = literal {
+                        literals.insert(name.clone(), literal);
+                    }
+                    let place = match &attribute.value {
+                        Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                            match container.expression.as_expression() {
+                                Some(expression) => match FunctionLike::of(expression) {
+                                    Some(function) => {
+                                        self.bind_inline(function, BodyKind::InlineHandler, &name)
+                                    }
+                                    None => self.eval(expression, &format!("@{name}")),
+                                },
+                                None => Place::Const,
+                            }
+                        }
+                        Some(JSXAttributeValue::Element(element)) => {
+                            let at = element.span.start;
+                            let built = self.build(&format!("@{name}"), at, |emitter, _| {
+                                let tree = emitter.jsx_element(element);
+                                emitter.constructed(&tree)
+                            });
+                            self.facts.built(at, &built);
+                            built
+                        }
+                        _ => Place::Const,
+                    };
+                    fields.insert(name, place);
+                }
+                JSXAttributeItem::SpreadAttribute(spread) => {
+                    // "A spread attribute ... [is] a spread in the object
+                    // literal of the attributes" (PL §3.4).
+                    let place = self.eval(&spread.argument, "spread");
+                    let declared = self.declared_members(&spread.argument);
+                    match (place, declared) {
+                        (Place::Record(members), _) => fields.extend(members),
+                        (Place::Const, _) => {}
+                        (place, Some(declared)) => {
+                            for (name, _) in declared {
+                                let member = Self::extend(&place, &name);
+                                fields.insert(name, member);
+                            }
+                        }
+                        _ => self.unsupported(
+                            "a spread into a record in the reactive tier",
+                            spread.span.start,
+                        ),
+                    }
+                }
+            }
+        }
+        let written = element
+            .children
+            .iter()
+            .any(|child| !matches!(child, JSXChild::Text(text) if text.value.trim().is_empty()));
+        if written {
+            let at = element.span.start;
+            let children = self.build("@children", at, |emitter, _| {
+                let tree = emitter.jsx_children(&element.children);
+                emitter.constructed(&tree)
+            });
+            self.facts.built(at, &children);
+            fields.insert("children".to_string(), children);
+        }
+        self.literal_values = literals;
+        Place::Record(fields)
+    }
+
+    /// A tag that names a pattern is a call of it (PL §1.1): compiled in
+    /// under a `site` step where the compiler can see the pattern, and a
+    /// `Child` where the tag names a factory value. `false` for any other
+    /// tag.
+    ///
+    /// With `child`, the tag is at a child position of a view node, and
+    /// the place is the callee's `[UI]`: "the entries of the enclosing
+    /// rendered tree at the tag's position are those of the callee's
+    /// `[UI]`". At every other place "the tag evaluates to the callee's
+    /// result, and the entries at that place are those of the result, with
+    /// the callee's tree below `$UI`" (PL §1.1).
+    fn jsx_pattern(&mut self, element: &JSXElement<'a>, child: bool) -> Option<Place> {
+        let JSXElementName::IdentifierReference(identifier) = &element.opening_element.name else {
+            return None;
+        };
+        let at = element.span.start;
+        let name = identifier.name.to_string();
+        if let Some(factory @ (Place::Slot(..) | Place::Value(..))) = self.env.get(&name).cloned() {
+            self.ui_chain.push(None);
+            let argument = self.tag_argument(element);
+            self.ui_chain.pop();
+            let child = self.children.len();
+            let callee = match &factory {
+                Place::Slot(root, path) => {
+                    let slot = self.slot(root, path, "identity");
+                    if let Some(cone) = self.cone {
+                        self.cones[cone].slots.insert(slot);
+                    }
+                    json!({ "factory": { "slot": slot } })
+                }
+                _ => {
+                    self.pass(&factory);
+                    json!({ "factory": {} })
+                }
+            };
+            self.children.push(json!({
+                "callee": callee,
+                "name": name,
+                "within": self.within_json(),
+            }));
+            // The argument: one write edge with target `argument` per
+            // path, with the template of what is written there.
+            let (cone, made) = self.computing(&name, at);
+            let mut paths = Vec::new();
+            request_paths(&argument, &mut Vec::new(), &mut paths);
+            for (path, member) in paths {
+                let template = self.one("identity", |_| member).1;
+                let mut write = Map::new();
+                write.insert(
+                    "target".to_string(),
+                    json!({ "kind": "argument", "child": child, "path": path }),
+                );
+                if let Some(template) = template {
+                    write.insert("template".to_string(), template);
+                }
+                write.insert("constraints".to_string(), json!([]));
+                self.cones[cone].writes.push(Value::Object(write));
+            }
+            if made {
+                self.cone = None;
+            }
+            // What the child renders is no slot of the crate.
+            return Some(Place::Unknown);
+        }
+        let Some((home, start, DefKind::Pattern)) = self.def_function(identifier) else {
+            return None;
+        };
+        self.ui_chain.push(None);
+        let argument = self.tag_argument(element);
+        self.ui_chain.pop();
+        // What the pattern declares is in cones of its own, as the
+        // declarations of a call written as a statement are.
+        let saved_cone = self.cone.take();
+        let saved = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        if let Some(function) = self.function_at(home, start) {
+            let span = function.span();
+            self.tags.push((home, span.start, span.end));
+        }
+        let result = self.inline_argument(home, start, &name, argument, at);
+        self.cone = saved_cone;
+        self.operands = saved.0;
+        self.opaque = saved.1;
+        // The enclosing tree holds what the pattern renders.
+        let rendered = if child {
+            rendered_at_child(result)
+        } else {
+            result
+        };
+        self.pass(&rendered);
+        Some(rendered)
+    }
+
+    /// The template of a constructed value observed whole, with its
+    /// entries left for the value `build` makes (PL §3.4).
+    fn constructed(&mut self, place: &Place) -> Option<Value> {
+        let entries = self.entries_of(place);
+        let whole = match &entries {
+            Some(entries) => entries_whole(entries, &[]),
+            None => self.template_of(place, "identity"),
+        };
+        self.pending_entries = entries;
+        whole
+    }
+
+    /// The view node of a host element or a fragment (PL §3.4, "A JSX
+    /// element"): `props`, the object literal of the attributes, and
+    /// `children`, the array literal of the children. `type` and `name`
+    /// are constants.
+    fn jsx_node(&mut self, props: Option<Place>, children: &[JSXChild<'a>]) -> Place {
+        let mut fields = BTreeMap::new();
+        if let Some(props) = props {
+            fields.insert("props".to_string(), props);
+        }
+        fields.insert("children".to_string(), self.jsx_children(children));
+        Place::Record(fields)
+    }
+
+    /// The array literal of the children of an element. Each child is at
+    /// a position of its own, counted over the children as written. A
+    /// child that is a collection, the assembled result of a `map` among
+    /// them, is one child, and its elements are at `children/<n>/*`
+    /// (ruling Z31), over an array of references, over an array of plain
+    /// values in place, and over the result of another per-element
+    /// construct alike. An array literal that the author writes among
+    /// the children is flattened where the tree is built, so each of its
+    /// members is a child.
+    fn jsx_children(&mut self, children: &[JSXChild<'a>]) -> Place {
+        let mut fields = BTreeMap::new();
+        let mut position = 0usize;
+        for child in children {
+            match child {
+                // Text that is white space with a line break is no
+                // child, and other text is a constant.
+                JSXChild::Text(text) => {
+                    if !(text.value.trim().is_empty() && text.value.contains('\n')) {
+                        position += 1;
+                    }
+                }
+                JSXChild::Element(element) => {
+                    let place = self.jsx_element_at(element, true);
+                    fields.insert(position.to_string(), place);
+                    position += 1;
+                }
+                JSXChild::Fragment(fragment) => {
+                    let place = self.jsx_node(None, &fragment.children);
+                    fields.insert(position.to_string(), place);
+                    position += 1;
+                }
+                JSXChild::ExpressionContainer(container) => {
+                    let Some(expression) = container.expression.as_expression() else {
+                        continue;
+                    };
+                    for written in written_children(expression) {
+                        // A call of a pattern, and a variable that holds
+                        // the result of one, render as the tag does (PL
+                        // §1.1).
+                        let place = rendered_at_child(self.eval(written, "child"));
+                        self.pass(&place);
+                        fields.insert(position.to_string(), place);
+                        position += 1;
+                    }
+                }
+                JSXChild::Spread(spread) => {
+                    let place = self.eval(&spread.expression, "child");
+                    self.pass(&place);
+                    fields.insert(position.to_string(), place);
+                    position += 1;
+                }
+            }
+        }
+        Place::Record(fields)
+    }
+
+    fn jsx_element(&mut self, element: &JSXElement<'a>) -> Place {
+        self.jsx_element_at(element, false)
+    }
+
+    /// The place of a JSX element, at a child position of a view node
+    /// where `child` is true.
+    fn jsx_element_at(&mut self, element: &JSXElement<'a>, child: bool) -> Place {
+        if let Some(rendered) = self.jsx_pattern(element, child) {
+            return rendered;
+        }
+        let surface = self.ui_element(element);
+        self.ui_chain.push(surface);
+        let tree = self.host_element(element);
+        self.ui_chain.pop();
+        tree
+    }
+
+    /// What a tag says of its surface: a host element, or one of the
+    /// helpers `UiAction`, `UiPromptSlot` and `UiDisclosure`, which
+    /// "are host elements with the data attribute each one sets" (PL
+    /// §4.4). `None` for any other tag.
+    fn ui_element(&self, element: &JSXElement<'a>) -> Option<UiElement> {
+        let helper: &[(&str, &'static str)] = match &element.opening_element.name {
+            JSXElementName::Identifier(_) => &[],
+            JSXElementName::IdentifierReference(identifier) => match identifier.name.as_str() {
+                "UiAction" => &[("action", "data-ui-action")],
+                "UiPromptSlot" => &[("surface", "data-ui-surface"), ("role", "data-ui-role")],
+                "UiDisclosure" => &[("kind", "data-ui-disclosure-kind")],
+                _ => return None,
+            },
+            _ => return None,
+        };
+        const READ: &[&str] = &[
+            "data-ui-pattern",
+            "data-ui-event-integrity",
+            "data-ui-action",
+            "data-ui-surface",
+            "data-ui-role",
+            "data-ui-disclosure-kind",
+        ];
+        let mut found = UiElement::default();
+        for attribute in &element.opening_element.attributes {
+            let JSXAttributeItem::Attribute(attribute) = attribute else {
+                found.spread = true;
+                continue;
+            };
+            let JSXAttributeName::Identifier(name) = &attribute.name else {
+                continue;
+            };
+            let name = name.name.as_str();
+            let key = helper
+                .iter()
+                .find(|(prop, _)| *prop == name)
+                .map(|(_, attribute)| *attribute)
+                .or_else(|| READ.iter().find(|read| **read == name).copied());
+            let Some(key) = key else {
+                continue;
+            };
+            let value = match &attribute.value {
+                Some(JSXAttributeValue::StringLiteral(text)) => Some(text.value.to_string()),
+                Some(JSXAttributeValue::ExpressionContainer(container)) => container
+                    .expression
+                    .as_expression()
+                    .and_then(|expression| self.resolver.constant_value(self.module, expression, 0))
+                    .and_then(|value| value.as_str().map(str::to_string)),
+                _ => None,
+            };
+            found.attributes.insert(key, value);
+        }
+        Some(found)
+    }
+
+    /// The chain of the element being evaluated, where its surface is
+    /// decided: "every one of those attributes on its chain is a
+    /// constant ... and no element of the chain has a spread attribute"
+    /// (PL §4.4).
+    fn decided_chain(&self) -> Option<Vec<UiElement>> {
+        let chain: Vec<UiElement> = self.ui_chain.iter().cloned().collect::<Option<_>>()?;
+        chain
+            .iter()
+            .all(|element| !element.spread && element.attributes.values().all(Option::is_some))
+            .then_some(chain)
+    }
+
+    fn host_element(&mut self, element: &JSXElement<'a>) -> Place {
+        let mut props = BTreeMap::new();
+        for attribute in &element.opening_element.attributes {
+            match attribute {
+                JSXAttributeItem::Attribute(attribute) => {
+                    let name = match &attribute.name {
+                        JSXAttributeName::Identifier(identifier) => identifier.name.to_string(),
+                        JSXAttributeName::NamespacedName(name) => name.name.name.to_string(),
+                    };
+                    let place = match &attribute.value {
+                        Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                            match container.expression.as_expression() {
+                                Some(expression) => match FunctionLike::of(expression) {
+                                    Some(function) => {
+                                        self.bind_inline(function, BodyKind::InlineHandler, &name)
+                                    }
+                                    None => {
+                                        let place = self.eval(expression, &format!("@{name}"));
+                                        self.pass(&place);
+                                        // "An element binds a handler
+                                        // where an `on*` attribute of a
+                                        // host element holds the stream
+                                        // of an entry of `Plan.bindings`"
+                                        // (PL §4.4).
+                                        if let (Place::Stream(binding), true) =
+                                            (&place, name.starts_with("on"))
+                                        {
+                                            let chain = self.decided_chain();
+                                            self.ui_bound.push((
+                                                *binding,
+                                                chain,
+                                                attribute.span.start,
+                                            ));
+                                        }
+                                        place
+                                    }
+                                },
+                                None => Place::Const,
+                            }
+                        }
+                        Some(JSXAttributeValue::Element(element)) => self.jsx_element(element),
+                        Some(JSXAttributeValue::Fragment(fragment)) => {
+                            self.jsx_node(None, &fragment.children)
+                        }
+                        _ => Place::Const,
+                    };
+                    props.insert(name, place);
+                }
+                JSXAttributeItem::SpreadAttribute(spread) => {
+                    // "A spread attribute ... [is] a spread in the object
+                    // literal of the attributes" (PL §3.4). Where the
+                    // type of the operand declares its properties, each
+                    // is a path; otherwise the operand decides the key
+                    // set.
+                    let place = self.eval(&spread.argument, "spread");
+                    self.pass(&place);
+                    let declared = self.declared_members(&spread.argument);
+                    match (place, declared) {
+                        (Place::Record(members), _) => props.extend(members),
+                        (Place::Const, _) => {}
+                        (place, Some(declared)) => {
+                            for (name, _) in declared {
+                                let member = Self::extend(&place, &name);
+                                props.insert(name, member);
+                            }
+                        }
+                        (place, None) => {
+                            props.insert("*".to_string(), place);
+                        }
+                    }
+                }
+            }
+        }
+        self.jsx_node(Some(Place::Record(props)), &element.children)
+    }
+
+    // ----- bodies -----
+
+    /// The slot or the computed value an entry of a use of a body is at,
+    /// by what the entry's formal input is bound to.
+    fn bound(&self, inputs: &HashMap<String, Place>, input: &str, path: &[Seg]) -> Place {
+        let Some(mut place) = inputs.get(input).cloned() else {
+            return Place::Unknown;
+        };
+        let mut rest = path;
+        // A record written in the reactive tier is followed member by
+        // member.
+        while let (Place::Record(fields), Some(Seg::Key(key))) = (&place, rest.first()) {
+            place = fields.get(key).cloned().unwrap_or(Place::Const);
+            rest = &rest[1..];
+        }
+        match place {
+            Place::Slot(root, base) => Place::Slot(root, slot_path(&base, rest)),
+            Place::Value(value, base) => Place::Value(value, slot_path(&base, rest)),
+            other => other,
+        }
+    }
+
+    /// The `Body` record of one use of a body, pushed onto `Plan.bodies`.
+    #[allow(clippy::too_many_arguments)]
+    fn body_record(
+        &mut self,
+        kind: &str,
+        name: &str,
+        record: &Record,
+        inputs: &HashMap<String, Place>,
+        prefix: bool,
+        at: u32,
+        computation: bool,
+    ) -> usize {
+        // The inputs bound to a value the instance computed (FA §1.1). A
+        // record written in the reactive tier binds each member on its
+        // own, so it is decided entry by entry below.
+        let computed: BTreeSet<String> = inputs
+            .iter()
+            .filter(|(_, place)| matches!(place, Place::Value(..) | Place::Unknown))
+            .map(|(input, _)| input.clone())
+            .collect();
+        let index = self.plan_bodies.len();
+        let mut dynamic: Vec<usize> = Vec::new();
+        let used: UseRecord = bind_use(record, &computed);
+        // `Body.reads`: each slot with its place in the body's argument
+        // (PL §1.1, `ReadInput`).
+        let mut reads: Vec<(usize, Vec<String>)> = Vec::new();
+        let mut computed_inputs: Vec<Value> = Vec::new();
+        let mut names: Names = HashMap::new();
+        // The `value` entries, for an operand that names a space.
+        let mut value_names: Names = HashMap::new();
+        // Where each entry of the use is: a slot, or an entry of
+        // `Body.computed`.
+        let mut placed: Vec<(crate::footprint::Entry, Result<usize, usize>)> = Vec::new();
+        let mut handle_entries: Vec<(usize, String, Vec<Seg>)> = Vec::new();
+
+        for entry in used.reads.iter().chain(&used.computed) {
+            let place = if entry.input == "cause" && !inputs.contains_key("cause") {
+                Place::Slot(Root::Cause, slot_path(&[], &entry.path))
+            } else {
+                self.bound(inputs, &entry.input, &entry.path)
+            };
+            let resolved = entry.class == Class::Resolved;
+            let key = (entry.input.clone(), entry.path.clone(), resolved);
+            // "A sandboxed body lists it in `Body.reads`" (PL §1.3).
+            let place = match place {
+                Place::Read(root @ Root::Index(_), path, _) => Place::Slot(root, path),
+                place => place,
+            };
+            match place {
+                Place::Slot(root, path) => {
+                    // A `shape` entry at the position of a handle or of a
+                    // reference is made in place (PL §1.1).
+                    let in_place = entry.class == Class::Shape
+                        && entry.path.last() != Some(&Seg::Hop)
+                        && record
+                            .detail
+                            .by_reference
+                            .iter()
+                            .any(|(input, path)| *input == entry.input && *path == entry.path);
+                    let slot =
+                        self.slot_with(&root, &path, class_name(entry.class), resolved, in_place);
+                    placed.push((entry.clone(), Ok(slot)));
+                    {
+                        // For a handler the first segment is `event` for
+                        // the first parameter and `binding` for the
+                        // second, and the slot's path follows. Otherwise
+                        // the place is formed as `ComputedInput.at` is.
+                        let mut at_path: Vec<String> = Vec::new();
+                        match &root {
+                            Root::Event(_) => {
+                                at_path.push("event".to_string());
+                                at_path.extend(path.iter().cloned());
+                            }
+                            Root::Binding(_) => {
+                                at_path.push("binding".to_string());
+                                at_path.extend(path.iter().cloned());
+                            }
+                            _ => {
+                                if prefix {
+                                    at_path.push(entry.input.clone());
+                                }
+                                at_path.extend(slot_path(&[], &entry.path));
+                            }
+                        }
+                        if !reads.contains(&(slot, at_path.clone())) {
+                            reads.push((slot, at_path));
+                        }
+                    }
+                    if let (Class::Value, true, Some(cone)) = (entry.class, computation, self.cone)
+                    {
+                        let view = self
+                            .formal_types
+                            .get(&entry.input)
+                            .and_then(|ty| self.entry_type(*ty, &entry.path));
+                        self.cones[cone].views.entry(slot).or_default().push(view);
+                    }
+                    if matches!(entry.class, Class::Identity | Class::Resolved) {
+                        names.insert(key, json!(slot));
+                    } else if entry.class == Class::Value {
+                        value_names.insert(key, json!(slot));
+                    }
+                }
+                Place::Const | Place::Stream(_) => {}
+                place => {
+                    // A value of the same cone is no output on account
+                    // of the use (PL §1.4): "the result of a body used
+                    // inside an initializer ... [is an entry] of
+                    // `Plan.outputs` only where another cone, a `pick`,
+                    // or a collection refers to [it]".
+                    if let Place::Value(value, _) = &place {
+                        match self.cone {
+                            Some(cone) if self.values[*value].cone == cone => {}
+                            Some(cone) => {
+                                self.values[*value].referred = true;
+                                self.cones[cone].uses.insert(*value);
+                            }
+                            None => self.values[*value].referred = true,
+                        }
+                    }
+                    let mut at_path: Vec<String> = Vec::new();
+                    if prefix {
+                        at_path.push(entry.input.clone());
+                    }
+                    at_path.extend(slot_path(&[], &entry.path));
+                    if matches!(entry.class, Class::Identity | Class::Resolved) {
+                        names.insert(key, json!({ "computed": computed_inputs.len() }));
+                    } else if entry.class == Class::Value {
+                        value_names.insert(key, json!({ "computed": computed_inputs.len() }));
+                    }
+                    let mut input = Map::new();
+                    input.insert("at".to_string(), json!(at_path));
+                    input.insert("observes".to_string(), json!(class_name(entry.class)));
+                    let template = match &place {
+                        Place::Value(value, path) => {
+                            self.value_template(*value, path, class_name(entry.class))
+                        }
+                        // "An entry at a path of the literal itself, such
+                        // as `enumeration` at the literal, is an entry of
+                        // `Body.computed` whose template is the literal's
+                        // own" (PL §3.9), which is `const` for a static
+                        // set of keys (§3.4). A `value` entry there
+                        // observes every member.
+                        Place::Record(_)
+                            if matches!(entry.class, Class::Shape | Class::Enumeration) =>
+                        {
+                            Some(json!({ "op": "const" }))
+                        }
+                        Place::Record(_) => {
+                            let saved = (
+                                std::mem::take(&mut self.operands),
+                                std::mem::replace(&mut self.opaque, false),
+                            );
+                            let saved_cone = self.cone.take();
+                            self.observe(&place, "value");
+                            self.cone = saved_cone;
+                            let inputs = std::mem::replace(&mut self.operands, saved.0);
+                            let opaque = std::mem::replace(&mut self.opaque, saved.1);
+                            (!opaque).then(|| joined(inputs))
+                        }
+                        _ => None,
+                    };
+                    if let Some(template) = template {
+                        input.insert("template".to_string(), template);
+                    }
+                    placed.push((entry.clone(), Err(computed_inputs.len())));
+                    computed_inputs.push(Value::Object(input));
+                }
+            }
+        }
+        // `Body.handles`, and the dynamic reads of the plan.
+        let mut handles: Vec<Value> = Vec::new();
+        for handle in &used.handles {
+            let named = match &handle.at {
+                HandleAt::Entry(input, path) => match name_of(&names, input, path, false) {
+                    Some(Value::Number(slot)) => Some(json!({ "slot": slot })),
+                    other => other,
+                },
+                HandleAt::Computed(position) => {
+                    let entry = &used.computed[*position];
+                    name_of(&names, &entry.input, &entry.path, false)
+                }
+                HandleAt::Call(call) => Some(json!({ "call": call })),
+            };
+            match named {
+                Some(named) => {
+                    if let HandleAt::Entry(input, path) = &handle.at {
+                        handle_entries.push((handles.len(), input.clone(), path.clone()));
+                    }
+                    dynamic.push(self.dynamic(json!({
+                        "why": { "kind": "handle", "body": index, "handle": handles.len() },
+                    })));
+                    handles.push(json!({ "handle": named }));
+                }
+                None => self.unsupported("a handle of a body the emitter cannot name", at),
+            }
+        }
+        let mut through: Vec<Value> = Vec::new();
+        for starts in &record.detail.links {
+            for (input, path) in starts {
+                // A resolution that starts below a hop whose read is
+                // dynamic has no name: it is journaled with the reads of
+                // that handle.
+                let link = match name_of(&names, input, path, false) {
+                    Some(Value::Number(slot)) => json!(slot),
+                    Some(Value::Object(computed)) => {
+                        json!({ "body": index, "computed": computed["computed"] })
+                    }
+                    _ => continue,
+                };
+                if !through.contains(&link) {
+                    through.push(link);
+                }
+            }
+        }
+        for line in &used.links {
+            if let Some(position) = line.strip_prefix("computed ") {
+                if let Ok(position) = position.parse::<usize>() {
+                    let entry = &used.computed[position];
+                    if let Some(Value::Object(computed)) =
+                        name_of(&names, &entry.input, &entry.path, false)
+                    {
+                        let link = json!({ "body": index, "computed": computed["computed"] });
+                        if !through.contains(&link) {
+                            through.push(link);
+                        }
+                    }
+                }
+            }
+        }
+        for link in through {
+            dynamic.push(self.dynamic(json!({ "why": { "kind": "link", "through": link } })));
+        }
+        if used.label_metadata {
+            dynamic.push(self.dynamic(json!({
+                "why": { "kind": "labelMetadata", "body": index },
+            })));
+        }
+        // The reads of the access list of a space (PL §3.16): each names
+        // the slot of its operand, or the operand's entry of `computed`.
+        let mut spaces: Vec<Value> = Vec::new();
+        for starts in &record.detail.spaces {
+            for (input, path) in starts {
+                let of = match name_of(&names, input, path, false)
+                    .or_else(|| name_of(&value_names, input, path, false))
+                {
+                    Some(Value::Number(slot)) => json!(slot),
+                    Some(Value::Object(computed)) => {
+                        json!({ "body": index, "computed": computed["computed"] })
+                    }
+                    _ => {
+                        self.unsupported(
+                            "a dynamic read of kind `space` whose operand the emitter cannot name",
+                            at,
+                        );
+                        continue;
+                    }
+                };
+                if !spaces.contains(&of) {
+                    spaces.push(of);
+                }
+            }
+        }
+        for of in spaces {
+            dynamic.push(self.dynamic(json!({ "why": { "kind": "space", "of": of } })));
+        }
+        // `Body.calls`.
+        let mut calls: Vec<Value> = Vec::new();
+        let mut child_of_call: HashMap<usize, usize> = HashMap::new();
+        let mut binds: Vec<(usize, BindRec, String)> = Vec::new();
+        for (number, call) in record.calls.iter().enumerate() {
+            let call_name = format!("{name}/n{number}");
+            calls.push(match call.as_str() {
+                "instantiate:order" | "instantiate:tag" => {
+                    self.children.push(json!({
+                        "name": call_name,
+                        "$of": [index, number],
+                        "within": self.within_json(),
+                    }));
+                    child_of_call.insert(number, self.children.len() - 1);
+                    json!({
+                        "kind": "instantiate",
+                        "child": self.children.len() - 1,
+                        "identifiedBy": call.trim_start_matches("instantiate:"),
+                    })
+                }
+                "createCell:order" => {
+                    json!({ "kind": "createCell", "scope": "space", "identifiedBy": "order" })
+                }
+                "createCell:cause (state)" => {
+                    self.state_cells.push(json!({
+                        "name": call_name,
+                        "$of": [index, number],
+                        "scope": "space",
+                        "within": self.within_json(),
+                    }));
+                    json!({
+                        "kind": "createCell",
+                        "scope": "space",
+                        "identifiedBy": "cause",
+                        "stateCell": self.state_cells.len() - 1,
+                    })
+                }
+                "bind" => {
+                    // The binding holds its place among the bindings now,
+                    // and is filled in once the handler is a body.
+                    self.bindings.push(json!({ "within": self.within_json() }));
+                    let binding = self.bindings.len() - 1;
+                    match record.detail.binds.iter().find(|bind| bind.call == number) {
+                        Some(bind) => binds.push((binding, bind.clone(), call_name.clone())),
+                        None => self.unsupported(
+                            "a binding made in a function body: its handler and state",
+                            at,
+                        ),
+                    }
+                    json!({ "kind": "bind", "binding": binding })
+                }
+                other => match other.strip_prefix("effect:") {
+                    Some(builtin) => json!({ "kind": "effect", "builtin": builtin }),
+                    None => {
+                        json!({ "kind": "createCell", "scope": "space", "identifiedBy": "cause" })
+                    }
+                },
+            });
+        }
+        // `Body.writes` and `Body.envelopes`.
+        let mut writes: Vec<Value> = Vec::new();
+        let mut envelopes: Vec<Value> = Vec::new();
+        let mut fact = BodyFact {
+            // An authored function has no tier of its own (FA §6.3): used
+            // in the reactive tier, it is a computation with static
+            // side-writes where every write it makes has a static target.
+            side_writes: computation
+                && match record.tier {
+                    Some(tier) => tier == "static side-write",
+                    None => record.detail.edges.iter().all(|edge| edge.fixed),
+                },
+            kind: match (computation, record.tier) {
+                (false, _) => None,
+                (true, Some("materializer")) => Some("materializer"),
+                (true, Some("static side-write")) => Some("static"),
+                (true, Some(_)) => None,
+                // An authored function has no tier of its own.
+                (true, None) if record.detail.edges.is_empty() => None,
+                (true, None) if record.detail.edges.iter().all(|edge| edge.fixed) => Some("static"),
+                (true, None) => Some("materializer"),
+            },
+            at,
+            targets: Vec::new(),
+        };
+        for edge in &record.detail.edges {
+            let WriteRec {
+                target,
+                path,
+                fixed,
+                reference: named,
+            } = edge;
+            let below = slot_path(&[], path);
+            let target_json = match target {
+                WriteTarget::Handle {
+                    input,
+                    path: position,
+                    resolved,
+                } => {
+                    let handle = name_of(&names, input, position, *resolved);
+                    let written = target;
+                    let mut target = Map::new();
+                    target.insert("kind".to_string(), json!("handle"));
+                    let mut state_cell = None;
+                    match &handle {
+                        Some(Value::Number(slot)) => {
+                            target.insert("slot".to_string(), json!(slot));
+                            let slot = slot.as_u64().unwrap_or(0) as usize;
+                            let (root, slot_at, ..) = self.slots[slot].clone();
+                            // A write with a static target through a
+                            // state cell of the instance (FA §6.2).
+                            if let (Root::State(cell), true) = (&root, *fixed) {
+                                let mut path = slot_at.clone();
+                                path.extend(below.iter().cloned());
+                                state_cell = Some(json!({
+                                    "kind": "state",
+                                    "cell": cell,
+                                    "path": path,
+                                }));
+                            }
+                            if *fixed && named.is_none() {
+                                // One target for each site that writes it.
+                                let mut sites: Vec<(Option<(usize, u32)>, bool)> = record
+                                    .detail
+                                    .side_writes
+                                    .iter()
+                                    .filter(|write| write.target == *written && write.path == *path)
+                                    .map(|write| (Some(write.site), write.reads_own))
+                                    .collect();
+                                if sites.is_empty() {
+                                    sites.push((None, false));
+                                }
+                                for (site, reads_own) in sites {
+                                    fact.targets.push(Target {
+                                        slot,
+                                        root: root.clone(),
+                                        at: slot_at.clone(),
+                                        below: below.clone(),
+                                        resolved: *resolved,
+                                        site,
+                                        reads_own,
+                                    });
+                                }
+                            }
+                        }
+                        Some(Value::Object(computed)) => {
+                            target.insert("computed".to_string(), computed["computed"].clone());
+                        }
+                        _ => {
+                            self.unsupported(
+                                "a write through a handle the emitter cannot name",
+                                at,
+                            );
+                            continue;
+                        }
+                    }
+                    target.insert("path".to_string(), json!(below));
+                    if *resolved {
+                        target.insert("resolved".to_string(), json!(true));
+                    }
+                    state_cell.unwrap_or(Value::Object(target))
+                }
+                WriteTarget::Created(call) => {
+                    json!({ "kind": "created", "call": call, "path": below })
+                }
+                WriteTarget::Argument(call) => match child_of_call.get(call) {
+                    Some(child) => json!({ "kind": "argument", "child": child, "path": below }),
+                    None => continue,
+                },
+                WriteTarget::Request(call) => {
+                    json!({ "kind": "request", "of": { "call": call }, "path": below })
+                }
+            };
+            if !*fixed {
+                // An envelope of kind `created` names the site alone
+                // (PL §1.1, `WriteEnvelope`).
+                let mut target_json = target_json;
+                if target_json["kind"] == "created" {
+                    if let Some(envelope) = target_json.as_object_mut() {
+                        envelope.remove("path");
+                    }
+                }
+                envelopes.push(target_json);
+                continue;
+            }
+            let mut write = Map::new();
+            write.insert("target".to_string(), target_json);
+            if let Some((passes, listed)) = named {
+                match reference_json(&names, *passes, listed) {
+                    Some(reference) => {
+                        write.insert("reference".to_string(), reference);
+                    }
+                    // A reference whose entry has no name has the body's
+                    // template, which the edge of the whole write has.
+                    None => continue,
+                }
+            }
+            write.insert("constraints".to_string(), json!([]));
+            writes.push(Value::Object(write));
+        }
+        // `Body.outputs`.
+        let mut outputs: Vec<Value> = Vec::new();
+        for (path, passes, listed) in &record.detail.outputs {
+            if let Some(reference) = reference_json(&names, *passes, listed) {
+                outputs.push(json!({ "path": slot_path(&[], path), "reference": reference }));
+            }
+        }
+        self.plan_bodies.push(json!({
+            "name": name,
+            "within": self.within_json(),
+            "kind": kind,
+            "reads": reads
+                .iter()
+                .map(|(slot, at)| {
+                    let mut entry = json!({ "slot": slot, "at": at });
+                    // `ReadInput.default`: the default the callee declares
+                    // for the path the call bound to the slot (ruling
+                    // Z16). A handler is one body for all its bindings,
+                    // and its entries have root `binding`.
+                    let (root, path, ..) = &self.slots[*slot];
+                    if let Some(default) = default_for(&self.bound_defaults, root, path) {
+                        entry["default"] = default;
+                    }
+                    entry
+                })
+                .collect::<Vec<Value>>(),
+            "computed": computed_inputs,
+            "handles": handles,
+            "writes": writes,
+            "envelopes": envelopes,
+            "outputs": outputs,
+            "calls": calls,
+            "widenings": [],
+        }));
+        self.body_facts.push(fact);
+        self.body_dynamic.push(dynamic);
+        let guards = self.input_guards(index, inputs, &placed, &handle_entries);
+        self.body_guards.push(guards);
+        // "The label of the written value is the edge's template ... the
+        // body's template when a sandboxed body performs the write" (PL
+        // §3.11). For an edge that names a reference, the template
+        // "applies where the check fails" (§1.1).
+        let own = self.body_template(index);
+        if let Some(own) = &own {
+            for write in self.plan_bodies[index]["writes"]
+                .as_array_mut()
+                .into_iter()
+                .flatten()
+            {
+                if let Some(write) = write.as_object_mut() {
+                    write.insert("template".to_string(), own.clone());
+                }
+            }
+        }
+        // The bindings the body makes (PL §1.1, `Binding`): the handler
+        // is a body of the plan, and each path of its state is copied or
+        // holds a reference the binding body was given.
+        for (binding, bind, call_name) in binds {
+            let (home, start) = bind.handler;
+            let kind = if bind.action { "action" } else { "handler" };
+            let name = self
+                .body_starts
+                .get(&home)
+                .and_then(|starts| starts.get(&start))
+                .and_then(|body| self.bodies[home][*body].name.clone())
+                .unwrap_or(call_name);
+            let Some(handler) = self.handler_body(home, start, &name, kind) else {
+                self.unsupported("a handler that has no footprint record", at);
+                continue;
+            };
+            let mut state: Vec<Value> = Vec::new();
+            for entry in &bind.state {
+                let mut item = Map::new();
+                item.insert("path".to_string(), json!(slot_path(&[], &entry.path)));
+                let capture = if entry.copy { "copy" } else { "link" };
+                item.insert("capture".to_string(), json!(capture));
+                // A copied path has the binding body's template, and so
+                // has a path bound by reference where the check of its
+                // reference fails (PL §3.14).
+                if let Some(own) = &own {
+                    item.insert("template".to_string(), own.clone());
+                }
+                if let Some((passes, listed)) = &entry.reference {
+                    if let Some(reference) = reference_json(&names, *passes, listed) {
+                        item.insert("reference".to_string(), reference);
+                    }
+                }
+                state.push(Value::Object(item));
+            }
+            let within = self.bindings[binding]["within"].clone();
+            self.bindings[binding] = json!({
+                "handler": { "body": handler },
+                "state": state,
+                "within": within,
+            });
+        }
+        if computation && record.tier == Some("materializer") {
+            // "For a materializer, the template of its body" (PL §1.1,
+            // `Operation.input`).
+            let mut operation = Map::new();
+            operation.insert("kind".to_string(), json!("materializer"));
+            operation.insert("implementation".to_string(), json!({ "body": index }));
+            if let Some(own) = &own {
+                operation.insert("input".to_string(), own.clone());
+            }
+            operation.insert("name".to_string(), json!(name));
+            operation.insert("within".to_string(), self.within_json());
+            self.operations.push(Value::Object(operation));
+        }
+        if let Some(cone) = self.cone {
+            if computation {
+                self.cones[cone].bodies.push(index);
+                self.cones[cone]
+                    .slots
+                    .extend(reads.iter().map(|(slot, _)| *slot));
+            }
+        }
+        index
+    }
+
+    /// A use of a `lift`, of an authored function, or of a `computed` that
+    /// is not promoted, in the reactive tier.
+    fn use_body(
+        &mut self,
+        home: usize,
+        start: u32,
+        name: &str,
+        arguments: &[&Expression<'a>],
+        hint: &str,
+        at: u32,
+    ) -> Place {
+        let Some((kind, record)) = self.record_at(home, start) else {
+            self.unsupported("a call of a function that has no footprint record", at);
+            return Place::Unknown;
+        };
+        let Some(function) = self.function_at(home, start) else {
+            return Place::Unknown;
+        };
+        let plan_kind = match kind {
+            BodyKind::Lift => "lift",
+            BodyKind::Computed => "computed",
+            BodyKind::Assert => "assert",
+            _ => "function",
+        };
+        let name = name.to_string();
+        let hint = hint.to_string();
+        let formals = parameter_names(kind, function);
+        let (cone, made) = self.computing(&hint, at);
+        let mut inputs: HashMap<String, Place> = HashMap::new();
+        for (formal, argument) in formals.iter().zip(arguments) {
+            let place = self.eval(argument, &hint);
+            inputs.insert(formal.clone(), place);
+        }
+        // What the body captures: the names of the reactive tier around
+        // it.
+        for entry in record.detail.entries.iter().chain(&record.detail.envelope) {
+            if !inputs.contains_key(&entry.input) {
+                if let Some(place) = self.env.get(&entry.input) {
+                    inputs.insert(entry.input.clone(), place.clone());
+                }
+            }
+        }
+        let prefix = kind != BodyKind::Lift;
+        // The type each formal input is declared with, where it is one
+        // name.
+        let mut types: HashMap<String, TypeId> = HashMap::new();
+        for (formal, parameter) in formals.iter().zip(&function.params().items) {
+            if let BindingPattern::BindingIdentifier(identifier) = &parameter.pattern {
+                if let Some(Ok(ty)) = identifier
+                    .symbol_id
+                    .get()
+                    .map(|symbol| self.resolver.declared_symbol_type(home, symbol, 0))
+                {
+                    types.insert(formal.clone(), ty);
+                }
+            }
+        }
+        let saved_types = std::mem::replace(&mut self.formal_types, types);
+        let body = self.body_record(plan_kind, &name, &record, &inputs, prefix, start, true);
+        self.formal_types = saved_types;
+        if made {
+            self.cone = None;
+        }
+        let value = self.value(&hint, cone);
+        let mut listed: Vec<(String, Place)> = inputs
+            .iter()
+            .map(|(name, place)| (name.clone(), place.clone()))
+            .collect();
+        // A name the body captures and reads nothing of has no entry of
+        // the footprint record, and the body's code names it all the same.
+        let captured: Vec<String> = self
+            .body_at(home, start)
+            .map(|index| {
+                self.bodies[home][index]
+                    .captures
+                    .iter()
+                    .map(|capture| capture.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for name in captured {
+            if let (false, Some(place)) = (inputs.contains_key(&name), self.env.get(&name)) {
+                listed.push((name, place.clone()));
+            }
+        }
+        listed.sort_by(|a, b| a.0.cmp(&b.0));
+        listed.dedup_by(|a, b| a.0 == b.0);
+        let handles: Vec<String> = match self.resolver.shape(self.captured_types(home, function)) {
+            Shape::Object(properties, _) => properties
+                .into_iter()
+                .filter(|property| {
+                    matches!(
+                        self.resolver.shape(self.resolver.present(property.ty)),
+                        Shape::Handle(..)
+                    )
+                })
+                .map(|property| property.name)
+                .collect(),
+            _ => Vec::new(),
+        };
+        self.facts.uses.insert(
+            value,
+            crate::emit::UseFact {
+                body,
+                home,
+                start,
+                kind: plan_kind,
+                formals: parameter_names(kind, function),
+                inputs: listed,
+                handles,
+            },
+        );
+        self.values[value].template = self.body_template(body);
+        // What the body returns, by the form of its returns. The caller of
+        // a `computed` decides with the names it captures.
+        let saved = std::mem::replace(&mut self.formal_names, formals);
+        self.values[value].origin = self.returned_origin(function);
+        self.formal_names = saved;
+        Place::Value(value, Vec::new())
+    }
+
+    /// The template of what a body returned (PL §3.9, and `T_send` of
+    /// §6.2): a `derive` by the body over its slots, the templates of its
+    /// computed inputs, and its dynamic reads.
+    fn body_template(&self, body: usize) -> Option<Value> {
+        let record = &self.plan_bodies[body];
+        let mut inputs: Vec<Value> = Vec::new();
+        for read in record["reads"].as_array()? {
+            let node = json!({ "op": "slot", "slot": read["slot"] });
+            if !inputs.contains(&node) {
+                inputs.push(node);
+            }
+        }
+        for input in record["computed"].as_array()? {
+            let template = input.get("template")?;
+            if !inputs.contains(template) {
+                inputs.push(template.clone());
+            }
+        }
+        for reads in self.body_dynamic.get(body)? {
+            let node = json!({ "op": "dynamic", "reads": reads });
+            if !inputs.contains(&node) {
+                inputs.push(node);
+            }
+        }
+        Some(json!({ "op": "derive", "inputs": inputs, "by": { "body": body } }))
+    }
+
+    /// The plan body of a handler: one record however many bindings name
+    /// it (PL §1.1).
+    fn handler_body(&mut self, home: usize, start: u32, name: &str, kind: &str) -> Option<usize> {
+        if let Some(index) = self.handlers.get(&(home, start)) {
+            return Some(*index);
+        }
+        let (body_kind, record) = self.record_at(home, start)?;
+        let index = self.plan_bodies.len();
+        if let (BodyKind::Handler, Some(function)) = (body_kind, self.function_at(home, start)) {
+            let parameters = &function.params().items;
+            if let Some(event) = parameters.first() {
+                self.root_type(home, Root::Event(index), event);
+            }
+            if let Some(state) = parameters.get(1) {
+                self.root_type(home, Root::Binding(index), state);
+            }
+        }
+        // An `action` declares its event as the annotation of its one
+        // parameter or as its type argument, and an inline handler as the
+        // annotation of its parameter. Where an inline handler has no
+        // annotation, the crate has no type for its event.
+        if let (BodyKind::Action | BodyKind::InlineHandler, Some(function)) =
+            (body_kind, self.function_at(home, start))
+        {
+            if let Some(event) = function.params().items.first() {
+                self.root_type(home, Root::Event(index), event);
+            }
+            // Its state is what it captures, each name with the type it
+            // is declared with: a handle where a pattern declares one for
+            // its parameter (ES §2.4).
+            let captured = self.captured_types(home, function);
+            self.root_types.insert(Root::Binding(index), captured);
+        }
+        let mut inputs: HashMap<String, Place> = HashMap::new();
+        inputs.insert(
+            "event".to_string(),
+            Place::Slot(Root::Event(index), Vec::new()),
+        );
+        if body_kind == BodyKind::Handler {
+            inputs.insert(
+                "state".to_string(),
+                Place::Slot(Root::Binding(index), Vec::new()),
+            );
+        } else {
+            // What an inline handler or an action captures is its state.
+            for entry in record.detail.entries.iter().chain(&record.detail.envelope) {
+                if entry.input != "event" && entry.input != "cause" {
+                    inputs.insert(
+                        entry.input.clone(),
+                        Place::Slot(Root::Binding(index), vec![entry.input.clone()]),
+                    );
+                }
+            }
+        }
+        // The handler's record does not depend on where it is bound.
+        let saved_within = std::mem::take(&mut self.within);
+        let saved_cone = self.cone.take();
+        self.body_record(kind, name, &record, &inputs, false, start, false);
+        self.facts.handlers.insert(
+            index,
+            crate::emit::HandlerFact {
+                home,
+                start,
+                named: body_kind == BodyKind::Handler,
+                captures: {
+                    let mut names: Vec<String> = inputs
+                        .keys()
+                        .filter(|name| *name != "event" && *name != "state")
+                        .cloned()
+                        .collect();
+                    names.sort();
+                    names
+                },
+            },
+        );
+        self.within = saved_within;
+        self.cone = saved_cone;
+        self.handlers.insert((home, start), index);
+        Some(index)
+    }
+
+    /// What a path of a binding's state is bound to, in the reactive
+    /// tier: every path is a link (PL §3.14).
+    fn state_entries(
+        &mut self,
+        path: &mut Vec<String>,
+        place: &Place,
+        written: Option<&Expression<'a>>,
+        state: &mut Vec<Value>,
+    ) {
+        let mut entry = Map::new();
+        entry.insert("path".to_string(), json!(path.clone()));
+        entry.insert("capture".to_string(), json!("link"));
+        // A name the parameter of a pattern compiled in binds to a
+        // property that the call writes as a literal: the path holds the
+        // literal, whole, as its constant.
+        // A name that a handler written in place captures has no written
+        // expression: its path is the name.
+        let named = match written.map(|written| unwrap(written)) {
+            Some(Expression::Identifier(identifier)) => Some(identifier.name.as_str()),
+            Some(_) => None,
+            None if path.len() == 1 => Some(path[0].as_str()),
+            None => None,
+        };
+        if let (Place::Const | Place::Record(_), Some(named)) = (place, named) {
+            if let Some(constant) = self.callee_literals.get(named) {
+                entry.insert("place".to_string(), json!({ "constant": constant }));
+                entry.insert("template".to_string(), json!({ "op": "const" }));
+                state.push(Value::Object(entry));
+                return;
+            }
+        }
+        match place {
+            Place::Slot(root, at) => {
+                let slot = self.slot(root, at, "identity");
+                entry.insert("place".to_string(), json!({ "slot": slot }));
+                // The default the callee declares for the path, where
+                // the place is a slot the call bound (PL §8, question
+                // 110, assumed).
+                if let Some(default) = default_for(&self.bound_defaults, root, at) {
+                    entry.insert("default".to_string(), default);
+                }
+                entry.insert(
+                    "template".to_string(),
+                    json!({ "op": "slot", "slot": slot }),
+                );
+            }
+            Place::Value(value, at) => {
+                // The template is the output's, filled in with the
+                // outputs (`finish`).
+                self.values[*value].referred = true;
+                let output = if at.is_empty() {
+                    json!({ "$value": value })
+                } else {
+                    if !self.values[*value].below.contains(at) {
+                        self.values[*value].below.push(at.clone());
+                    }
+                    json!({ "$value": value, "$path": at })
+                };
+                entry.insert("place".to_string(), json!({ "output": output }));
+            }
+            Place::Stream(binding) => {
+                // The stream of a binding of the reactive tier is named
+                // by the binding's `name` and `within` (PL §3.14), which
+                // are constants of the plan.
+                entry.insert("place".to_string(), json!({ "stream": binding }));
+                entry.insert("template".to_string(), json!({ "op": "const" }));
+            }
+            Place::Record(fields) => {
+                for (name, member) in fields {
+                    let below = written.and_then(|written| member_written(written, name));
+                    path.push(name.clone());
+                    self.state_entries(path, member, below, state);
+                    path.pop();
+                }
+                return;
+            }
+            // "A slot of the instance, which for the index of the
+            // element in the collection of an enclosing element body is
+            // the slot of root `index` that names that collection" (PL
+            // §1.1, `Binding.state`).
+            Place::Read(root @ Root::Index(_), at, class) => {
+                let slot = self.slot(root, at, class);
+                entry.insert("place".to_string(), json!({ "slot": slot }));
+                entry.insert(
+                    "template".to_string(),
+                    json!({ "op": "slot", "slot": slot }),
+                );
+            }
+            Place::Accumulator(..) | Place::Read(..) => {
+                if let Some(template) = self.template_of(place, "value") {
+                    entry.insert("template".to_string(), template);
+                }
+            }
+            Place::Const => {
+                // "A path bound to `undefined` has no entry of `state`."
+                if written.is_some_and(|written| {
+                    matches!(unwrap(written), Expression::Identifier(name) if name.name == "undefined")
+                }) {
+                    return;
+                }
+                // A literal, or the value of a module-scope constant
+                // with a static initializer, or the default of a path of
+                // the argument that the call of the pattern compiled in
+                // leaves out (ruling Z4).
+                let name = match written.map(|written| unwrap(written)) {
+                    Some(Expression::Identifier(identifier)) => Some(identifier.name.as_str()),
+                    Some(_) => None,
+                    None if path.len() == 1 => Some(path[0].as_str()),
+                    None => None,
+                };
+                let constant = written
+                    .and_then(|written| {
+                        constant_of(written)
+                            .or_else(|| self.resolver.constant_value(self.module, written, 0))
+                    })
+                    .or_else(|| name.and_then(|name| self.callee_defaults.get(name).cloned()))
+                    .unwrap_or(Value::Null);
+                entry.insert("place".to_string(), json!({ "constant": constant }));
+                entry.insert("template".to_string(), json!({ "op": "const" }));
+            }
+            Place::Unknown => {
+                // The name a pattern binds to `[SELF]`: "`place` is
+                // `{ result: true }`", and "the entry's `capture` is
+                // `link` and its `template` is `const`" (PL §1.1; ruling
+                // Z28).
+                let own = written.is_some_and(|written| {
+                    matches!(unwrap(written), Expression::Identifier(name)
+                        if self.self_names.contains(name.name.as_str()))
+                });
+                if own {
+                    entry.insert("place".to_string(), json!({ "result": true }));
+                    entry.insert("template".to_string(), json!({ "op": "const" }));
+                }
+            }
+        }
+        state.push(Value::Object(entry));
+    }
+
+    /// What a place is, for a write through a handle bound to it. With
+    /// `element`, what an element of the place is.
+    fn origin_of(&self, place: &Place, element: bool) -> Origin {
+        match place {
+            Place::Slot(Root::Element(collection), _) => self.source_origin(*collection),
+            Place::Slot(..) => Origin::Stored,
+            Place::Value(value, path) => {
+                let computed = &self.values[*value];
+                let below = element || !path.is_empty();
+                match computed.origin {
+                    Some(Declared::Whole) => return Origin::Reference,
+                    Some(Declared::Elements) if below => return Origin::Reference,
+                    Some(Declared::Elements | Declared::Produced) => return Origin::Produced,
+                    Some(Declared::Mixed) => return Origin::Mixed,
+                    None => {}
+                }
+                if let (Some(collection), false) = (computed.collection, computed.scan) {
+                    // The result of a `filter` is an array the instance
+                    // made, of the elements of its source.
+                    if below && self.collections[collection]["construct"] == "filter" {
+                        return match self.source_origin(collection) {
+                            Origin::Stored | Origin::Reference => Origin::Reference,
+                            other => other,
+                        };
+                    }
+                    return Origin::Produced;
+                }
+                if computed.chosen.is_some() {
+                    return Origin::Reference;
+                }
+                match computed
+                    .template
+                    .as_ref()
+                    .and_then(|template| template["op"].as_str())
+                {
+                    Some("derive" | "fold" | "const") => Origin::Produced,
+                    _ => Origin::Other,
+                }
+            }
+            _ => Origin::Other,
+        }
+    }
+
+    /// What an element of what a collection iterates is.
+    fn source_origin(&self, collection: usize) -> Origin {
+        let source = &self.collections[collection]["source"];
+        if let Some(slot) = source["slot"].as_u64() {
+            let (root, path, ..) = &self.slots[slot as usize];
+            return self.origin_of(&Place::Slot(root.clone(), path.clone()), true);
+        }
+        if let Some(value) = source["output"]["$value"].as_u64() {
+            return self.origin_of(&Place::Value(value as usize, Vec::new()), true);
+        }
+        if let Some(inner) = source["collection"].as_u64() {
+            if self.collections[inner as usize]["construct"] == "filter" {
+                return match self.source_origin(inner as usize) {
+                    Origin::Stored | Origin::Reference => Origin::Reference,
+                    other => other,
+                };
+            }
+            return Origin::Produced;
+        }
+        Origin::Other
+    }
+
+    /// What a place holds, as a computed value that passes it on has it.
+    fn declared_of(&self, place: &Place) -> Option<Declared> {
+        if matches!(place, Place::Const) {
+            return None;
+        }
+        match self.origin_of(place, false) {
+            Origin::Stored | Origin::Reference => Some(Declared::Whole),
+            Origin::Mixed => Some(Declared::Mixed),
+            Origin::Other => Some(Declared::Mixed),
+            Origin::Produced => match self.origin_of(place, true) {
+                Origin::Stored | Origin::Reference => Some(Declared::Elements),
+                _ => Some(Declared::Produced),
+            },
+        }
+    }
+
+    /// "A handle that a `computed` returns": whether the expression a
+    /// `computed` returns has the type of a handle, which is a reference to
+    /// the cell behind it.
+    fn returns_handle(&self, function: FunctionLike<'_, 'a>) -> bool {
+        function.expression_body().is_some_and(|expression| {
+            self.resolver
+                .typed_at(self.module, expression, 0)
+                .is_ok_and(|ty| {
+                    let present = self.resolver.present(ty);
+                    matches!(self.resolver.shape(present), Shape::Handle(..))
+                })
+        })
+    }
+
+    /// What a `computed` that stays a body returns, by the form of each
+    /// expression it returns: a reference to a stored place where each is
+    /// an element or a selection of elements of one (ruling T3: "an
+    /// element that a `filter` (or another construct that passes elements
+    /// on) in a `computed` yields, or a handle that a `computed` returns").
+    fn returned_origin(&self, function: FunctionLike<'_, 'a>) -> Option<Declared> {
+        fn gather<'e, 'a>(
+            statements: &'e [Statement<'a>],
+            returned: &mut Vec<&'e Expression<'a>>,
+            locals: &mut HashMap<String, &'e Expression<'a>>,
+        ) {
+            for statement in statements {
+                match statement {
+                    Statement::ReturnStatement(statement) => {
+                        if let Some(argument) = &statement.argument {
+                            returned.push(argument);
+                        }
+                    }
+                    Statement::VariableDeclaration(declaration) => {
+                        for declarator in &declaration.declarations {
+                            if let (BindingPattern::BindingIdentifier(name), Some(init)) =
+                                (&declarator.id, &declarator.init)
+                            {
+                                locals.insert(name.name.to_string(), init);
+                            }
+                        }
+                    }
+                    Statement::BlockStatement(block) => gather(&block.body, returned, locals),
+                    Statement::IfStatement(branch) => {
+                        gather(std::slice::from_ref(&branch.consequent), returned, locals);
+                        if let Some(alternate) = &branch.alternate {
+                            gather(std::slice::from_ref(alternate), returned, locals);
+                        }
+                    }
+                    Statement::ForOfStatement(each) => {
+                        gather(std::slice::from_ref(&each.body), returned, locals)
+                    }
+                    Statement::ForStatement(each) => {
+                        gather(std::slice::from_ref(&each.body), returned, locals)
+                    }
+                    Statement::WhileStatement(each) => {
+                        gather(std::slice::from_ref(&each.body), returned, locals)
+                    }
+                    Statement::TryStatement(tried) => {
+                        gather(&tried.block.body, returned, locals);
+                        if let Some(handler) = &tried.handler {
+                            gather(&handler.body.body, returned, locals);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut returned = Vec::new();
+        let mut locals = HashMap::new();
+        match function.expression_body() {
+            Some(expression) => returned.push(expression),
+            None => gather(
+                function.block_body().unwrap_or(&[]),
+                &mut returned,
+                &mut locals,
+            ),
+        }
+        let found: Vec<Option<Declared>> = returned
+            .iter()
+            .map(|expression| self.passed_on(expression, &locals, 0))
+            .collect();
+        Some(combine(found).unwrap_or(Declared::Produced))
+    }
+
+    /// What one returned expression of a function body passes on. `None`
+    /// is a constant, which is no branch of a selection.
+    fn passed_on(
+        &self,
+        expression: &Expression<'a>,
+        locals: &HashMap<String, &Expression<'a>>,
+        depth: u32,
+    ) -> Option<Declared> {
+        if depth > 12 {
+            return Some(Declared::Produced);
+        }
+        let next = depth + 1;
+        let below = |found: Option<Declared>| match found {
+            Some(Declared::Elements) => Some(Declared::Whole),
+            other => other,
+        };
+        let elements = |found: Option<Declared>| match found {
+            Some(Declared::Whole) => Some(Declared::Elements),
+            other => other,
+        };
+        match unwrap(expression) {
+            Expression::NullLiteral(_)
+            | Expression::StringLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::BooleanLiteral(_) => None,
+            Expression::ArrayExpression(array) if array.elements.is_empty() => None,
+            // A path below a record or an array assembled in the body can
+            // hold a reference the body put there.
+            Expression::ArrayExpression(_)
+            | Expression::ObjectExpression(_)
+            | Expression::NewExpression(_) => Some(Declared::Mixed),
+            Expression::Identifier(identifier) => {
+                let name = identifier.name.as_str();
+                if let Some(init) = locals.get(name) {
+                    // An array the body fills by `push` starts empty.
+                    return match unwrap(init) {
+                        Expression::ArrayExpression(_) => Some(Declared::Mixed),
+                        _ => self.passed_on(init, locals, next),
+                    };
+                }
+                if self.formal_names.iter().any(|formal| formal == name) {
+                    // A parameter returned unchanged.
+                    return Some(Declared::Mixed);
+                }
+                match self.env.get(name) {
+                    Some(place) => self.declared_of(place),
+                    None if name == "undefined" => None,
+                    None if self.resolver.value_def(self.module, identifier).is_some() => None,
+                    None => Some(Declared::Produced),
+                }
+            }
+            Expression::ConditionalExpression(conditional) => combine([
+                self.passed_on(&conditional.consequent, locals, next),
+                self.passed_on(&conditional.alternate, locals, next),
+            ]),
+            Expression::LogicalExpression(logical) => {
+                let right = self.passed_on(&logical.right, locals, next);
+                if logical.operator == LogicalOperator::And {
+                    right
+                } else {
+                    combine([self.passed_on(&logical.left, locals, next), right])
+                }
+            }
+            Expression::StaticMemberExpression(member) => {
+                below(self.passed_on(&member.object, locals, next))
+            }
+            Expression::ComputedMemberExpression(member) => {
+                below(self.passed_on(&member.object, locals, next))
+            }
+            Expression::CallExpression(call) => {
+                let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
+                    // What an authored function returns is not followed
+                    // here: it can pass on a reference it was given.
+                    return Some(Declared::Mixed);
+                };
+                let receiver = self.passed_on(&member.object, locals, next);
+                match member.property.name.as_str() {
+                    "get" | "sample" => receiver,
+                    "key" | "find" | "findLast" | "at" => below(receiver),
+                    "filter" | "slice" | "toSorted" | "sort" | "reverse" | "toReversed" => {
+                        elements(receiver)
+                    }
+                    "map" => {
+                        // A callback that returns its element passes the
+                        // elements on.
+                        let passes = call
+                            .arguments
+                            .first()
+                            .and_then(|argument| argument.as_expression())
+                            .and_then(FunctionLike::of)
+                            .is_some_and(|callback| {
+                                let parameter = callback.params().items.first().and_then(|item| {
+                                    match &item.pattern {
+                                        BindingPattern::BindingIdentifier(name) => {
+                                            Some(name.name.as_str())
+                                        }
+                                        _ => None,
+                                    }
+                                });
+                                match (parameter, callback.expression_body().map(unwrap)) {
+                                    (Some(parameter), Some(Expression::Identifier(returned))) => {
+                                        returned.name == parameter
+                                    }
+                                    _ => false,
+                                }
+                            });
+                        if passes {
+                            elements(receiver)
+                        } else {
+                            Some(Declared::Produced)
+                        }
+                    }
+                    _ => Some(Declared::Produced),
+                }
+            }
+            _ => Some(Declared::Produced),
+        }
+    }
+
+    /// Whether the checker listed `written` as a value bound where a
+    /// handle that can write is declared (`assign.rs`, `note_bindings`).
+    fn declared_writable(&self, written: &Expression<'a>) -> bool {
+        let span = written.span();
+        self.resolver
+            .types
+            .borrow()
+            .notes
+            .iter()
+            .any(|(module, category, at)| {
+                *module == self.module
+                    && category.starts_with("a writable handle bound to")
+                    && *at == span
+            })
+    }
+
+    /// Whether the body writes through a handle at or below `path` of its
+    /// state.
+    fn writes_through(&self, body: usize, path: &[String]) -> bool {
+        ["writes", "envelopes"].iter().any(|list| {
+            self.plan_bodies[body][*list]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|write| {
+                    let target = write.get("target").unwrap_or(write);
+                    target["kind"] == "handle"
+                        && target["slot"].as_u64().is_some_and(|slot| {
+                            let (root, at, ..) = &self.slots[slot as usize];
+                            matches!(root, Root::Binding(_)) && at.starts_with(path)
+                        })
+                })
+        })
+    }
+
+    /// The handles of a binding's state that are bound to a computed
+    /// value (ruling T3). Where the value at the bound path is a reference
+    /// to a stored place, the handle resolves through the reference, and
+    /// the binding's entry says so. Where the instance produces the value,
+    /// a write through the handle is refused at run time.
+    fn bound_handles(
+        &mut self,
+        body: usize,
+        path: &mut Vec<String>,
+        place: &Place,
+        written: Option<&Expression<'a>>,
+        state: &mut [Value],
+    ) {
+        if let Place::Record(fields) = place {
+            for (name, member) in fields {
+                let below = written.and_then(|written| member_written(written, name));
+                path.push(name.clone());
+                self.bound_handles(body, path, member, below, state);
+                path.pop();
+            }
+            return;
+        }
+        let declared = written.is_some_and(|written| self.declared_writable(written));
+        // A literal or a constant given where a handle that can write is
+        // declared is a value the instance produces.
+        // So is a parameter of a pattern compiled in that the call gives
+        // as a literal: the child's handle of it is bound to a constant
+        // (PL §3.15). A property the call leaves out is not one.
+        let given = written.is_some_and(|written| match unwrap(written) {
+            Expression::Identifier(identifier) => {
+                self.given_constants.contains(identifier.name.as_str())
+            }
+            _ => false,
+        });
+        let literal = matches!(place, Place::Const) && (declared || given);
+        let origin = if literal {
+            Origin::Produced
+        } else {
+            self.origin_of(place, false)
+        };
+        if matches!(origin, Origin::Stored | Origin::Other) {
+            return;
+        }
+        let writes = self.writes_through(body, path);
+        let case = match (origin, writes) {
+            (Origin::Produced, true) if literal => "literal: written",
+            (Origin::Produced, false) if literal => "literal: read",
+            (Origin::Reference, true) => "reference",
+            (Origin::Produced, true) => "computed: written",
+            (Origin::Mixed, true) => "mixed: written",
+            (Origin::Produced, false) if declared => "computed: read",
+            (Origin::Mixed, false) if declared => "mixed: read",
+            _ => return,
+        };
+        if origin == Origin::Reference {
+            for entry in state
+                .iter_mut()
+                .filter(|entry| entry["path"] == json!(path))
+            {
+                entry["through"] = json!("reference");
+            }
+        }
+        // The site in the module of the pattern: where the value is
+        // written, or where the pattern that binds it is called.
+        let at = match (self.inline_at.first(), written) {
+            (Some(site), _) => *site,
+            (None, Some(written)) => written.span().start,
+            (None, None) => 0,
+        };
+        let text = written
+            .and_then(|written| {
+                let parsed = self.resolver.parsed(self.module)?;
+                let text = written.span().source_text(parsed.source);
+                let line = parsed.lines.position(parsed.source, written.span().start).0;
+                Some(format!(
+                    "`{}` at {}:{line}",
+                    text.split_whitespace().collect::<Vec<_>>().join(" "),
+                    parsed.path
+                ))
+            })
+            .unwrap_or_default();
+        let what = format!(
+            "state path `{}` of `{}`, bound to {text}",
+            path.join("/"),
+            self.plan_bodies[body]["name"].as_str().unwrap_or("")
+        );
+        let write = HandleWrite { case, at, what };
+        if !self.handle_writes.contains(&write) {
+            self.handle_writes.push(write);
+        }
+    }
+
+    /// A handler applied to its state in the reactive tier.
+    fn bind_handler(
+        &mut self,
+        home: usize,
+        start: u32,
+        name: &str,
+        arguments: &[&Expression<'a>],
+        hint: &str,
+    ) -> Place {
+        let Some(body) = self.handler_body(home, start, name, "handler") else {
+            self.unsupported("a handler that has no footprint record", start);
+            return Place::Unknown;
+        };
+        let mut state = Vec::new();
+        if let Some(argument) = arguments.first() {
+            // The binding is no cone's computation.
+            let saved = self.cone.take();
+            let place = self.eval(argument, hint);
+            self.cone = saved;
+            self.state_entries(&mut Vec::new(), &place, Some(argument), &mut state);
+            self.bound_handles(body, &mut Vec::new(), &place, Some(argument), &mut state);
+        }
+        let name = base_name(hint, name);
+        self.bindings.push(json!({
+            "handler": { "body": body },
+            "state": state,
+            "name": name,
+            "within": self.within_json(),
+        }));
+        Place::Stream(self.bindings.len() - 1)
+    }
+
+    /// An `action`, or an inline event handler in JSX: a binding of the
+    /// function to what it captures.
+    fn bind_inline(&mut self, function: FunctionLike<'_, 'a>, kind: BodyKind, hint: &str) -> Place {
+        let start = function.span().start;
+        let plan_kind = if kind == BodyKind::Action {
+            "action"
+        } else {
+            "handler"
+        };
+        let Some(body) = self.handler_body(self.module, start, hint, plan_kind) else {
+            self.unsupported("a handler that has no footprint record", start);
+            return Place::Unknown;
+        };
+        let Some((_, record)) = self.record_at(self.module, start) else {
+            return Place::Unknown;
+        };
+        let mut captured: BTreeSet<String> = BTreeSet::new();
+        for entry in record.detail.entries.iter().chain(&record.detail.envelope) {
+            if entry.input != "event" && entry.input != "cause" {
+                captured.insert(entry.input.clone());
+            }
+        }
+        let mut state = Vec::new();
+        for name in captured {
+            let place = match self.env.get(&name) {
+                Some(place) => place.clone(),
+                None => {
+                    self.unsupported(
+                        "a capture of a handler that the emitter has no place for",
+                        start,
+                    );
+                    Place::Unknown
+                }
+            };
+            self.state_entries(&mut vec![name], &place, None, &mut state);
+        }
+        self.bindings.push(json!({
+            "handler": { "body": body },
+            "state": state,
+            "name": hint,
+            "within": self.within_json(),
+        }));
+        self.facts.inline_binding(start, self.bindings.len() - 1);
+        Place::Stream(self.bindings.len() - 1)
+    }
+
+    // ----- the result -----
+
+    fn keep(&mut self, path: &mut Vec<String>, place: &Place) {
+        match place {
+            Place::Value(value, _) => {
+                self.values[*value].kept.push(path.clone());
+            }
+            Place::Record(fields) => {
+                for (name, member) in fields {
+                    path.push(name.clone());
+                    self.keep(path, member);
+                    path.pop();
+                }
+            }
+            Place::Slot(root, at) => {
+                let slot = self.slot(root, at, "identity");
+                self.passed.push((path.clone(), slot));
+                let (cone, made) = self.computing("result", 0);
+                self.cones[cone].slots.insert(slot);
+                if made {
+                    self.cone = None;
+                }
+            }
+            Place::Read(root, at, class) => {
+                let slot = self.slot(root, at, class);
+                self.passed.push((path.clone(), slot));
+                let (cone, made) = self.computing("result", 0);
+                self.cones[cone].slots.insert(slot);
+                if made {
+                    self.cone = None;
+                }
+            }
+            Place::Stream(_) | Place::Accumulator(..) | Place::Const | Place::Unknown => {}
+        }
+    }
+
+    /// The `Plan` record, with the cones in an order in which every edge
+    /// that is not on a cycle goes from a lower index to a higher one (PL
+    /// §1.4).
+    #[allow(clippy::type_complexity)]
+    fn finish(
+        mut self,
+        file: &str,
+    ) -> (
+        Value,
+        Vec<(String, u32)>,
+        Vec<(u32, Vec<String>)>,
+        Vec<(&'static str, u32, String)>,
+        crate::emit::Finished,
+    ) {
+        let result_cone = self.cones.iter().rposition(|cone| cone.entry == "result");
+        // The edges, over the cones as they were made.
+        let count = self.cones.len();
+        let mut output_edges: Vec<(usize, usize, usize)> = Vec::new();
+        for (to, cone) in self.cones.iter().enumerate() {
+            for value in &cone.uses {
+                output_edges.push((self.values[*value].cone, to, *value));
+            }
+        }
+        // The edges of the static side-writes (PL §3.11, "Which slots read
+        // a `handle` target"): the cone, the cone that reads, `via`, where
+        // the write is, and whether the writing body reads its own target.
+        let mut write_edges: Vec<(usize, usize, Value, u32, bool)> = Vec::new();
+        for (from, cone) in self.cones.iter().enumerate() {
+            for body in &cone.bodies {
+                let fact = &self.body_facts[*body];
+                if !fact.side_writes {
+                    continue;
+                }
+                for target in &fact.targets {
+                    let Target {
+                        slot,
+                        root,
+                        at,
+                        below,
+                        resolved,
+                        site,
+                        reads_own,
+                    } = target;
+                    let mut cell = at.clone();
+                    cell.extend(below.iter().cloned());
+                    let state = matches!(root, Root::State(_));
+                    for (to, other) in self.cones.iter().enumerate() {
+                        let reads = other.slots.iter().any(|index| {
+                            let (other_root, path, class, slot_resolved, in_place) =
+                                &self.slots[*index];
+                            if other_root != root {
+                                return false;
+                            }
+                            let overlaps = path.starts_with(&cell) || cell.starts_with(path);
+                            if state {
+                                // "One slot is excepted there: the
+                                // `identity` slot at the cell's root,
+                                // with the empty path", the handle a
+                                // body holds in order to write.
+                                return overlaps && !(path.is_empty() && *class == "identity");
+                            }
+                            if path.len() >= at.len() {
+                                // At or below the handle's position. The
+                                // handle's `identity` slot and a `shape`
+                                // slot in place there observe the
+                                // reference and not the cell.
+                                let excepted = path == at
+                                    && (index == slot
+                                        || (*class == "identity" && !*slot_resolved)
+                                        || (*class == "shape" && *in_place));
+                                return overlaps && !excepted;
+                            }
+                            // Above the handle's position: a `value` slot
+                            // whose type has data there.
+                            if *class != "value" || !at.starts_with(path) {
+                                return false;
+                            }
+                            let rest = &at[path.len()..];
+                            match other.views.get(index) {
+                                Some(views) => views.iter().any(|view| {
+                                    view.and_then(|view| self.reaches_cell(view, rest))
+                                        .unwrap_or(true)
+                                }),
+                                None => true,
+                            }
+                        });
+                        if !reads {
+                            continue;
+                        }
+                        let via = match root {
+                            Root::State(cell_index) => {
+                                json!({ "kind": "state", "cell": cell_index, "path": cell })
+                            }
+                            _ => {
+                                let mut via = Map::new();
+                                via.insert("kind".to_string(), json!("handle"));
+                                via.insert("slot".to_string(), json!(slot));
+                                via.insert("path".to_string(), json!(below));
+                                if *resolved {
+                                    via.insert("resolved".to_string(), json!(true));
+                                }
+                                Value::Object(via)
+                            }
+                        };
+                        // The report names the side-write where it is in
+                        // this module, and else the function.
+                        let at = match site {
+                            Some((module, start)) if *module == self.module => *start,
+                            _ => fact.at,
+                        };
+                        write_edges.push((from, to, via, at, *reads_own));
+                    }
+                }
+            }
+        }
+        // The strongly connected components, in an order that follows the
+        // edges and otherwise the order of the source.
+        let mut successors: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); count];
+        for (from, to, _) in &output_edges {
+            successors[*from].insert(*to);
+        }
+        for (from, to, ..) in &write_edges {
+            successors[*from].insert(*to);
+        }
+        let reaches = |from: usize, to: usize| -> bool {
+            let mut seen = vec![false; count];
+            let mut stack = vec![from];
+            while let Some(next) = stack.pop() {
+                for other in &successors[next] {
+                    if *other == to {
+                        return true;
+                    }
+                    if !seen[*other] {
+                        seen[*other] = true;
+                        stack.push(*other);
+                    }
+                }
+            }
+            false
+        };
+        let mut component: Vec<usize> = (0..count).collect();
+        for a in 0..count {
+            for b in 0..a {
+                if component[b] == b && reaches(a, b) && reaches(b, a) {
+                    component[a] = b;
+                    break;
+                }
+            }
+        }
+        let mut order: Vec<usize> = Vec::new();
+        let mut placed = vec![false; count];
+        while order.len() < count {
+            let next = (0..count).find(|cone| {
+                !placed[*cone]
+                    && (0..count).all(|other| {
+                        placed[other]
+                            || component[other] == component[*cone]
+                            || !successors[other].contains(cone)
+                    })
+            });
+            // Every cone of a component follows its first one.
+            let next = next.unwrap_or_else(|| (0..count).find(|cone| !placed[*cone]).unwrap_or(0));
+            for cone in 0..count {
+                if !placed[cone] && component[cone] == component[next] {
+                    placed[cone] = true;
+                    order.push(cone);
+                }
+            }
+        }
+        let mut position = vec![0usize; count];
+        for (index, cone) in order.iter().enumerate() {
+            position[*cone] = index;
+        }
+        // The static side-writes on a cycle (`side-write:cycle`): an edge
+        // on a cycle through another cone, and an edge from a cone to
+        // itself where the writing body does not read its own target
+        // (`scheduler-and-serving-loop.md` §8.2).
+        let mut cycles: Vec<(u32, Vec<String>)> = Vec::new();
+        for (from, to, _, at, reads_own) in &write_edges {
+            let reported = if from == to {
+                !*reads_own
+            } else {
+                reaches(*to, *from)
+            };
+            if reported {
+                let mut names: Vec<String> = (0..count)
+                    .filter(|cone| component[*cone] == component[*from])
+                    .map(|cone| self.cones[cone].entry.clone())
+                    .collect();
+                names.sort();
+                if !cycles.iter().any(|(other, _)| other == at) {
+                    cycles.push((*at, names));
+                }
+            }
+        }
+        // The outputs, by cone in the order of the plan, and within a
+        // cone in source order.
+        let mut output_of: HashMap<(usize, Vec<String>), usize> = HashMap::new();
+        let mut listed: Vec<(usize, usize, Option<(usize, Vec<String>)>, Value)> = Vec::new();
+        for value in &self.values {
+            let cone = position[value.cone];
+            let mut entry = |path: Value, interim: Option<&str>, kept: bool, below: &[String]| {
+                let mut output = Map::new();
+                output.insert("path".to_string(), path);
+                if let Some(interim) = interim {
+                    output.insert("interim".to_string(), json!(interim));
+                }
+                output.insert("cone".to_string(), json!(cone));
+                if let Some(collection) = value.collection {
+                    output.insert("collection".to_string(), json!(collection));
+                }
+                if let (Some(collection), true) = (value.passes, below.is_empty()) {
+                    output.insert("passesCollection".to_string(), json!(collection));
+                }
+                // `Output.keyFields`: a copy of the key fields that the
+                // type of the value declares with `ArrayByKey`. The plan
+                // holds no schema of an output, and the runtime writes
+                // the keyword into the schema of a link to the stored
+                // output (ruling Z54).
+                if let Some(fields) = self.value_keys.get(&(value.order, below.to_vec())) {
+                    output.insert("keyFields".to_string(), fields.clone());
+                }
+                if let Some(template) = &value.template {
+                    output.insert("template".to_string(), template.clone());
+                }
+                output.insert("kept".to_string(), json!(kept));
+                output.insert("constraints".to_string(), json!([]));
+                // A constructed value has an entry per path (PL §3.4),
+                // the container entry first.
+                let spread = |output: &Map<String, Value>, entries: &Entries, star: bool| {
+                    entries
+                        .iter()
+                        .map(|(at, template)| {
+                            let mut output = output.clone();
+                            let mut path: Vec<Value> =
+                                output["path"].as_array().cloned().unwrap_or_default();
+                            if star {
+                                path.push(json!("*"));
+                            }
+                            path.extend(at.iter().map(|segment| json!(segment)));
+                            output.insert("path".to_string(), json!(path));
+                            output.remove("template");
+                            if star {
+                                output.remove("collection");
+                            }
+                            if star || !at.is_empty() {
+                                output.remove("passesCollection");
+                                output.remove("keyFields");
+                            }
+                            if let Some(template) = template {
+                                output.insert("template".to_string(), template.clone());
+                            }
+                            Value::Object(output)
+                        })
+                        .collect::<Vec<Value>>()
+                };
+                match (&value.entries, below.is_empty()) {
+                    (Some(entries), true) => {
+                        for output in spread(&output, entries, false) {
+                            listed.push((
+                                cone,
+                                value.order,
+                                Some((value.order, below.to_vec())),
+                                output,
+                            ));
+                        }
+                    }
+                    _ => listed.push((
+                        cone,
+                        value.order,
+                        Some((value.order, below.to_vec())),
+                        Value::Object(output.clone()),
+                    )),
+                }
+                if let (Some(entries), true) = (&value.element_entries, below.is_empty()) {
+                    for output in spread(&output, entries, true) {
+                        listed.push((cone, value.order, None, output));
+                    }
+                    return;
+                }
+                // The per-element entry of an element construct: its
+                // path "has `*` at the position of each enclosing
+                // collection", and its template is over `element` slots
+                // (PL §1.4).
+                if let (Some(element), true) = (&value.element, below.is_empty()) {
+                    let mut path: Vec<Value> =
+                        output["path"].as_array().cloned().unwrap_or_default();
+                    path.push(json!("*"));
+                    output.insert("path".to_string(), json!(path));
+                    output.remove("collection");
+                    output.remove("keyFields");
+                    output.remove("template");
+                    if let Some(element) = element {
+                        output.insert("template".to_string(), element.clone());
+                    }
+                    listed.push((cone, value.order, None, Value::Object(output)));
+                }
+            };
+            if value.step {
+                let mut output = Map::new();
+                output.insert("path".to_string(), json!(["*"]));
+                output.insert("interim".to_string(), json!(value.name));
+                output.insert("cone".to_string(), json!(cone));
+                if let Some(template) = &value.template {
+                    output.insert("template".to_string(), template.clone());
+                }
+                output.insert("kept".to_string(), json!(false));
+                output.insert("constraints".to_string(), json!([]));
+                listed.push((cone, value.order, None, Value::Object(output)));
+                continue;
+            }
+            for path in &value.kept {
+                entry(json!(path), None, true, &[]);
+            }
+            if value.kept.is_empty() && value.referred {
+                entry(json!([]), Some(&value.name), false, &[]);
+            }
+            for path in &value.below {
+                entry(json!(path), Some(&value.name), false, path);
+            }
+        }
+        if let Some(result) = result_cone {
+            for (index, (path, slot)) in self.passed.iter().enumerate() {
+                listed.push((
+                    position[result],
+                    usize::MAX - self.passed.len() + index,
+                    None,
+                    json!({
+                        "path": path,
+                        "cone": position[result],
+                        "template": { "op": "slot", "slot": slot },
+                        "kept": true,
+                        "constraints": [],
+                    }),
+                ));
+            }
+        }
+        listed.sort_by_key(|(cone, order, _, _)| (*cone, *order));
+        let mut outputs: Vec<Value> = Vec::new();
+        for (_, _, value, output) in listed {
+            if let Some(value) = value {
+                output_of.entry(value).or_insert(outputs.len());
+            }
+            outputs.push(output);
+        }
+        let mut sorted_edges: Vec<(usize, usize, Value)> = Vec::new();
+        for (from, to, value) in &output_edges {
+            if let Some(output) = output_of.get(&(*value, Vec::new())) {
+                sorted_edges.push((
+                    position[*from],
+                    position[*to],
+                    json!({ "kind": "output", "output": output }),
+                ));
+            }
+        }
+        for (from, to, via, ..) in &write_edges {
+            sorted_edges.push((position[*from], position[*to], via.clone()));
+        }
+        sorted_edges.sort_by_key(|(from, to, via)| (*from, *to, via.to_string()));
+        let mut edges: Vec<Value> = Vec::new();
+        for (from, to, via) in sorted_edges {
+            let edge = json!({ "from": from, "to": to, "via": via });
+            if !edges.contains(&edge) {
+                edges.push(edge);
+            }
+        }
+        let cones: Vec<Value> = order
+            .iter()
+            .map(|index| {
+                let cone = &self.cones[*index];
+                let mut record = json!({
+                    "entry": cone.entry,
+                    "at": { "file": file, "start": cone.at },
+                    "within": cone.within,
+                    "slots": cone.slots.iter().collect::<Vec<_>>(),
+                    "bodies": cone.bodies,
+                    "selectors": cone.selectors,
+                    "picks": cone.picks,
+                    "writes": cone.writes,
+                });
+                // The kind of a cone with side-writes (ruling Z7): a
+                // materializer where one of its bodies is one, as a body
+                // with one write that is not static is a materializer for
+                // all of its writes (FA §6.3).
+                let kinds: Vec<&str> = cone
+                    .bodies
+                    .iter()
+                    .filter_map(|body| self.body_facts[*body].kind)
+                    .collect();
+                if kinds.contains(&"materializer") {
+                    record["sideWrites"] = json!("materializer");
+                } else if !kinds.is_empty() {
+                    record["sideWrites"] = json!("static");
+                }
+                record
+            })
+            .collect();
+        let slots: Vec<Value> = self
+            .slots
+            .iter()
+            .map(|(root, path, class, resolved, in_place)| {
+                let mut slot = Map::new();
+                slot.insert("root".to_string(), root_json(root));
+                slot.insert("path".to_string(), json!(path));
+                slot.insert("observes".to_string(), json!(class));
+                if *resolved {
+                    slot.insert("resolved".to_string(), json!(true));
+                }
+                if *in_place {
+                    slot.insert("inPlace".to_string(), json!(true));
+                }
+                // The schema of the value at the path, and the label the
+                // annotations on the way declare (PL §1.1, §4.4; LS
+                // §8.3). The crate holds the schema itself where PL has
+                // its content address.
+                if let Some(nodes) = self.slot_types(root, path) {
+                    if let Some(last) = nodes.last() {
+                        slot.insert("schema".to_string(), self.resolver.schema_of(*last));
+                    }
+                    let annotations: Vec<Vec<crate::types::Annotation>> = nodes
+                        .iter()
+                        .map(|node| {
+                            let mut found = self.resolver.annotations_of(*node);
+                            let present = self.resolver.present(*node);
+                            if present != *node {
+                                found.extend(self.resolver.annotations_of(present));
+                            }
+                            found
+                        })
+                        .collect();
+                    // "An `identity` slot and a `shape` slot in place have
+                    // no `declared` member" (PL §1.5, question 55).
+                    let reference = *class == "identity" || (*class == "shape" && *in_place);
+                    if let (false, Some(declared)) =
+                        (reference, crate::schema::declared_label(&annotations))
+                    {
+                        slot.insert("declared".to_string(), declared);
+                    }
+                }
+                Value::Object(slot)
+            })
+            .collect();
+        for operation in &mut self.operations {
+            if let Some(cone) = operation["implementation"]
+                .get("$cone")
+                .and_then(Value::as_u64)
+            {
+                operation["implementation"] = json!({ "cone": position[cone as usize] });
+            }
+        }
+        // `StateCell.schema`: the value type of the cell's constructor,
+        // with a first value that is a constant as its default (PL §1.1;
+        // ruling Z3). `StateCell.first` names its cone by its place in
+        // `Plan.cones`.
+        for (index, cell) in self.state_cells.iter_mut().enumerate() {
+            let mut schema = match self.state_types.get(&index) {
+                Some(ty) => self.resolver.schema_of(*ty),
+                None => json!({}),
+            };
+            let Some(cell) = cell.as_object_mut() else {
+                continue;
+            };
+            if let (Some(default), Some(schema)) = (cell.remove("$default"), schema.as_object_mut())
+            {
+                schema.insert("default".to_string(), default);
+            }
+            cell.insert("schema".to_string(), schema);
+            if let Some(cone) = cell
+                .get("first")
+                .and_then(|first| first.get("$cone"))
+                .and_then(Value::as_u64)
+            {
+                let write = cell["first"]["write"].clone();
+                cell.insert(
+                    "first".to_string(),
+                    json!({ "cone": position[cone as usize], "write": write }),
+                );
+            }
+        }
+        let dynamic_reads = std::mem::take(&mut self.dynamic_reads);
+        // The schema of a handler's event, where the emitter has the type
+        // its parameter declares: `Binding.eventSchema` of every binding
+        // of the handler (PL §1.1; section 8, question 75).
+        let events: Vec<(usize, TypeId)> = self
+            .root_types
+            .iter()
+            .filter_map(|(root, ty)| match root {
+                Root::Event(index) => Some((*index, *ty)),
+                _ => None,
+            })
+            .collect();
+        for (index, ty) in events {
+            let schema = self.resolver.schema_of(ty);
+            for binding in &mut self.bindings {
+                if binding["handler"]["body"] == json!(index) {
+                    binding["eventSchema"] = schema.clone();
+                }
+            }
+        }
+        let patterns: Vec<Value> = self
+            .patterns
+            .iter()
+            .map(|(home, start)| json!(self.pattern_identity(*home, *start)))
+            .collect();
+        let mut plan = json!({
+            "version": 1,
+            "patterns": patterns,
+            "slots": slots,
+            "selectors": self.selectors.iter().map(|arity| json!({ "arity": arity })).collect::<Vec<Value>>(),
+            "picks": self.picks.iter().map(|by| json!({ "chosenBy": by })).collect::<Vec<Value>>(),
+            "collections": self.collections,
+            "bodies": self.plan_bodies,
+            "dynamicReads": dynamic_reads,
+            "constraints": [],
+            "outputs": outputs,
+            "cones": cones,
+            "edges": edges,
+            "stateCells": self.state_cells,
+            "operations": self.operations,
+            "children": self.children,
+            "closures": [],
+            "bindings": self.bindings,
+        });
+        // A template that holds the template of a value names its output
+        // (ruling Z58).
+        let templates: Vec<Option<Value>> = self
+            .values
+            .iter()
+            .map(|value| value.template.clone())
+            .collect();
+        let mut held_of = HashMap::new();
+        resolve_templates(&mut plan, &output_of, &templates, &mut held_of);
+        // The templates that are held by a reference name values as well.
+        let mut next = 0;
+        while let Some(mut held) = HELD_TWICE.with(|held| held.borrow().get(next).cloned()) {
+            resolve_templates(&mut held, &output_of, &templates, &mut held_of);
+            HELD_TWICE.with(|all| all.borrow_mut()[next] = held);
+            next += 1;
+        }
+        // A record that refers to a value names its output.
+        let mut missing = false;
+        resolve_values(&mut plan, &output_of, &mut missing);
+        HELD_TWICE.with(|held| {
+            for template in held.borrow_mut().iter_mut() {
+                resolve_values(template, &output_of, &mut missing);
+            }
+        });
+        if missing {
+            self.unsupported
+                .push(("a reference to a value that has no output".to_string(), 0));
+        }
+        // A kept output has the schema the pattern declares for its
+        // result at the path, where it declares one.
+        if let Some(result) = self.result_type {
+            for output in plan["outputs"].as_array_mut().into_iter().flatten() {
+                if output["kept"] != json!(true) {
+                    continue;
+                }
+                let mut ty = Some(result);
+                for segment in output["path"].as_array().into_iter().flatten() {
+                    ty = ty.and_then(|ty| {
+                        let ty = match self.resolver.shape(self.resolver.present(ty)) {
+                            Shape::Handle(_, value) => value,
+                            _ => ty,
+                        };
+                        self.type_below(ty, segment.as_str()?)
+                    });
+                }
+                if let (Some(ty), Some(output)) = (ty, output.as_object_mut()) {
+                    output.insert("schema".to_string(), self.resolver.schema_of(ty));
+                }
+            }
+        }
+        // A template that occurs at more than one position is written
+        // once (provisional decision P6).
+        share_templates(&mut plan);
+        // The checks follow a reference node to the template it names.
+        crate::flow::name_templates(
+            plan["outputs"].as_array().map_or(&[][..], Vec::as_slice),
+            plan["templates"].as_array().map_or(&[][..], Vec::as_slice),
+        );
+        let flows = self.constraints(&mut plan);
+        crate::flow::forget_named();
+        name_sites(&mut plan, &self.site_steps);
+        name_ordinals(&mut plan);
+        // A state path that resolves to an output has the output's
+        // template (PL §1.1, `Binding.state.place`).
+        let outputs = plan["outputs"].clone();
+        for binding in plan["bindings"].as_array_mut().into_iter().flatten() {
+            for entry in binding["state"].as_array_mut().into_iter().flatten() {
+                // The template of the output, by reference (ruling Z58).
+                let template = entry["place"]["output"].as_u64().and_then(|output| {
+                    outputs[output as usize]
+                        .get("template")
+                        .map(|_| json!({ "op": "output", "output": output }))
+                });
+                if let (Some(template), Some(entry)) = (template, entry.as_object_mut()) {
+                    entry.insert("template".to_string(), template);
+                }
+            }
+        }
+        // The identity of every pattern of the program, for the value
+        // code of each module the artifact holds.
+        let mut identities = HashMap::new();
+        for (home, bodies) in self.bodies.iter().enumerate() {
+            for (index, start) in body_functions(self.resolver, home, bodies) {
+                if bodies[index].kind == BodyKind::Pattern {
+                    identities.insert((home, start), self.pattern_identity(home, start));
+                }
+            }
+        }
+        let finished = crate::emit::Finished {
+            identities,
+            facts: std::mem::take(&mut self.facts),
+            position,
+            output_of,
+            values: self
+                .values
+                .iter()
+                .map(|value| (value.cone, value.collection, value.scan))
+                .collect(),
+            slots: self.slots.clone(),
+        };
+        (plan, self.unsupported, cycles, flows, finished)
+    }
+
+    /// The annotations on the way from a slot root to a path below a
+    /// slot: `below` continues from the slot's path, across the link of
+    /// a handle there. One list per node, the root first.
+    fn annotations_at(&self, slot: usize, below: &[String]) -> Option<Vec<Vec<Annotation>>> {
+        let (root, at, ..) = &self.slots[slot];
+        let mut path = at.clone();
+        path.extend(below.iter().cloned());
+        let nodes = self.slot_types(root, &path)?;
+        Some(
+            nodes
+                .iter()
+                .map(|node| {
+                    let mut found = self.resolver.annotations_of(*node);
+                    let present = self.resolver.present(*node);
+                    if present != *node {
+                        found.extend(self.resolver.annotations_of(present));
+                    }
+                    found
+                })
+                .collect(),
+        )
+    }
+
+    /// The annotations on the way to the path a write targets (PL §1.5,
+    /// "At a write target"): of the handle's value type for a `handle`
+    /// target, of the cell's value type for a `state` target, and of the
+    /// child's argument type for an `argument` target. One list per
+    /// node, the root first.
+    fn target_annotations(&self, target: &Value) -> Option<Vec<Vec<Annotation>>> {
+        let below: Vec<String> = target["path"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|segment| segment.as_str().map(str::to_string))
+            .collect();
+        let ty = match target["kind"].as_str()? {
+            "handle" => return self.annotations_at(target["slot"].as_u64()? as usize, &below),
+            "state" => *self.state_types.get(&(target["cell"].as_u64()? as usize))?,
+            "argument" => *self
+                .child_types
+                .get(&(target["child"].as_u64()? as usize))?,
+            _ => return None,
+        };
+        Some(
+            self.typed_way(ty, &below)?
+                .iter()
+                .map(|(_, node)| self.node_annotations(*node))
+                .collect(),
+        )
+    }
+
+    /// `array-by-key:state-without-key` (provisional decision P21): the
+    /// body of a per-element construct holds per-element state (a state
+    /// cell, a handler binding, an operation or a child instance), the
+    /// elements are records, and neither the array nor, for a construct
+    /// over the result of another one, the array that the chain of
+    /// constructs starts at declares a key. An element is taken as a
+    /// record where a slot of root `element` of the collection has a
+    /// path. The type does not say whether the array holds plain values
+    /// in place or references, so the report is made for both.
+    fn state_without_key(&self, plan: &Value, flows: &mut Vec<(&'static str, u32, String)>) {
+        let collections = plan["collections"].as_array().cloned().unwrap_or_default();
+        let inside = |record: &Value, collection: usize| {
+            record["within"].as_array().is_some_and(|steps| {
+                steps
+                    .iter()
+                    .any(|step| step["element"] == json!(collection))
+            })
+        };
+        for (index, collection) in collections.iter().enumerate() {
+            if !matches!(
+                collection["construct"].as_str(),
+                Some("map" | "filter" | "flatMap")
+            ) {
+                continue;
+            }
+            // The array that the chain of constructs starts at.
+            let mut source = collection;
+            while let Some(upstream) = source["source"]["collection"].as_u64() {
+                source = &collections[upstream as usize];
+            }
+            if source.get("keyFields").is_some() {
+                continue;
+            }
+            let record = plan["slots"].as_array().is_some_and(|slots| {
+                slots.iter().any(|slot| {
+                    slot["root"]["kind"] == "element"
+                        && slot["root"]["collection"] == json!(index)
+                        && slot["path"].as_array().is_some_and(|path| !path.is_empty())
+                })
+            });
+            if !record {
+                continue;
+            }
+            let kinds = [
+                ("stateCells", "a state cell"),
+                ("bindings", "a handler binding"),
+                ("operations", "an operation"),
+                ("children", "a child instance"),
+            ];
+            let held: Vec<&str> = kinds
+                .iter()
+                .filter(|(list, _)| {
+                    plan[*list]
+                        .as_array()
+                        .is_some_and(|records| records.iter().any(|record| inside(record, index)))
+                })
+                .map(|(_, name)| *name)
+                .collect();
+            if held.is_empty() {
+                continue;
+            }
+            flows.push((
+                "array-by-key:state-without-key",
+                self.collection_starts[index],
+                format!(
+                    "The body of this `{}` holds {} for each element, and the array declares no key, so an element that is a plain value in place has a key formed from its whole value, and an edit of it is another element with new state",
+                    collection["construct"].as_str().unwrap_or("map"),
+                    held.join(", ")
+                ),
+            ));
+        }
+    }
+
+    /// `Plan.constraints` (PL §1.5 and §4.4), and the constraints that
+    /// fail at compile time (PL §4.4, "What the compiler decides"). At a
+    /// write target, which is a write edge of a body or of a cone and a
+    /// kept output: a `writer` constraint from `writeAuthorizedBy` and
+    /// `writePolicyAnyOf` on the path, a `writerFit` constraint where
+    /// the path declares a confidentiality, and a `writeFloor` from
+    /// `requiredIntegrity` there (`language-subset.md` §8.6, assumed).
+    /// At an input: the constraints of `input_guards`, listed on every
+    /// write edge of the body and on every output whose template has a
+    /// `derive` by the body.
+    fn constraints(&self, plan: &mut Value) -> Vec<(&'static str, u32, String)> {
+        let mut constraints: Vec<Value> = Vec::new();
+        let mut flows: Vec<(&'static str, u32, String)> = Vec::new();
+        fn index_of(constraints: &mut Vec<Value>, constraint: Value) -> usize {
+            match constraints.iter().position(|other| *other == constraint) {
+                Some(index) => index,
+                None => {
+                    constraints.push(constraint);
+                    constraints.len() - 1
+                }
+            }
+        }
+        fn report(
+            flows: &mut Vec<(&'static str, u32, String)>,
+            id: &'static str,
+            at: u32,
+            found: String,
+        ) {
+            if !flows
+                .iter()
+                .any(|(other, start, _)| *other == id && *start == at)
+            {
+                flows.push((id, at, found));
+            }
+        }
+        let slots = plan["slots"].as_array().cloned().unwrap_or_default();
+        let bodies = plan["bodies"].as_array().cloned().unwrap_or_default();
+        // Where a body is reported: a handler at its function where that
+        // is in the module of the pattern, and any other body at its use.
+        let body_at = |number: usize| -> u32 {
+            match self.handlers.iter().find(|(_, index)| **index == number) {
+                Some(((home, start), _)) if *home == self.module => *start,
+                Some(_) => 0,
+                None => self.body_facts.get(number).map_or(0, |fact| fact.at),
+            }
+        };
+        // "A body with no write edge, and with no output whose template
+        // has a `derive` by it, has no constraint from its inputs" (PL
+        // §1.5, "A body that writes nothing").
+        let mut writers: Vec<usize> = Vec::new();
+        for output in plan["outputs"].as_array().into_iter().flatten() {
+            derived_by(&output["template"], &mut writers);
+        }
+        for (number, body) in bodies.iter().enumerate() {
+            let writes = ["writes", "envelopes"]
+                .iter()
+                .any(|list| body[*list].as_array().is_some_and(|list| !list.is_empty()));
+            if writes && !writers.contains(&number) {
+                writers.push(number);
+            }
+        }
+        let guards: Vec<Vec<usize>> = (0..bodies.len())
+            .map(|number| {
+                self.body_guards
+                    .get(number)
+                    .filter(|_| writers.contains(&number))
+                    .into_iter()
+                    .flatten()
+                    .map(|guard| index_of(&mut constraints, guard.clone()))
+                    .collect()
+            })
+            .collect();
+        for (number, listed) in guards.iter().enumerate() {
+            for index in listed {
+                if let Some((id, found)) = input_failure(&constraints[*index], &slots, &bodies) {
+                    report(&mut flows, id, body_at(number), found);
+                }
+            }
+        }
+        // What the annotations at a write target give: the constraints,
+        // and what the two write checks compare the template with.
+        struct AtTarget {
+            listed: Vec<usize>,
+            /// The confidentiality declared at the target, where the
+            /// crate reads every list.
+            declared: Option<Vec<Value>>,
+            floors: Vec<Vec<Value>>,
+            /// The path declares `addIntegrity`, `exactCopyOf` or
+            /// `projection`, which credit the floor at run time.
+            credited: bool,
+            policies: Vec<Vec<Value>>,
+        }
+        let at_target = |constraints: &mut Vec<Value>, nodes: &[Vec<Annotation>]| -> AtTarget {
+            let mut found = AtTarget {
+                listed: Vec::new(),
+                declared: None,
+                floors: Vec::new(),
+                credited: false,
+                policies: Vec::new(),
+            };
+            let mut fit = false;
+            for annotation in nodes.iter().flatten() {
+                match annotation.key {
+                    "writeAuthorizedBy" | "writePolicyAnyOf" => {
+                        // The alternatives: one policy, or the members
+                        // of `WritePolicyAnyOf`. A policy the checker
+                        // did not resolve gives no record.
+                        let policies = match (&annotation.value, annotation.key) {
+                            (Some(Value::Array(policies)), "writePolicyAnyOf") => policies.clone(),
+                            (Some(policy), "writeAuthorizedBy") => vec![policy.clone()],
+                            _ => continue,
+                        };
+                        found.listed.push(index_of(
+                            constraints,
+                            json!({ "kind": "writer", "anyOf": policies }),
+                        ));
+                        found.policies.push(policies);
+                    }
+                    "confidentiality" => fit = true,
+                    "requiredIntegrity" => {
+                        if let Some(Value::Array(patterns)) = crate::schema::label_list(annotation)
+                        {
+                            found.listed.push(index_of(
+                                constraints,
+                                json!({ "kind": "writeFloor", "patterns": patterns }),
+                            ));
+                            found.floors.push(patterns);
+                        }
+                    }
+                    "addIntegrity" | "exactCopyOf" | "projection" => found.credited = true,
+                    _ => {}
+                }
+            }
+            if fit {
+                found
+                    .listed
+                    .push(index_of(constraints, json!({ "kind": "writerFit" })));
+                found.declared = crate::schema::declared_label(nodes)
+                    .and_then(|declared| declared.get("confidentiality")?.as_array().cloned());
+            }
+            found
+        };
+        // The two checks on what a write edge or a kept output writes.
+        let write_checks = |flows: &mut Vec<(&'static str, u32, String)>,
+                            found: &AtTarget,
+                            write: &Value,
+                            what: &str,
+                            at: u32| {
+            let Some(template) = write.get("template") else {
+                return;
+            };
+            // An edge with a `reference`: the label stays with the linked
+            // value, and the floor is held to the declared integrity of
+            // the referenced slot, an `identity` slot, which has none
+            // (PL §1.5, question 55).
+            if write.get("reference").is_some() {
+                return;
+            }
+            if let Some(declared) = &found.declared {
+                if let Some(clause) = writer_misfit(template, declared, &slots) {
+                    report(
+                        flows,
+                        "cfc-flow:writer-fit",
+                        at,
+                        format!(
+                            "{what} is computed from a slot that declares the confidentiality clause `{clause}`, and the target declares {}, which does not admit it",
+                            display_list(declared)
+                        ),
+                    );
+                }
+            }
+            if !found.credited {
+                for patterns in &found.floors {
+                    if let Some((pattern, had)) = floor_failure(template, patterns, &slots) {
+                        report(
+                            flows,
+                            "cfc-flow:write-floor",
+                            at,
+                            format!(
+                                "{what} has the declared integrity {}, and the target requires `{pattern}`, which no atom of it satisfies",
+                                display_list(&had)
+                            ),
+                        );
+                    }
+                }
+            }
+        };
+        for (number, body) in bodies.iter().enumerate() {
+            let name = body["name"].as_str().unwrap_or("");
+            let kind = body["kind"].as_str().unwrap_or("");
+            let writes = body["writes"].as_array().cloned().unwrap_or_default();
+            for (position, write) in writes.iter().enumerate() {
+                let mut listed = guards[number].clone();
+                let target = &write["target"];
+                let below: Vec<String> = target["path"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|segment| segment.as_str().map(str::to_string))
+                    .collect();
+                let nodes = self.target_annotations(target).unwrap_or_default();
+                let found = at_target(&mut constraints, &nodes);
+                listed.extend(found.listed.iter().copied());
+                let site = self.body_facts.get(number).and_then(|fact| {
+                    let slot = target["slot"].as_u64()? as usize;
+                    fact.targets
+                        .iter()
+                        .find(|other| other.slot == slot && other.below == below)
+                        .and_then(|other| other.site)
+                        .filter(|(module, _)| *module == self.module)
+                        .map(|(_, start)| start)
+                });
+                for policies in &found.policies {
+                    if target["kind"] != "handle" {
+                        continue;
+                    }
+                    // "`Body.code` of the writing body is one the policy
+                    // names": the handler, or the function, a binding
+                    // denotes, by the record of its module and its name
+                    // (PL §1.5).
+                    let named = matches!(kind, "handler" | "function")
+                        && policies.iter().any(|policy| {
+                            policy["body"]["binding"] == json!(name)
+                                && body["at"]["file"]
+                                    .as_str()
+                                    .is_none_or(|file| policy["body"]["module"] == file)
+                        });
+                    if !named {
+                        let at = site.unwrap_or(0);
+                        let writers: Vec<String> = policies
+                            .iter()
+                            .filter_map(|policy| policy["body"]["binding"].as_str())
+                            .map(|binding| format!("`{binding}`"))
+                            .collect();
+                        let found = format!(
+                            "The path `{}` may be written by {} alone, and this write is in the {kind} `{name}`",
+                            below.join("/"),
+                            writers.join(" or ")
+                        );
+                        if !flows.iter().any(|(_, other, _)| *other == at) {
+                            flows.push(("cfc-flow:write-policy", at, found));
+                        }
+                    }
+                }
+                let what = format!("What the {kind} `{name}` writes to `{}`", below.join("/"));
+                write_checks(
+                    &mut flows,
+                    &found,
+                    write,
+                    &what,
+                    site.unwrap_or_else(|| body_at(number)),
+                );
+                listed.sort();
+                listed.dedup();
+                plan["bodies"][number]["writes"][position]["constraints"] = json!(listed);
+            }
+        }
+        // The write edges of the cones: the paths of a child's argument
+        // and of a request.
+        let cones = plan["cones"].as_array().cloned().unwrap_or_default();
+        for (number, cone) in cones.iter().enumerate() {
+            let at = cone["at"]["start"].as_u64().unwrap_or(0) as u32;
+            let writes = cone["writes"].as_array().cloned().unwrap_or_default();
+            for (position, write) in writes.iter().enumerate() {
+                let nodes = self
+                    .target_annotations(&write["target"])
+                    .unwrap_or_default();
+                let mut found = at_target(&mut constraints, &nodes);
+                let what = format!(
+                    "What the cone `{}` writes to the {} path `{}`",
+                    cone["entry"].as_str().unwrap_or(""),
+                    write["target"]["kind"].as_str().unwrap_or(""),
+                    write["target"]["path"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("/")
+                );
+                write_checks(&mut flows, &found, write, &what, at);
+                found.listed.sort();
+                found.listed.dedup();
+                plan["cones"][number]["writes"][position]["constraints"] = json!(found.listed);
+            }
+        }
+        // The kept outputs, against the type the pattern declares for
+        // its result.
+        let outputs = plan["outputs"].as_array().cloned().unwrap_or_default();
+        for (number, output) in outputs.iter().enumerate() {
+            let mut listed: Vec<usize> = Vec::new();
+            // "Every output whose template has a `derive` by that body."
+            let mut by: Vec<usize> = Vec::new();
+            if let Some(template) = output.get("template") {
+                derived_by(template, &mut by);
+            }
+            for body in by {
+                listed.extend(guards.get(body).into_iter().flatten().copied());
+            }
+            if output["kept"] == json!(true) {
+                let path: Vec<String> = output["path"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|segment| segment.as_str().map(str::to_string))
+                    .collect();
+                let nodes: Vec<Vec<Annotation>> = self
+                    .result_type
+                    .and_then(|result| self.typed_way(result, &path))
+                    .map(|nodes| {
+                        nodes
+                            .iter()
+                            .map(|(_, node)| self.node_annotations(*node))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let found = at_target(&mut constraints, &nodes);
+                listed.extend(found.listed.iter().copied());
+                let at = output["cone"]
+                    .as_u64()
+                    .and_then(|cone| cones.get(cone as usize)?["at"]["start"].as_u64())
+                    .unwrap_or(0) as u32;
+                let what = format!("The output `{}`", path.join("/"));
+                write_checks(&mut flows, &found, output, &what, at);
+            }
+            listed.sort();
+            listed.dedup();
+            plan["outputs"][number]["constraints"] = json!(listed);
+        }
+        // `cfc-flow:ui-contract` (PL §4.4): "the plan has at least one
+        // element that binds the handler, none of them satisfies the
+        // contract, and the surface of each is decided."
+        let bindings = plan["bindings"].as_array().cloned().unwrap_or_default();
+        for constraint in &constraints {
+            for policy in constraint["anyOf"].as_array().into_iter().flatten() {
+                let (Some(contract), Some(binding)) =
+                    (policy.get("uiContract"), policy["body"]["binding"].as_str())
+                else {
+                    continue;
+                };
+                // "`WriterPolicy.uiContract` has no member for the
+                // surface and the role of `UiPromptSlot` or the kind of
+                // `UiDisclosure`, so an alternative with one of those
+                // helpers is not decided."
+                if contract["helper"] != "UiAction" {
+                    continue;
+                }
+                let handler = bodies
+                    .iter()
+                    .position(|body| body["kind"] == "handler" && body["name"] == json!(binding));
+                let Some(handler) = handler else {
+                    continue;
+                };
+                let bound: Vec<&(usize, Option<Vec<UiElement>>, u32)> = self
+                    .ui_bound
+                    .iter()
+                    .filter(|(binding, ..)| bindings[*binding]["handler"]["body"] == json!(handler))
+                    .collect();
+                let decided: Option<Vec<&Vec<UiElement>>> =
+                    bound.iter().map(|(_, chain, _)| chain.as_ref()).collect();
+                let (Some(decided), Some((_, _, at))) = (decided, bound.first()) else {
+                    continue;
+                };
+                if decided
+                    .iter()
+                    .any(|chain| satisfies_contract(chain, contract))
+                {
+                    continue;
+                }
+                report(
+                    &mut flows,
+                    "cfc-flow:ui-contract",
+                    *at,
+                    format!(
+                        "The handler `{binding}` may write under the UI contract `{contract}`, and none of the {} elements of this pattern that bind it sits under a surface with that pattern, those integrity names, and that action",
+                        bound.len()
+                    ),
+                );
+            }
+        }
+        plan["constraints"] = Value::Array(constraints);
+        self.state_without_key(plan, &mut flows);
+        flows
+    }
+}
+
+/// The bodies the `derive` nodes of a template are by, those of the
+/// templates that its reference nodes name included.
+fn derived_by(template: &Value, by: &mut Vec<usize>) {
+    derived_by_once(template, by, &mut HashSet::new());
+}
+
+fn derived_by_once(template: &Value, by: &mut Vec<usize>, seen: &mut HashSet<String>) {
+    match template {
+        Value::Object(node) => {
+            if matches!(
+                node.get("op").and_then(Value::as_str),
+                Some("output" | "shared")
+            ) {
+                // Each named template is walked once.
+                if seen.insert(template.to_string()) {
+                    if let Some(named) = crate::flow::named_template(template) {
+                        derived_by_once(&named, by, seen);
+                    }
+                }
+                return;
+            }
+            if let (Some("derive"), Some(body)) = (
+                node.get("op").and_then(Value::as_str),
+                node.get("by")
+                    .and_then(|by| by.get("body"))
+                    .and_then(Value::as_u64),
+            ) {
+                if !by.contains(&(body as usize)) {
+                    by.push(body as usize);
+                }
+            }
+            for member in node.values() {
+                derived_by_once(member, by, seen);
+            }
+        }
+        Value::Array(members) => members
+            .iter()
+            .for_each(|member| derived_by_once(member, by, seen)),
+        _ => {}
+    }
+}
+
+fn display_list(list: &[Value]) -> String {
+    format!("`{}`", Value::Array(list.to_vec()))
+}
+
+const RESIDENCY: &[&str] = &["Space", "PersonalSpace", "User"];
+
+/// `cfc-flow:writer-fit` (PL §4.4): "a clause of the lower bound of
+/// `C(template)` is subsumed by no clause declared at the target, and no
+/// alternative of that clause is an atom of type `Space`,
+/// `PersonalSpace` or `User`". Not decided where the template is not
+/// evaluated, and where "a `Policy` atom or another run-time term is
+/// involved".
+fn writer_misfit(template: &Value, declared: &[Value], slots: &[Value]) -> Option<Value> {
+    let bound = crate::flow::confidentiality_bound(template, slots)?;
+    let policy = |clause: &Value| crate::flow::holds_type(clause, &["Policy"]);
+    if bound.iter().chain(declared).any(policy) || declared.iter().any(crate::flow::run_time_term) {
+        return None;
+    }
+    bound
+        .into_iter()
+        .filter(|clause| {
+            !crate::flow::run_time_term(clause) && !crate::flow::holds_type(clause, RESIDENCY)
+        })
+        .find(|clause| {
+            !declared
+                .iter()
+                .any(|allowed| crate::flow::clause_subsumes(allowed, clause))
+        })
+}
+
+/// `cfc-flow:write-floor` (PL §4.4): "`I(template)` evaluates and does
+/// not satisfy `patterns`". The pattern that fails, and the atoms the
+/// declarations give. A pattern that holds a run-time term is not
+/// compared, and neither is one that can match the `TransformedBy` atom
+/// of a `derive`, whose code hash the crate does not form.
+fn floor_failure(
+    template: &Value,
+    patterns: &[Value],
+    slots: &[Value],
+) -> Option<(Value, Vec<Value>)> {
+    let integrity = crate::flow::integrity_of(template, slots)?;
+    if integrity.atoms.iter().any(crate::flow::run_time_term) {
+        return None;
+    }
+    patterns
+        .iter()
+        .filter(|pattern| !crate::flow::run_time_term(pattern))
+        .filter(|pattern| !(integrity.minted && crate::flow::may_match_transformed_by(pattern)))
+        .find(|pattern| {
+            !integrity
+                .atoms
+                .iter()
+                .any(|atom| crate::flow::atom_satisfies(atom, pattern))
+        })
+        .map(|pattern| (pattern.clone(), integrity.atoms.clone()))
+}
+
+/// `cfc-flow:max-confidentiality` and `cfc-flow:required-integrity` (PL
+/// §4.4) on one input constraint: the diagnostic and what was found,
+/// where the declared labels of the listed inputs fail it. Not decided
+/// where the constraint lists a handle entry, where an input declares
+/// nothing for the dimension or its template is not evaluated, and
+/// where a run-time term or, for a ceiling, a `Policy` atom is involved.
+fn input_failure(
+    constraint: &Value,
+    slots: &[Value],
+    bodies: &[Value],
+) -> Option<(&'static str, String)> {
+    if constraint["handles"]
+        .as_array()
+        .is_some_and(|handles| !handles.is_empty())
+    {
+        return None;
+    }
+    let listed = constraint["slots"].as_array()?;
+    let computed: Vec<&Value> = constraint["computed"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|entry| {
+            &bodies[entry["body"].as_u64().unwrap_or(0) as usize]["computed"]
+                [entry["computed"].as_u64().unwrap_or(0) as usize]
+        })
+        .collect();
+    let name = |slot: &Value| {
+        let slot = &slots[slot.as_u64().unwrap_or(0) as usize];
+        let path: Vec<&str> = slot["path"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        format!("the slot `{}`", path.join("/"))
+    };
+    match constraint["kind"].as_str()? {
+        "maxConfidentiality" => {
+            let ceiling = constraint["ceiling"].as_array()?;
+            let mut inputs: Vec<(String, Vec<Value>)> = Vec::new();
+            for slot in listed {
+                let declared = crate::flow::declared_bound(slots.get(slot.as_u64()? as usize)?)?
+                    ["confidentiality"]
+                    .as_array()?
+                    .clone();
+                inputs.push((name(slot), declared));
+            }
+            for entry in &computed {
+                let bound = crate::flow::confidentiality_bound(entry.get("template")?, slots)?;
+                inputs.push(("a value the instance computed".to_string(), bound));
+            }
+            let policy = |clause: &Value| crate::flow::holds_type(clause, &["Policy"]);
+            if ceiling.iter().any(policy)
+                || ceiling.iter().any(crate::flow::run_time_term)
+                || inputs.iter().any(|(_, label)| label.iter().any(policy))
+            {
+                return None;
+            }
+            inputs.iter().find_map(|(input, label)| {
+                let clause = label
+                    .iter()
+                    .filter(|clause| !crate::flow::run_time_term(clause))
+                    .find(|clause| {
+                        !ceiling
+                            .iter()
+                            .any(|allowed| crate::flow::clause_subsumes(allowed, clause))
+                    })?;
+                Some((
+                    "cfc-flow:max-confidentiality",
+                    format!(
+                        "The body reads {input}, which declares the confidentiality clause `{clause}`, under `maxConfidentiality` {}, which does not admit it",
+                        display_list(ceiling)
+                    ),
+                ))
+            })
+        }
+        "requiredIntegrity" => {
+            let patterns = constraint["patterns"].as_array()?;
+            let mut labels: Vec<Vec<Value>> = Vec::new();
+            let mut minted = false;
+            for slot in listed {
+                labels.push(
+                    crate::flow::declared_bound(slots.get(slot.as_u64()? as usize)?)?["integrity"]
+                        .as_array()?
+                        .clone(),
+                );
+            }
+            for entry in &computed {
+                let integrity = crate::flow::integrity_of(entry.get("template")?, slots)?;
+                minted |= integrity.minted;
+                labels.push(integrity.atoms);
+            }
+            if labels.iter().flatten().any(crate::flow::run_time_term) {
+                return None;
+            }
+            let pattern = patterns
+                .iter()
+                .filter(|pattern| !crate::flow::run_time_term(pattern))
+                .filter(|pattern| !(minted && crate::flow::may_match_transformed_by(pattern)))
+                .find(|pattern| {
+                    crate::flow::coherent_failure(&labels, std::slice::from_ref(pattern)).is_some()
+                })?;
+            let inputs: Vec<String> = listed.iter().map(name).collect();
+            let declared: Vec<String> = labels.iter().map(|label| display_list(label)).collect();
+            Some((
+                "cfc-flow:required-integrity",
+                format!(
+                    "The body reads {} under `requiredIntegrity` with the pattern `{pattern}`, and the declared integrity {} has no one atom that satisfies it",
+                    inputs.join(", "),
+                    declared.join(", ")
+                ),
+            ))
+        }
+        _ => None,
+    }
+}
+
+thread_local! {
+    /// The entry of `Plan.patterns` whose source the emitter is
+    /// evaluating: 0 for the pattern the plan is compiled from, and the
+    /// entry of a pattern compiled in while its body is evaluated (PL
+    /// §3.2, "The atom of the pattern"). The functions that make a
+    /// `derive` and a `fold` read it, and `Emitter::inline_argument` sets
+    /// it.
+    static WRITTEN_IN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Expression code over the templates of its operands (PL §3.2). The
+/// node names the pattern it is written in where that is not entry 0.
+fn join(inputs: Vec<Value>) -> Value {
+    match WRITTEN_IN.get() {
+        0 => json!({ "op": "derive", "inputs": inputs, "by": { "expression": true } }),
+        pattern => json!({
+            "op": "derive",
+            "inputs": inputs,
+            "by": { "expression": true, "pattern": pattern },
+        }),
+    }
+}
+
+/// What a child position of a view node holds of `place`: of the result
+/// of a pattern its `[UI]`, and any other place itself (PL §1.1).
+fn rendered_at_child(place: Place) -> Place {
+    match place {
+        Place::Record(mut fields) if fields.contains_key("$UI") => {
+            fields.remove("$UI").unwrap_or(Place::Unknown)
+        }
+        other => other,
+    }
+}
+
+/// A `fold` over a collection, which names the pattern it is written in
+/// as a `derive` does (PL §1.1).
+fn fold_node(collection: usize, body: Value, through: Option<usize>) -> Value {
+    let mut node = Map::new();
+    node.insert("op".to_string(), json!("fold"));
+    node.insert("collection".to_string(), json!(collection));
+    node.insert("body".to_string(), body);
+    if let Some(through) = through {
+        node.insert("through".to_string(), json!(through));
+    }
+    match WRITTEN_IN.get() {
+        0 => {}
+        pattern => {
+            node.insert("pattern".to_string(), json!(pattern));
+        }
+    }
+    Value::Object(node)
+}
+
+/// A join of templates (PL §3.2, "A join"): a `derive` by expression
+/// over the joined templates, in the order given. "A join with `const`
+/// is the other template alone", and "a join of one template with
+/// itself is that template".
+fn joined(inputs: Vec<Value>) -> Value {
+    let mut kept: Vec<Value> = Vec::new();
+    for input in inputs {
+        if input["op"] != "const" && !kept.contains(&input) {
+            kept.push(input);
+        }
+    }
+    match kept.len() {
+        0 => json!({ "op": "const" }),
+        1 => kept.remove(0),
+        _ => join(kept),
+    }
+}
+
+thread_local! {
+    /// The templates that a `select` under construction holds at two
+    /// positions, each written once (`select_node`). `share_templates`
+    /// takes them when the plan is assembled.
+    static HELD_TWICE: std::cell::RefCell<Vec<Value>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether a template is one node with no template below it.
+fn is_leaf(template: &Value) -> bool {
+    matches!(
+        template["op"].as_str(),
+        Some("const" | "slot" | "output" | "shared")
+    )
+}
+
+/// A `select` node, where the condition and every branch have a template.
+/// `a && b`, `a || b` and `a ?? b` hold the template of `a` as the
+/// condition and as a branch (PL §3.5): it is written once, and the node
+/// holds a reference to it at both positions, so that a chain of such
+/// operands does not double with each (provisional decision P6).
+fn select_node(
+    selector: usize,
+    condition: Option<Value>,
+    branches: Vec<Option<Value>>,
+) -> Option<Value> {
+    let mut condition = condition?;
+    let mut branches: Vec<Value> = branches.into_iter().collect::<Option<_>>()?;
+    // Each operand that is no single node is held by a reference while
+    // the plan is built, so equal operands are one, at whatever depth
+    // they are. `share_templates` writes an operand that one position
+    // holds in place again.
+    let hold = |template: &mut Value| {
+        if is_leaf(template) {
+            return;
+        }
+        *template = HELD_TWICE.with(|held| {
+            let mut held = held.borrow_mut();
+            let index = held
+                .iter()
+                .position(|known| known == template)
+                .unwrap_or_else(|| {
+                    held.push(template.clone());
+                    held.len() - 1
+                });
+            json!({ "op": "shared", "$held": index })
+        });
+    };
+    hold(&mut condition);
+    branches.iter_mut().for_each(hold);
+    Some(json!({
+        "op": "select",
+        "selector": selector,
+        "condition": condition,
+        "branches": branches,
+    }))
+}
+
+/// Writes each template that occurs at more than one position of a plan
+/// once, in `Plan.templates`, and a node `{ "op": "shared", "template": n }`
+/// at each position (provisional decision P6). Two templates are one
+/// where they are structurally equal, and a template that is one node
+/// with nothing below it is written in place. An entry of the table can
+/// hold `shared` and `output` nodes.
+fn share_templates(plan: &mut Value) {
+    let held: Vec<Value> = HELD_TWICE.with(|held| std::mem::take(&mut *held.borrow_mut()));
+    // How many positions hold each template. What is below a template
+    // that was counted before is not counted again: it will be written
+    // once with it.
+    fn is_template(node: &Map<String, Value>) -> bool {
+        matches!(
+            node.get("op").and_then(Value::as_str),
+            Some("derive" | "select" | "pick" | "fold" | "dynamic")
+        )
+    }
+    fn count(
+        value: &Value,
+        held: &[Value],
+        counts: &mut HashMap<String, usize>,
+        seen_held: &mut HashMap<usize, usize>,
+    ) {
+        match value {
+            Value::Object(node) => {
+                if let Some(index) = node.get("$held").and_then(Value::as_u64) {
+                    let uses = seen_held.entry(index as usize).or_insert(0);
+                    *uses += 1;
+                    if *uses == 1 {
+                        if let Some(template) = held.get(index as usize) {
+                            count(template, held, counts, seen_held);
+                        }
+                    }
+                    return;
+                }
+                if is_template(node) {
+                    let times = counts.entry(value.to_string()).or_insert(0);
+                    *times += 1;
+                    if *times > 1 {
+                        return;
+                    }
+                }
+                for member in node.values() {
+                    count(member, held, counts, seen_held);
+                }
+            }
+            Value::Array(members) => {
+                for member in members {
+                    count(member, held, counts, seen_held);
+                }
+            }
+            _ => {}
+        }
+    }
+    struct Table<'h> {
+        held: &'h [Value],
+        counts: HashMap<String, usize>,
+        index: HashMap<String, usize>,
+        of_held: HashMap<usize, usize>,
+        held_uses: HashMap<usize, usize>,
+        entries: Vec<Value>,
+    }
+    fn share(value: &mut Value, table: &mut Table) {
+        match value {
+            Value::Object(node) => {
+                if let Some(index) = node.get("$held").and_then(Value::as_u64) {
+                    let index = index as usize;
+                    // An operand that one position holds is written in
+                    // place, unless the same template is written
+                    // elsewhere.
+                    if table.held_uses.get(&index).copied().unwrap_or(0) <= 1 {
+                        *value = table.held.get(index).cloned().unwrap_or(Value::Null);
+                        share(value, table);
+                        return;
+                    }
+                    let at = match table.of_held.get(&index) {
+                        Some(at) => *at,
+                        None => {
+                            let at = table.entries.len();
+                            table.entries.push(Value::Null);
+                            table.of_held.insert(index, at);
+                            let mut template =
+                                table.held.get(index).cloned().unwrap_or(Value::Null);
+                            // The template is written once whatever its
+                            // count: it is held at two positions.
+                            let key = template.to_string();
+                            table.index.insert(key, at);
+                            share_below(&mut template, table);
+                            table.entries[at] = template;
+                            at
+                        }
+                    };
+                    *value = json!({ "op": "shared", "template": at });
+                    return;
+                }
+                if is_template(node) {
+                    let key = value.to_string();
+                    if let Some(at) = table.index.get(&key) {
+                        *value = json!({ "op": "shared", "template": at });
+                        return;
+                    }
+                    if table.counts.get(&key).copied().unwrap_or(0) > 1 {
+                        let at = table.entries.len();
+                        table.entries.push(Value::Null);
+                        table.index.insert(key, at);
+                        let mut template = value.clone();
+                        share_below(&mut template, table);
+                        table.entries[at] = template;
+                        *value = json!({ "op": "shared", "template": at });
+                        return;
+                    }
+                }
+                share_below(value, table);
+            }
+            Value::Array(members) => {
+                for member in members {
+                    share(member, table);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn share_below(value: &mut Value, table: &mut Table) {
+        match value {
+            Value::Object(node) => {
+                for member in node.values_mut() {
+                    share(member, table);
+                }
+            }
+            Value::Array(members) => {
+                for member in members {
+                    share(member, table);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut counts = HashMap::new();
+    let mut held_uses = HashMap::new();
+    count(plan, &held, &mut counts, &mut held_uses);
+    let mut table = Table {
+        held: &held,
+        counts,
+        held_uses,
+        index: HashMap::new(),
+        of_held: HashMap::new(),
+        entries: Vec::new(),
+    };
+    share(plan, &mut table);
+    plan["templates"] = Value::Array(table.entries);
+}
+
+/// Whether a hint names no declaration: the expression is an operand, a
+/// branch, a condition, or a JSX child.
+fn anonymous(hint: &str) -> bool {
+    matches!(hint, "branch" | "operand" | "condition" | "child")
+}
+
+/// A hint that starts with `@` is the property or the JSX attribute an
+/// expression is written at, and not a `const` it is assigned to.
+fn written_at(hint: &str) -> &str {
+    hint.strip_prefix('@').unwrap_or(hint)
+}
+
+/// The name of a declaration that has a base name (PL §1.3): the name of
+/// the `const` it is assigned to, and else the base name.
+fn base_name<'n>(hint: &'n str, base: &'n str) -> &'n str {
+    if hint.starts_with('@') || anonymous(hint) {
+        base
+    } else {
+        hint
+    }
+}
+
+/// The name of a declaration that has no base name (PL §1.3): the name
+/// of the `const`, else the property or the attribute it is written at,
+/// and else the name of the construct.
+fn fallback_name<'n>(hint: &'n str, construct: &'n str) -> &'n str {
+    if anonymous(hint) {
+        construct
+    } else {
+        written_at(hint)
+    }
+}
+
+/// The expression written at a member of an object or an array literal.
+fn member_written<'e, 'a>(written: &'e Expression<'a>, name: &str) -> Option<&'e Expression<'a>> {
+    match unwrap(written) {
+        Expression::ObjectExpression(object) => object.properties.iter().find_map(|property| {
+            let ObjectPropertyKind::ObjectProperty(property) = property else {
+                return None;
+            };
+            (!property.computed && static_key_name(&property.key) == Some(name))
+                .then_some(&property.value)
+        }),
+        Expression::ArrayExpression(array) => array
+            .elements
+            .get(name.parse::<usize>().ok()?)
+            .and_then(|element| element.as_expression()),
+        _ => None,
+    }
+}
+
+/// The value of a literal written in place, as the plan holds it.
+fn constant_of(written: &Expression<'_>) -> Option<Value> {
+    match unwrap(written) {
+        Expression::StringLiteral(literal) => Some(json!(literal.value.as_str())),
+        Expression::NumericLiteral(literal) => {
+            if literal.value.fract() == 0.0 && literal.value.abs() < 9.0e15 {
+                Some(json!(literal.value as i64))
+            } else {
+                Some(json!(literal.value))
+            }
+        }
+        Expression::BooleanLiteral(literal) => Some(json!(literal.value)),
+        Expression::NullLiteral(_) => Some(Value::Null),
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+            .quasis
+            .first()
+            .and_then(|quasi| quasi.value.cooked.as_ref())
+            .map(|text| json!(text.as_str())),
+        _ => None,
+    }
+}
+
+/// The paths of a request: one per member of a record written at the
+/// site, and the root otherwise.
+fn request_paths(place: &Place, path: &mut Vec<String>, found: &mut Vec<(Vec<String>, Place)>) {
+    match place {
+        Place::Record(fields) if !fields.is_empty() => {
+            for (name, member) in fields {
+                path.push(name.clone());
+                request_paths(member, path, found);
+                path.pop();
+            }
+        }
+        _ => found.push((path.clone(), place.clone())),
+    }
+}
+
+/// Replaces each reference to the template of a value, which
+/// `template_by_reference` wrote with the index of the value, by the
+/// reference to the output of the value, `{ "op": "output", "output": n }`
+/// (ruling Z58). A value that has no entry of `Plan.outputs` has its
+/// template in place.
+fn resolve_templates(
+    value: &mut Value,
+    output_of: &HashMap<(usize, Vec<String>), usize>,
+    templates: &[Option<Value>],
+    held_of: &mut HashMap<usize, usize>,
+) {
+    match value {
+        Value::Object(members) => {
+            if let Some(Value::Number(number)) = members.get("$template") {
+                let index = number.as_u64().unwrap_or(0) as usize;
+                match output_of.get(&(index, Vec::new())) {
+                    Some(output) => *value = json!({ "op": "output", "output": output }),
+                    None => {
+                        let template = templates
+                            .get(index)
+                            .cloned()
+                            .flatten()
+                            .unwrap_or_else(|| json!({ "op": "const" }));
+                        if is_leaf(&template) {
+                            *value = template;
+                            resolve_templates(value, output_of, templates, held_of);
+                            return;
+                        }
+                        // The template of a value that has no output is
+                        // held once for every position that names it:
+                        // `share_templates` writes it in place where one
+                        // position does.
+                        let held = *held_of.entry(index).or_insert_with(|| {
+                            HELD_TWICE.with(|held| {
+                                let mut held = held.borrow_mut();
+                                held.push(template);
+                                held.len() - 1
+                            })
+                        });
+                        *value = json!({ "op": "shared", "$held": held });
+                    }
+                }
+                return;
+            }
+            for member in members.values_mut() {
+                resolve_templates(member, output_of, templates, held_of);
+            }
+        }
+        Value::Array(elements) => {
+            for element in elements {
+                resolve_templates(element, output_of, templates, held_of);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Replaces each `{ "$value": n }` by the index of the output of value `n`.
+fn resolve_values(
+    value: &mut Value,
+    output_of: &HashMap<(usize, Vec<String>), usize>,
+    missing: &mut bool,
+) {
+    match value {
+        Value::Object(members) => {
+            if let Some(Value::Number(number)) = members.get("$value") {
+                let index = number.as_u64().unwrap_or(0) as usize;
+                let path: Vec<String> = members
+                    .get("$path")
+                    .and_then(Value::as_array)
+                    .map(|path| {
+                        path.iter()
+                            .filter_map(|segment| segment.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                match output_of.get(&(index, path)) {
+                    Some(output) => *value = json!(output),
+                    None => {
+                        *missing = true;
+                        *value = Value::Null;
+                    }
+                }
+                return;
+            }
+            for member in members.values_mut() {
+                resolve_values(member, output_of, missing);
+            }
+        }
+        Value::Array(elements) => {
+            for element in elements {
+                resolve_values(element, output_of, missing);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Gives each `site` step the name of its call: the name alone for the
+/// one call of that name under its `within`, and the record of the name
+/// and the ordinal of the call among those of the name, in source order,
+/// for one of several (PL §1.3, "A `site` step holds the name of its call
+/// by the same rules"). A step of the walk holds the number of its call
+/// under `$site`, an index of `calls`, which this removes.
+fn name_sites(plan: &mut Value, calls: &[(String, String)]) {
+    let mut counts: HashMap<&(String, String), u64> = HashMap::new();
+    for call in calls {
+        *counts.entry(call).or_default() += 1;
+    }
+    let mut seen: HashMap<&(String, String), u64> = HashMap::new();
+    let names: Vec<Value> = calls
+        .iter()
+        .map(|call| {
+            let ordinal = seen.entry(call).or_default();
+            *ordinal += 1;
+            match counts[call] {
+                1 => json!(call.1),
+                _ => json!({ "name": call.1, "ordinal": *ordinal }),
+            }
+        })
+        .collect();
+    fn rename(value: &mut Value, names: &[Value]) {
+        match value {
+            Value::Object(node) => {
+                if let Some(call) = node.remove("$site") {
+                    let call = call.as_u64().unwrap_or(0) as usize;
+                    node.insert("site".to_string(), names[call].clone());
+                }
+                node.values_mut().for_each(|member| rename(member, names));
+            }
+            Value::Array(members) => members.iter_mut().for_each(|member| rename(member, names)),
+            _ => {}
+        }
+    }
+    rename(plan, &names);
+}
+
+/// Where two declarations of one pattern body have the same name, each
+/// takes the name and its ordinal among them, in source order (PL §1.3).
+/// A name of several parts is the record of its parts, and no string
+/// joins them (PL §1.1, `Name`; §1.2, "Written forms").
+fn name_ordinals(plan: &mut Value) {
+    let tables = [
+        "stateCells",
+        "operations",
+        "children",
+        "collections",
+        "bodies",
+        "bindings",
+    ];
+    // A handler is one record however many bindings name it, and is not
+    // one more declaration of the name its bindings have: the names of
+    // the bodies are counted apart from the others.
+    let kind = |table: &str| table == "bodies";
+    let mut counts: BTreeMap<(bool, String, String), usize> = BTreeMap::new();
+    for table in tables {
+        for record in plan[table].as_array().into_iter().flatten() {
+            // A thing a site of a body makes is named from the body, and
+            // a sidecar or a clock cell of a `wish` from the operation.
+            if record.get("$of").is_some() || record.get("$ofOperation").is_some() {
+                continue;
+            }
+            if let Some(name) = record["name"].as_str() {
+                *counts
+                    .entry((kind(table), record["within"].to_string(), name.to_string()))
+                    .or_default() += 1;
+            }
+        }
+    }
+    let mut ordinals: BTreeMap<(bool, String, String), usize> = BTreeMap::new();
+    for table in tables {
+        for record in plan[table].as_array_mut().into_iter().flatten() {
+            if record.get("$of").is_some() || record.get("$ofOperation").is_some() {
+                continue;
+            }
+            let Some(name) = record["name"].as_str().map(str::to_string) else {
+                continue;
+            };
+            let key = (kind(table), record["within"].to_string(), name.clone());
+            if counts.get(&key).copied().unwrap_or(0) > 1 {
+                let ordinal = ordinals.entry(key).or_default();
+                *ordinal += 1;
+                record["name"] = json!({ "name": name, "ordinal": *ordinal });
+            }
+        }
+    }
+    // "The name of a `Child` that a site of `Body.calls` instantiates is
+    // the record of the body's `name` and the index of the site in
+    // `Body.calls`" (PL §1.3). A state cell that a site creates under a
+    // constant cause is named the same way: the crate records the site
+    // and not the cause.
+    let bodies = plan["bodies"].clone();
+    let operations = plan["operations"].clone();
+    for table in ["children", "stateCells"] {
+        for record in plan[table].as_array_mut().into_iter().flatten() {
+            let Some(record) = record.as_object_mut() else {
+                continue;
+            };
+            // The name of a sidecar is the record of the operation's
+            // `name` and the sidecar's (PL §1.1, `Name`; §3.19).
+            if let Some(of) = record.remove("$ofOperation") {
+                let operation = of[0].as_u64().unwrap_or(0) as usize;
+                let name = json!({
+                    "operation": operations[operation]["name"],
+                    "sidecar": of[1],
+                });
+                record.insert("name".to_string(), name);
+            }
+            if let Some(of) = record.remove("$of") {
+                let body = of[0].as_u64().unwrap_or(0) as usize;
+                let name = json!({ "body": bodies[body]["name"], "site": of[1] });
+                record.insert("name".to_string(), name);
+            }
+        }
+    }
+}
+
+/// The plan of each pattern of module `module`.
+pub fn emit_module<'a>(
+    resolver: &Resolver<'_, 'a>,
+    module: usize,
+    bodies: &[Vec<Body>],
+    records: &[Vec<(usize, Record)>],
+) -> Vec<PatternPlan> {
+    let Some(parsed) = resolver.parsed(module) else {
+        return Vec::new();
+    };
+    let mut plans = Vec::new();
+    let starts = body_functions(resolver, module, &bodies[module]);
+    // For each plan, the start of its pattern's function and the patterns
+    // it compiles in as a tag.
+    type Tags = (u32, Vec<(usize, u32, u32)>);
+    let mut tags: Vec<Tags> = Vec::new();
+    for (index, body) in bodies[module].iter().enumerate() {
+        // A pattern compiled into another has no plan of its own.
+        if body.kind != BodyKind::Pattern || body.parent.is_some() {
+            continue;
+        }
+        let Some((_, start)) = starts.iter().find(|(other, _)| *other == index) else {
+            continue;
+        };
+        let mut emitter = Emitter {
+            resolver,
+            module,
+            bodies,
+            records,
+            functions: HashMap::new(),
+            body_starts: HashMap::new(),
+            env: HashMap::new(),
+            within: Vec::new(),
+            cone: None,
+            slots: Vec::new(),
+            values: Vec::new(),
+            cones: Vec::new(),
+            selectors: Vec::new(),
+            picks: Vec::new(),
+            collections: Vec::new(),
+            plan_bodies: Vec::new(),
+            body_facts: Vec::new(),
+            dynamic_reads: Vec::new(),
+            state_cells: Vec::new(),
+            operations: Vec::new(),
+            children: Vec::new(),
+            bindings: Vec::new(),
+            handlers: HashMap::new(),
+            passed: Vec::new(),
+            unsupported: Vec::new(),
+            operands: Vec::new(),
+            opaque: false,
+            body_dynamic: Vec::new(),
+            formal_types: HashMap::new(),
+            iterated: Vec::new(),
+            collection_starts: Vec::new(),
+            hints: Vec::new(),
+            handle_writes: Vec::new(),
+            self_names: BTreeSet::new(),
+            literal_values: HashMap::new(),
+            callee_literals: HashMap::new(),
+            patterns: vec![(module, *start)],
+            inline_at: Vec::new(),
+            given_constants: HashSet::new(),
+            callee_defaults: HashMap::new(),
+            bound_defaults: Vec::new(),
+            literal_keys: HashSet::new(),
+            formal_names: Vec::new(),
+            tags: Vec::new(),
+            root_types: HashMap::new(),
+            value_keys: HashMap::new(),
+            result_type: None,
+            state_types: HashMap::new(),
+            child_types: HashMap::new(),
+            body_guards: Vec::new(),
+            ui_chain: Vec::new(),
+            ui_bound: Vec::new(),
+            pending_entries: None,
+            site_steps: Vec::new(),
+            facts: crate::emit::Facts::new(module, *start),
+        };
+        // The type the pattern declares for its result: the second type
+        // argument of the call that defines it.
+        for node in parsed.semantic.nodes().iter() {
+            let AstKind::CallExpression(call) = node.kind() else {
+                continue;
+            };
+            let defines = call
+                .arguments
+                .iter()
+                .filter_map(FunctionLike::of_argument)
+                .any(|function| function.span().start == *start);
+            let declared = call
+                .type_arguments
+                .as_ref()
+                .is_some_and(|arguments| arguments.params.len() > 1);
+            if defines && declared {
+                if let Shape::PatternFactory(_, output) =
+                    resolver.shape(resolver.factory_type(module, call, 0))
+                {
+                    emitter.result_type = Some(output);
+                }
+            }
+        }
+        let Some(function) = emitter.function_at(module, *start) else {
+            continue;
+        };
+        if let Some(parameter) = function.params().items.first() {
+            emitter.root_type(module, Root::Argument, parameter);
+            emitter.bind_pattern(&parameter.pattern, Place::Slot(Root::Argument, Vec::new()));
+        }
+        let result = match function.expression_body() {
+            Some(expression) => Some(emitter.eval(expression, "result")),
+            None => function
+                .block_body()
+                .and_then(|statements| emitter.statements(statements)),
+        };
+        if let Some(result) = result {
+            emitter.keep(&mut Vec::new(), &result);
+        }
+        let hints = std::mem::take(&mut emitter.hints);
+        let handle_writes = std::mem::take(&mut emitter.handle_writes);
+        tags.push((*start, std::mem::take(&mut emitter.tags)));
+        let argument_schema = emitter
+            .root_types
+            .get(&Root::Argument)
+            .map(|ty| resolver.schema_of(*ty));
+        let result_schema = emitter.result_type.map(|ty| resolver.schema_of(ty));
+        let (mut plan, unsupported, cycles, flows, finished) = emitter.finish(&parsed.path);
+        let mut schemas = name_schemas(&mut plan, argument_schema.as_ref(), result_schema.as_ref());
+        let code = crate::emit::requested()
+            .then(|| crate::emit::generate(resolver, module, &plan, &schemas, &finished));
+        // A type that a schema document holds at more than one position
+        // is written once (provisional decision P7).
+        for (_, document) in &mut schemas {
+            crate::schema::share_types(document);
+        }
+        plans.push(PatternPlan {
+            name: body.name.clone(),
+            line: body.line,
+            plan,
+            unsupported,
+            cycles,
+            hints,
+            flows,
+            handle_writes,
+            argument_schema,
+            result_schema,
+            schemas,
+            code,
+        });
+    }
+    // "The chain ... continues through a pattern written as a tag" (PL
+    // §4.4): a pattern that another plan of the module compiles in as a
+    // tag, with no report of its bindings there, has its surface from the
+    // pattern that embeds it and is not reported on its own.
+    for index in 0..plans.len() {
+        let own = tags[index].0;
+        let embedded = (0..plans.len()).any(|other| {
+            other != index
+                && tags[other].1.iter().any(|(home, start, end)| {
+                    *home == module
+                        && *start == own
+                        && !plans[other].flows.iter().any(|(id, at, _)| {
+                            *id == "cfc-flow:ui-contract" && *start <= *at && *at < *end
+                        })
+                })
+        });
+        if embedded {
+            plans[index]
+                .flows
+                .retain(|(id, ..)| *id != "cfc-flow:ui-contract");
+        }
+    }
+    plans
+}
+
+/// Counts the nodes of a template by kind, a `derive` by what computed
+/// it.
+fn count_nodes(template: &Value, nodes: &mut BTreeMap<String, usize>) {
+    let kind = match template["op"].as_str() {
+        Some("derive") if template["by"].get("body").is_some() => "derive by a body".to_string(),
+        Some("derive") => "derive by expression code".to_string(),
+        Some(op) => op.to_string(),
+        None => return,
+    };
+    *nodes.entry(kind).or_default() += 1;
+    for member in ["inputs", "branches"] {
+        for input in template[member].as_array().into_iter().flatten() {
+            count_nodes(input, nodes);
+        }
+    }
+    for member in ["condition", "body", "choice"] {
+        if let Some(inner) = template.get(member) {
+            count_nodes(inner, nodes);
+        }
+    }
+}
+
+/// For how many of the accepted modules of a program a plan is emitted
+/// with no unsupported construct, and the unsupported constructs by kind.
+pub fn corpus_summary(analysis: &crate::program::ProgramAnalysis) -> String {
+    let accepted: Vec<&crate::program::ModuleAnalysis> = analysis
+        .modules
+        .iter()
+        .filter(|module| module.accepted())
+        .collect();
+    let with_patterns: Vec<&&crate::program::ModuleAnalysis> = accepted
+        .iter()
+        .filter(|module| !module.plans.is_empty())
+        .collect();
+    let complete = with_patterns
+        .iter()
+        .filter(|module| module.plans.iter().all(|plan| plan.unsupported.is_empty()))
+        .count();
+    let patterns: usize = with_patterns.iter().map(|module| module.plans.len()).sum();
+    let complete_patterns = with_patterns
+        .iter()
+        .flat_map(|module| &module.plans)
+        .filter(|plan| plan.unsupported.is_empty())
+        .count();
+    let mut kinds: BTreeMap<String, (usize, BTreeSet<&str>)> = BTreeMap::new();
+    for module in &with_patterns {
+        for plan in &module.plans {
+            for (kind, _) in &plan.unsupported {
+                // A method or a built-in is counted under one kind, and
+                // listed by name after it.
+                let entry = kinds.entry(kind.clone()).or_default();
+                entry.0 += 1;
+                entry.1.insert(module.path.as_str());
+            }
+        }
+    }
+    let cycles: usize = accepted
+        .iter()
+        .flat_map(|module| &module.plans)
+        .map(|plan| plan.cycles.len())
+        .sum();
+    let mut out = String::new();
+    out.push_str(&format!(
+        "modules: {} parsed, {} accepted, {} accepted with a pattern\n",
+        analysis.modules.len(),
+        accepted.len(),
+        with_patterns.len()
+    ));
+    out.push_str(&format!(
+        "plans emitted with no unsupported construct: {complete} of {} modules, {complete_patterns} of {patterns} patterns\n",
+        with_patterns.len()
+    ));
+    out.push_str(&format!("side-write:cycle: {cycles}\n"));
+    // The operations by kind, and what a hint names, over the accepted
+    // modules.
+    let mut operation_kinds: BTreeMap<String, usize> = BTreeMap::new();
+    let mut hints: BTreeMap<&str, usize> = BTreeMap::new();
+    for plan in accepted.iter().flat_map(|module| &module.plans) {
+        for operation in plan.plan["operations"].as_array().into_iter().flatten() {
+            let kind = operation["kind"].as_str().unwrap_or("").to_string();
+            *operation_kinds.entry(kind).or_default() += 1;
+        }
+        for (kind, _) in &plan.hints {
+            *hints.entry(kind.as_str()).or_default() += 1;
+        }
+    }
+    let listed: Vec<String> = operation_kinds
+        .iter()
+        .map(|(kind, count)| format!("{kind} {count}"))
+        .collect();
+    out.push_str(&format!("operations: {}\n", listed.join(", ")));
+    for (kind, count) in &hints {
+        out.push_str(&format!("hint, {kind}: {count}\n"));
+    }
+    // The uses of bodies, and how many have an input bound to a value the
+    // instance computed (FA §1.1).
+    let mut uses = 0;
+    let mut with_computed = 0;
+    let mut computed_handles = 0;
+    let (mut cones, mut edges, mut write_edges) = (0, 0, 0);
+    // The cones with side-writes by their kind (ruling Z7), each kind by
+    // what its bodies write, and the first values of state cells that a
+    // cone writes once.
+    let mut side_writes: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let (mut cells, mut first_values) = (0, 0);
+    for plan in accepted.iter().flat_map(|module| &module.plans) {
+        for cell in plan.plan["stateCells"].as_array().into_iter().flatten() {
+            cells += 1;
+            if cell.get("first").is_some() {
+                first_values += 1;
+            }
+        }
+        for cone in plan.plan["cones"].as_array().into_iter().flatten() {
+            let Some(kind) = cone["sideWrites"].as_str() else {
+                continue;
+            };
+            let mut targets: BTreeSet<&str> = BTreeSet::new();
+            for body in cone["bodies"].as_array().into_iter().flatten() {
+                let body = &plan.plan["bodies"][body.as_u64().unwrap_or(0) as usize];
+                for write in body["writes"].as_array().into_iter().flatten() {
+                    targets.extend(write["target"]["kind"].as_str());
+                }
+                if body["envelopes"]
+                    .as_array()
+                    .is_some_and(|list| !list.is_empty())
+                {
+                    targets.insert("envelope");
+                }
+            }
+            let targets: Vec<&str> = targets.into_iter().collect();
+            let targets = match targets.is_empty() {
+                true => "no write edge".to_string(),
+                false => targets.join("+"),
+            };
+            *side_writes.entry((kind.to_string(), targets)).or_default() += 1;
+        }
+        for body in plan.plan["bodies"].as_array().into_iter().flatten() {
+            uses += 1;
+            if body["computed"]
+                .as_array()
+                .is_some_and(|list| !list.is_empty())
+            {
+                with_computed += 1;
+            }
+            computed_handles += body["handles"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|handle| handle["handle"].get("computed").is_some())
+                .count();
+        }
+        cones += plan.plan["cones"].as_array().map_or(0, Vec::len);
+        for edge in plan.plan["edges"].as_array().into_iter().flatten() {
+            edges += 1;
+            if edge["via"]["kind"] != "output" {
+                write_edges += 1;
+            }
+        }
+    }
+    out.push_str(&format!(
+        "uses of bodies: {uses}, {with_computed} with an entry of `computed`; handles named by a computed entry: {computed_handles}\n"
+    ));
+    out.push_str(&format!(
+        "cones: {cones}; edges: {edges}, {write_edges} through a side-write\n"
+    ));
+    for kind in ["static", "materializer"] {
+        let of_kind: Vec<String> = side_writes
+            .iter()
+            .filter(|((other, _), _)| other == kind)
+            .map(|((_, targets), count)| format!("{targets} {count}"))
+            .collect();
+        let total: usize = side_writes
+            .iter()
+            .filter(|((other, _), _)| other == kind)
+            .map(|(_, count)| count)
+            .sum();
+        out.push_str(&format!(
+            "cones with side-writes of kind `{kind}`: {total}; by the targets of their bodies: {}\n",
+            of_kind.join(", ")
+        ));
+    }
+    out.push_str(&format!(
+        "state cells: {cells}, {first_values} with a first value that a cone writes once\n"
+    ));
+    // The bindings of a handler in an element body.
+    let mut in_element = 0;
+    for plan in accepted.iter().flat_map(|module| &module.plans) {
+        in_element += plan.plan["bindings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|binding| {
+                binding.get("handler").is_some()
+                    && binding["within"]
+                        .as_array()
+                        .is_some_and(|steps| steps.iter().any(|step| step.get("element").is_some()))
+            })
+            .count();
+    }
+    out.push_str(&format!(
+        "bindings of a handler in an element body: {in_element}\n"
+    ));
+    // The templates of the plans emitted with no unsupported construct:
+    // which records have one, and the nodes by kind.
+    let complete_plans: Vec<&PatternPlan> = with_patterns
+        .iter()
+        .flat_map(|module| &module.plans)
+        .filter(|plan| plan.unsupported.is_empty())
+        .collect();
+    let mut every_output = 0;
+    let mut holders: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    let mut nodes: BTreeMap<String, usize> = BTreeMap::new();
+    for plan in &complete_plans {
+        let plan = &plan.plan;
+        let mut tally = |kind: &'static str, record: &Value, member: &str| {
+            let entry = holders.entry(kind).or_default();
+            entry.1 += 1;
+            if let Some(template) = record.get(member) {
+                entry.0 += 1;
+                count_nodes(template, &mut nodes);
+            }
+        };
+        let list = |value: &Value| value.as_array().cloned().unwrap_or_default();
+        let outputs = list(&plan["outputs"]);
+        if outputs
+            .iter()
+            .all(|output| output.get("template").is_some())
+        {
+            every_output += 1;
+        }
+        for output in &outputs {
+            tally("Output.template", output, "template");
+        }
+        for collection in list(&plan["collections"]) {
+            tally("Collection.membership", &collection, "membership");
+        }
+        for operation in list(&plan["operations"]) {
+            tally("Operation.input", &operation, "input");
+        }
+        for body in list(&plan["bodies"]) {
+            for input in list(&body["computed"]) {
+                tally("ComputedInput.template", &input, "template");
+            }
+            for write in list(&body["writes"]) {
+                tally("WriteEdge.template (body)", &write, "template");
+            }
+        }
+        for cone in list(&plan["cones"]) {
+            for write in list(&cone["writes"]) {
+                tally("WriteEdge.template (cone)", &write, "template");
+            }
+        }
+        for binding in list(&plan["bindings"]) {
+            for entry in list(&binding["state"]) {
+                tally("Binding.state.template", &entry, "template");
+            }
+        }
+    }
+    out.push_str(&format!(
+        "plans in which every output has a template: {every_output} of {}\n",
+        complete_plans.len()
+    ));
+    out.push_str("records with a template, of the records that hold one:\n");
+    for (kind, (with, all)) in &holders {
+        out.push_str(&format!("  {with:6} of {all:6}  {kind}\n"));
+    }
+    out.push_str("template nodes, by kind:\n");
+    for (kind, count) in &nodes {
+        out.push_str(&format!("  {count:7}  {kind}\n"));
+    }
+    // The schemas, the declared labels, and the constraints of the plans
+    // of the accepted modules.
+    let (mut slots, mut with_schema, mut with_declared) = (0, 0, 0);
+    let (mut kept, mut kept_with_schema) = (0, 0);
+    let mut constraint_kinds: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for plan in accepted.iter().flat_map(|module| &module.plans) {
+        let plan = &plan.plan;
+        let plan_slots = plan["slots"].as_array().cloned().unwrap_or_default();
+        for slot in &plan_slots {
+            slots += 1;
+            with_schema += usize::from(slot.get("schema").is_some());
+            with_declared += usize::from(slot.get("declared").is_some());
+        }
+        for output in plan["outputs"].as_array().into_iter().flatten() {
+            if output["kept"] == json!(true) {
+                kept += 1;
+                kept_with_schema += usize::from(plan.get("resultSchema").is_some());
+            }
+        }
+        for constraint in plan["constraints"].as_array().into_iter().flatten() {
+            let kind = constraint["kind"].as_str().unwrap_or("");
+            let entry = constraint_kinds.entry(kind.to_string()).or_default();
+            entry.0 += 1;
+            // "At compile time, when everything it reads is declared:
+            // every listed slot has a `declared` label for the dimension
+            // the constraint tests" (PL §4.4).
+            let dimension = match kind {
+                "requiredIntegrity" => "integrity",
+                "maxConfidentiality" => "confidentiality",
+                _ => continue,
+            };
+            let declared = constraint["slots"].as_array().is_some_and(|listed| {
+                listed.iter().all(|slot| {
+                    slot.as_u64().is_some_and(|slot| {
+                        plan_slots[slot as usize]["declared"]
+                            .get(dimension)
+                            .is_some()
+                    })
+                })
+            });
+            entry.1 += usize::from(declared);
+        }
+    }
+    out.push_str(&format!(
+        "slots: {slots}, {with_schema} with a schema, {with_declared} with a declared label; kept outputs: {kept}, {kept_with_schema} in a plan with a result schema\n"
+    ));
+    out.push_str(
+        "constraints, by kind (records, those whose every listed slot declares the label):\n",
+    );
+    for (kind, (count, declared)) in &constraint_kinds {
+        out.push_str(&format!("  {count:5} {declared:4}  {kind}\n"));
+    }
+    // The `cfc-flow:*` diagnostics: occurrences, modules, and the modules
+    // that have no other error.
+    let mut flow: BTreeMap<&str, (usize, BTreeSet<&str>, BTreeSet<&str>)> = BTreeMap::new();
+    for module in &analysis.modules {
+        let others = module
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.is_error() && !diagnostic.id.starts_with("cfc-flow:"));
+        for diagnostic in &module.diagnostics {
+            if diagnostic.id.starts_with("cfc-flow:") {
+                let entry = flow.entry(diagnostic.id).or_default();
+                entry.0 += 1;
+                entry.1.insert(module.path.as_str());
+                if !others && diagnostic.is_error() {
+                    entry.2.insert(module.path.as_str());
+                }
+            }
+        }
+    }
+    out.push_str("cfc-flow diagnostics (occurrences, modules, modules they newly refuse):\n");
+    for (id, (count, modules, refused)) in &flow {
+        out.push_str(&format!(
+            "  {count:5} {:4} {:4}  {id}\n",
+            modules.len(),
+            refused.len()
+        ));
+    }
+    out.push_str("unsupported constructs, by kind (sites, modules):\n");
+    let mut sorted: Vec<(&String, &(usize, BTreeSet<&str>))> = kinds.iter().collect();
+    sorted.sort_by_key(|(kind, (sites, _))| (usize::MAX - *sites, kind.to_string()));
+    for (kind, (sites, modules)) in sorted {
+        out.push_str(&format!("  {sites:5} {:4}  {kind}\n", modules.len()));
+    }
+    out
+}

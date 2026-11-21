@@ -1,0 +1,162 @@
+[
+  {
+    "module": "compare/fixtures/data-file.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [
+            {
+              "file": "compare/fixtures/data/words.json",
+              "text": "[\"alfa\", \"bravo\", \"charlie\"]\n"
+            }
+          ],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/data-file.tsx",
+              "source": "const { \"computed\": computed, \"dataFile\": dataFile, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst WORDS = JSON.parse($rt.dataFile(0));\nconst wordAt = (index) => WORDS[index] ?? \"\";\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/data-file.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((index) => WORDS[index] ?? \"\")($a[\"index\"]));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ first: ((WORDS)[(0)]), count: ((WORDS).length), picked: $h.output(0) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0
+            },
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 12,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "function",
+              "name": "wordAt",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "index"
+                  ],
+                  "slot": 0
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/data-file.tsx",
+                "start": 557
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "picked",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "picked"
+              ],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/data-file.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "index"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "index": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "index"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

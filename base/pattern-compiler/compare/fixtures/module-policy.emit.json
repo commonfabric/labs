@@ -1,0 +1,150 @@
+[
+  {
+    "module": "compare/fixtures/module-policy.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/module-policy.tsx",
+              "source": "const { \"Default\": Default, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst { \"cfcPattern\": cfcPattern, \"exchangeRule\": exchangeRule, \"exchangeRules\": exchangeRules, \"THIS_POLICY\": THIS_POLICY, \"v\": v } = $rt.external(\"commonfabric/cfc\");\nconst releaseToReader = exchangeRule({\n  appliesTo: THIS_POLICY,\n  pre: {\n    integrity: [\n      cfcPattern.hasRole(v(\"reader\"), THIS_POLICY.subject, \"reader\"),\n    ],\n  },\n  post: {\n    addAlternatives: [cfcPattern.user(v(\"reader\"))],\n  },\n});\nconst rules = exchangeRules([releaseToReader]);\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/module-policy.tsx#default\",\n));\nObject.defineProperty($exports, \"releaseToReader\", { enumerable: true, get: () => releaseToReader });\nObject.defineProperty($exports, \"rules\", { enumerable: true, get: () => rules });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ message: $h.slot(0) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [],
+          "valuesWithoutOutput": []
+        },
+        "line": 33,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/module-policy.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "writerFit"
+            }
+          ],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [
+                0
+              ],
+              "kept": true,
+              "path": [
+                "message"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/module-policy.tsx#default"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [
+                "message"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "message": {
+                  "default": "none",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "message": {
+                  "ifc": {
+                    "confidentiality": [
+                      {
+                        "policyOf": {
+                          "binding": "rules",
+                          "module": "compare/fixtures/module-policy.tsx"
+                        }
+                      }
+                    ]
+                  },
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "default": "none",
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

@@ -1,0 +1,511 @@
+[
+  {
+    "module": "compare/fixtures/absent-state.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {
+            "1": {
+              "captures": [],
+              "named": true
+            }
+          },
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/absent-state.tsx",
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst find = lift((\n  { items, wanted },\n) => items.find((item) => item.id === wanted));\nconst note = handler((_, state) => {\n  if (!state.card) {\n    state.log.push(\"none\");\n    return;\n  }\n  state.log.push(state.card.id);\n});\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/absent-state.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((\n  { items, wanted },\n) => items.find((item) => item.id === wanted))($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ items: $h.slot(0), wanted: $h.slot(3) }))));\nreturn $rt.thunk(($h) => (({ log: $h.slot(7), note: $h.stream(0) })));\n});\n$rt.body(1, ($e, $s) => ((_, state) => {\n  if (!state.card) {\n    state.log.push(\"none\");\n    return;\n  }\n  state.log.push(state.card.id);\n})($e, $s));"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 27,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/6",
+              "handler": {
+                "body": 1
+              },
+              "name": "note",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "card"
+                  ],
+                  "place": {
+                    "output": 0
+                  },
+                  "template": {
+                    "op": "output",
+                    "output": 0
+                  }
+                },
+                {
+                  "capture": "link",
+                  "path": [
+                    "log"
+                  ],
+                  "place": {
+                    "slot": 7
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "find",
+              "outputs": [
+                {
+                  "path": [],
+                  "reference": {
+                    "oneOf": [
+                      1
+                    ]
+                  }
+                }
+              ],
+              "reads": [
+                {
+                  "at": [
+                    "items"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "items",
+                    "*"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "items",
+                    "*",
+                    "id"
+                  ],
+                  "slot": 2
+                },
+                {
+                  "at": [
+                    "wanted"
+                  ],
+                  "slot": 3
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "note",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "binding",
+                    "card"
+                  ],
+                  "slot": 4
+                },
+                {
+                  "at": [
+                    "binding",
+                    "card",
+                    "id"
+                  ],
+                  "slot": 5
+                },
+                {
+                  "at": [
+                    "binding",
+                    "log"
+                  ],
+                  "slot": 6
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [
+                      "*"
+                    ],
+                    "slot": 6
+                  },
+                  "template": {
+                    "by": {
+                      "body": 1
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 4
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 5
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 6
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/absent-state.tsx",
+                "start": 863
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "card",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1,
+                2,
+                3
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/absent-state.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                7
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "interim": "card",
+              "kept": false,
+              "path": [],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "log"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 7
+              }
+            }
+          ],
+          "patterns": [
+            "unhashed:pattern/compare/fixtures/absent-state.tsx#default"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "items",
+                "*"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "items",
+                "*",
+                "id"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "wanted"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "shape",
+              "path": [
+                "card"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "card",
+                "id"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "log"
+              ],
+              "root": {
+                "handler": 1,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "log",
+              "schema": "unhashed:schema/7",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "items": {
+                  "items": {
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "wanted": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "items",
+                "wanted"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "items": {
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/6",
+            "schema": {
+              "type": "unknown"
+            }
+          },
+          {
+            "id": "unhashed:schema/7",
+            "schema": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]
