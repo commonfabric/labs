@@ -764,11 +764,12 @@ For the serving loop, in `runtime/runner/test/executor/`:
 11. The chain above, with all three recorded and none running: a demand for
     C alone starts B and A, and C's session reads the value derived from the
     new input.
-12. In that chain, when A's recomputation leaves `a` equal, B's mark clears
-    and B is not started again. Both exist in
+12. In that chain, when A's recomputation leaves `a` equal, the marks of B
+    and C clear and C's session reads the value it held. Both exist in
     `space-server-currency-chain.test.ts`, with a viewer who holds no grant
     on the first two spaces, and with a demand for C that starts nothing
-    while no input changed.
+    while no input changed. That B, once the demand for `b` has started it,
+    derives nothing further is not checked.
 13. A piece that reads `#now/N` is served from the store within the
     interval and started after it, and a root a loop holds unstarted is
     loaded when the interval passes. Both exist in
