@@ -242,7 +242,15 @@ function extractWrapperTypeReference(
             checker.getTypeArguments(typeRef);
           if (
             typeArgs && typeArgs.length > 0 &&
-            (named === undefined || typeRef.target.symbol?.name === named)
+            (named === undefined ||
+              // Reached through a declaration, a base can still carry the
+              // declaration's own parameter, as `SqliteDb<T>` does under
+              // `interface Board<T> extends SqliteDb<T>`. That names no
+              // payload, and the search by name gives way to the plain one.
+              (typeRef.target.symbol?.name === named &&
+                !typeArgs.some((arg) =>
+                  (arg.flags & ts.TypeFlags.TypeParameter) !== 0
+                )))
           ) {
             return typeRef;
           }

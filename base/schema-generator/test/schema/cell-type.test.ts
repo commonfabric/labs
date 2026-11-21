@@ -126,6 +126,24 @@ describe("Schema: Cell types", () => {
     expect(Object.keys(result.$defs ?? {})).toEqual(["SqliteDatabase"]);
   });
 
+  it("reads the payload a handle subtype forwards to SqliteDb off the subtype's own argument", async () => {
+    // `SqliteDb<T>` under `interface Board<T> extends SqliteDb<T>` carries the
+    // declaration's parameter and not what `Board` was given.
+
+    const code = `
+      interface Named { name: string; }
+      interface Board<T> extends SqliteDb<T> {}
+      interface X { db: Board<Named>; }
+    `;
+    const { type, checker } = await getTypeFromCode(code, "X");
+    const gen = new SchemaGenerator();
+    const result = asObjectSchema(gen.generateSchema(type, checker));
+    expect(result.properties?.db).toEqual({
+      $ref: "#/$defs/Named",
+      asCell: ["sqlite"],
+    });
+  });
+
   it("leaves a type carrying some other brand structural", async () => {
     const code = `
       declare const OTHER_BRAND: unique symbol;
