@@ -126,6 +126,21 @@ describe("Schema: Cell types", () => {
     expect(Object.keys(result.$defs ?? {})).toEqual(["SqliteDatabase"]);
   });
 
+  it("describes a handle subtype behind a generic alias by the descriptor", async () => {
+    const code = `
+      interface Board<Kinds> extends SqliteDb { kinds?: Kinds; }
+      type BoardOf<Kinds> = Board<Kinds>;
+      interface X { db: BoardOf<{ topics: string }>; }
+    `;
+    const { type, checker } = await getTypeFromCode(code, "X");
+    const gen = new SchemaGenerator();
+    const result = asObjectSchema(gen.generateSchema(type, checker));
+    expect(result.properties?.db).toEqual({
+      $ref: "#/$defs/SqliteDatabase",
+      asCell: ["sqlite"],
+    });
+  });
+
   it("reads the payload a handle subtype forwards to SqliteDb off the subtype's own argument", async () => {
     // `SqliteDb<T>` under `interface Board<T> extends SqliteDb<T>` carries the
     // declaration's parameter and not what `Board` was given.
