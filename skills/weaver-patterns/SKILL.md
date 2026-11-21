@@ -159,10 +159,15 @@ command names the service and the key itself: `<key>` is
   - **This one** (a particular pattern of theirs): save the new pattern, then
     `cf piece link my-<other>/<output field> my-<name>/<input field>`.
   - **Whichever one** (a pattern meant for other people, each of whom has their
-    own copy of the other): the labs way is a `#tag` in the doc comment on the
-    other pattern's output type and a `wish` for it, but a wish does not yet
-    find a piece in a loom's space. Say it is not built yet, and offer **this
-    one** for their own copy.
+    own copy of the other): put a `#tag` in the doc comment on the other
+    pattern's output type (`/** The emails a #triage pattern kept. */`), and in
+    the new pattern read it with `wish({ query: "#triage" })`, with no `scope`.
+    That searches the person's favorites, in any space, by the tags a piece had
+    when it was favorited, so the other piece is found only once it is one of
+    their favorites; tell them so. Favoriting a piece from Claude Code or Weaver
+    is not built yet, so say that too, and offer **this one** for their own copy
+    meanwhile. Do not use `scope: ["."]`: it searches what the loom's own
+    pattern lists, which is not the pieces saved onto it.
 
   Never read again a source another pattern already reads (their mail, their
   calendar): build on that pattern. Never copy its data into the new one, write
