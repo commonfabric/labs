@@ -1,20 +1,35 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { type Stub, stub } from "@std/testing/mock";
 import {
   advanceCurrencyCursor,
   ANY_INSTANCE,
+  applyCurrencyImports,
   type CurrencyRead,
   type CurrencyRecord,
   type CurrencySliceRecord,
+  dropUnreadCurrencyImports,
+  forgetCurrencySource,
   judgeCurrencyRoots,
+  pullCurrencyExports,
+  registerCurrencyReads,
+  selectCurrencyDeriver,
+  selectCurrencyNextExpiry,
   selectCurrencyPiece,
+  selectCurrencyReadersMoved,
+  selectCurrencySourcePosition,
+  selectCurrencySources,
   storeCurrencyRecords,
 } from "../v2/currency-index.ts";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
 import { resolveScopeKey } from "../v2.ts";
 
 const SPACE = "did:key:z6Mk-currency-index-test-space";
+
+/** A second space, whose store some cases read from. */
+const SOURCE = "did:key:z6Mk-currency-index-test-source";
 const EPOCH = "epoch-one";
 
 /** The two viewers of these tests, and the scope keys of their instances. */
@@ -92,6 +107,8 @@ describe("currency-index", () => {
     owned?: string[];
     vouches?: Array<{ id: string; scopeKey: string }>;
     slices?: CurrencySliceRecord[];
+    /** The time the `space` slice expires at. */
+    expiresAt?: number;
   };
 
   /** A record of `piece`, vouched for, with `parts` over the empty ones. */
@@ -103,6 +120,7 @@ describe("currency-index", () => {
         vouched: boolean;
         reads: CurrencyRead[];
         vouches: string[];
+        expiresAt?: number;
       }
     >();
     const sliceAt = (key: string) => {
@@ -120,6 +138,9 @@ describe("currency-index", () => {
       sliceAt(scopeKey).vouches.push(id);
     }
     for (const id of parts.produces ?? []) sliceAt("space").vouches.push(id);
+    if (parts.expiresAt !== undefined) {
+      sliceAt("space").expiresAt = parts.expiresAt;
+    }
     for (const given of parts.slices ?? []) {
       const merged = sliceAt(given.key);
       merged.vouched &&= given.vouched;
@@ -1103,6 +1124,34 @@ describe("currency-index", () => {
       expect(markOf("of:piece")).toBe(0);
     });
 
+    it("stores clean a piece that vouches for an instance a client wrote above the `asOf` of its first record, once a record covers that write", () => {
+      // The first record is taken below the client's write, so it answers
+      // for the instance at no seq, and the write is not an overwrite of
+      // anything the piece vouched for.
+
+      const vouching = record("of:piece", { produces: ["computed:out"] });
+      const before = write("of:piece");
+      const created = write("computed:out");
+      store(before, [vouching]);
+      expect(markOf("of:piece")).toBe(2);
+
+      store(created, [vouching]);
+
+      expect(markOf("of:piece")).toBe(0);
+    });
+
+    it("keeps marked a piece whose output was overwritten above the `asOf` of a record of it, through a later record that covers the overwrite", () => {
+      const vouching = record("of:piece", { produces: ["computed:out"] });
+      const asOf = write("of:piece", "computed:out");
+      store(asOf, [vouching]);
+      const overwritten = write("computed:out");
+      store(asOf, [vouching]);
+
+      store(overwritten, [vouching]);
+
+      expect(markOf("of:piece")).toBe(2);
+    });
+
     it("replaces a piece's rows as a set", () => {
       const asOf = write("of:a", "of:b");
       store(asOf, [record("of:piece", { reads: [input("of:a")] })]);
@@ -1125,6 +1174,72 @@ describe("currency-index", () => {
         const asOf = write("of:a", "computed:out");
         store(asOf, [vouching()]);
         const own = write("computed:out");
+
+        const stored = store(asOf, [vouching()], [own]);
+
+        expect(stored.falseClean).toEqual(["of:piece"]);
+      });
+
+      it("names no piece that wrote an instance it vouched for again with the value it held", () => {
+        // A start derives every output afresh, and writes what stands.
+
+        /** Commits a write of `{ n: 1 }` to `computed:out`. */
+        const writeTheSame = (): number => {
+          localSeq += 1;
+          return applyCommit(engine, {
+            sessionId: ALICE.sessionId,
+            principal: ALICE.principal,
+            space: SPACE,
+            commit: {
+              localSeq,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: "computed:out",
+                value: { value: { n: 1 } },
+              }],
+            },
+          }).seq;
+        };
+        write("of:a");
+        const asOf = writeTheSame();
+        store(asOf, [vouching()]);
+        const own = writeTheSame();
+
+        const stored = store(asOf, [vouching()], [own]);
+
+        expect(stored.falseClean).toEqual([]);
+        expect(markOf("of:piece")).toBe(0);
+      });
+
+      it("names a piece that wrote an instance it vouched for again with a different byte sequence in it", () => {
+        // A byte sequence keeps its state out of its properties, so a
+        // comparison of properties alone would take the two for the same.
+
+        /** Commits a write of `bytes` to `computed:out`. */
+        const writeBytes = (bytes: number[]): number => {
+          localSeq += 1;
+          return applyCommit(engine, {
+            sessionId: ALICE.sessionId,
+            principal: ALICE.principal,
+            space: SPACE,
+            commit: {
+              localSeq,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: "computed:out",
+                value: {
+                  value: { bytes: new FabricBytes(new Uint8Array(bytes)) },
+                },
+              }],
+            },
+          }).seq;
+        };
+        write("of:a");
+        const asOf = writeBytes([1, 2, 3]);
+        store(asOf, [vouching()]);
+        const own = writeBytes([1, 2, 4]);
 
         const stored = store(asOf, [vouching()], [own]);
 
@@ -1213,6 +1328,36 @@ describe("currency-index", () => {
 
         expect(stored.falseClean).toEqual([]);
       });
+    });
+  });
+
+  describe("selectCurrencyDeriver()", () => {
+    it("returns the one piece recorded as writing a computed document", () => {
+      store(0, [record("of:piece", { writes: ["computed:total"] })]);
+
+      expect(
+        selectCurrencyDeriver(engine, { space: SPACE, id: "computed:total" }),
+      )
+        .toBe("of:piece");
+    });
+
+    it("returns `undefined` for a document that is no computed one, though one piece is recorded as writing it", () => {
+      store(0, [record("of:piece", { writes: ["of:argument"] })]);
+
+      expect(selectCurrencyDeriver(engine, { space: SPACE, id: "of:argument" }))
+        .toBeUndefined();
+    });
+
+    it("returns `undefined` for a computed document that no piece, or more than one, is recorded as writing", () => {
+      store(0, [
+        record("of:piece", { writes: ["computed:shared"] }),
+        record("of:other", { writes: ["computed:shared"] }),
+      ]);
+
+      expect([
+        selectCurrencyDeriver(engine, { space: SPACE, id: "computed:shared" }),
+        selectCurrencyDeriver(engine, { space: SPACE, id: "computed:none" }),
+      ]).toEqual([undefined, undefined]);
     });
   });
 
@@ -1475,6 +1620,598 @@ describe("currency-index", () => {
       store(asOf, [record("of:other", { vouched: false })]);
 
       expect(judge(["of:other", "of:piece"], [ROOT_ROW])).toEqual(["of:piece"]);
+    });
+  });
+
+  describe("with a slice whose record expires", () => {
+    /** What `Date.now()` returns in these cases. */
+    let now: number;
+    let clock: Stub<DateConstructor>;
+
+    /** The time the records of these cases expire at. */
+    const EXPIRES = 1_700_000_060_000;
+
+    beforeEach(() => {
+      now = 1_700_000_000_000;
+      clock = stub(Date, "now", () => now);
+    });
+
+    afterEach(() => {
+      clock.restore();
+    });
+
+    /**
+     * Records `of:clock` as computing `computed:tick` until `EXPIRES`, and
+     * `of:reader` as reading it, and returns the store's head.
+     */
+    const storeClock = (): number => {
+      const asOf = write("of:clock", "of:reader", "computed:tick");
+      store(asOf, [
+        record("of:clock", {
+          produces: ["computed:tick"],
+          expiresAt: EXPIRES,
+        }),
+        record("of:reader", { reads: [derived("computed:tick")] }),
+      ]);
+      return asOf;
+    };
+
+    describe("storeCurrencyRecords()", () => {
+      it("stores clean a slice whose record expires later", () => {
+        storeClock();
+
+        expect([markOf("of:clock"), markOf("of:reader")]).toEqual([0, 0]);
+      });
+
+      it("stores marked `2` a slice whose record has expired already", () => {
+        now = EXPIRES;
+
+        storeClock();
+
+        expect([markOf("of:clock"), markOf("of:reader")]).toEqual([2, 1]);
+      });
+
+      it("keeps clean past its old time a slice whose later record does not expire", () => {
+        const asOf = storeClock();
+        store(asOf, [record("of:clock", { produces: ["computed:tick"] })]);
+        now = EXPIRES;
+
+        expect(advance()).toEqual([]);
+        expect(markOf("of:clock")).toBe(0);
+      });
+    });
+
+    describe("advanceCurrencyCursor()", () => {
+      it("marks nothing before the time a slice expires at", () => {
+        storeClock();
+        now = EXPIRES - 1;
+
+        expect(advance()).toEqual([]);
+        expect(markOf("of:clock")).toBe(0);
+      });
+
+      it("marks `2` a slice once the time it expires at has come, and `1` a slice that reads what it writes, each at a seq above the head", () => {
+        const head = storeClock();
+        now = EXPIRES;
+
+        expect(
+          advanceCurrencyCursor(engine, { space: SPACE }).map((
+            { piece, seq },
+          ) => ({ piece, seq })).sort((a, b) => a.piece.localeCompare(b.piece)),
+        ).toEqual([
+          { piece: "of:clock", seq: head + 1 },
+          { piece: "of:reader", seq: head + 1 },
+        ]);
+        expect([markOf("of:clock"), markOf("of:reader")]).toEqual([2, 1]);
+      });
+
+      it("reports an expired slice once", () => {
+        storeClock();
+        now = EXPIRES;
+        advance();
+
+        expect(advance()).toEqual([]);
+      });
+    });
+
+    describe("selectCurrencyNextExpiry()", () => {
+      it("returns `undefined` where no slice expires", () => {
+        store(write("of:piece"), [record("of:piece")]);
+
+        expect(selectCurrencyNextExpiry(engine, { space: SPACE }))
+          .toBeUndefined();
+      });
+
+      it("returns the earliest time a slice expires at", () => {
+        storeClock();
+        store(write("of:later"), [
+          record("of:later", { expiresAt: EXPIRES + 60_000 }),
+        ]);
+
+        expect(selectCurrencyNextExpiry(engine, { space: SPACE })).toBe(
+          EXPIRES,
+        );
+      });
+
+      it("returns `undefined` once the slice has been marked for its expiry", () => {
+        storeClock();
+        now = EXPIRES;
+        advance();
+
+        expect(selectCurrencyNextExpiry(engine, { space: SPACE }))
+          .toBeUndefined();
+      });
+    });
+
+    describe("registerCurrencyReads()", () => {
+      it("reports current to another space what a piece with a slice that expires later writes", () => {
+        const head = storeClock();
+
+        const registered = registerCurrencyReads(engine, {
+          space: SPACE,
+          reader: SOURCE,
+          reads: [{ id: "computed:tick", scopeKey: "space" }],
+        });
+
+        expect(registered.entries).toEqual([{
+          id: "computed:tick",
+          scopeKey: "space",
+          head,
+          stale: false,
+        }]);
+      });
+    });
+
+    describe("pullCurrencyExports()", () => {
+      it("returns stale, once a slice has expired, what a piece that read its output writes", () => {
+        const asOf = write("of:clock", "of:reader", "computed:tick", "of:out");
+        store(asOf, [
+          record("of:clock", {
+            produces: ["computed:tick"],
+            expiresAt: EXPIRES,
+          }),
+          record("of:reader", {
+            reads: [derived("computed:tick")],
+            produces: ["of:out"],
+          }),
+        ]);
+        registerCurrencyReads(engine, {
+          space: SPACE,
+          reader: SOURCE,
+          reads: [{ id: "of:out", scopeKey: "space" }],
+        });
+        now = EXPIRES;
+
+        const pulled = pullCurrencyExports(engine, {
+          space: SPACE,
+          reader: SOURCE,
+          since: 0,
+        });
+
+        expect(pulled.entries).toEqual([{
+          id: "of:out",
+          scopeKey: "space",
+          head: asOf,
+          stale: true,
+        }]);
+      });
+    });
+  });
+
+  describe("with a slice that read another space", () => {
+    let source: Engine;
+    let sourcePath: string;
+
+    beforeEach(async () => {
+      sourcePath = await Deno.makeTempFile({ suffix: ".sqlite" });
+      source = await open({ url: toFileUrl(sourcePath) });
+    });
+
+    afterEach(async () => {
+      close(source);
+      await Deno.remove(sourcePath);
+    });
+
+    /** Commits a write to each of `ids` in the source, and returns its seq. */
+    const writeSource = (...ids: string[]): number => {
+      localSeq += 1;
+      return applyCommit(source, {
+        sessionId: ALICE.sessionId,
+        principal: ALICE.principal,
+        space: SOURCE,
+        commit: {
+          localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: ids.map((id) => ({
+            op: "set" as const,
+            id,
+            value: { value: { n: localSeq } },
+          })),
+        },
+      }).seq;
+    };
+
+    /** Stores `records` of the source's own pieces, as taken at `asOf`. */
+    const storeSource = (asOf: number, records: CurrencyRecord[]) =>
+      storeCurrencyRecords(source, {
+        space: SOURCE,
+        asOf,
+        seen: [],
+        epoch: EPOCH,
+        records,
+      });
+
+    /** A read of the source's shared instance of `id`, made at `seq`. */
+    const far = (id: string, seq?: number): CurrencyRead => ({
+      space: SOURCE,
+      id,
+      scopeKey: "space",
+      derived: false,
+      ...(seq !== undefined && { seq }),
+    });
+
+    /** Registers the reading space's read of each of `ids` with the source. */
+    const register = (...ids: string[]) =>
+      applyCurrencyImports(engine, {
+        space: SPACE,
+        source: SOURCE,
+        entries: registerCurrencyReads(source, {
+          space: SOURCE,
+          reader: SPACE,
+          reads: ids.map((id) => ({ id, scopeKey: "space" })),
+        }).entries,
+      });
+
+    /**
+     * The spaces the source would tell of what moved since `since`, a
+     * position of its own.
+     */
+    const movedSince = (since: number): string[] =>
+      selectCurrencyReadersMoved(source, { space: SOURCE, since }).readers
+        .map(({ reader }) => reader);
+
+    /** The source's highest position. */
+    const position = (): number =>
+      selectCurrencyReadersMoved(source, { space: SOURCE, since: 0 }).position;
+
+    /** Pulls from the source what changed, and applies it. */
+    const pull = () => {
+      const pulled = pullCurrencyExports(source, {
+        space: SOURCE,
+        reader: SPACE,
+        since: selectCurrencySourcePosition(engine, {
+          space: SPACE,
+          source: SOURCE,
+        }),
+        dropped: dropUnreadCurrencyImports(engine, {
+          space: SPACE,
+          source: SOURCE,
+        }),
+      });
+      applyCurrencyImports(engine, {
+        space: SPACE,
+        source: SOURCE,
+        entries: pulled.entries,
+        position: pulled.position,
+      });
+      return pulled.entries.map(({ id }) => id).sort();
+    };
+
+    /**
+     * Records `of:piece` as having read the source's `of:far` at its head,
+     * which the source has reported, and returns that head.
+     */
+    const storeReading = (piece = "of:piece", id = "of:far"): number => {
+      const head = writeSource(id);
+      register(id);
+      store(write(piece), [record(piece, { reads: [far(id, head)] })]);
+      return head;
+    };
+
+    /**
+     * Gives the source a piece, `of:producer`, that computes `computed:far`
+     * from `of:raw`, recorded clean.
+     */
+    const storeProducer = (): number => {
+      const asOf = writeSource("of:producer", "of:raw", "computed:far");
+      storeSource(asOf, [
+        record("of:producer", {
+          reads: [{ ...input("of:raw"), space: SOURCE }],
+          produces: ["computed:far"],
+        }),
+      ]);
+      return asOf;
+    };
+
+    describe("storeCurrencyRecords()", () => {
+      it("stores clean a slice that read an instance at its head in the source, once the source has reported it", () => {
+        storeReading();
+
+        expect(markOf("of:piece")).toBe(0);
+      });
+
+      it("stores marked `2` a slice that read an instance below its head in the source", () => {
+        const read = writeSource("of:far");
+        writeSource("of:far");
+        register("of:far");
+
+        store(write("of:piece"), [
+          record("of:piece", { reads: [far("of:far", read)] }),
+        ]);
+
+        expect(markOf("of:piece")).toBe(2);
+      });
+
+      it("stores marked `2` a slice that read an instance the source has reported nothing of", () => {
+        const head = writeSource("of:far");
+
+        store(write("of:piece"), [
+          record("of:piece", { reads: [far("of:far", head)] }),
+        ]);
+
+        expect(markOf("of:piece")).toBe(2);
+      });
+
+      it("stores marked `2` a slice that read another space at a seq its record does not name", () => {
+        writeSource("of:far");
+        register("of:far");
+
+        store(write("of:piece"), [
+          record("of:piece", { reads: [far("of:far")] }),
+        ]);
+
+        expect(markOf("of:piece")).toBe(2);
+      });
+
+      it("stores clean a slice that reads what a clean slice that read another space writes", () => {
+        const head = writeSource("of:far");
+        register("of:far");
+        const asOf = write("of:piece", "computed:out");
+
+        store(asOf, [
+          record("of:piece", {
+            reads: [far("of:far", head)],
+            produces: ["computed:out"],
+          }),
+          record("of:reader", { reads: [derived("computed:out")] }),
+        ]);
+
+        expect([markOf("of:piece"), markOf("of:reader")]).toEqual([0, 0]);
+      });
+
+      it("reports no false clean for a piece that wrote a vouched instance again after an instance of another space it read changed", () => {
+        const head = writeSource("of:far");
+        register("of:far");
+        const producing = (seq: number) =>
+          record("of:piece", {
+            reads: [far("of:far", seq)],
+            produces: ["computed:out"],
+          });
+        const asOf = write("of:piece", "computed:out");
+        store(asOf, [producing(head)]);
+        const changed = writeSource("of:far");
+        register("of:far");
+        const own = write("computed:out");
+
+        const stored = storeCurrencyRecords(engine, {
+          space: SPACE,
+          asOf,
+          seen: [own],
+          epoch: EPOCH,
+          records: [producing(changed)],
+        });
+
+        expect(stored.falseClean).toEqual([]);
+        expect(markOf("of:piece")).toBe(0);
+      });
+
+      it("stores marked `1` a slice that read an instance its source reports stale upstream", () => {
+        const head = storeProducer();
+        writeSource("of:raw");
+        register("computed:far");
+
+        store(write("of:piece"), [
+          record("of:piece", { reads: [far("computed:far", head)] }),
+        ]);
+
+        expect(markOf("of:piece")).toBe(1);
+      });
+    });
+
+    describe("pullCurrencyExports()", () => {
+      it("returns each registered instance that changed since the position pulled from, and nothing to a second pull", () => {
+        storeReading("of:pieceA", "of:farA");
+        storeReading("of:pieceB", "of:farB");
+        pull();
+        writeSource("of:farA");
+
+        expect(pull()).toEqual(["of:farA"]);
+        expect(pull()).toEqual([]);
+      });
+
+      it("returns nothing of an instance the reading space dropped", () => {
+        storeReading();
+        store(write("of:piece"), [record("of:piece")]);
+        pull();
+        writeSource("of:far");
+
+        expect(pull()).toEqual([]);
+      });
+    });
+
+    describe("registerCurrencyReads()", () => {
+      it("returns to no pull an instance that has not changed since it was registered", () => {
+        storeReading();
+
+        expect(pull()).toEqual([]);
+      });
+
+      it("returns the slices of the source its advance marked", () => {
+        const asOf = storeProducer();
+        const changed = writeSource("of:raw");
+
+        const registered = registerCurrencyReads(source, {
+          space: SOURCE,
+          reader: SPACE,
+          reads: [{ id: "computed:far", scopeKey: "space" }],
+        });
+
+        expect(registered.marked.map(({ piece, seq }) => ({ piece, seq })))
+          .toEqual([{ piece: "of:producer", seq: changed }]);
+        expect(registered.entries).toEqual([{
+          id: "computed:far",
+          scopeKey: "space",
+          head: asOf,
+          stale: true,
+        }]);
+      });
+    });
+
+    describe("selectCurrencyReadersMoved()", () => {
+      it("returns a space that registered an instance a commit changed, once the cursor advanced, in a store with no record", () => {
+        storeReading();
+        const before = position();
+        writeSource("of:far");
+        expect(movedSince(before)).toEqual([]);
+
+        advanceCurrencyCursor(source, { space: SOURCE });
+
+        expect(movedSince(before)).toEqual([SPACE]);
+      });
+
+      it("returns no space for a commit to an instance none registered", () => {
+        storeReading();
+        const before = position();
+        writeSource("of:other");
+
+        advanceCurrencyCursor(source, { space: SOURCE });
+
+        expect(movedSince(before)).toEqual([]);
+      });
+
+      it("returns a space that registered an instance whose producer an advance marked, and again once a record of the producer is clean", () => {
+        storeProducer();
+        register("computed:far");
+        const before = position();
+        const changed = writeSource("of:raw");
+        advanceCurrencyCursor(source, { space: SOURCE });
+        expect(movedSince(before)).toEqual([SPACE]);
+        const marked = position();
+
+        storeSource(changed, [
+          record("of:producer", {
+            reads: [{ ...input("of:raw"), space: SOURCE }],
+            produces: ["computed:far"],
+          }),
+        ]);
+
+        expect(movedSince(marked)).toEqual([SPACE]);
+      });
+
+      it("returns a space that registered an instance a piece no longer writes", () => {
+        const asOf = storeProducer();
+        register("computed:far");
+        const before = position();
+
+        storeSource(asOf, [record("of:producer")]);
+
+        expect(movedSince(before)).toEqual([SPACE]);
+      });
+    });
+
+    describe("applyCurrencyImports()", () => {
+      it("marks `2` each slice that read an instance a pull finds changed, and no slice that read another", () => {
+        storeReading("of:pieceA", "of:farA");
+        storeReading("of:pieceB", "of:farB");
+        writeSource("of:farA");
+
+        pull();
+
+        expect([markOf("of:pieceA"), markOf("of:pieceB")]).toEqual([2, 0]);
+      });
+
+      it("marks `1` a slice that reads what a slice writes that a pull marked", () => {
+        const head = writeSource("of:far");
+        register("of:far");
+        store(write("of:piece", "computed:out"), [
+          record("of:piece", {
+            reads: [far("of:far", head)],
+            produces: ["computed:out"],
+          }),
+          record("of:reader", { reads: [derived("computed:out")] }),
+        ]);
+        writeSource("of:far");
+
+        pull();
+
+        expect([markOf("of:piece"), markOf("of:reader")]).toEqual([2, 1]);
+      });
+
+      it("marks `1` a slice whose source reports its instance stale upstream, and clears it once the source's producer is recorded clean again", () => {
+        const head = storeProducer();
+        register("computed:far");
+        store(write("of:piece"), [
+          record("of:piece", { reads: [far("computed:far", head)] }),
+        ]);
+        const changed = writeSource("of:raw");
+        pull();
+        expect(markOf("of:piece")).toBe(1);
+
+        storeSource(changed, [
+          record("of:producer", {
+            reads: [{ ...input("of:raw"), space: SOURCE }],
+            produces: ["computed:far"],
+          }),
+        ]);
+        pull();
+
+        expect(markOf("of:piece")).toBe(0);
+      });
+    });
+
+    describe("forgetCurrencySource()", () => {
+      it("marks `2` each slice that read the source, and leaves nothing held of it", () => {
+        storeReading();
+
+        expect(forgetCurrencySource(engine, { space: SPACE, source: SOURCE }))
+          .toEqual(["of:piece"]);
+
+        expect(markOf("of:piece")).toBe(2);
+        expect(
+          selectCurrencySourcePosition(engine, {
+            space: SPACE,
+            source: SOURCE,
+          }),
+        ).toBe(0);
+      });
+    });
+
+    describe("selectCurrencySources()", () => {
+      it("returns the other spaces the slices at the given keys read", () => {
+        storeReading();
+
+        expect(
+          selectCurrencySources(engine, { space: SPACE, slices: ["space"] }),
+        ).toEqual([SOURCE]);
+        expect(
+          selectCurrencySources(engine, { space: SPACE, slices: [ALICE_USER] }),
+        ).toEqual([]);
+      });
+    });
+
+    describe("judgeCurrencyRoots()", () => {
+      it("returns a root that rests on a clean slice that read another space", () => {
+        storeReading();
+
+        expect(
+          judgeCurrencyRoots(engine, {
+            space: SPACE,
+            roots: ["of:piece"],
+            rows: [{ id: "of:piece", scopeKey: "space" }],
+            epoch: EPOCH,
+          }).servable,
+        ).toEqual(["of:piece"]);
+      });
     });
   });
 });

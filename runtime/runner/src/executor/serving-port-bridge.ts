@@ -161,6 +161,8 @@ export class ServingPortBridge {
         }),
       viewsChanged: (space, sessionId) =>
         endpoint.notify("observer.viewsChanged", { space, sessionId }),
+      currencyChanged: (space) =>
+        endpoint.notify("observer.currencyChanged", { space }),
       sessionChanged: (event) =>
         endpoint.notify("observer.sessionChanged", { event }),
     };
@@ -398,6 +400,13 @@ export class ServingPortBridge {
         server.judgeCurrencyRoots(space, roots, {
           ...(excludePrincipal !== undefined && { excludePrincipal }),
           epoch,
+        }),
+    );
+    endpoint.onRequest(
+      "server.setCarriedDemand",
+      ({ space, reader, rows, excludePrincipal }) =>
+        server.setCarriedDemand(space, reader, rows, {
+          ...(excludePrincipal !== undefined && { excludePrincipal }),
         }),
     );
     endpoint.onRequest(

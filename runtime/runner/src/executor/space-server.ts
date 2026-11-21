@@ -65,6 +65,11 @@ import {
 } from "@commonfabric/memory/v2/genesis-root";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
+import {
+  CarriedDemand,
+  type CarriedPair,
+  carriedRowsOf,
+} from "./carried-demand.ts";
 
 import type { HostMemoryServer } from "./host-memory-server.ts";
 import type { RoutedPlane, RouteOptions } from "./routed-plane.ts";
@@ -217,6 +222,8 @@ import {
 import { ensureSpaceRootPattern } from "../ensure-space-root.ts";
 import { sourceDocKey } from "../compilation-cache/cell-cache.ts";
 import { asPatternIdentityRef } from "../meta-seam.ts";
+import { entityKindOfIdString } from "../entity-kind.ts";
+import { getMetaLink } from "../link-utils.ts";
 import {
   stampWaveRunContext,
   WaveAccumulator,
@@ -781,15 +788,6 @@ export async function selectForeignStaleInstances(
   return added;
 }
 
-/** The well-known never-a-piece id classes excluded from piece demand
- * (RULED 2026-08-07): a `computed:` doc is a derivation result, a
- * `cid:` doc is a content-addressed bundle, and the watermark doc is
- * the settledness subscription — none can ever carry `patternIdentity`
- * meta, so an `ensurePieceRunning` attempt (and its retry churn) is
- * structurally futile. Remaining `of:` ids are NOT distinguishable by
- * id class (a not-yet-created piece and a never-a-piece value doc look
- * alike) — the complete terminal-state design is the owed follow-up. */
-
 /** The dedupe key of a demanding (principal, session) pair in the
  * registry (stage B): both components, so two sessions of one user are
  * two demanders (a node beneath the root may narrow to session for that
@@ -828,15 +826,32 @@ export function demandersOfRoots(
   return [...demanders.values()];
 }
 
+/**
+ * Whether `id` is of a class that leads to no piece, so that a demand for
+ * it owes no structure load (RULED 2026-08-07): the watermark document is
+ * the settledness subscription, the effects document is a session-scoped
+ * value document every client of a serving space subscribes to
+ * (protocol.md §5), and a `cid:` document is a content-addressed bundle.
+ * None carries a pattern pointer or a back-link to a document that does.
+ * The remaining `of:` ids cannot be told apart by class, and the terminal
+ * state of the structure load covers the ones that are no piece's.
+ */
 const neverAPieceRootId = (id: string): boolean =>
   id === SERVER_EXECUTION_WATERMARK_DOC_ID ||
-  // Phase 4: the effects doc is a session-scoped VALUE doc every
-  // flag-ON client subscribes to (protocol.md §5) — it can never carry
-  // `patternIdentity` meta, so piece demand for it is structurally
-  // futile (the same never-a-piece class as the watermark doc).
   id === SERVER_EXECUTION_EFFECTS_DOC_ID ||
-  id.startsWith("computed:") ||
   id.startsWith("cid:");
+
+/**
+ * Whether `id` names a `computed:` document, the result of a derivation. It
+ * carries no pattern pointer and does carry a `result` back-link to the
+ * piece that derives it (`docs/specs/space-model/4-cells.md`), which a
+ * structure load follows as it follows an argument's. A session is sent
+ * many of them for each piece it watches, so one is a structure-load root
+ * only when a demand names it as a root (serving-loop.md §1, "A computed
+ * document a demand names").
+ */
+const isComputedId = (id: string): boolean =>
+  entityKindOfIdString(id) === "computed";
 
 /**
  * A pattern-lifecycle verb the serving loop runs on the space's runtime on
@@ -1285,10 +1300,32 @@ export class SpaceServer implements TransactionSealDestination {
    * the index (`SpaceServerPolicy.currencyIndex`). */
   #currency: StoreCurrency | undefined;
 
+  /**
+   * What this loop carries into the spaces its runs read (serving-loop.md
+   * §3b), made when a run first reads one.
+   */
+  #carriedDemand: CarriedDemand | undefined;
+
+  /**
+   * The pairs that demand in this space, each with the session it is
+   * carried for, as the last demand pass that changed a row left them.
+   */
+  #carriedDemandPairs: CarriedPair[] | undefined;
+
   /** Wake latch: a stored currency record left a piece owed another
-   * snapshot, which the next cycle's settle takes. Consumed by the next
+   * snapshot, which the next cycle's settle takes, or the currency index
+   * changed from outside this loop while a root was left unloaded, which the
+   * next cycle's demand pass judges again. Consumed by the next
    * `#waitForInput()`. */
   #pendingCurrencyWake = false;
+
+  /**
+   * The timer that wakes the loop at the time a slice's record expires,
+   * where a root is left unloaded, and the time it is set for. Both are
+   * `undefined` while none is set.
+   */
+  #currencyExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+  #currencyExpiryAt: number | undefined;
 
   /** Level-converted demand wake (stage B): a session's watch set
    * changed (or a session opened); consumed by the next #waitForInput. */
@@ -2551,6 +2588,44 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /**
+   * Has the next cycle judge again each root left unloaded because the
+   * store could serve it (serving-loop.md §3b): the space's currency index
+   * changed from outside this loop. A loop that left no root unloaded, and
+   * has no judgment under way that may leave one, does nothing.
+   */
+  noteCurrencyChanged(): void {
+    if (this.#currency?.noteIndexChanged() !== true) return;
+    this.#options.stats.currency.indexWakes += 1;
+    this.#pendingCurrencyWake = true;
+    this.#feedArrived?.resolve();
+  }
+
+  /**
+   * Helper for `#loadDemandedStructure()`, which sets the timer that wakes
+   * the loop when the record of a slice expires, for as long as a root is
+   * left unloaded (serving-loop.md §3b). A slice that read a clock goes
+   * stale at the clock's next tick with no commit to report it, so the
+   * loop asks for a judgment then. The judgment that follows sets the timer
+   * again, for the next such time.
+   */
+  #armCurrencyExpiry(): void {
+    const at = this.#currency?.nextExpiry;
+    if (at === this.#currencyExpiryAt) return;
+    clearTimeout(this.#currencyExpiryTimer);
+    this.#currencyExpiryAt = at;
+    this.#currencyExpiryTimer = at === undefined
+      ? undefined
+      : setTimeout(() => {
+        this.#currencyExpiryTimer = undefined;
+        this.#currencyExpiryAt = undefined;
+        if (this.#currency?.noteIndexChanged() !== true) return;
+        this.#options.stats.currency.expiryWakes += 1;
+        this.#pendingCurrencyWake = true;
+        this.#feedArrived?.resolve();
+      }, Math.max(0, at - Date.now()));
+  }
+
+  /**
    * Queue a lifecycle verb for the next wave cycle. Resolves with the
    * verb's receipt once the wave that carried its writes has committed
    * and its `confirm` step has passed; rejects with the verb's own
@@ -2872,6 +2947,7 @@ export class SpaceServer implements TransactionSealDestination {
     const runtime = this.#runtime;
     if (!this.#active || runtime === undefined) return;
     await this.#currency?.stored;
+    await this.#carriedDemand?.settled;
     await this.#outbox?.settle();
     await runtime.settled();
     await this.#options.server.idle();
@@ -6082,13 +6158,18 @@ export class SpaceServer implements TransactionSealDestination {
       // structure load's input) when any session's row says so, or it is
       // warm, or a session's row was sent one of a piece's values: a piece
       // reached only through a data link starts for the session that demands
-      // its values, as one it watches does (design §2.8 flag 4).
+      // its values, as one it watches does (design §2.8 flag 4). A
+      // `computed:` document a session was sent is no root on that ground:
+      // a session watching a piece is sent every one the piece derives, and
+      // the piece starts from the root that reached them.
       let first: { id: string; scope: CellScope } | undefined;
       let root = warm !== undefined;
       const pairs = new Map<string, ScopeKeyIdentity>();
       for (const row of rows?.values() ?? []) {
         first ??= row;
-        if (row.root || row.piece === true) root = true;
+        if (row.root || (row.piece === true && !isComputedId(row.id))) {
+          root = true;
+        }
         // Anonymous sessions (no principal) contribute the key but own no
         // instance — not a demander (`fanOutInstances` drops principal-less
         // pairs; parity with `watchedRootsForSpace`'s identity-less rows).
@@ -6156,6 +6237,12 @@ export class SpaceServer implements TransactionSealDestination {
     }
     this.#demandFullReconcile = false;
     stats.demand.demandKeysReconciled += changed.size;
+    // A pair that arrived or left changes whom a read in another space is
+    // carried for.
+    if (changed.size > 0) {
+      this.#carriedDemandPairs = undefined;
+      this.#syncCarriedDemand();
+    }
     // The roots whose structure load is owed, with the address each one's
     // load reads: every root on its first demand, and every root still
     // pending from an earlier attempt.
@@ -6195,6 +6282,7 @@ export class SpaceServer implements TransactionSealDestination {
           this.#rearmSeqsAwaitingFollow.delete(key);
         }
       }
+      this.#armCurrencyExpiry();
     }
     // ONE changed-doc collection for the whole pass, opened BEFORE the pull
     // below rather than per root inside it. The pull is what registers each
@@ -6225,19 +6313,16 @@ export class SpaceServer implements TransactionSealDestination {
         // per-cycle ensure churn (stage P2-F, the OW19 design).
         if (this.#terminalStructureLoads.has(key)) {
           continue;
-        } // Id-class exclusion (RULED 2026-08-07): well-known never-a-piece
-        // ids register NO piece demand — no `ensurePieceRunning` attempt,
-        // no retry, no `structureLoadDeferred` increment (the counter
-        // stays meaningful for genuinely not-yet-loadable pieces).
-        // `computed:` docs are derivation results, `cid:` docs are
-        // content-addressed bundles, and the watermark doc is the
-        // settledness subscription every waitForSettled/overlay client
-        // holds — none can ever carry `patternIdentity` meta. The remaining
-        // `of:` ids — which id classes cannot split into not-yet-created
-        // pieces vs never-a-piece value docs — are covered by the TERMINAL
-        // state below (stage P2-F): confirmed-synced-no-meta parks the
-        // root, and the commit-triggered re-arm keeps the creation race
-        // sound.
+        } // Id-class exclusion (RULED 2026-08-07): an id of a class that
+        // leads to no piece (`neverAPieceRootId()`) registers NO piece
+        // demand — no `ensurePieceRunning` attempt, no retry, no
+        // `structureLoadDeferred` increment (the counter stays meaningful
+        // for genuinely not-yet-loadable pieces). Every other id is loaded,
+        // a `computed:` one through its back-link. The ids that turn out to
+        // be no piece's — which id classes cannot split from pieces not yet
+        // created — are covered by the TERMINAL state below (stage P2-F):
+        // confirmed-synced-no-meta parks the root, and the commit-triggered
+        // re-arm keeps the creation race sound.
         else if (neverAPieceRootId(root.id)) {
           this.#pendingStructureLoads.delete(key);
           this.#structureLoadDeferralStreaks.delete(key);
@@ -6281,9 +6366,14 @@ export class SpaceServer implements TransactionSealDestination {
             ]);
             this.#rearmSeqsUnderRetry.delete(key);
             this.#rearmSeqsAwaitingFollow.delete(key);
+            // A `computed:` root narrower than the space is loaded from
+            // the document its demander's instance links back to.
+            const loadRoot =
+              await this.#ownerOfComputedInstance(runtime, key, root) ?? root;
+            if (!this.#active || this.#runtime !== runtime) return;
             const attempt = await this.#attemptStructureLoad(
               runtime,
-              root,
+              loadRoot,
               onOwningRoot,
               onSourceRoot,
             );
@@ -6299,7 +6389,7 @@ export class SpaceServer implements TransactionSealDestination {
               // where it can answer, and to the chain where it cannot.
               const confirmed = (await this.#confirmNoPatternMeta(
                 runtime,
-                root,
+                loadRoot,
                 attempt,
                 onOwningRoot,
                 onSourceRoot,
@@ -6503,7 +6593,8 @@ export class SpaceServer implements TransactionSealDestination {
       const rootScope: CellScope = resolved === undefined
         ? this.#demandRootAddresses.get(key)?.scope ?? "space"
         : (resolved.scope ?? "space") as CellScope;
-      if (neverAPieceRootId(rootId)) continue;
+      // A `computed:` root whose load resolved to no piece owes no seed.
+      if (neverAPieceRootId(rootId) || isComputedId(rootId)) continue;
       let seeded = this.#seededDemanders.get(rootId);
       if (seeded === undefined) {
         seeded = new Set();
@@ -6595,6 +6686,51 @@ export class SpaceServer implements TransactionSealDestination {
     d.demandPasses += 1;
     d.demandPassMs += performance.now() - passStart;
     timing.time(passStart, "executor", "wave", "demand-pass");
+  }
+
+  /**
+   * The document that the `computed:` root `root`, demanded under `key` at
+   * an instance narrower than the space, links back to: the next document
+   * on the way to the piece that derives it. A structure load reads a root
+   * under the serving identity, whose own instance of such a document is
+   * not the one demanded, and the space may hold no instance of it at all.
+   * So the instance is read as a pair that demands it, which resolves to
+   * the demanded one. `undefined` for any other root, for a key no pair
+   * demands, and for an instance that is absent, cannot be read, or links
+   * back to a document of another space.
+   */
+  async #ownerOfComputedInstance(
+    runtime: Runtime,
+    key: string,
+    root: { id: string; scope?: string },
+  ): Promise<{ id: string; scope?: string } | undefined> {
+    const scope = (root.scope ?? "space") as CellScope;
+    if (scope === "space" || !isComputedId(root.id)) return undefined;
+    const demander = this.#demandersByKey.get(key)?.values().next().value;
+    if (demander === undefined) return undefined;
+    const tx = runtime.readTx();
+    tx.tx.scopeKeyIdentity = demander;
+    try {
+      const instance = runtime.getCellFromLink(
+        {
+          space: this.#options.space,
+          id: root.id as URI,
+          scope,
+          path: [],
+        },
+        undefined,
+        tx,
+      );
+      await instance.sync();
+      const owner = getMetaLink(instance, "result");
+      if (owner === undefined || owner.space !== this.#options.space) {
+        return undefined;
+      }
+      return { id: owner.id, scope: owner.scope };
+    } catch {
+      // The structure load of the root itself reports what cannot be read.
+      return undefined;
+    }
   }
 
   /**
@@ -7224,7 +7360,8 @@ export class SpaceServer implements TransactionSealDestination {
    * Helper for `#serveWave()`, which takes the currency records of the pieces
    * that ran, as the scheduler holds them at this instant
    * (serving-loop.md §3b). `blocked` says the cycle cannot vouch for what it
-   * derived, and `asOf` is the visible input head the settle covered. Returns
+   * derived, and `asOf` is the visible input head the settle covered, which
+   * the records are taken at where the watermark is not above it. Returns
    * `undefined` where the index is not kept, the cycle is blocked, a run or
    * a seal is still under way, an effect is outstanding, or no piece is due
    * a record.
@@ -7244,7 +7381,82 @@ export class SpaceServer implements TransactionSealDestination {
       !runtime.hasAsyncWorkPending && !this.#effectsRetirementOwed &&
       (this.#outbox?.inflightCount ?? 0) === 0;
     if (!settled) return undefined;
-    return currency.snapshot(runtime, asOf, this.#ownDerivedSeqs);
+    // The watermark covers this loop's own commits as well as the inputs
+    // below them, and forgets the own ones it covers. A cycle that no input
+    // woke, as a viewer's arrival does, settles at the input head of the
+    // cycle before it, which may sit below such a commit.
+    const snapshot = currency.snapshot(
+      runtime,
+      Math.max(asOf, this.#watermark),
+      this.#ownDerivedSeqs,
+    );
+    // Taking the snapshot is what finds a run's reads in another space,
+    // and what finds them gone, whether or not it leaves a record to store.
+    if (
+      currency.takeForeignReadsChanged() ||
+      this.#carriedDemand?.retryOwed === true
+    ) this.#syncCarriedDemand();
+    return snapshot;
+  }
+
+  /**
+   * Sends each space a run here read the demand that read carries
+   * (serving-loop.md §3b), where it changed: the instance read, for each
+   * pair demanding in this space that the run was made for
+   * (`carriedRowsOf()`).
+   */
+  #syncCarriedDemand(): void {
+    const reads = this.#currency?.foreignReads;
+    if (reads === undefined) return;
+    if (reads.size === 0 && this.#carriedDemand?.carries !== true) return;
+    this.#carriedDemand ??= new CarriedDemand({
+      space: this.#options.space,
+      server: this.#options.server,
+      serviceIdentity: this.#options.serviceIdentity,
+      stats: this.#options.stats,
+    });
+    this.#carriedDemand.send(
+      carriedRowsOf(
+        [...reads.values()].flat(),
+        reads.size === 0 ? [] : this.#demandingPairs(),
+      ),
+    );
+  }
+
+  /**
+   * Helper for `#syncCarriedDemand()`, which returns the pairs demanding
+   * in this space with the session each is carried for: the pair's own
+   * session here, or the origin of a pair another space carried here. A
+   * demand carried here with no pair is returned with its origin alone.
+   */
+  #demandingPairs(): CarriedPair[] {
+    if (this.#carriedDemandPairs !== undefined) return this.#carriedDemandPairs;
+    const pairs = new Map<string, CarriedPair>();
+    for (const key of this.#demandMirror.keys()) {
+      for (const row of this.#demandMirror.rowsFor(key)?.values() ?? []) {
+        const { principal, sessionId } = row.identity ?? {};
+        if (principal === undefined || sessionId === undefined) {
+          // A row another space carried here for an actor who may not read
+          // this space names no pair, and is carried on for its origin: a
+          // read made for everyone was made for it too.
+          if (row.origin === undefined) continue;
+          const originKey = `\0${row.origin.space}\0${row.origin.sessionId}`;
+          if (!pairs.has(originKey)) {
+            pairs.set(originKey, { origin: row.origin });
+          }
+          continue;
+        }
+        const identity = { principal, sessionId } as ScopeKeyIdentity;
+        const pairKey = demanderPairKey(identity);
+        if (pairs.has(pairKey)) continue;
+        pairs.set(pairKey, {
+          ...identity,
+          origin: row.origin ?? { space: this.#options.space, sessionId },
+        });
+      }
+    }
+    this.#carriedDemandPairs = [...pairs.values()];
+    return this.#carriedDemandPairs;
   }
 
   /**
@@ -8990,6 +9202,9 @@ export class SpaceServer implements TransactionSealDestination {
     this.#enclosingRootsByOwningRoot.clear();
     this.#demandRootAddresses.clear();
     this.#rootsAwaitingFirstLoad.clear();
+    // No run of this tenure reads another space any longer.
+    this.#carriedDemand?.withdraw();
+    this.#carriedDemandPairs = undefined;
     // The registry is empty, so the next tenure's first pass reconciles
     // every key it reads.
     this.#demandMirror.clear();
@@ -9017,6 +9232,9 @@ export class SpaceServer implements TransactionSealDestination {
     this.#pendingStructureRetryWake = false;
     this.#currency = undefined;
     this.#pendingCurrencyWake = false;
+    clearTimeout(this.#currencyExpiryTimer);
+    this.#currencyExpiryTimer = undefined;
+    this.#currencyExpiryAt = undefined;
     // Phase 5: foreign engine resolutions die with the tenure, since the
     // memory server may close their engines once it has ended.
     this.#foreignEngines.clear();
@@ -9033,6 +9251,7 @@ export class SpaceServer implements TransactionSealDestination {
     const wave = this.#currentWave;
     this.#currentWave = undefined;
     await this.#sealChain;
+    await this.#carriedDemand?.settled;
     wave?.abandon(`parked: ${reason}`);
     // Nothing sealed into this tenure's waves commits now: a barrier
     // waiting on one has nothing left to wait for.

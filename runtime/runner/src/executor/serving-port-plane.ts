@@ -533,6 +533,21 @@ class PlaneMemoryServer implements HostMemoryServer {
   }
 
   /** @inheritDoc */
+  setCarriedDemand(
+    space: string,
+    reader: string,
+    rows: Parameters<HostMemoryServer["setCarriedDemand"]>[2],
+    options: { excludePrincipal?: string } = {},
+  ): ReturnType<HostMemoryServer["setCarriedDemand"]> {
+    return this.#endpoint.request("server.setCarriedDemand", {
+      space,
+      reader,
+      rows: [...rows],
+      excludePrincipal: options.excludePrincipal,
+    });
+  }
+
+  /** @inheritDoc */
   foreignWriteAuthorityFor(
     space: string,
     principal: string | undefined,
@@ -696,6 +711,9 @@ export class ServingPlane {
     endpoint.onNotice("observer.viewsChanged", ({ space, sessionId }) => {
       this.#viewInterests.noteChanged(space);
       this.#observer?.viewsChanged?.(space, sessionId);
+    });
+    endpoint.onNotice("observer.currencyChanged", ({ space }) => {
+      this.#observer?.currencyChanged?.(space);
     });
     endpoint.onNotice("observer.sessionChanged", ({ event }) => {
       this.#sessions.apply(event);

@@ -85,6 +85,7 @@ import {
   type SpaceAccessRestoredNotification,
   type SpaceAclCapability,
   type SpaceAclView,
+  type SpaceSeqAdvancedNotification,
   TelemetryNotification,
   type UploadBlobResponse,
 } from "./protocol/mod.ts";
@@ -194,6 +195,12 @@ export type RuntimeClientEvents = {
    * and this is the word to ask on: nothing else says when.
    */
   connectionrestored: [];
+
+  /**
+   * The newest seq of a space the runtime has learned of moved forward, for
+   * a space `watchSpaceHistory()` asked to follow.
+   */
+  spaceseqadvanced: [{ space: DID; seq: number }];
 
   telemetry: [RuntimeTelemetryMarkerResult];
   pendingwriteschange: [{ pending: boolean }];
@@ -463,6 +470,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#conn.on("spaceaccesslost", this.#onSpaceAccessLost);
     this.#conn.on("spaceaccessrestored", this.#onSpaceAccessRestored);
     this.#conn.on("connectionrestored", this.#onConnectionRestored);
+    this.#conn.on("spaceseqadvanced", this.#onSpaceSeqAdvanced);
     this.#conn.on("eventintentoutcome", this.#onEventIntentOutcome);
     this.#conn.on("telemetry", this.#onTelemetry);
     this.#conn.on("pendingwriteschange", this.#onPendingWritesChange);
@@ -1903,6 +1911,21 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   }
 
   /**
+   * Starts reporting `spaceseqadvanced` for `space`, each time the newest
+   * seq of it the runtime has learned of moves forward, or with `watch`
+   * false stops. The seq moves for a commit the runtime makes and for one
+   * to a document it watches, so a commit to a document it does not watch
+   * is not reported until one it does follows.
+   */
+  async watchSpaceHistory(space: DID, watch: boolean): Promise<void> {
+    await this.#conn.request<RequestType.SpaceHistoryWatch>({
+      type: RequestType.SpaceHistoryWatch,
+      space,
+      watch,
+    });
+  }
+
+  /**
    * Forks the branch `options.name` of `options.space` from the point
    * `options.forkSeq` of its history. A runtime client initialized with the
    * branch in `RuntimeClientOptions.branches` runs the space as the branch
@@ -1991,6 +2014,12 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     { space, eventId, kind, reason }: EventIntentOutcomeNotification,
   ): void => {
     this.emit("eventintentoutcome", { space, eventId, kind, reason });
+  };
+
+  #onSpaceSeqAdvanced = (
+    { space, seq }: SpaceSeqAdvancedNotification,
+  ): void => {
+    this.emit("spaceseqadvanced", { space, seq });
   };
 
   #onSpaceAccessLost = (

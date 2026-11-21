@@ -34,6 +34,7 @@ import {
   RuntimeErrorCode,
   SpaceAccessLostNotification,
   SpaceAccessRestoredNotification,
+  SpaceSeqAdvancedNotification,
   TelemetryNotification,
   TransportNotificationType,
   VDomBatchNotification,
@@ -134,6 +135,7 @@ export function isIPCRemoteNotification(
     isSpaceAccessLostNotification(value) ||
     isSpaceAccessRestoredNotification(value) ||
     isConnectionRestoredNotification(value) ||
+    isSpaceSeqAdvancedNotification(value) ||
     isEventIntentOutcomeNotification(value);
 }
 
@@ -267,6 +269,15 @@ export function isConnectionRestoredNotification(
 ): value is ConnectionRestoredNotification {
   return isObjectNotArray(value) &&
     value.type === NotificationType.ConnectionRestored;
+}
+
+/** Recognizes a report that a space's newest seq moved forward. */
+export function isSpaceSeqAdvancedNotification(
+  value: unknown,
+): value is SpaceSeqAdvancedNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.SpaceSeqAdvanced && isDID(value.space) &&
+    Number.isSafeInteger(value.seq) && (value.seq as number) >= 0;
 }
 
 /**

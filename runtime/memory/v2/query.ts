@@ -219,11 +219,13 @@ export type SlowestQueryRoot = {
   reads: number;
 
   /** The walk this root ran, as counters: how many documents it crossed
-   * (`dagTraversals`), what kind of structure it crossed them through, and
-   * how much the schema memo saved. `elapsedMs` says a root was expensive;
-   * this says what it did to get that way — a wide root crossing thousands
-   * of documents and one deep root re-walking a schema are the same
-   * duration and different bugs. */
+   * (`dagTraversals`), what kind of structure it crossed them through, how
+   * much the schema memo saved, and how many positions it ran from the
+   * traversal's own stack because the data was deep enough
+   * (`nativeDepthHandoffs`). `elapsedMs` says a root was expensive; this
+   * says what it did to get that way — a wide root crossing thousands of
+   * documents and one deep root re-walking a schema are the same duration
+   * and different bugs. */
   walk: GraphQueryWalkStats;
 };
 
@@ -241,6 +243,7 @@ const walkStatsDelta = (
   dagTraversals: after.dagTraversals - before.dagTraversals,
   getDocAtPathCalls: after.getDocAtPathCalls - before.getDocAtPathCalls,
   schemaMemoHits: after.schemaMemoHits - before.schemaMemoHits,
+  nativeDepthHandoffs: after.nativeDepthHandoffs - before.nativeDepthHandoffs,
 });
 
 /**
