@@ -14,6 +14,7 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { isCfcLabelReference } from "../src/cfc/label-documents.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
+  type ImplementationIdentity,
   runtimeWritePolicyAuthorization,
   type StoredCfcMetadata,
 } from "../src/cfc/types.ts";
@@ -26,7 +27,10 @@ import {
   writeProcessedClaim,
 } from "../src/executor/processed-claim.ts";
 import { processedClaimJoinIsForeign } from "../src/cfc/prepare.ts";
-import { runBeforeAbort } from "../src/storage/extended-storage-transaction.ts";
+import {
+  runBeforeAbort,
+  setCfcImplementationIdentity,
+} from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -547,6 +551,127 @@ describe("cfc-processed-claim", () => {
       ).toBe(false);
       expect(withheldOn(tx)).toBeUndefined();
       expect(waveClaimIsWithheld(tx)).toBe(false);
+      tx.abort();
+    });
+  });
+  describe("the write-identity summary", () => {
+    // §6.2.2 claims the processed cell apart from the handler, so the claim
+    // the serving loop writes in the handler's transaction, under no
+    // identity, is not one of the handler's writes: a run whose own writes
+    // are all the handler's is attributed to the handler (§8.9.3). Only that
+    // write is left out. Each case writes the claim, then writes as the
+    // handler, and then, in the negative cases, writes something else.
+    const HANDLER: ImplementationIdentity = {
+      kind: "verified",
+      moduleIdentity: "module:processed-claim-identity",
+      symbol: "advance",
+      bindingPath: ["advance"],
+    };
+
+    /**
+     * A handler run whose serving loop wrote its processed claim, and whose
+     * handler has written one document.
+     */
+    const claimedHandlerRun = (
+      actionId: string,
+      { clearDeferral }: { clearDeferral: boolean },
+    ) => {
+      const tx = handlerRun(actionId);
+      writeProcessedClaim(
+        runtime,
+        tx,
+        space,
+        { sidecarId: entriesId, index: 0 },
+        { clearDeferral },
+      );
+      setCfcImplementationIdentity(tx, HANDLER);
+      runtime.getCell<string>(space, `${actionId}-out`, undefined, tx)
+        .set("handled");
+      return tx;
+    };
+
+    for (const clearDeferral of [false, true]) {
+      it(
+        `attributes the run to the handler${
+          clearDeferral ? " when the claim clears a delivery deferral" : ""
+        }`,
+        () => {
+          const tx = claimedHandlerRun(
+            `attributed-handler-${clearDeferral}`,
+            { clearDeferral },
+          );
+          const summary = tx.getCfcState().writeIdentity;
+          expect(summary.multiple).toBe(false);
+          expect(summary.identity).toEqual(HANDLER);
+          tx.abort();
+        },
+      );
+    }
+
+    it("still counts a write made under no identity elsewhere", () => {
+      const tx = claimedHandlerRun("mixed-handler", { clearDeferral: false });
+      setCfcImplementationIdentity(tx, undefined);
+      runtime.getCell<string>(space, "mixed-handler-other", undefined, tx)
+        .set("unattributed");
+      expect(tx.getCfcState().writeIdentity.multiple).toBe(true);
+      tx.abort();
+    });
+
+    it("still counts a write under no identity of another value at the claim's path", () => {
+      const tx = claimedHandlerRun("overwritten-claim", {
+        clearDeferral: false,
+      });
+      setCfcImplementationIdentity(tx, undefined);
+      runtime.getCellFromLink<boolean>({
+        space,
+        scope: "space",
+        id: entriesId as never,
+        path: ["entries", "0", "consequenced"],
+      }).withTx(tx).set(false);
+      expect(tx.getCfcState().writeIdentity.multiple).toBe(true);
+      tx.abort();
+    });
+
+    it("still counts a write the runtime named a claim on a document no stream's entries are", () => {
+      const tx = claimedHandlerRun("misplaced-claim", { clearDeferral: false });
+      setCfcImplementationIdentity(tx, undefined);
+      const other = runtime.getCell<{ consequenced?: boolean }>(
+        space,
+        "not-a-stream-entries-doc",
+        undefined,
+        tx,
+      );
+      const link = other.getAsNormalizedFullLink();
+      tx.recordCfcWritePolicyInput({
+        kind: "structural-provenance",
+        target: { space, id: link.id, scope: "space", path: ["consequenced"] },
+        claim: CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
+        sources: [],
+      }, runtimeWritePolicyAuthorization);
+      other.key("consequenced").set(true);
+      expect(tx.getCfcState().writeIdentity.multiple).toBe(true);
+      tx.abort();
+    });
+
+    it("leaves out no write at a path named a claim without the runtime's mark", () => {
+      const tx = handlerRun("forged-claim-identity");
+      const path = ["entries", "0", "consequenced"];
+      tx.recordCfcWritePolicyInput({
+        kind: "structural-provenance",
+        target: { space, id: entriesId, scope: "space", path },
+        claim: CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM,
+        sources: [],
+      });
+      runtime.getCellFromLink<boolean>({
+        space,
+        scope: "space",
+        id: entriesId as never,
+        path,
+      }).withTx(tx).set(true);
+      setCfcImplementationIdentity(tx, HANDLER);
+      runtime.getCell<string>(space, "forged-claim-identity-out", undefined, tx)
+        .set("handled");
+      expect(tx.getCfcState().writeIdentity.multiple).toBe(true);
       tx.abort();
     });
   });

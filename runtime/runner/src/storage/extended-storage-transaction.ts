@@ -121,6 +121,7 @@ import {
 import { withoutEnvelopeStabilityToken } from "../cfc/envelope-stability-reason.ts";
 import {
   ensureSchemaDocument,
+  isProcessedClaimValue,
   labelMetadataTemplatesFor,
   loadStoredCfcEnvelope,
   prepareBoundaryCommitSteps,
@@ -1970,11 +1971,18 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * and under no identity, and it takes nothing of what the handler reads
    * (CFC §6.2.2, `executor/processed-claim.ts`). Counted, it would make every
    * served handler's transaction one of mixed authorship, and nothing a
-   * served handler wrote would carry `TransformedBy`.
+   * served handler wrote would carry `TransformedBy`. Only that write is left
+   * out: one made under no identity, of `written`, the value the claim
+   * writes, at a path the runtime named a claim. It is the write the prepare
+   * gate leaves out of the join's stamp (`isProcessedClaimValue()`), so a
+   * write the stamp covers is never one the summary skipped.
    */
   #noteWriteIdentity(
     address: IMemorySpaceAddress,
-    { unmarked = false }: { unmarked?: boolean } = {},
+    { unmarked = false, written }: {
+      unmarked?: boolean;
+      written?: { value: FabricValue | undefined };
+    } = {},
   ): void {
     if (!unmarked && this.#privilegedSystemWriteDepth > 0) return;
     const current = unmarked
@@ -1996,7 +2004,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         }));
       }
     }
-    if (!unmarked && this.#isProcessedClaimWrite(address)) return;
+    if (
+      !unmarked && current === undefined && written !== undefined &&
+      this.#isProcessedClaimWrite(address, written.value)
+    ) return;
     const summary = this.#cfcState.writeIdentity;
     if (summary.multiple) return;
     if (!summary.sawWrite) {
@@ -2011,20 +2022,26 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   /**
-   * Whether `address` is a path the runtime named a served event's processed
-   * claim on this transaction.
+   * Whether writing `value` at `address` writes a served event's processed
+   * claim: the value the claim writes, at a path the runtime named a claim on
+   * this transaction.
    */
-  #isProcessedClaimWrite(address: IMemorySpaceAddress): boolean {
+  #isProcessedClaimWrite(
+    address: IMemorySpaceAddress,
+    value: FabricValue | undefined,
+  ): boolean {
     if (this.#processedClaimKeys.size === 0) return false;
     const path = canonicalizeDocumentPath(toDocumentPath(address.path));
-    return path !== undefined && this.#processedClaimKeys.has(
-      stringTupleKey([
-        address.space,
-        address.id,
-        normalizeCellScope(address.scope),
-        ...path,
-      ]),
-    );
+    return path !== undefined &&
+      isProcessedClaimValue(address.id, path, value) &&
+      this.#processedClaimKeys.has(
+        stringTupleKey([
+          address.space,
+          address.id,
+          normalizeCellScope(address.scope),
+          ...path,
+        ]),
+      );
   }
 
   /**
@@ -2035,7 +2052,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    */
   #noteAttemptedWrite(
     address: IMemorySpaceAddress,
-    options?: { unmarked?: boolean },
+    options?: {
+      unmarked?: boolean;
+      written?: { value: FabricValue | undefined };
+    },
   ): void {
     this.#noteCfcActivity();
     this.#noteWriteIdentity(address, options);
@@ -2627,6 +2647,17 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // document is, not which piece it was minted for.
       if (
         frozen.kind === "structural-provenance" &&
+        frozen.claim === CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE &&
+        canonicalizeLogicalPath(frozen.target.path).length === 0
+      ) {
+        this.#markedUndeclarableStores.add(
+          runtimeOwnedStoreKey(frozen.target.space, frozen.target.id),
+        );
+      }
+      // A served event's processed claim names one path, which the
+      // write-identity summary leaves out (`#noteWriteIdentity()`).
+      if (
+        frozen.kind === "structural-provenance" &&
         frozen.claim === CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM
       ) {
         this.#processedClaimKeys.add(stringTupleKey([
@@ -2635,15 +2666,6 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           normalizeCellScope(frozen.target.scope),
           ...canonicalizeLogicalPath(frozen.target.path),
         ]));
-      }
-      if (
-        frozen.kind === "structural-provenance" &&
-        frozen.claim === CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE &&
-        canonicalizeLogicalPath(frozen.target.path).length === 0
-      ) {
-        this.#markedUndeclarableStores.add(
-          runtimeOwnedStoreKey(frozen.target.space, frozen.target.id),
-        );
       }
     }
     if (this.#cfcState.prepare.status === "prepared") {
@@ -4408,7 +4430,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     value = this.#storedLinkSchemaForm(address, value);
     this.#noteCfcActivity();
     this.#noteSystemWrite(address, value, options);
-    this.#noteWriteIdentity(address);
+    this.#noteWriteIdentity(address, {
+      written: { value: options?.delete === true ? undefined : value },
+    });
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("write-after-prepare");
     }
@@ -4437,7 +4461,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     value = this.#storedLinkSchemaForm(address, value);
     this.#noteCfcActivity();
     this.#noteSystemWrite(address, value, options);
-    this.#noteWriteIdentity(address);
+    this.#noteWriteIdentity(address, {
+      written: { value: options?.delete === true ? undefined : value },
+    });
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("write-after-prepare");
     }
@@ -4522,8 +4548,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // counts a write that leaves the value unchanged among the attempted
       // writes, and has any write after a preparation invalidate it;
       // `docs/specs/cfc-commit-preparation.md` covers the arrangement.
-      const noteWriteIdentity = (address: IMemorySpaceAddress) =>
-        this.#noteAttemptedWrite(address);
+      const noteWriteIdentity = (
+        address: IMemorySpaceAddress,
+        value: FabricValue | undefined,
+      ) => this.#noteAttemptedWrite(address, { written: { value } });
       const refuseMalformedSchemaMeta = (
         address: IMemorySpaceAddress,
         value: FabricValue | undefined,
@@ -4556,7 +4584,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
             const address = toMemorySpaceAddress(write.address);
             const value = storedLinkSchemaForm(address, write.value);
             noteSystemWrite(address, value);
-            noteWriteIdentity(address);
+            noteWriteIdentity(address, write.delete ? undefined : value);
             if (!write.delete) {
               refuseMalformedSchemaMeta(address, value);
               if (getContentAddressedSchemasConfig()) {

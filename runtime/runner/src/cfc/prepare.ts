@@ -1559,12 +1559,27 @@ const structuralProvenanceForPath = (
 };
 
 /**
+ * Whether `value` at `path` of the document `id` is what a served event's
+ * processed claim writes. Only a stream's entries document holds one, and
+ * only while the path holds what the claim writes: `true` for the mark and
+ * for `withheld`, nothing for a cleared delivery deferral. It says nothing of
+ * whether the runtime named the path a claim; `isProcessedClaimPath()` and
+ * the transaction's write-identity summary each also require that.
+ */
+export const isProcessedClaimValue = (
+  id: string,
+  path: readonly string[],
+  value: unknown,
+): boolean =>
+  id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
+  value === (path.at(-1) === "deliveryDeferral" ? undefined : true);
+
+/**
  * Whether `path` of `target` is a served event's processed claim, as an
  * authorized `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM` marker on `tx` names
- * it, holding `value`, the value the transaction wrote there. Only a stream's
- * entries document holds one, and only while the path holds what the claim
- * writes: `true` for the mark and for `withheld`, nothing for a cleared
- * delivery deferral. Anything else written there is measured as any write is.
+ * it, holding `value`, the value the transaction wrote there
+ * (`isProcessedClaimValue()`). Anything else written there is measured as any
+ * write is.
  */
 const isProcessedClaimPath = (
   tx: IExtendedStorageTransaction,
@@ -1576,8 +1591,7 @@ const isProcessedClaimPath = (
   path: readonly string[],
   value: unknown,
 ): boolean =>
-  target.id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
-  value === (path.at(-1) === "deliveryDeferral" ? undefined : true) &&
+  isProcessedClaimValue(target.id, path, value) &&
   structuralProvenanceForPath(
       tx,
       target,
