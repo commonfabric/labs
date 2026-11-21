@@ -42,7 +42,7 @@ export interface QuickCaptureOutput {
   [NAME]: string;
   [UI]: VNode;
   summary: string;
-  capture: Stream<{ text: string; attachments?: Writable<any>[] }>;
+  capture: Stream<{ text: string; attachments?: Writable<unknown>[] }>;
 }
 
 const clearChat = handler(
@@ -66,7 +66,7 @@ const sendMessage = handler<
 });
 
 const captureHandler = handler<
-  { text: string; attachments?: Writable<any>[] },
+  { text: string; attachments?: Writable<unknown>[] },
   { addMessage: Stream<BuiltInLLMMessage> }
 >(({ text }, { addMessage }) => {
   addMessage.send({
@@ -85,7 +85,7 @@ export const createNoteHandler = handler<
     title,
     content,
   });
-  pieceRegistry.push(note as any);
+  pieceRegistry.push(note);
   return note;
 });
 
@@ -100,7 +100,7 @@ export const createNotebookHandler = handler<
     })
   );
   const notebook = Notebook({ title, notes });
-  pieceRegistry.push(notebook as any);
+  pieceRegistry.push(notebook);
   return notebook;
 });
 

@@ -95,7 +95,7 @@ const removePiece = handler<
 >((_, state) => {
   const registeredPieces = state.pieceRegistry.get();
   const index = registeredPieces.findIndex(
-    (c: any) => c && state.piece.equals(c),
+    (c) => c && state.piece.equals(c),
   );
 
   if (index !== -1) {
@@ -110,7 +110,7 @@ const removePiece = handler<
 // Handler for dropping a note onto a notebook row
 const dropOntoNotebook = handler<
   { detail: { sourceCell: Writable<NotePiece> } },
-  { notebook: Writable<{ notes?: NotePiece[] }> }
+  { notebook: Writable<MentionablePiece & { notes?: NotePiece[] }> }
 >((event, { notebook }) => {
   const sourceCell = event.detail.sourceCell;
 
@@ -416,7 +416,7 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
                               <cf-drop-zone
                                 accept="note"
                                 oncf-drop={dropOntoNotebook({
-                                  notebook: piece as any,
+                                  notebook: piece,
                                 })}
                               >
                                 {link}

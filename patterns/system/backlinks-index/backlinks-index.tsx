@@ -23,7 +23,7 @@ export type MentionablePiece = {
   isMentionable?: boolean;
   mentioned?: MentionablePiece[];
   backlinks?: MentionablePiece[];
-  mentionable?: MentionablePiece[] | { get?: () => MentionablePiece[] };
+  mentionable?: MentionablePiece[];
 };
 
 export type MentionableCell = Writable<MentionablePiece>;

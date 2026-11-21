@@ -379,7 +379,7 @@ const KnowledgeGraph = pattern<Input>(({ messages }) => {
                 <h3 style={{ margin: "0 0 8px", fontSize: "15px" }}>Groups</h3>
                 <cf-table fullWidth>
                   <tbody>
-                    {compoundNodes.map((node: any) => (
+                    {compoundNodes.map((node) => (
                       <tr>
                         <td style={{ fontWeight: "500" }}>{node[NAME]}</td>
                         <td

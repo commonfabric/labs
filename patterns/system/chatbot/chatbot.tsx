@@ -79,7 +79,7 @@ export type ChatOutput = {
   pinCell: Stream<{ path: string; name: string }>;
   unpinAllCells: Stream<void>;
   pinToChat: Stream<{ path: string; name: string; accumulate: boolean }>;
-  tools: any;
+  tools: Record<string, unknown>;
   ui: {
     chatLog: VNode;
     promptInput: VNode;
@@ -156,7 +156,7 @@ export default pattern<ChatInput, ChatOutput>(
 
     const items = computed(() => {
       if (!result) return [];
-      const items = Object.keys(result as any).map((key) => ({
+      const items = Object.keys(result).map((key) => ({
         label: key,
         value: key,
       }));
