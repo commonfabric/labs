@@ -10173,9 +10173,13 @@ Topics at 100, 1,000 and 2,000 topics on the runtime's storage.
      registers that artifact with the runtime (`CompiledPlanRegistry`), and the
      records of a transaction are kept per compiled pattern, each with a table
      of inputs of its own, since a `plan-inputs` input is of one compiled
-     pattern. The test: the fixture's records of the made instance are recorded
-     under another compiled pattern than those of the instance that makes it,
-     and its commit is accepted.
+     pattern. Round m of the integration branch found the same defect and left
+     such an instance's records out, so that its paths took the join of the
+     transaction, with the registration of each plan as its plan; at the merge
+     of that round the registration stays and the stub is removed. The test: the
+     fixture's records of the made instance are recorded under another compiled
+     pattern than those of the instance that makes it, and its commit is
+     accepted.
 
 569. **A body was handed stand-ins for the elements it reads members of**
      (`Host.pass`, `Host.invoke`). The narrowing of note 543 read a reference of
@@ -10197,30 +10201,33 @@ Topics at 100, 1,000 and 2,000 topics on the runtime's storage.
 
 570. **Topics on the runtime's storage, at 100, 1,000 and 2,000 topics**
      (milestone 2; `compare/topics/scale.ts`, arms `storage` and `today-labeled`
-     beside `executor` and `today`). The Topics source is that of pull request
-     10036, merged into a local branch the runs use. `storage` is the executor
-     with its documents in the runtime's emulated storage, the option
-     `compiledPatterns` on, each topic and each input of the board under a
-     schema with one clause, labels from templates at commit. `today-labeled` is
-     today's runtime with the same clauses and `cfcFlowLabels` at `persist`;
-     `today` stores no label. One process per arm and size, three runs, so nine
-     edits and nine creates per cell; an 18-core machine at load averages of 7
-     to 12 from other sessions, so the times are loaded and the counts are
-     exact. The run of `today-labeled` at 2,000 topics is one run. Every commit
-     of `storage` was accepted, and the facts the four arms read of the board
-     after each step are equal.
+     beside `executor` and `today`), on the integration branch at `dbcce35f91`
+     (its round m). The Topics source is that of pull request 10036, merged into
+     a local branch the runs use. `storage` is the executor with its documents
+     in the runtime's emulated storage, the option `compiledPatterns` on, each
+     topic and each input of the board under a schema with one clause, labels
+     from templates at commit. `today-labeled` is today's runtime with the same
+     clauses and `cfcFlowLabels` at `persist`; `today` stores no label. One
+     process per arm and size, three runs, so nine edits and nine creates per
+     cell; an 18-core machine at load averages of 5 to 15 from other sessions
+     and from a corpus run of this one, so the times are loaded and the counts
+     are exact. The run of `today-labeled` at 2,000 topics is one run. Every
+     commit of `storage` was accepted, and the facts the four arms read of the
+     board after each step are equal. The same runs on the integration branch at
+     `11d92e4776` gave the same counts for an edit and a create and times within
+     these ranges, but for the load.
 
      | Topics | Step   | Executor in memory, ms | On the runtime's storage, ms |        Today, ms | Today with labels, ms |
      | -----: | ------ | ---------------------: | ---------------------------: | ---------------: | --------------------: |
-     |    100 | load   |               57 to 68 |                   489 to 615 |   1,706 to 2,230 |        3,237 to 4,305 |
-     |    100 | edit   |               15 to 35 |                   215 to 343 |       361 to 491 |          991 to 1,514 |
-     |    100 | create |               41 to 56 |                   548 to 840 |     790 to 1,236 |        2,024 to 3,407 |
-     |  1,000 | load   |             350 to 390 |               5,960 to 8,598 | 15,080 to 16,409 |      44,140 to 45,078 |
-     |  1,000 | edit   |             160 to 271 |               2,116 to 3,480 |   3,780 to 4,302 |      11,423 to 15,822 |
-     |  1,000 | create |             306 to 610 |               5,371 to 6,577 |   7,118 to 7,961 |      24,661 to 29,488 |
-     |  2,000 | load   |             607 to 707 |             23,925 to 29,491 | 35,320 to 36,810 |               144,848 |
-     |  2,000 | edit   |             310 to 472 |               6,654 to 7,457 |  8,532 to 10,251 |      32,745 to 39,524 |
-     |  2,000 | create |           603 to 1,078 |             13,813 to 18,931 | 16,523 to 17,621 |      68,049 to 88,373 |
+     |    100 | load   |               53 to 64 |                   482 to 531 |   1,557 to 2,066 |        2,955 to 4,546 |
+     |    100 | edit   |               18 to 33 |                   214 to 297 |       338 to 407 |          870 to 1,620 |
+     |    100 | create |               44 to 54 |                   524 to 850 |       702 to 992 |        1,817 to 3,287 |
+     |  1,000 | load   |             305 to 368 |               4,432 to 5,263 | 14,660 to 17,705 |      37,674 to 42,664 |
+     |  1,000 | edit   |             151 to 279 |               2,256 to 3,085 |   3,660 to 5,075 |      11,987 to 16,850 |
+     |  1,000 | create |             301 to 552 |               5,254 to 6,864 |   7,341 to 8,271 |      25,646 to 29,608 |
+     |  2,000 | load   |             658 to 672 |             13,312 to 13,922 | 32,516 to 39,688 |               104,252 |
+     |  2,000 | edit   |             346 to 484 |               6,721 to 7,983 |  8,169 to 10,972 |      30,843 to 37,314 |
+     |  2,000 | create |           683 to 1,683 |             12,994 to 16,997 | 15,956 to 19,178 |      67,115 to 86,231 |
 
      What one edit costs on the runtime's storage, the same in every run:
 
@@ -10238,30 +10245,32 @@ Topics at 100, 1,000 and 2,000 topics on the runtime's storage.
      | Overlap queries of the preparation                           |      1,311 |         13,011 |         26,011 |
      | Label entries held by the documents the commits changed      |      2,269 |         22,069 |         44,069 |
      | Those entries as JSON with each label in place, MB           |       1.17 |           11.5 |           23.0 |
-     | Preparation, ms                                              |   46 to 76 |     417 to 681 |   970 to 1,865 |
-     | The executor's own work, ms                                  |   22 to 37 |     209 to 272 |     461 to 584 |
-     | From the executor's last commit to every commit settled, ms  | 115 to 185 | 1,168 to 2,304 | 3,897 to 4,822 |
+     | Preparation, ms                                              |   43 to 68 |     429 to 637 | 1,020 to 1,803 |
+     | The executor's own work, ms                                  |   19 to 33 |     207 to 273 |     466 to 560 |
+     | From the executor's last commit to every commit settled, ms  | 117 to 156 | 1,182 to 2,022 | 3,900 to 5,483 |
 
-     A create has 5 commits, 3 preparations, 16 evaluations, 12 documents, 83
-     records given and 81 recorded, 16 bounds and 128 templates at every size,
-     and reads 1,524, 14,124 and 28,124 positions with records of 1.2, 11.1 and
-     22.2 MB. The load has 2 commits and 1 preparation; its preparation takes
-     122 to 151 ms, 2,747 to 4,678 ms and 14,359 to 19,787 ms, which is more
-     than linear.
+     A create has 5 commits, 3 preparations, 16 evaluations, 12 documents, 83 to
+     89 records given and 81 to 83 recorded, 16 bounds and 128 to 130 templates
+     at every size, and reads 1,361 to 1,688, 13,061 to 15,188 and 26,061 to
+     30,188 positions with records of 1.2, 11.1 and 22.2 MB. The load has 2
+     commits and 1 preparation, 835, 8,035 and 16,035 records given and 736,
+     7,036 and 14,036 recorded; its preparation takes 111 to 117 ms, 1,200 to
+     1,448 ms and 4,424 to 4,900 ms, more than linear still. At `11d92e4776` it
+     took 2,747 to 4,678 ms at 1,000 topics and 14,359 to 19,787 ms at 2,000.
 
      - **The cost of one change grows with the board on the runtime's storage, a
-       little faster than the board.** The median edit takes 257, 2,658 and
-       7,063 ms at 100, 1,000 and 2,000 topics: 27 times more for 20 times the
-       topics, and 2.7 times more from 1,000 to 2,000. Today's grows 23 times
-       (392, 4,029 and 9,090 ms) and today's with labels 33 times (1,177, 12,638
-       and 38,930 ms). The executor in memory grows 18 times (21, 189 and 373
+       little faster than the board.** The median edit takes 249, 2,557 and
+       6,984 ms at 100, 1,000 and 2,000 topics: 28 times more for 20 times the
+       topics, and 2.7 times more from 1,000 to 2,000. Today's grows 27 times
+       (357, 4,150 and 9,547 ms) and today's with labels 30 times (1,137, 14,091
+       and 33,548 ms). The executor in memory grows 18 times (22, 189 and 388
        ms).
-     - **At 1,000 topics an edit takes 2.1 to 3.5 s against 3.8 to 4.3 s today
-       and 11.4 to 15.8 s today with labels.** It is below today's in every
-       sample: by the medians 1.5 times below the arm that stores no label and
-       4.8 times below the arm that stores the same labels, and 14 times above
+     - **At 1,000 topics an edit takes 2.3 to 3.1 s against 3.7 to 5.1 s today
+       and 12.0 to 16.9 s today with labels.** It is below today's in every
+       sample: by the medians 1.6 times below the arm that stores no label and
+       5.5 times below the arm that stores the same labels, and 14 times above
        the executor in memory. A create is 1.3 and 4.4 times below. The
-       executor's own work is 0.21 to 0.27 s of it.
+       executor's own work is 0.21 to 0.27 s of the edit.
      - **What the instantiation of templates costs is flat, as provisional
        decision P31 intends:** 17 templates, 45 nodes and 11 slot labels per
        edit at every size. What grows is around it.
@@ -10273,23 +10282,44 @@ Topics at 100, 1,000 and 2,000 topics on the runtime's storage.
        body read in each topic's document one by one, in the `below` chains of
        the slot and in the `dynamic` reads through a handle (497 addresses at
        100 topics in one record). Z75 (c) covers the members of one container,
-       and not what a read reached through them.
+       and not what a read reached through them. Round m's one record for
+       element records with equal label identifiers changes no count here: the
+       load gives 835 records and records 736 at 100 topics before and after it,
+       since a position the transaction in progress wrote has no label
+       identifier.
      - **The result document carries 22 label entries a topic, and every edit
        writes that document.** The entries are at the children of the cards'
        view node (`$UI/children/#/children`, in the classes `enumerate`, `shape`
        and `value`). `mentionable` is a list of copies held in the result
        document, so an edit of one title changes that document, and the commit
-       carries its label entries. After the executor is done, 1.2 to 2.3 s of an
+       carries its label entries. After the executor is done, 1.2 to 2.0 s of an
        edit at 1,000 topics pass in the memory server's handling of that commit;
-       a profile of one edit has there the decoding of the message with its deep
-       freeze (0.65 s), the compression of the label metadata (0.46 s), hashing
-       (0.36 s), the check of the message (0.33 s) and collection (0.35 s).
+       a profile of one edit, taken at `11d92e4776`, has there the decoding of
+       the message with its deep freeze (0.65 s), the compression of the label
+       metadata (0.46 s), hashing (0.36 s), the check of the message (0.33 s)
+       and collection (0.35 s).
      - **An edit adds two label entries that stay:** `mentionable/#/title` in
        the classes `shape` and `value` for the edited element. The result
        document holds 2,267, 2,269 and 2,271 entries after the three edits at
        100 topics.
      - **The preparation's own pass over the reads grows with them:** 13 overlap
        queries a topic for each edit.
+     - **A handler's read of what a computed row was made from
+       (`#readComputedSource`, round m) costs these steps nothing.** The board
+       binds three handlers, `addTopic`, `backfill` and `submitTopic`, none in a
+       row of a `map`; an edit reads 707, 7,007 and 14,007 positions and a
+       create 1,361, 13,061 and 26,061 at both heads of the integration branch.
+       A handler bound in a card would read what `cardRowsByActivity` read, 7
+       positions a topic, at each of its events.
+     - **A created topic is an instance `addTopic` makes of `topic.tsx`, and it
+       stores the labels of its own templates** (note 568). After a create at
+       100 topics the topic's result holds 177 label entries: `title`, `body`,
+       `comments`, `commentCount` and `shortName` carry no clause and the atom
+       of the compiled pattern, and `$NAME`, `createdBy` and `mentions` carry
+       the clauses of `topics` and `names`. Its argument carries both clauses at
+       every path. Under round m's stub each path of the instance would have
+       taken the join of the transaction. Whether a position with no clause
+       holds a link to one that has one was not read.
      - **At 2,000 topics the load's commit is refused at the memory server's
        default limit** of 1,000,000 array slots and record members in one client
        message (`MessageTooLargeError`); the runs at 2,000 raised it to
@@ -10297,38 +10327,38 @@ Topics at 100, 1,000 and 2,000 topics on the runtime's storage.
        derivation transaction, where today's runtime makes 4,021 commits.
      - **With a clause of its own on each topic the cost is quadratic in the
        board, and at 1,000 topics the run does not finish**
-       (`SCALE_TOPIC_LABELS=distinct`). Each derivation over the whole list
-       reads every topic, so the label of each of its outputs is the join of
-       every topic's clause, and each of the 22 label entries a topic holds that
-       join. At 100 topics the load's commit is refused at the default limit;
-       with the limit raised an edit takes 6.2 to 6.4 s where it takes 0.2 to
-       0.3 s with one clause, and the entries of the documents it changes are 33
-       MB against 1.2 MB. At 200 topics an edit takes 27 to 32 s and the entries
-       are 130 MB. At 1,000 topics the process ends in the load, out of memory.
-       Today's runtime with labels takes 25 to 29 s for an edit at 100 topics
-       with such clauses. These runs ran beside corpus runs of this session; the
-       ratios are what they show.
+       (`SCALE_TOPIC_LABELS=distinct`; measured at `11d92e4776` and not again on
+       round m). Each derivation over the whole list reads every topic, so the
+       label of each of its outputs is the join of every topic's clause, and
+       each of the 22 label entries a topic holds that join. At 100 topics the
+       load's commit is refused at the default limit; with the limit raised an
+       edit takes 6.2 to 6.4 s where it takes 0.2 to 0.3 s with one clause, and
+       the entries of the documents it changes are 33 MB against 1.2 MB. At 200
+       topics an edit takes 27 to 32 s and the entries are 130 MB. At 1,000
+       topics the process ends in the load, out of memory. Today's runtime with
+       labels takes 25 to 29 s for an edit at 100 topics with such clauses and
+       88 to 106 s at 200. These runs ran beside corpus runs of this session;
+       the ratios are what they show.
      - **Labels beside today's, on the generated scenario of the corpus**
-       (`stored-labels.ts run` on `apps/topics/`): of 10 output rows of
-       `main.tsx`, 3 are tighter, 3 differ by the atom that names the pattern, 1
-       is equal and 3 are classed looser. In those three (`index`, `names`,
-       `topics`) the confidentiality is tighter, and the integrity holds the
-       atom of the pattern where today's holds an atom for each function that
-       ran. No row is looser in confidentiality. `topic.tsx` requests an effect
-       and is not run there. That run's check of the stored labels against the
-       values is not made for `main.tsx`: two runs on one scenario give
-       different values.
+       (`stored-labels.ts run` on `apps/topics/`, at `11d92e4776`): of 10 output
+       rows of `main.tsx`, 3 are tighter, 3 differ by the atom that names the
+       pattern, 1 is equal and 3 are classed looser. In those three (`index`,
+       `names`, `topics`) the confidentiality is tighter, and the integrity
+       holds the atom of the pattern where today's holds an atom for each
+       function that ran. No row is looser in confidentiality. `topic.tsx`
+       requests an effect and is not run there.
      - **The check at scale** (`SCALE_CHECK`): after an edit, each stored
        position that changed outside the edited topic, 2 per edit (the
        `mentionable` of the result and the `title` of a row), holds the topic's
-       clause. Checked for the three edits at 100 and at 1,000 topics with one
-       clause and at 100 topics with a clause for each topic, none missing. It
-       checks the positions whose stored value changed, and no position whose
-       value is reached through a reference.
+       clause. Checked for the three edits at 100 topics on round m, and at
+       `11d92e4776` at 100 and 1,000 topics with one clause and at 100 topics
+       with a clause for each topic, none missing. It checks the positions whose
+       stored value changed, and no position whose value is reached through a
+       reference.
 
      What separates the growth: the executor's own part is the five `lift`s that
      read every topic (note 545), 0.21 to 0.27 ms a topic for each edit. Storage
-     and labels add 1.9 to 3.2 ms a topic at 1,000 topics, and each part of that
+     and labels add 2.0 to 2.8 ms a topic at 1,000 topics, and each part of that
      follows either what those `lift`s read (the reads through the transaction,
      the addresses in the records, the overlap queries) or the label entries of
      the document they write. What would remove it, by derivation, all five over
@@ -10353,3 +10383,17 @@ Topics at 100, 1,000 and 2,000 topics on the runtime's storage.
      harness cannot start (it needs a toolshed, and the existing Topics
      benchmarks drive it from a browser); the heap; the real board's seed on the
      runtime's storage; a board whose topics run as instances.
+
+571. **Round m of the integration branch merged** (`dbcce35f91`). One conflict,
+     the stub of note 568. The whole-corpus runs at the merge against that
+     round's own (`79d2e29dd6`, whose tree differs from `dbcce35f91` by one
+     unused declaration): the value run is equal in every one of 287 modules
+     (7,463 values compared, 7,325 equal). In the label run no commit is refused
+     on either side, the check of the stored labels against the values finds
+     nothing as given and 1 finding with repeated events on both, and 159 of
+     2,177 rows differ in their text, none in its confidentiality: in 236 fields
+     a hash inside an integrity atom, the identity of a compiled pattern whose
+     plan holds `handle: true` (P40); in 38 the same atoms in another order; and
+     in `apps/base/contacts.tsx` and `apps/calendar/calendar.tsx`, 12 fields of
+     rows of instances a handler makes, which hold the atoms of their own plan
+     where the stub left the join.
