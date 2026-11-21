@@ -441,7 +441,12 @@ export const reactionTalliesOf = (
  * newest was sent.
  */
 export interface ChatRoomActivity {
-  /** How many messages the room holds, obliterated tombstones included. */
+  /**
+   * How many messages the room holds, obliterated tombstones included. The
+   * room's own count leaves out any message its reader can't read; the count
+   * a message's join carries is the length of the room's message list, which
+   * counts every message.
+   */
   count: number;
 
   /** The newest message's `sentAt`; absent while there are none. */

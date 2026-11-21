@@ -1893,7 +1893,12 @@ const performManagerAct = (
         },
       ]);
     } else {
-      noteHeard(state.roomMembership, memberships, room, { title, activity });
+      // The stored records, not the catalog's view of them, so that only the
+      // title and the activity change.
+      noteHeard(state.roomMembership, state.roomMembership.get() ?? [], room, {
+        title,
+        activity,
+      });
     }
   }
   // A user whose profile hasn't resolved is listed without joining the
