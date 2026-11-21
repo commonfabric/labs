@@ -194,6 +194,7 @@ import {
 import { opInputsDocKey } from "./builtins/op-pattern-ref.ts";
 import {
   delegatedCarriageOf,
+  markScopedDefaultSeed,
   requireWaveAcceptance,
   waveRunContextOf,
   waveSettlementOf,
@@ -11508,6 +11509,7 @@ export class Runner {
           kind: "bookkeeping",
           ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
         });
+        markScopedDefaultSeed(tx);
         markDurableReadTx(tx);
         const owner = this.#runtime.getCellFromLink(
           resultLink,
