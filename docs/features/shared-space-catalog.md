@@ -220,7 +220,8 @@ Other saved spaces expose conversations through their roots' explicit
 separately from the container's catalog entry. Forgetting such a conversation
 leaves its container saved and suppresses rediscovery through the declaration.
 Archiving the container leaves such a conversation out of the chat list, and
-restoring it lists the conversation again, with no write to either record. See
+restoring it lists the conversation again unless it was forgotten, with no write
+to either record. See
 [FabriChatManager](../specs/fabrichat/FabriChatManager.md).
 
 FabriChat consumes the manager's flat fields through its room-specific schema.
