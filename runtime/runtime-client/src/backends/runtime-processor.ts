@@ -110,8 +110,10 @@ import {
   type CfcModulePolicySource,
   createRenderConfidentialityResolver,
   createRuntimeCfcModulePolicySource,
+  createRuntimeListMembershipProvider,
   createRuntimeSpaceMembershipProvider,
   hostGestureProvenance,
+  type ListMembershipProvider,
   markRendererTrustedEvent,
   redactCaveatSourcesForDisplay,
   type RenderConfidentialityResolver,
@@ -659,6 +661,7 @@ export function renderConfidentialityResolverFor(
   sessionSpace: string | undefined,
   membershipProvider: SpaceMembershipProvider | undefined,
   modulePolicySource: CfcModulePolicySource | undefined,
+  listMembershipProvider?: ListMembershipProvider,
 ): RenderConfidentialityResolver | undefined {
   if (ceiling === undefined) {
     return undefined;
@@ -680,6 +683,9 @@ export function renderConfidentialityResolverFor(
     // build a private one — both read the same underlying runtime documents.
     membershipProvider: membershipProvider ??
       createRuntimeSpaceMembershipProvider(runtime, actingPrincipal),
+    // The spec §4.9.5 list lookup, shared with the reconciler the same way.
+    listMembershipProvider: listMembershipProvider ??
+      createRuntimeListMembershipProvider(runtime, actingPrincipal),
     // A `PolicyOf` label's module rules run at the display boundary too,
     // resolved through the runtime's verified manifest read; a manifest that
     // is missing or fails verification leaves the label sealed. The source is
@@ -707,6 +713,26 @@ export function renderMembershipProviderFor(
     return undefined;
   }
   return createRuntimeSpaceMembershipProvider(
+    runtime,
+    renderAudienceOf(runtime, identity),
+  );
+}
+
+/**
+ * The spec §4.9.5 list provider for a worker's renders, shared like
+ * {@link renderMembershipProviderFor}'s: the resolver reads lists through it,
+ * and the reconciler subscribes to them, so adding or removing a member
+ * re-renders. Undefined when no ceiling is configured.
+ */
+export function renderListMembershipProviderFor(
+  runtime: Runtime,
+  identity: Identity,
+  ceiling: RenderConfidentialityCeiling | undefined,
+): ListMembershipProvider | undefined {
+  if (ceiling === undefined) {
+    return undefined;
+  }
+  return createRuntimeListMembershipProvider(
     runtime,
     renderAudienceOf(runtime, identity),
   );
@@ -1181,6 +1207,13 @@ export class RuntimeProcessor {
   #renderMembershipProvider?: SpaceMembershipProvider;
 
   /**
+   * The list provider shared with the resolver above and handed to every
+   * mount's reconciler, so a `Members(...)`-labeled cell re-renders when its
+   * list changes (spec §4.9.5). `undefined` when no ceiling is in force.
+   */
+  #renderListMembershipProvider?: ListMembershipProvider;
+
+  /**
    * The module-policy manifest source shared with the resolver above and
    * handed to every mount's reconciler, so a `PolicyOf` cell blocked before
    * its manifest synced re-renders once it arrives. `undefined` when no
@@ -1439,6 +1472,11 @@ export class RuntimeProcessor {
       this.#identity,
       ceiling,
     );
+    this.#renderListMembershipProvider = renderListMembershipProviderFor(
+      runtime,
+      this.#identity,
+      ceiling,
+    );
     this.#renderModulePolicySource = renderModulePolicySourceFor(
       runtime,
       ceiling,
@@ -1450,10 +1488,12 @@ export class RuntimeProcessor {
       this.#sessionSpace,
       this.#renderMembershipProvider,
       this.#renderModulePolicySource,
+      this.#renderListMembershipProvider,
     );
     this.#hostReadGate = new HostReadGate(rootRenderPolicyFor(ceiling), {
       resolveConfidentiality: this.#renderConfidentialityResolver,
       membership: this.#renderMembershipProvider,
+      listMembership: this.#renderListMembershipProvider,
       modulePolicies: this.#renderModulePolicySource,
     });
   }
@@ -5008,6 +5048,7 @@ export class RuntimeProcessor {
       renderConfidentialityCeiling: this.#renderConfidentialityCeiling,
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
+      listMembershipProvider: this.#renderListMembershipProvider,
       modulePolicySource: this.#renderModulePolicySource,
       spaceAccess: renderSpaceAccessProviderFor(
         this.#runtime,

@@ -32,6 +32,8 @@ import {
   clauseAlternatives,
   exchangeEachObservation,
   type ExchangeRuleKind,
+  type ListMembershipProvider,
+  listMembersInConfidentiality,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
   type RenderConfidentialityResolver,
@@ -74,6 +76,7 @@ export type DisplayFitSources = {
     SpaceMembershipProvider,
     "readerRole" | "subscribe"
   >;
+  readonly listMembership?: ListMembershipProvider;
   readonly modulePolicies?: WorkerReconcilerOptions["modulePolicySource"];
 };
 
@@ -512,6 +515,15 @@ function watchLabelSources(
       watchDocument(
         `membership:${space}`,
         () => provider.subscribe(space, reeval),
+      );
+    }
+  }
+  const lists = sources.listMembership;
+  if (lists !== undefined) {
+    for (const list of listMembersInConfidentiality(confidentiality)) {
+      watchDocument(
+        `list:${JSON.stringify(list)}`,
+        () => lists.subscribe(list, reeval),
       );
     }
   }

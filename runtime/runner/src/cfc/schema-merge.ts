@@ -59,6 +59,7 @@ const IFC_KEYS = [
   "writeAuthorizedBy",
   "writePolicyAnyOf",
   "exactCopyOf",
+  "members",
   "projection",
   "collection",
   // Reserved legacy key: minted by nothing (the list builtins' per-element
@@ -368,6 +369,7 @@ const mergeSetLikeIfcArray = (
           storedSide === "existing",
         );
     case "exactCopyOf":
+    case "members":
     case "projection":
     case "collection":
     case "ownerPrincipal":
