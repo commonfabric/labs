@@ -305,10 +305,17 @@ export class XHistoryView extends BaseView {
         this._steps = withOlderSteps(this._steps, page.steps);
         this._next = page.next;
       } else if (refresh === true) {
+        // The older steps listed stay only where the new page reaches back
+        // to them: the space can have moved on by more than a page, and
+        // steps kept below such a page would leave the ones between out
+        // of reach, with no cursor to list them by.
         const reached = page.steps.at(-1)?.startSeq;
-        const below = reached === undefined
-          ? []
-          : this._steps.filter((step) => step.seq < reached);
+        const newestListed = this._steps[0]?.seq;
+        const meets = reached !== undefined && newestListed !== undefined &&
+          (page.next === undefined || reached <= newestListed);
+        const below = meets
+          ? this._steps.filter((step) => step.seq < reached)
+          : [];
         this._steps = withOlderSteps(page.steps, below);
         if (below.length === 0) this._next = page.next;
       } else {

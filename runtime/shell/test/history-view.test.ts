@@ -1364,6 +1364,31 @@ describe("XHistoryView", () => {
         expect(listings.at(-1)).toBe(5);
       });
 
+      it("lists only the new steps, with their way to older steps, when the space moved on by more than they reach", async () => {
+        // The new stretch does not reach back to step 5, so keeping step 5
+        // below it would put steps 6 and 7 out of reach.
+
+        const { view, follows, listings, markup, until } = await following([
+          { steps: [step(5)] },
+          { steps: [step(9), step(8)], next: 8 },
+        ]);
+
+        await until(
+          () => follows[0].onAdvance(9),
+          (rendered) => rendered.includes('data-seq="9"'),
+        );
+
+        const seqs = [...markup().matchAll(/data-seq="(\d+)"/g)].map((
+          [, seq],
+        ) => Number(seq));
+        expect(seqs).toEqual([9, 8]);
+        const [older] = templateListeners(view.render(), "click", view).filter((
+          { text },
+        ) => text === "Show older steps");
+        older.dispatch(new Event("click"));
+        expect(listings.at(-1)).toBe(8);
+      });
+
       it("takes the way to older steps from what it lists when it reaches past every listed step", async () => {
         const { follows, markup, until } = await following([
           { steps: [step(5)] },
