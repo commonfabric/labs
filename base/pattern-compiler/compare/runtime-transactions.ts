@@ -51,7 +51,9 @@ import {
 } from "../../../runtime/runner/src/cell.ts";
 import type { CompiledPlan } from "../../../runtime/runner/src/cfc/compiled-plans.ts";
 import {
+  appliesAtItsPathOnly,
   consumedEntriesForRead,
+  isRuntimeMintedTemplate,
   labelForConsumedEntries,
 } from "../../../runtime/runner/src/cfc/consumed-label.ts";
 import { readStoredCfcMetadata } from "../../../runtime/runner/src/cfc/metadata.ts";
@@ -388,18 +390,9 @@ export class RuntimeTransactions implements TransactionHooks {
         const before = this.#entries.get(doc) ?? new Map();
         const after = entriesOf(this.#storedLabels(tx, doc));
         this.#entries.set(doc, after);
-        const paths = new Set<string>();
-        for (const [path, label] of after) {
-          if (before.get(path) !== label) paths.add(path);
-        }
-        for (const path of before.keys()) {
-          if (!after.has(path)) paths.add(path);
-        }
-        if (paths.size > 0) {
-          changes.push({
-            doc,
-            paths: [...paths].map((path) => JSON.parse(path) as string[]),
-          });
+        const { paths, alone } = changedLabelPaths(before, after);
+        if (paths.length > 0) {
+          changes.push({ doc, paths, ...(alone.length > 0 ? { alone } : {}) });
         }
       }
     } finally {
@@ -697,14 +690,10 @@ export class RuntimeTransactions implements TransactionHooks {
     try {
       for (const [doc, before] of this.#unchanged) {
         const after = entriesOf(this.#storedLabels(tx, doc));
-        const paths = [...new Set([...before.keys(), ...after.keys()])]
-          .filter((path) => before.get(path) !== after.get(path));
+        const { paths, alone } = changedLabelPaths(before, after);
         if (paths.length === 0) continue;
         this.#counts.labelEntriesChanged += paths.length;
-        changes.push({
-          doc,
-          paths: paths.map((path) => JSON.parse(path) as string[]),
-        });
+        changes.push({ doc, paths, ...(alone.length > 0 ? { alone } : {}) });
       }
     } finally {
       tx.abort();
@@ -1255,17 +1244,53 @@ const observesOf = (observes: string): "value" | "shape" | "followRef" =>
 
 /**
  * The label entries of stored labels, each as text by the text of its path;
- * entries at one path are one, their texts in order.
+ * entries at one path are one, their texts in order. An entry that labels a
+ * read of its own path and no read below it (`appliesAtItsPathOnly`) is
+ * marked, so that a change of such entries alone is told apart
+ * (`changedLabelPaths`).
  */
 const entriesOf = (metadata: CfcMetadata | undefined): Map<string, string> => {
   const byPath = new Map<string, string[]>();
   for (const entry of metadata?.labelMap.entries ?? []) {
     const path = JSON.stringify(entry.path);
     const texts = byPath.get(path) ?? [];
-    texts.push(JSON.stringify(entry));
+    texts.push(
+      `${
+        appliesAtItsPathOnly(entry, isRuntimeMintedTemplate(entry))
+          ? AT_ITS_PATH_ONLY
+          : ""
+      }${JSON.stringify(entry)}`,
+    );
     byPath.set(path, texts);
   }
   return new Map(
     [...byPath].map(([path, texts]) => [path, texts.sort().join("\n")]),
   );
+};
+
+/** What marks, in `entriesOf`, an entry no read below its path consumes. */
+const AT_ITS_PATH_ONLY = "\u0001";
+
+/**
+ * The paths whose entries differ between `before` and `after`, and those
+ * among them where only entries that no read below the path consumes
+ * differ (`LabelChange.alone`).
+ */
+const changedLabelPaths = (
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+): { paths: string[][]; alone: string[][] } => {
+  const below = (text: string | undefined) =>
+    (text ?? "").split("\n").filter((entry) =>
+      !entry.startsWith(AT_ITS_PATH_ONLY)
+    ).join("\n");
+  const paths: string[][] = [];
+  const alone: string[][] = [];
+  for (const path of new Set([...before.keys(), ...after.keys()])) {
+    if (before.get(path) === after.get(path)) continue;
+    const parsed = JSON.parse(path) as string[];
+    paths.push(parsed);
+    if (below(before.get(path)) === below(after.get(path))) alone.push(parsed);
+  }
+  return { paths, alone };
 };

@@ -1183,6 +1183,23 @@ describe("a read that covers the members of an array of references", () => {
     expect(await asks(1_000)).toBe(small);
   });
 
+  it("asks for no label where the entry of the list's membership alone changed, among 10 members and among 1,000", async () => {
+    const asks = async (count: number) => {
+      const { instance, recorder, asked } = await over(count);
+      asked.length = 0;
+      recorder.labelsChanged?.([{
+        doc: instance.argument,
+        paths: [["items"]],
+        alone: [["items"]],
+      }]);
+      instance.dispatch();
+      return asked.length;
+    };
+
+    expect(await asks(10)).toBe(0);
+    expect(await asks(1_000)).toBe(0);
+  });
+
   it("moves a member whose label changed to the group of its label, and forms the label of the output that read the list again", async () => {
     const { instance, recorder, labels, binding } = await over(8);
     expect(binding().members?.[0].groups).toBe(1);

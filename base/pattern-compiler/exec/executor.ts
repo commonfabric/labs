@@ -691,6 +691,13 @@ type LabelReaders = {
 export type LabelChange = {
   doc: string;
   paths: readonly (readonly string[])[];
+  /**
+   * The paths of `paths` at which every entry that changed labels a read
+   * of the path itself and no read below it: the membership of a container,
+   * or the shape of a container node. The label of what a member holds, and
+   * of the reference to it, did not change with one of them.
+   */
+  alone?: readonly (readonly string[])[];
 };
 
 /**
@@ -9012,14 +9019,28 @@ export class Instance {
   #memberLabelsChanged(changes: readonly LabelChange[]): Set<string> {
     const found = new Set<string>();
     const touched = new Set<MemberGroups>();
-    for (const { doc, paths } of changes) {
+    for (const { doc, paths, alone } of changes) {
+      const own = new Set((alone ?? []).map((path) => canonical(path)));
       for (const table of this.#memberGroupsOf.get(doc) ?? []) {
+        if (doc !== table.doc) {
+          touched.add(table);
+          for (const member of table.byDoc.get(doc) ?? []) {
+            table.dirty.add(member);
+          }
+          continue;
+        }
+        // An entry at the container or above it that labels a read of its
+        // own path alone, as that of the container's membership, is one no
+        // member's link position takes its label from.
+        const below = paths.filter((path) =>
+          path.length > table.path.length || !own.has(canonical(path))
+        );
+        if (below.length === 0) continue;
         touched.add(table);
         for (const member of table.byDoc.get(doc) ?? []) {
           table.dirty.add(member);
         }
-        if (doc !== table.doc) continue;
-        for (const path of paths) {
+        for (const path of below) {
           const shared = Math.min(path.length, table.path.length);
           if (
             !table.path.slice(0, shared).every((segment, at) =>
