@@ -207,8 +207,9 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   watched instance is demand, so the server starts every card, and the topic it
   links to, for every viewer. On a copy of the team's board at 3,441 topics, one
   viewer of the unbounded list took a serving worker past its 8 GB heap limit;
-  bounded to 200, the same viewer settled at 1.35 GB. When the board holds more,
-  it says how many it is showing.
+  bounded to 200, the worker settled at 2.6 GB with the board open in two tabs.
+  When the board holds more, a caption gives the limit and how many topics the
+  board holds.
 
   What each reader of a topic gets is then its own declared schema's business.
   The published `index` declares the six scalars a survey reads, so a survey

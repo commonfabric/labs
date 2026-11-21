@@ -584,7 +584,8 @@ export interface CardSource {
  * topic it links to, for every viewer. Unbounded, that is the whole board per
  * viewer: on a copy of the team's board at 3,441 topics, one viewer took a
  * serving worker past its 8 GB heap limit, and with the cards bounded here it
- * settled at 1.35 GB. Older topics are reached by number or by search.
+ * settled at 2.6 GB with the board open in two tabs. Older topics are reached
+ * by number or by search.
  */
 export const CARD_LIMIT = 200;
 
@@ -1002,9 +1003,8 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
             {cardsAreCapped
               ? (
                 <cf-text variant="caption" tone="muted">
-                  Showing the {CARD_LIMIT} most recently active of {topicCount}
-                  {" "}
-                  topics.
+                  Showing up to {CARD_LIMIT} of {topicCount}{" "}
+                  topics, most recently active first.
                 </cf-text>
               )
               : null}
