@@ -4525,6 +4525,33 @@ const holdsOnlySuppliedReferences = (
 };
 
 /**
+ * The positions at or beneath `path`, where `value` sits, that a write of
+ * `value` left as it found them: each scalar and each empty container that
+ * no path in `writtenPaths` is at or above. A container that holds something
+ * is no position of its own, since its keys are those of the positions
+ * beneath it. A reference is left out: a destination holding one qualifies
+ * only where the runtime stored that reference for the writer in this
+ * transaction (`holdsOnlySuppliedReferences`).
+ */
+const leavesInPlace = (
+  value: unknown,
+  path: readonly string[],
+  writtenPaths: readonly (readonly string[])[],
+): (readonly string[])[] => {
+  if (writtenPaths.some((written) => isPrefix(written, path))) return [];
+  if (isPrimitiveCellLink(value)) return [];
+  if (isWalkableObjectOrArray(value)) {
+    const members = Object.entries(value);
+    if (members.length > 0) {
+      return members.flatMap(([key, member]) =>
+        leavesInPlace(member, [...path, key], writtenPaths)
+      );
+    }
+  }
+  return [path];
+};
+
+/**
  * The destinations of this transaction's whole-value writes in one document
  * that its flow stamp covers as if it had written them whole.
  *
@@ -4552,12 +4579,19 @@ const holdsOnlySuppliedReferences = (
  * - the join fits every ceiling declared at or beneath it, so the wider stamp
  *   never measures a misfit the per-path stamps did not; and
  * - the destination is one this transaction created, or the transaction
- *   read no content at or beneath it, nor recursively above it. A writer that read its destination can carry what it found into what
- *   it sets, and the diff leaves such a value where it is; stamping the
- *   destination whole would then name the writer as the author of a value
- *   another writer put there. The diff's own reads of its destination
- *   (`writeDestinationRead`) do not count, and nor does a reference probe,
- *   which resolving the destination makes and which observes no content.
+ *   read no content at or beneath it, nor recursively above it, or every
+ *   value the write left in place is one the same writer wrote. A writer
+ *   that read its destination can carry what it found into what it sets, and
+ *   the diff leaves such a value where it is; stamping the destination whole
+ *   would then name the writer as the author of a value another writer put
+ *   there. A value the writer itself put there, in an earlier attempt, is
+ *   its own to carry, which is what lets a handler keep a record as its
+ *   state: `leavesInPlace` says which values those are, and
+ *   `ownedBefore(path)` whether the stored labels name this writer as the
+ *   one who wrote the value at `path`. The diff's own reads of its
+ *   destination (`writeDestinationRead`) do not count, and nor does a
+ *   reference probe, which resolving the destination makes and which
+ *   observes no content.
  * Recording is the runtime's alone (`recordCfcAssertedValueRoot`).
  */
 const assertedValueRootPaths = (
@@ -4570,6 +4604,7 @@ const assertedValueRootPaths = (
   writtenPaths: readonly (readonly string[])[],
   fitsCeilingsFrom: (root: readonly string[]) => boolean,
   previousPresence: ReadonlyMap<string, boolean> | undefined,
+  ownedBefore: (path: readonly string[]) => boolean,
 ): (readonly string[])[] => {
   const key = targetKey(target);
   const roots: (readonly string[])[] = [];
@@ -4603,6 +4638,24 @@ const assertedValueRootPaths = (
       isPrefix(root, path) || (recursive && isPrefix(path, root))
     );
   };
+  // Whether the transaction read the value at `path` itself: a read of that
+  // path, or a recursive read above it.
+  const observedAt = (path: readonly string[]): boolean =>
+    (observed ?? []).some((read) =>
+      pathKey(read.path) === pathKey(path) ||
+      (read.recursive && isPrefix(read.path, path))
+    );
+  // Whether every value the write left in place beneath `root` is one this
+  // writer wrote before and read in this transaction. Reading it puts what
+  // it carried into the witnesses the new stamp retains, so the stamp says
+  // of a carried value what its own stamp said.
+  const carriedOnlyItsOwn = (
+    value: unknown,
+    root: readonly string[],
+  ): boolean =>
+    leavesInPlace(value, root, writtenPaths).every((path) =>
+      observedAt(path) && ownedBefore(path)
+    );
   const recorded = writersRecordedRoots(tx, target);
   const references = recordedReferences(tx, target);
   for (const { address } of recorded) {
@@ -4621,7 +4674,10 @@ const assertedValueRootPaths = (
     if (!fitsCeilingsFrom(root)) continue;
     // A destination this transaction created holds nothing it did not
     // write, whatever it read on the way.
-    if (previousPresence?.get(rootKey) !== false && observedWithin(root)) {
+    if (
+      previousPresence?.get(rootKey) !== false && observedWithin(root) &&
+      !carriedOnlyItsOwn(value, root)
+    ) {
       continue;
     }
     roots.push(root);
@@ -14239,6 +14295,12 @@ export function* prepareBoundaryCommitSteps(
     let rootCeilings:
       | { paths: (readonly string[])[]; index: PathIndex }
       | undefined;
+    // The stored value stamps, as the evidence an input witness reads, built
+    // on the first destination that asks who wrote what it left in place.
+    let storedEvidence: WitnessTrieNode | undefined;
+    const flowIdentity = tx.getCfcState().writeIdentity.multiple
+      ? undefined
+      : tx.getCfcState().writeIdentity.identity;
     const assertedRoots = flowPersist && flowTransformedBy.length > 0 &&
         flowWrittenPaths.length > 0
       ? assertedValueRootPaths(
@@ -14284,6 +14346,22 @@ export function* prepareBoundaryCommitSteps(
           );
         },
         flowPreviousPresence,
+        (path) => {
+          if (flowIdentity === undefined) return false;
+          storedEvidence ??= witnessTrie(
+            (existing?.labelMap.entries ?? []).filter((entry) =>
+              readConsumesEntry("value", entry) && isWitnessEvidence(entry)
+            ).map(asWitnessEvidence),
+          );
+          const resolved = entriesResolvingAtLocation(storedEvidence, path);
+          return (labelForEntriesAtPath(resolved, path)?.integrity ?? [])
+            .some((atom) =>
+              deepEqual(atom, {
+                type: CFC_ATOM_TYPE.TransformedBy,
+                identity: flowIdentity,
+              })
+            );
+        },
       )
       : [];
     for (const root of assertedRoots) flowWrittenPrefixes.add(root);

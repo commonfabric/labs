@@ -187,14 +187,33 @@ included. A destination qualifies only when all of these hold:
   document's residency clauses (§8.12.4, as `cfc-enforcement-matrix.md` §4
   describes them);
 - the transaction created the destination, or read no content at or beneath
-  it, nor recursively above it. A writer that read its destination can carry a
-  value it found there into what it sets, and the diff leaves that value in
-  place. The diff's own reads of the destination, and the reference probe that
-  resolves it, do not count, nor does a shallow read above it, which observes
-  keys rather than the value. Only a direct read of the destination counts: a
-  value that reaches the set through a copy of the destination in another
-  document is the writer's input like any other (see "A one-level guard trusts
-  every input the endorsed step read" below).
+  it, nor recursively above it, or every value the write left in place is the
+  writer's own. A writer that read its destination can carry a value it found
+  there into what it sets, and the diff leaves that value in place. The diff's
+  own reads of the destination, and the reference probe that resolves it, do
+  not count, nor does a shallow read above it, which observes keys rather than
+  the value. Only a direct read of the destination counts: a value that
+  reaches the set through a copy of the destination in another document is the
+  writer's input like any other (see "A one-level guard trusts every input the
+  endorsed step read" below).
+
+A value the write left in place is the writer's own when the stored labels
+resolve, at its position, to a value stamp naming the same identity, and the
+transaction read it. The positions are the scalars and the empty containers of
+the final value that the diff did not write at or above; a container holding
+something is its members' positions. Reading the value puts the witnesses its
+stamp carried into the meet, so the new stamp says of a carried value no more
+than its own stamp said. This is what lets a handler keep a record as its
+state: each step reads the record and sets it again, and everything a step
+leaves unchanged is what an earlier step of the same handler wrote
+(`leavesInPlace` and `carriedOnlyItsOwn` in `prepare.ts`,
+`runtime/runner/test/cfc-transformed-by-input-witness-state.test.ts`).
+
+A default is nobody's. A record default whose member a writer never changes
+keeps that member unstamped, so the writer's destination is not stamped whole
+until every member of the default has been replaced. A state that starts as
+`null`, or as any value nothing of which survives the first write, has no such
+member.
 
 A peer that adds a member beneath the destination after the writer read its
 replica makes the writer's commit a conflict, so the retry sets over the
@@ -418,8 +437,8 @@ not rely on the witness without them.
   (`cfc-transformed-by-input-witness-references.test.ts`).
 - **An output that does not change.** A stamp is replaced when its value is
   written. When an endorsed transformer runs again over inputs other code
-  chose and computes the value it had already written, it writes nothing, and
-  the value keeps the stamp its earlier run earned. Whoever chose the inputs
+  chose and computes the whole value it had already written, it writes
+  nothing, and the value keeps the stamp its earlier run earned. Whoever chose the inputs
   learns whether they yield the value already released, one comparison per
   run.
 - **Selection among committed values.** A transformation fed a subset of
