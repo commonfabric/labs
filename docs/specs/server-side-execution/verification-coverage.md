@@ -3337,10 +3337,11 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   names its actor. BUILT for a loop that keeps the currency index, where
   one memory server holds both spaces (serving-loop.md §3b;
   `Server.setCarriedDemand`, `SpaceServer`'s `#syncCarriedDemand`; pinned
-  in `runtime/memory/test/v2-server-carried-demand.test.ts` and
-  `runtime/runner/test/executor/space-server-currency-wish.test.ts`).
-  Owed: a foreign per-actor instance read under two actors, tested end
-  to end; a loop that keeps no index; and a foreign space another memory
+  in `runtime/memory/test/v2-server-carried-demand.test.ts` and, for a
+  foreign per-actor instance read under two actors who hold no session
+  in the foreign space, in
+  `runtime/runner/test/executor/space-server-carried-demand.test.ts`).
+  Owed: a loop that keeps no index, and a foreign space another memory
   server holds (`docs/plans/stored-output-currency-across-spaces.md`,
   "Demand across spaces", step 5). Trigger for both: the first pattern whose
   correctness rests on a revocation taking effect without a re-pull, or

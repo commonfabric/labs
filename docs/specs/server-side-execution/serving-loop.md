@@ -1273,7 +1273,11 @@ executing:
   stand is worked out again whenever that index or the arming changes. A
   reading space that offers rows pulls from the space when it is not armed
   with it, and again when the space tells it of a change, so it is armed
-  whenever a row could be proven. A row that stands is a row of the
+  whenever a row could be proven. With a row for an actor's own instance
+  stands a row for each piece the index records as writing that document,
+  for the same pair, since such an instance may not exist yet and a loop
+  finds the piece behind a document from what the document holds. A row
+  that stands is a row of the
   space's demand set, a root with the origin session's pair where it has
   one, held under an id of its own among the space's sessions, so the
   space's loop loads and judges it as it does a client's:

@@ -182,6 +182,7 @@ import {
   selectCurrencyReadersMoved,
   selectCurrencySourcePosition,
   selectCurrencySources,
+  selectCurrencyWriters,
   storeCurrencyRecords,
 } from "./currency-index.ts";
 import { sliceChain, SPACE_SLICE } from "./currency-keys.ts";
@@ -13573,8 +13574,10 @@ export class Server {
    * offered row stands unless `space`'s currency index proves its instance
    * current: the instance is shared, the reading space is armed with
    * `space` for no limited time, so that it hears of the next change, and
-   * the index holds the instance as one no piece here is behind on. Called
-   * whenever what is offered, the index, or the arming may have changed.
+   * the index holds the instance as one no piece here is behind on. With a
+   * row for an actor's own instance stands a row for each piece the index
+   * records as writing that document, for the same pair. Called whenever
+   * what is offered, the index, or the arming may have changed.
    */
   #refreshCarriedDemand(space: string): void {
     const offered = this.#carriedOffered.get(space);
@@ -13604,6 +13607,32 @@ export class Server {
           ),
         );
         if (rows.size === 0) continue;
+        // An instance that is the actor's own may not exist yet, and a
+        // serving loop finds the piece behind a document from what the
+        // document holds. So the piece the index records as writing it is
+        // demanded with it, for the same pair.
+        if (engine !== undefined) {
+          for (const row of [...rows.values()]) {
+            if (row.scopeKey === "space") continue;
+            for (
+              const piece of selectCurrencyWriters(engine, {
+                space,
+                id: row.id,
+              })
+            ) {
+              const key = toDirtyKey(piece, "space");
+              if (rows.has(key)) continue;
+              rows.set(key, {
+                id: piece,
+                scope: "space",
+                scopeKey: "space",
+                ...(row.identity !== undefined && { identity: row.identity }),
+                root: true,
+                origin: session.origin,
+              });
+            }
+          }
+        }
         stands.set(sessionId, {
           ...session,
           share: { sessionId, rows },

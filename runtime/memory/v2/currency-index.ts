@@ -1835,6 +1835,21 @@ export const applyCurrencyImports = (
 };
 
 /**
+ * The pieces of `space` whose records say they write the document `id`, at
+ * any instance of it.
+ */
+export const selectCurrencyWriters = (
+  engine: Engine,
+  options: { space: string; id: string },
+): string[] => {
+  const context = contextFor(engine, options.space);
+  return (context.statements.selectWriters.all({
+    branch: context.branch,
+    id: options.id,
+  }) as Array<{ piece: string }>).map(({ piece }) => piece);
+};
+
+/**
  * What `space`'s index last worked out of the instance `(id, scopeKey)` for
  * the spaces that read it, or `undefined` where no space registered it: its
  * head, and whether a piece here computes it and does not answer for it at

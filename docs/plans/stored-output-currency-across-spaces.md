@@ -387,7 +387,11 @@ proven: a shared instance, read by a space that is armed with the source
 for no limited time, which the source's index holds as one no piece there
 is behind on. A read of an instance narrower than the space is not
 registered with the source's index, so it always stands, and so does every
-read of a space the reader is not armed with. What stands is worked out
+read of a space the reader is not armed with. With a row for an actor's
+own instance stands a row for each piece the source's index records as
+writing that document, for the same pair: the instance may not exist yet,
+and a serving loop finds the piece behind a document from what the
+document holds. What stands is worked out
 again whenever the source's index or the arming changes, and a reading
 space that offers rows pulls from the source when it is not armed with it
 and when the source tells it of a change, so that it is armed whenever a
@@ -682,8 +686,8 @@ A third is ruled:
    left out; the reading loop's set, sent when it changes and withdrawn at
    a park; and activation and parking of the source, which follow from the
    rows being held among the source's sessions. Still to do: the acceptance
-   tests 11, 12 and 22 below, and a measurement of what a carried demand
-   costs the source.
+   tests 11 and 12 below, and a measurement of what a carried demand costs
+   the source.
 6. **Computations that run without demand.** Envelopes among the write
    rows; a computation recorded as unbounded from what it wrote; the
    unsettled space, settled before a judgment in it or a pull from it
@@ -784,9 +788,11 @@ For computations that run without demand, in both places:
 19. A reader of an instance that a piece in another space declares it
     writes is marked `1` while that piece's slice is marked there.
 
-For demand across spaces. Tests 20 and 21 exist, in
-`runtime/memory/test/v2-server-carried-demand.test.ts` and
-`runtime/runner/test/executor/carried-demand.test.ts`:
+For demand across spaces. All three exist: 20 in
+`runtime/memory/test/v2-server-carried-demand.test.ts`, 21 in
+`runtime/runner/test/executor/carried-demand.test.ts`, and 22 in
+`runtime/runner/test/executor/space-server-carried-demand.test.ts`, with a
+change to a shared input of the other space, which reaches both viewers:
 
 20. A row carried into a space stands in its demand set with the origin
     session's pair, tells the serving host as an opened session does, is
@@ -799,9 +805,9 @@ For demand across spaces. Tests 20 and 21 exist, in
     session's slice for that pair, and each user's own instance of a
     document for that user's pairs and no other's.
 22. A piece in one space whose runs read a `PerUser` instance of another
-    space, watched by two viewers: the other space's loop computes each
-    viewer's instance, and a change to one viewer's input there reaches
-    that viewer's session and starts nothing for the other.
+    space, watched by two viewers who have no session in that other space:
+    its loop computes each viewer's instance, each viewer reads their own
+    through the piece, and a change to an input there reaches them.
 
 ## Related
 

@@ -277,6 +277,32 @@ describe("v2-server-carried-demand", () => {
           expect(demand().map(({ id }) => id)).toEqual(["of:prefs"]);
         });
 
+        it("adds, with a row for an actor's own instance, a row for the piece the index records as writing that document, for the same pair", async () => {
+          // The actor's instance may not exist yet, and the piece is what
+          // a serving loop can load.
+
+          const alice = await session(ALICE, "alice-one");
+
+          await server.setCarriedDemand(SOURCE, READER, [
+            own("computed:far", ALICE, alice),
+          ]);
+
+          expect(
+            demand().map(({ id, scopeKey, identity }) => ({
+              id,
+              scopeKey,
+              principal: identity?.principal,
+            })),
+          ).toEqual([
+            {
+              id: "computed:far",
+              scopeKey: `user:${ALICE}`,
+              principal: ALICE,
+            },
+            { id: "of:producer", scopeKey: "space", principal: ALICE },
+          ]);
+        });
+
         it("adds the row, and tells the serving host, once an input of the piece that computes the instance changed", async () => {
           const alice = await session(ALICE, "alice-one");
           await arm();
