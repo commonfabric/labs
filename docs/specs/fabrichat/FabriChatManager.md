@@ -49,6 +49,10 @@ that room's roster, in an instance of its own per room, and each notice's
 instance re-types its notice's room the same way. Each instance's argument
 holds the handle, so no list the manager stores types a room as more than a
 handle; a reader that syncs such a list would walk into every room it names.
+The roster instances each run by their room's link, so a room listed,
+forgotten, listed again or adopted from the catalog starts or stops its own
+instance and leaves every other room's as it was, and telling the rooms apart
+reads nothing behind their links.
 The notices' instances run over the notices in the order the manager stores
 them, so a notice dropped moves the instances of the notices after it.
 
@@ -100,8 +104,12 @@ reads of the room, and it writes only on a mismatch. The one exception is a
 reaction: none of those changes the title, so the manager reads nothing of the
 room's `about` for one. The member who retitles a room tells their manager at
 once; another member's entry follows on their manager's next event for that
-room other than a message or a reaction: their own retitle, an acceptance, or a
-client's `joinRoom` when they open it.
+room other than a message or a reaction: their own retitle, an acceptance, a
+client's `joinRoom` when they open it, or the `joinRoom` their host sends for a
+notice in their share inbox that the room changed. A join naming such a
+`notice` marks it acted on in the catalog's `notices`, in the same
+transaction, and does nothing at all for a room the user's chats do not list as
+saved, so it never restores a forgotten room or records a membership.
 
 ### Adopting the catalog's rooms
 

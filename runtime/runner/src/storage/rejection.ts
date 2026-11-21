@@ -87,7 +87,10 @@ export function isPermanentAuthorizationRefusal(
  *   re-sent stand for the same slots, so a retry is refused identically.
  *   As with `RowLabelCommitError`, the server serializes the class name
  *   unchanged and the runner keeps it through normalization
- *   (storage/v2.ts `toRejectedError`).
+ *   (storage/v2.ts `toRejectedError`). The memory client gives a commit the
+ *   same name when it refuses it, unsent, for an encoding past the bounds its
+ *   connection holds one request to (memory/v2/client.ts,
+ *   `oversizedCommitRefusal`), and the same write is refused again there too.
  */
 const TERMINAL_REJECTION_NAMES: ReadonlySet<string> = new Set([
   "RowLabelCommitError",
@@ -119,8 +122,10 @@ export function isTerminalRejection(
 
 /**
  * The store refused the commit for standing for more than it admits in one
- * message. The size grows with what the write carries, so the same write is
- * refused again while that and the store's limit stay as they are.
+ * message, or the memory client refused it, unsent, for more than its
+ * connection takes in one request. The size grows with what the write
+ * carries, so the same write is refused again while that and the limit stay
+ * as they are.
  */
 export function isOversizedRejection(
   error: { name?: string } | undefined | null,

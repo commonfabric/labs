@@ -82,11 +82,14 @@ import type { ShareInboxPiece } from "../profile-home/profile-home.tsx";
 import {
   changeSharedSpaceMembershipIn,
   isSharedSpaceCatalog,
+  isSharedSpaceNoticeMark,
+  markSharedSpaceNoticeIn,
   readSharedSpaceCatalog,
   registerSharedSpaceIn,
   retitleSharedSpaceIn,
   type SharedSpaceCatalogStorage,
   type SharedSpaceEntry,
+  type SharedSpaceNoticeMark,
 } from "../shared-space/shared-space-catalog.ts";
 import { shortDid } from "../social-space/short-did.ts";
 import { sameNameMarks } from "./logic.ts";
@@ -279,6 +282,15 @@ export interface ManagerStreamEvent {
    * under as it is.
    */
   messageAct?: boolean;
+
+  /**
+   * The notice that the room changed which a `joinRoom` is sent for, as the
+   * user's host read it from their share inbox. Such a join brings the title
+   * the catalog lists the room under up to the room's own, and marks the
+   * notice acted on in the catalog, for a room the user's chats list as saved,
+   * and does nothing for any other room.
+   */
+  notice?: SharedSpaceNoticeMark;
 
   /**
    * Whether accepting a room leaves its entry archived, when it is; absent,
@@ -1424,6 +1436,11 @@ const performManagerAct = (
   const declared = container?.key("chatRoom").get();
   const hasDeclaration = declared !== undefined && equals(declared, room);
 
+  // A notice that a room changed tells of a room the user keeps, and joins
+  // them to no other.
+  const notice = act === "joinRoom" ? event?.notice : undefined;
+  if (notice !== undefined && membership?.state !== "saved") return;
+
   // A room this user's chats list already is one they have joined, so
   // joining it again changes nothing, and a join that names no request
   // records nothing either: a caller may send one each time the person
@@ -1446,10 +1463,15 @@ const performManagerAct = (
     // listed only through a container has no catalog entry, and gets no
     // write there. A room this user holds a notice of has its roster read
     // too, so that a notice whose recipient has joined since is dropped.
+    // A notice that the room changed is marked acted on as the title is
+    // brought up, so the user's host acts on it once.
     dropJoinedNotices(state, room);
     if (isWellFormedDID(joinedSpace) && event?.messageAct !== true) {
       const title = room.key("about").get()?.title;
       refreshListedTitle(catalog, joinedSpace, title);
+      if (isSharedSpaceNoticeMark(notice)) {
+        markSharedSpaceNoticeIn(catalog, notice);
+      }
       if (
         membership !== undefined && title !== undefined &&
         title !== membership.title
@@ -2444,10 +2466,20 @@ export const FabriChatManagerCore = pattern<
         direct.get() ?? {},
       )
     );
+    // The listed rooms' links, in the order `roomsForUser` lists the rooms.
+    // A map runs an element held as a link by that link, and an element held
+    // inline by its place in the list, so each room's reader stays with its
+    // room however the list moves: a room listed, forgotten, listed again,
+    // or adopted from the catalog runs its own reader, or stops it, and
+    // leaves every other room's as it was. Telling the links apart reads
+    // nothing behind them, so no room is read until its reader runs.
+    const roomLinksForUser = computed((): PerUser<Cell<unknown>[]> =>
+      roomsForUser.map((entry) => entry.room)
+    );
     // Each listed room's roster, each read on its own and per user, as
     // `roomsForUser` is: a room's space is read under the reader's access.
-    const rostersForUser = roomsForUser.map((entry) =>
-      RoomRoster.asScope("user")({ room: entry.room })
+    const rostersForUser = roomLinksForUser.map((room) =>
+      RoomRoster.asScope("user")({ room })
     );
     // The people the listed rooms' rosters hold, per user, as `roomsForUser`
     // is: a profile attests no one to a reader its space refuses. Its
@@ -2475,11 +2507,11 @@ export const FabriChatManagerCore = pattern<
     // difference: a derivation of `peopleForUser` itself would read it, and
     // every roster with it, whether or not the session had asked, since a
     // derivation reads what it is derived from before it runs.
-    const roomsAskedForSession = computed((): PerSession<ChatIndexEntry[]> =>
-      peopleAskedForSession.get() === true ? [...roomsForUser] : []
+    const roomsAskedForSession = computed((): PerSession<Cell<unknown>[]> =>
+      peopleAskedForSession.get() === true ? [...roomLinksForUser] : []
     );
-    const rostersForSession = roomsAskedForSession.map((entry) =>
-      RoomRoster.asScope("user")({ room: entry.room })
+    const rostersForSession = roomsAskedForSession.map((room) =>
+      RoomRoster.asScope("user")({ room })
     );
     const peopleForSession = computed(
       (): PerSession<Record<string, ManagerProfileCell[]>> =>
