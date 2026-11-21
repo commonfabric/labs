@@ -438,7 +438,9 @@ export class PartedDocuments {
   #insert(tree: Tree, start: number, values: readonly unknown[]): void {
     if (values.length === 0) return;
     const { leaf, offset } = this.#locate(tree, start);
-    const slots = values.map((value): Slot => ({
+    // A position that holds nothing, as those a write beyond the last
+    // member leaves before it, is a row too.
+    const slots = Array.from(values, (value): Slot => ({
       value,
       bytes: bytesOf(value),
       leaf,

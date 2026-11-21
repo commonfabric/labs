@@ -14143,6 +14143,18 @@ export function* prepareBoundaryCommitSteps(
           continue;
         }
         const written = flowWrittenValues?.get(flowKey);
+        // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+        // A write that leaves a path holding nothing is a write of what the
+        // attempt read: that the path holds nothing now says what decided
+        // the write. Its label is stored at the path as that of any value
+        // is. Behind `compiledPatterns`, which defaults off.
+        if (
+          planLabelsOn && written === undefined &&
+          flowWrittenValues?.has(flowKey)
+        ) {
+          derivedStampPaths.push(path);
+          continue;
+        }
         if (isPureLinkStructure(written)) {
           // A restated result wiring is written at its root beside the slots
           // its setup wrote, so a container can arrive twice.

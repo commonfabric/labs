@@ -609,6 +609,67 @@ describe("stored-labels", () => {
     });
   });
 
+  // `fixtures/member-edges.tsx`: changes of the members of a list of plain
+  // values in place at its edges.
+  describe("soundnessOfScenario() after changes at the edges of a list of plain values in place", () => {
+    const check = async (events: { binding: string; event: unknown }[]) => {
+      const artifact = await artifactOf("member-edges");
+      const { soundness, refused } = await soundnessOfScenario(
+        "member-edges",
+        artifact,
+        () => undefined,
+        { note: "n", secret: "ssss" },
+        events.map(({ binding, event }) => ({
+          binding: artifact.plan.bindings.findIndex(({ name }) =>
+            name === binding
+          ),
+          event,
+        })),
+      );
+      return {
+        refused,
+        found: lines("member-edges", soundness),
+        dependent: soundness?.dependent ?? 0,
+      };
+    };
+
+    it("finds the clause of a member that a removal and an addition of one transaction left at the position another stood at", async () => {
+      const { refused, found, dependent } = await check([
+        { binding: "add", event: { word: "a" } },
+        { binding: "addSecret", event: {} },
+        { binding: "dropFirstAndAdd", event: { word: "w" } },
+      ]);
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThanOrEqual(1);
+    });
+
+    it("finds the clause of the input that decided a write of `undefined` at a position, at that position", async () => {
+      for (const at of [0, 1]) {
+        const { refused, found, dependent } = await check([
+          { binding: "add", event: { word: "a" } },
+          { binding: "add", event: { word: "b" } },
+          { binding: "clearAtIfNoted", event: { at } },
+        ]);
+
+        expect(refused).toEqual([]);
+        expect(found).toEqual([]);
+        expect(dependent).toBeGreaterThanOrEqual(1);
+      }
+    });
+
+    it("commits a write at a position beyond the last member", async () => {
+      const { refused, found } = await check([
+        { binding: "add", event: { word: "a" } },
+        { binding: "putAt", event: { at: 3, word: "far" } },
+      ]);
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+    });
+  });
+
   // `fixtures/state-declared.tsx`: a state cell whose type declares the
   // clause `alice`, with a constant as its first value, returned by
   // reference.

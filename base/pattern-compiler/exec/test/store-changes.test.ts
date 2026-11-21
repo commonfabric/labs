@@ -188,6 +188,27 @@ describe("Store", () => {
       expect(store.changedSince(since, at("doc", "a"))).toBe(false);
     });
 
+    it("visits the same number of nodes for one changed member among 10 and among 1,000", () => {
+      const visitedFor = (count: number) => {
+        const store = new Store({ parts: false });
+        store.create("doc", "state", {
+          list: Array.from({ length: count }, (_, index) => index),
+        });
+        const since = store.clock;
+        store.write(new Ref("doc", ["list", "5"]), -1);
+        const before = store.changeNodesVisited;
+        const positions = [
+          { doc: "doc", path: ["list", "3"] },
+          { doc: "doc", path: ["list", "5"] },
+        ];
+        expect(store.changedSince(since, positions.slice(0, 1))).toBe(false);
+        expect(store.changedSince(since, positions.slice(1))).toBe(true);
+        return store.changeNodesVisited - before;
+      };
+
+      expect(visitedFor(1_000)).toBe(visitedFor(10));
+    });
+
     it("visits no earlier change to answer for a position: the work is the length of the path", () => {
       const store = written();
       const since = store.clock;
