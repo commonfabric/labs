@@ -779,6 +779,29 @@ describe("stored-labels", () => {
     });
   });
 
+  // `fixtures/set-then-push.tsx`: `fill` writes the whole input list `words`
+  // from the input `extra`, and `add` appends a word of its event.
+  describe("soundnessOfScenario() after an append to a list whose members an earlier write of the whole list stored", () => {
+    it("finds the clause of the input the whole write read in the stored label of each member that write stored", async () => {
+      const { soundness, refused } = await soundnessOfScenario(
+        "set-then-push",
+        await artifactOf("set-then-push"),
+        () => undefined,
+        { extra: "e", words: ["w"] },
+        [
+          { binding: 1, event: { word: "x" } },
+          { binding: 0, event: {} },
+          { binding: 1, event: { word: "y" } },
+        ],
+      );
+
+      expect(refused).toEqual([]);
+      expect(lines("set-then-push", soundness)).toEqual([]);
+      // The list, its two first members and its number of members.
+      expect(soundness?.dependent).toBeGreaterThanOrEqual(4);
+    });
+  });
+
   // `fixtures/input-writes.tsx`: `add` pushes a record onto the input list
   // `items`.
   describe("inStorage()", () => {

@@ -94,6 +94,14 @@ const WRITTEN: Record<string, Written[]> = {
     argument: { note: "n" },
     events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],
   }],
+  "set-then-push": [{
+    argument: { extra: "e", words: ["w"] },
+    events: [
+      { binding: 1, event: { word: "x" } },
+      { binding: 0, event: {} },
+      { binding: 1, event: { word: "y" } },
+    ],
+  }],
   "time-of-day": [{
     argument: { note: "n" },
     events: [{ binding: 0, event: {} }, { binding: 0, event: {} }],

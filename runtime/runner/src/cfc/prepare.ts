@@ -14254,6 +14254,8 @@ export function* prepareBoundaryCommitSteps(
         memberChanges.map(({ path }) => path),
       )
       : undefined;
+    const planLabelsOn = tx.getCfcState().planLabels === true;
+    const planLabeledPaths = planLabels.byTarget.get(key);
     for (const entry of existing?.labelMap.entries ?? []) {
       const entryPath = canonicalizeLogicalPath(entry.path);
       const key = pathKey(entryPath);
@@ -14341,14 +14343,29 @@ export function* prepareBoundaryCommitSteps(
         }
         continue;
       }
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // A derived entry at a path labels what the path holds, and with
+      // labels from templates it is the one entry for every position below
+      // that has none of its own: a write of a whole list stores the label
+      // of its members there. A transaction that mints the path's declared
+      // entry again and writes no value at the path, as an append to the
+      // list does, leaves what the path holds, so the entry stays unless a
+      // record gives the path a label. Behind `compiledPatterns`, which
+      // defaults off.
+      const derivedValueStands = planLabelsOn && entry.origin === "derived" &&
+        entry.observes !== "enumerate" && !currentLinkWritePaths.has(key) &&
+        !valueWrittenPrefixes.hasPrefixOf(entryPath) &&
+        !labelOnlyKeys.has(key) &&
+        planLabeledPaths?.has(planLabelPathKey(entryPath)) !== true;
       // A declared entry minted at a slot labels the position, not the
       // pointer the slot holds, so a link-origin entry there stays until its
       // own pointer is replaced (`linkEntrySuperseded` below).
       if (
-        (entry.origin !== "link" &&
+        !derivedValueStands &&
+        ((entry.origin !== "link" &&
           (persistedLabelEntryKeys.has(key) ||
             remintedDeclaredPaths.has(key))) ||
-        currentLinkWritePaths.has(key)
+          currentLinkWritePaths.has(key))
       ) {
         if (
           remintedDeclaredPaths.has(key) &&
