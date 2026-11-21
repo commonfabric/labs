@@ -1593,7 +1593,7 @@ export default pattern<CozyPollInput, CozyPollOutput>(
                             variant="chip"
                             size="sm"
                             $profile={entry.profile}
-                            fallback-name={entry.name}
+                            fallbackName={entry.name}
                             data-participant-badge={entry.name}
                           />
                         ))}
@@ -2199,7 +2199,7 @@ export default pattern<CozyPollInput, CozyPollOutput>(
                           $value={optionDraft}
                           placeholder="Add an option (e.g. Sushi place)…"
                           aria-label="Option title"
-                          timing-strategy="immediate"
+                          timingStrategy="immediate"
                           style="flex:1"
                         />
                         <cf-button
@@ -2257,7 +2257,7 @@ export default pattern<CozyPollInput, CozyPollOutput>(
                           type="date"
                           $value={visitDate}
                           aria-label="Visit date (blank = today)"
-                          timing-strategy="immediate"
+                          timingStrategy="immediate"
                         />
                         <span style={{ color: "#64748b" }}>
                           (blank = today)

@@ -1,6 +1,6 @@
 import {
   type EnvReader,
-  experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
   Runtime,
   type RuntimeOptions,
   runtimePresets,
@@ -21,7 +21,8 @@ type UrlEnv = Pick<ToolshedEnv, "MEMORY_URL" | "API_URL" | "API_INTERNAL_URL">;
  * With API_INTERNAL_URL set, the runtime's fetch sends requests addressed to
  * API_URL to that origin instead (`selfDirectedFetch`); the URLs themselves
  * are unchanged. EXPERIMENTAL_* flags come from the injected env reader via
- * the canonical mapping.
+ * the canonical mapping, over the posture of the deployment this toolshed
+ * follows, if it follows one (`EXPERIMENTAL_FOLLOWED_POSTURE`).
  */
 export function toolshedRuntimeOptions(
   config: UrlEnv,
@@ -34,7 +35,7 @@ export function toolshedRuntimeOptions(
     patternApiUrl: new URL(config.API_URL),
     ...(fetch !== undefined ? { fetch } : {}),
     storageManager,
-    experimental: experimentalOptionsFromEnv(envGet),
+    experimental: experimentalOptionsWithFollowedPosture(envGet),
   });
 }
 

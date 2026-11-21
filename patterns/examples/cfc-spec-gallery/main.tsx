@@ -1,3 +1,13 @@
+/**
+ * A gallery of worked CFC examples: three multi-step flows (forwarding a
+ * trusted note, sending a research brief by email, and releasing a safe link)
+ * that prepare a result and then authorize it separately, plus lighter cards
+ * such as returning a membership number, accepting an invite, and fact-check
+ * and provenance disclosures.
+ * Demonstrates trusted surfaces that authorize actions, `cf-cfc-label` showing
+ * the label on protected values, and write authorization with
+ * `WriteAuthorizedBy`.
+ */
 import {
   Cell,
   computed,

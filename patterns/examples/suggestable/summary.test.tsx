@@ -1,4 +1,4 @@
-import { assert, pattern, TESTS, UI } from "commonfabric";
+import { assert, NAME, pattern, TESTS, UI } from "commonfabric";
 import { hasText } from "../../tools/test-support/vnode-helpers.ts";
 import Summary from "./summary.tsx";
 
@@ -8,6 +8,8 @@ export default pattern(() => {
   const subject = Summary({});
 
   const assert_built = assert(() => subject != null);
+  // Without a topic it names itself generically.
+  const assert_generic_name = assert(() => subject[NAME] === "Summary");
   const assert_no_topic = assert(() => subject.topic === "");
   const assert_not_pending = assert(() => subject.pending === false);
   const assert_no_summary = assert(() => subject.summary === "");
@@ -19,6 +21,7 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { assertion: assert_built },
+      { assertion: assert_generic_name },
       { assertion: assert_no_topic },
       { assertion: assert_not_pending },
       { assertion: assert_no_summary },

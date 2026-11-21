@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
@@ -21,7 +22,11 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("shared query read ceilings");
-const BOB = "did:mailto:bob@example.test";
+// Readers as `dbOwner()`/`principal()` label rows with them: the CFC
+// `User{subject}` atom (spec §15.2), never the bare DID.
+const user = (subject: string) => ({ type: CFC_ATOM_TYPE.User, subject });
+const OWNER = user(signer.did());
+const BOB = user("did:mailto:bob@example.test");
 const SQL = "SELECT id, to_addr, body FROM emails ORDER BY id";
 
 describe("sqlite shared read ceiling", () => {
@@ -154,7 +159,7 @@ describe("sqlite shared read ceiling", () => {
   };
 
   it("materializes one complete shared result while withholding its values and row count from a narrower reader", async () => {
-    const narrow = reader([signer.did()]);
+    const narrow = reader([OWNER]);
     const result = await run(narrow);
     expect(() => result.get()).toThrow(/read ceiling/);
     expect(() => result.key("result").get()).toThrow(/read ceiling/);
@@ -165,7 +170,7 @@ describe("sqlite shared read ceiling", () => {
       /read ceiling/,
     );
     expect(result.key("error").get()).toBeUndefined();
-    const wide = reader([signer.did(), BOB]);
+    const wide = reader([OWNER, BOB]);
     const admitted = wide.getCellFromLink(result.getAsNormalizedFullLink());
     await admitted.sync();
     const rows = admitted.key("result").get() as Array<{ body: string }>;
@@ -189,14 +194,14 @@ describe("sqlite shared read ceiling", () => {
     const confidentiality = (view?.entries ?? []).flatMap((entry) =>
       entry.label.confidentiality ?? []
     );
-    expect(confidentiality).toContain(signer.did());
-    expect(confidentiality).not.toContain(BOB);
+    expect(confidentiality).toContainEqual(OWNER);
+    expect(confidentiality).not.toContainEqual(BOB);
     expect((await tx.commit().settled).error).toBeUndefined();
   });
 
   it("refreshes a labeled shared result without observing its previous rows", async () => {
-    const carol = "did:mailto:carol@example.test";
-    const runtime = reader([signer.did(), BOB, carol]);
+    const carol = user("did:mailto:carol@example.test");
+    const runtime = reader([OWNER, BOB, carol]);
     const { commonfabric: cf } = createTrustedBuilder(runtime);
     const tx = runtime.edit();
     const tick = runtime.getCell<number>(
@@ -246,7 +251,7 @@ describe("sqlite shared read ceiling", () => {
         { id: 1, to_addr: "", body: "mine" },
         { id: 2, to_addr: "carol@example.test", body: "private message" },
       ]);
-      const narrowed = reader([signer.did(), carol]).getCellFromLink(
+      const narrowed = reader([OWNER, carol]).getCellFromLink(
         result.getAsNormalizedFullLink(),
       );
       await narrowed.sync();
@@ -269,7 +274,7 @@ describe("sqlite shared read ceiling", () => {
     );
     expect(result.key("error").get()).toBeUndefined();
     expect(() => result.key("result").get()).toThrow(/read ceiling/);
-    const admitted = reader([signer.did()]).getCellFromLink(
+    const admitted = reader([OWNER]).getCellFromLink(
       result.getAsNormalizedFullLink(),
     );
     await admitted.sync();
@@ -277,12 +282,12 @@ describe("sqlite shared read ceiling", () => {
   });
 
   it("withholds a shared filtered array's shape under the labels of skipped rows", async () => {
-    const result = await run(reader([signer.did()]), SQL, {
-      maxConfidentiality: [signer.did()],
+    const result = await run(reader([OWNER]), SQL, {
+      maxConfidentiality: [OWNER],
       onExceed: "skip",
     });
     expect(() => result.key("result").get()).toThrow(/read ceiling/);
-    const admitted = reader([signer.did(), BOB]).getCellFromLink(
+    const admitted = reader([OWNER, BOB]).getCellFromLink(
       result.getAsNormalizedFullLink(),
     );
     await admitted.sync();
@@ -294,8 +299,8 @@ describe("sqlite shared read ceiling", () => {
   });
 
   it("reports a shared ceiling refusal without the private row ordinal", async () => {
-    const result = await run(reader([signer.did()]), SQL, {
-      maxConfidentiality: [signer.did()],
+    const result = await run(reader([OWNER]), SQL, {
+      maxConfidentiality: [OWNER],
     });
     expect(result.key("error").get()).toMatch(/declared output ceiling/);
     expect(result.key("error").get()).not.toMatch(/row \d/);
@@ -344,7 +349,7 @@ describe("sqlite shared read ceiling", () => {
   });
 
   it("admits a shared query over public rows", async () => {
-    const result = await run(reader([signer.did()]), "SELECT body FROM notes");
+    const result = await run(reader([OWNER]), "SELECT body FROM notes");
     expect(result.key("result").get()).toEqual([{ body: "public note" }]);
   });
 });

@@ -1,9 +1,8 @@
 /**
  * Runs the shipped profile-create pattern through a Mode A router, for the
- * router exercise, in a process of its own: the runtime locks its realm down
- * with SES, whose unhandled-rejection handler would let the exercise exit 0
- * on a failed gate, and a runtime's dispose resets the process-global
- * experimental flags the exercise's own clients advertise.
+ * router exercise, in a process of its own, because a runtime's dispose
+ * resets the process-global experimental flags the exercise's own clients
+ * advertise.
  *
  * A user's Home is born on its first open, by its own key, with the genesis
  * ACL the storage manager commits. The pattern creates a profile in a space of
@@ -190,15 +189,9 @@ async function createProfile(config: RoutedProfileFixture) {
 }
 
 if (import.meta.main) {
-  let result: Awaited<ReturnType<typeof createProfile>>;
-  try {
-    result = await createProfile(
-      JSON.parse(Deno.readTextFileSync(Deno.args[0])),
-    );
-  } catch (error) {
-    console.error(error);
-    Deno.exit(1);
-  }
+  const result = await createProfile(
+    JSON.parse(Deno.readTextFileSync(Deno.args[0])),
+  );
   console.log(JSON.stringify(result));
   Deno.exit(0);
 }

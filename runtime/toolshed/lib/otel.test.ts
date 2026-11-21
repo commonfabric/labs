@@ -1,4 +1,9 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
+import { ROOT_CONTEXT } from "@opentelemetry/api";
+import { AsyncHooksContextManager } from "@opentelemetry/context-async-hooks";
 import {
   BasicTracerProvider,
   BatchSpanProcessor,
@@ -7,8 +12,10 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { OpenInferenceBatchSpanProcessor } from "@arizeai/openinference-vercel";
 import {
+  chooseContextManager,
   getTracerProvider,
   initOpenTelemetry,
+  otelSettings,
   provider,
   shutdownOpenTelemetry,
 } from "@/lib/otel.ts";
@@ -36,6 +43,67 @@ Deno.test("spans carry both the service attributes and the SDK defaults", () => 
     typeof attributes["telemetry.sdk.version"] === "string",
     "telemetry.sdk.version should be set by the SDK's default resource",
   );
+});
+
+describe("otel", () => {
+  describe("otelSettings()", () => {
+    it("derives the traces URL from the endpoint, without a doubled slash", () => {
+      expect(
+        otelSettings({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4318/",
+          OTEL_SERVICE_NAME: "toolshed",
+          ENV: "production",
+        }),
+      ).toEqual({
+        tracesUrl: "http://collector:4318/v1/traces",
+        serviceName: "toolshed",
+        environment: "production",
+      });
+    });
+
+    it("falls back for each empty variable", () => {
+      expect(
+        otelSettings({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "",
+          OTEL_SERVICE_NAME: "",
+          ENV: "",
+        }),
+      ).toEqual({
+        tracesUrl: "http://localhost:4318/v1/traces",
+        serviceName: "toolshed-dev",
+        environment: "development",
+      });
+    });
+  });
+
+  describe("chooseContextManager()", () => {
+    it("returns the runtime's own manager when there is one", () => {
+      const builtIn = new AsyncHooksContextManager();
+      expect(
+        chooseContextManager({ telemetry: { contextManager: builtIn } }),
+      ).toBe(builtIn);
+    });
+
+    it("returns an async-hooks manager when the runtime has none", () => {
+      const manager = chooseContextManager({});
+      expect(manager).toBeInstanceOf(AsyncHooksContextManager);
+      expect(manager.active()).toBe(ROOT_CONTEXT);
+    });
+  });
+
+  describe("initOpenTelemetry()", () => {
+    it("logs that telemetry is disabled and registers nothing when not enabled", () => {
+      using log = stub(console, "log");
+      const before = getTracerProvider();
+
+      initOpenTelemetry(false);
+
+      expect(log.calls.map((call) => call.args)).toEqual([[
+        "OpenTelemetry is disabled via OTEL_ENABLED env var",
+      ]]);
+      expect(getTracerProvider()).toBe(before);
+    });
+  });
 });
 
 //
@@ -111,7 +179,19 @@ Deno.test(
   { sanitizeOps: false, sanitizeResources: false },
   async () => {
     initOpenTelemetry(true);
-    assert(getTracerProvider() !== undefined, "provider should be registered");
+    const registered = getTracerProvider();
+    assert(registered !== undefined, "provider should be registered");
+
+    // A second initialization is a logged no-op. Registration happens at
+    // most once per module instance, which is why this case holds both.
+    {
+      using log = stub(console, "log");
+      initOpenTelemetry(true);
+      assertEquals(log.calls.map((call) => call.args), [[
+        "OpenTelemetry already initialized, skipping",
+      ]]);
+    }
+    assertEquals(getTracerProvider(), registered);
 
     // No span was emitted, so forceFlush makes no network call to the collector.
     await shutdownOpenTelemetry();

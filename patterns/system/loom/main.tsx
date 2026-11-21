@@ -7,6 +7,8 @@ import {
   ifElse,
   NAME,
   pattern,
+  type PerUser,
+  spaceMembers,
   spaceOf,
   type Stream,
   UI,
@@ -16,6 +18,7 @@ import {
 } from "commonfabric";
 import FabriChatRoom from "../fabrichat/room.tsx";
 import { ensureFileStore } from "../fabrifile/store.tsx";
+import { memberSet, type SpaceMember } from "../social-space/member-set.ts";
 import {
   admitPanel,
   assertRemovable,
@@ -716,6 +719,14 @@ export default pattern<LoomInput, LoomOutput>(
       })
     );
     const roster = computed(() => rosterProfiles(participants));
+    // Only a member may read the space's access list, and a profile lives in
+    // its owner's own space, which may refuse a reader. Both are the reader's
+    // principal's, so the members are derived per user. The binding's name is
+    // its value's cause, the identity of the document that stores it, so
+    // renaming it moves its data.
+    const membersForUser = computed((): PerUser<SpaceMember[]> | undefined =>
+      memberSet(roster, spaceMembers(participants))
+    );
     const room = computed(() => chatRoom.get().room);
     const store = computed(() => fileStore.get().store);
     const viewerPanels = computed(() =>
@@ -891,6 +902,7 @@ export default pattern<LoomInput, LoomOutput>(
       duplicatePanel: duplicate,
       setPresentation: present,
       participants: roster,
+      members: membersForUser,
       addParticipant: addParticipant({ roster: participants }),
       chatRoom: room,
       setChatRoom: setChatRoom({ chatRoom }),

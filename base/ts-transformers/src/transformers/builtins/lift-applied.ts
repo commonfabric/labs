@@ -111,7 +111,9 @@ function planLiftAppliedInputEntries(
   fallback.forEach((ref, index) => {
     const { propertyName, paramName } = createPropertyParamNames(
       getExpressionText(ref),
-      ts.isIdentifier(ref),
+      // A fallback ref is never an identifier, which `parseCaptureExpression`
+      // always reads into the capture tree.
+      false,
       index,
       usedPropertyNames,
       usedParamNames,
@@ -163,11 +165,11 @@ function createParameterForPlan(
   return createParameterFromBindings(bindings, factory);
 }
 
-function createLiftAppliedInputArgs(
+function createLiftAppliedInputObject(
   factory: ts.NodeFactory,
   captureTree: ReturnType<typeof groupCapturesByRoot>,
   fallbackEntries: readonly FallbackEntry[],
-): readonly ts.Expression[] {
+): ts.ObjectLiteralExpression {
   const properties: ts.ObjectLiteralElementLike[] = [];
 
   const captureProperties = buildCapturePropertyAssignments(
@@ -176,36 +178,31 @@ function createLiftAppliedInputArgs(
   );
   for (const property of captureProperties) properties.push(property);
 
+  // A fallback ref is never an identifier, so it is never written shorthand.
   for (const entry of fallbackEntries) {
-    if (ts.isIdentifier(entry.ref) && entry.propertyName === entry.ref.text) {
-      properties.push(
-        factory.createShorthandPropertyAssignment(entry.ref, undefined),
-      );
-    } else {
-      properties.push(
-        factory.createPropertyAssignment(
-          factory.createIdentifier(entry.propertyName),
-          entry.ref,
-        ),
-      );
-    }
+    properties.push(
+      factory.createPropertyAssignment(
+        factory.createIdentifier(entry.propertyName),
+        entry.ref,
+      ),
+    );
   }
 
-  return [
-    factory.createObjectLiteralExpression(properties, properties.length > 1),
-  ];
+  return factory.createObjectLiteralExpression(
+    properties,
+    properties.length > 1,
+  );
 }
 
-// Caller must pass a non-empty refs array.
+/**
+ * Wraps `expression` in a lift-applied call whose input carries `refs`.
+ * Returns undefined when `refs` is empty.
+ */
 export function createLiftAppliedCall(
   expression: ts.Expression,
   refs: readonly ts.Expression[],
   options: LiftAppliedCallOptions,
 ): ts.Expression | undefined {
-  if (refs.length === 0) {
-    throw new Error("createLiftAppliedCall requires a non-empty refs array");
-  }
-
   const { factory, tsContext, cfHelpers, context } = options;
   const { captureTree, fallbackEntries, refToParamName } =
     planLiftAppliedInputEntries(
@@ -256,14 +253,11 @@ export function createLiftAppliedCall(
   // on the inner lift call. This matches the canonical post-Phase-1 shape
   // produced by LiftLoweringTransformer (see src/lift/transformer.ts) for
   // user-authored computed() calls.
-  const [inputObject] = createLiftAppliedInputArgs(
+  const inputObject = createLiftAppliedInputObject(
     factory,
     captureTree,
     fallbackEntries,
   );
-  if (!inputObject) {
-    return undefined;
-  }
 
   // Build input type node that preserves Cell<T> types
   const inputTypeNode = buildInputTypeNode(

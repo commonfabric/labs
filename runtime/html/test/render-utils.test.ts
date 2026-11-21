@@ -1,6 +1,9 @@
 /**
- * The two render-utility contracts a renderer depends on and neither the name
- * nor the signature states.
+ * The render-utility contracts a renderer depends on and neither the name nor
+ * the signature states.
+ *
+ * `getEventType` hands back a name that is not an event prop unchanged,
+ * including a bare `on`.
  *
  * `setPropDefault` compares under `Object.is` rather than `===`, which decides
  * two cases that differ from each other: `NaN` over a stored `NaN` is
@@ -19,9 +22,24 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { setPropDefault, styleObjectToCssString } from "../src/render-utils.ts";
+import {
+  getEventType,
+  setPropDefault,
+  styleObjectToCssString,
+} from "../src/render-utils.ts";
 
 describe("render-utils", () => {
+  describe("getEventType", () => {
+    it("lowercases the name after `on`", () => {
+      expect(getEventType("onMouseMove")).toBe("mousemove");
+    });
+
+    it("returns a name that is not an event prop unchanged", () => {
+      expect(getEventType("on")).toBe("on");
+      expect(getEventType("click")).toBe("click");
+    });
+  });
+
   describe("setPropDefault", () => {
     it("does not re-assign an unchanged NaN property", () => {
       // The write guard uses `Object.is` semantics: an incoming `NaN` over a

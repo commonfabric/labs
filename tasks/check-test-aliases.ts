@@ -24,7 +24,8 @@
  * and a `.jsonl` file of the directory's name beside it, holds aliases
  * that nothing reads, and fails.
  *
- * Usage: check-test-aliases.ts [base-ref]   (default: origin/main)
+ * Usage: check-test-aliases.ts [base-ref]
+ *        (default: upstream/main where that exists, and origin/main otherwise)
  */
 
 import { existsSync } from "@std/fs/exists";
@@ -38,6 +39,7 @@ import {
   parseAliasLine,
   readAliasDirectory,
 } from "@commonfabric/test-support/records";
+import { defaultBase, git } from "./repository-files.ts";
 
 /** What the gate compares: the alias directory now, and at the merge base. */
 export type AliasDirectoryState = {
@@ -138,22 +140,8 @@ export function aliasDirectoryProblems(
   return { problems, aliases };
 }
 
-async function git(...args: string[]): Promise<string> {
-  const { code, stdout, stderr } = await new Deno.Command("git", {
-    args,
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (code !== 0) {
-    throw new Error(
-      `git ${args.join(" ")} failed: ${new TextDecoder().decode(stderr)}`,
-    );
-  }
-  return new TextDecoder().decode(stdout);
-}
-
 async function main(): Promise<void> {
-  const base = Deno.args[0] ?? "origin/main";
+  const base = Deno.args[0] ?? await defaultBase(git);
   let mergeBase: string;
   try {
     mergeBase = (await git("merge-base", base, "HEAD")).trim();
@@ -195,7 +183,7 @@ async function main(): Promise<void> {
     strayFile: beside.some(({ name }) =>
       name === `${basename(ALIAS_DIRECTORY)}${ALIAS_FILE_SUFFIX}`
     ),
-    pathExists: (path) => existsSync(path),
+    pathExists: existsSync,
   });
 
   if (problems.length > 0) {

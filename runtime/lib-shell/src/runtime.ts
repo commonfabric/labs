@@ -17,8 +17,10 @@ import {
   attachOptionsFrom,
   CellHandle,
   FavoritesManager,
+  type HistoryStep,
   PieceHandle,
   type PieceSourceView,
+  type PieceUpdateSourceResponse,
   Program,
   RuntimeClient,
   RuntimeClientEvents,
@@ -28,6 +30,14 @@ import {
 } from "@commonfabric/runtime-client";
 import { WebWorkerRuntimeTransport } from "@commonfabric/runtime-client/transports/web-worker";
 import { getLogger } from "@commonfabric/logger";
+import { readBuildHash } from "./build-hash.ts";
+import {
+  type PatternChange,
+  type PieceSourceOfScope,
+  type SpaceHistoryStep,
+  withOlderSteps,
+  withPatternChanges,
+} from "./space-history.ts";
 
 const logger = getLogger("lib-shell.runtime", {
   enabled: false,
@@ -75,6 +85,9 @@ export function defaultRenderConfidentialityCeiling(
   return defaultDisplayCeiling(actingUser);
 }
 
+export type { HistoryStep, PatternChange, SpaceHistoryStep };
+export { withOlderSteps };
+
 export type RuntimeNavigationTarget = { spaceDid: DID; pieceId: string };
 
 export type RuntimeInternalsCallbacks = {
@@ -112,6 +125,15 @@ export type RuntimeInternalsCreateOptions = RuntimeInternalsCallbacks & {
    */
   spaceHostMap?: Record<string, string>;
 
+  /**
+   * The branch each space listed here is opened on, forwarded to the worker:
+   * the runtime runs such a space as that branch holds it and writes there.
+   * A runtime given any computes what a branch stores itself, whatever
+   * `experimental.serverExecution` says. Absent, every space is opened as it
+   * stands.
+   */
+  branches?: Record<DID, string>;
+
   experimental?: ExperimentalRuntimeFlags;
   cfcEnforcementMode?: RuntimeCfcEnforcementMode;
 
@@ -126,8 +148,12 @@ export type RuntimeInternalsCreateOptions = RuntimeInternalsCallbacks & {
    * Populate the default render confidentiality ceiling. Defaults to on:
    * the worker's display sinks gate labeled values against the §8.10.6
    * profile for the acting identity, and author-supplied render-boundary
-   * declassification is denied. `false` opts a host out, which renders
-   * labeled content ungated.
+   * declassification is denied. `false` opts a host out: it declares that it
+   * wants no ceiling (`renderConfidentialityCeiling: null`) and honors
+   * author-supplied declassification (`renderDeclassificationPolicy:
+   * "allow"`), so that labeled content renders ungated but for the authored
+   * boundaries around it. A host declaring neither is given the default
+   * ceiling, with declassification denied, by the worker.
    */
   cfcRenderCeiling?: boolean;
 
@@ -245,24 +271,7 @@ let buildHashPromise: Promise<string | undefined> | undefined;
  * fetched at most once.
  */
 export function fetchBuildHash(): Promise<string | undefined> {
-  if (!buildHashPromise) {
-    buildHashPromise = (async () => {
-      try {
-        const resp = await fetch(
-          new URL("/build-manifest.json", globalThis.location.origin),
-          { cache: "no-store" },
-        );
-        if (resp.ok) {
-          const manifest = await resp.json();
-          // Key must match the worker entry's `out` path in felt.config.ts.
-          return manifest["scripts/worker-runtime.js"] as string | undefined;
-        }
-      } catch {
-        // Manifest not available — compilation cache disabled
-      }
-      return undefined;
-    })();
-  }
+  buildHashPromise ??= readBuildHash();
   return buildHashPromise;
 }
 
@@ -312,6 +321,7 @@ export function createRuntimeClientOptions({
   apiUrl,
   memoryUrl,
   spaceHostMap,
+  branches,
   experimental,
   cfcEnforcementMode = "enforce-strict",
   // Epic H2 (docs/history/plans/cfc-future-work-implementation.md): shell hosts run the
@@ -345,6 +355,7 @@ export function createRuntimeClientOptions({
   apiUrl: URL;
   memoryUrl?: URL;
   spaceHostMap?: Record<string, string>;
+  branches?: Record<DID, string>;
   experimental?: ExperimentalRuntimeFlags;
   cfcEnforcementMode?: RuntimeCfcEnforcementMode;
   cfcFlowLabels?: RuntimeCfcFlowLabelsMode;
@@ -361,6 +372,7 @@ export function createRuntimeClientOptions({
   // as the render audience, the fallback the worker's own resolver applies to
   // the same field in `runtime-processor.ts`.
   const actingPrincipal = trustSnapshot?.actingPrincipal ?? session.as.did();
+  const onBranches = branches !== undefined && Object.keys(branches).length > 0;
   const resolvedTrustSnapshot = trustSnapshot === undefined
     ? { id: `principal:${actingPrincipal}`, actingPrincipal }
     : trustSnapshot ?? undefined;
@@ -372,7 +384,12 @@ export function createRuntimeClientOptions({
     spaceHostMap,
     identity: session.as,
     spaceDid: session.space,
-    experimental,
+    // No serving loop runs a branch, so the runtime that opens one computes
+    // what it stores.
+    branches: onBranches ? branches : undefined,
+    experimental: onBranches
+      ? { ...experimental, serverExecution: false }
+      : experimental,
     cfcEnforcementMode,
     cfcFlowLabels,
     ...(cfcRenderCeiling
@@ -383,7 +400,14 @@ export function createRuntimeClientOptions({
           actingPrincipal,
         ),
       }
-      : {}),
+      // No ceiling, declared as such, since the worker gives a host that
+      // declares none the default one. An authored boundary still narrows
+      // the ceiling of what it encloses, and with the ceiling off it may
+      // declassify as well.
+      : {
+        renderDeclassificationPolicy: "allow" as const,
+        renderConfidentialityCeiling: null,
+      }),
     trustSnapshot: resolvedTrustSnapshot,
     forwardWorkerConsole,
     patternCoverage,
@@ -530,15 +554,29 @@ export class RuntimeInternals extends EventTarget {
   /** Optional OTel sink (browser telemetry enabled). Inert when `undefined`. */
   #telemetrySink?: RuntimeTelemetrySink;
 
+  /**
+   * Stands up a second runtime like this one that opens the given spaces on
+   * the given branches, which `forkSpace()` runs a fork in. Absent where
+   * this runtime's embedder supplied its connection, since there is then no
+   * worker of this page's to stand another beside.
+   */
+  #spawnOnBranches?: (
+    branches: Record<DID, string>,
+  ) => Promise<RuntimeInternals>;
+
   constructor(
     client: RuntimeClient,
     callbacks: RuntimeInternalsCallbacks = {},
     telemetry?: RuntimeTelemetrySink,
+    spawnOnBranches?: (
+      branches: Record<DID, string>,
+    ) => Promise<RuntimeInternals>,
   ) {
     super();
     this.#client = client;
     this.#callbacks = callbacks;
     this.#telemetrySink = telemetry;
+    this.#spawnOnBranches = spawnOnBranches;
     this.#favorites = new FavoritesManager(client);
     this.#client.on("console", this.#onConsole);
     this.#client.on("navigaterequest", this.#onNavigateRequest);
@@ -587,11 +625,7 @@ export class RuntimeInternals extends EventTarget {
     options?: { argument?: FabricPlainObject; run?: boolean; cause?: string },
   ): Promise<PieceHandle<T>> {
     this.#check();
-    const piece = await this.#client.createPiece<T>(source, space, options);
-    if (!piece) {
-      throw new Error("Could not create piece");
-    }
-    return piece;
+    return await this.#client.createPiece<T>(source, space, options);
   }
 
   /**
@@ -776,9 +810,7 @@ export class RuntimeInternals extends EventTarget {
   #dropPattern(space: DID, scope: CellScope, id: string): void {
     const byScope = this.#patternCache.get(space);
     const byId = byScope?.get(scope);
-    if (!byScope || !byId) return;
-    byId.delete(id);
-    if (byId.size > 0) return;
+    if (!byScope || !byId?.delete(id) || byId.size > 0) return;
     byScope.delete(scope);
     if (byScope.size === 0) this.#patternCache.delete(space);
   }
@@ -887,6 +919,170 @@ export class RuntimeInternals extends EventTarget {
   async synced(space: DID): Promise<void> {
     this.#check();
     await this.#client.synced(space);
+  }
+
+  /**
+   * Returns a stretch of the history of `space`, newest first: its steps
+   * that began below `before`, or its newest ones, and the seq to pass as
+   * `before` for the stretch older than this one. Each step carries the
+   * changes of pattern code the space's pieces recorded during it, as a
+   * piece's own source history lists them: the pieces the space lists, and
+   * those `pieces` names beside them, which is how a piece the space does
+   * not list has its changes shown.
+   */
+  async spaceHistory(
+    space: DID,
+    before?: number,
+    pieces: readonly { id: string; scope?: CellScope }[] = [],
+  ): Promise<{ steps: SpaceHistoryStep[]; next?: number }> {
+    this.#check();
+    const [page, sources] = await Promise.all([
+      this.#client.spaceHistory({
+        space,
+        ...(before !== undefined ? { before } : {}),
+      }),
+      this.#pieceSources(space, pieces),
+    ]);
+    return { ...page, steps: withPatternChanges(page.steps, sources) };
+  }
+
+  /**
+   * Helper for `spaceHistory()`, which returns the source of each piece the
+   * space lists and each `named` adds beside them. A piece whose source
+   * cannot be read is left out, and so is every listed piece when the list
+   * cannot be: a history is still worth showing without what it says of
+   * pattern code.
+   */
+  async #pieceSources(
+    space: DID,
+    named: readonly { id: string; scope?: CellScope }[],
+  ): Promise<PieceSourceOfScope[]> {
+    let pieces: { id: string; scope?: CellScope }[] = [];
+    try {
+      // A piece registered a moment ago is on the list once the space's
+      // pending writes have landed.
+      await this.#client.synced(space);
+      const list = await this.#client.getPiecesListCell<unknown>(space);
+      await list.sync();
+      pieces = (list.get() ?? []).flatMap((piece) => {
+        const entry = piece as {
+          id?: () => unknown;
+          ref?: () => { scope?: CellScope };
+          $ID?: unknown;
+        } | null;
+        const id = typeof entry?.id === "function" ? entry.id() : entry?.$ID;
+        if (typeof id !== "string") return [];
+        const scope = typeof entry?.ref === "function"
+          ? entry.ref().scope
+          : undefined;
+        return [{ id, ...(scope !== undefined ? { scope } : {}) }];
+      });
+    } catch (error) {
+      logger.warn("space-history-pieces", () => [
+        `listing the pieces of ${space}:`,
+        error,
+      ]);
+    }
+    // A listed piece is named by its full URI and a routed one without the
+    // scheme, so the two are compared without it, and an omitted scope is
+    // the space's.
+    const key = ({ id, scope }: { id: string; scope?: CellScope }) =>
+      `${scope ?? "space"}\n${id.replace(/^of:/, "")}`;
+    const listed = new Set(pieces.map(key));
+    for (const piece of named) {
+      if (listed.has(key(piece))) continue;
+      listed.add(key(piece));
+      pieces.push(piece);
+    }
+    const sources = await Promise.allSettled(
+      pieces.map(({ id, scope }) =>
+        this.#client.getPieceSource(id, space, scope)
+      ),
+    );
+    return sources.flatMap((outcome, index) => {
+      if (outcome.status !== "fulfilled") return [];
+      const { scope } = pieces[index];
+      return [{
+        source: outcome.value,
+        ...(scope !== undefined ? { scope } : {}),
+      }];
+    });
+  }
+
+  /**
+   * Restores the pattern code of a piece of `space` to the source revision
+   * `change` names, and leaves the piece's data as it is: what "Origin and
+   * history" in the piece's menu does for that revision. Returns the
+   * runtime's answer, which carries a `compatibilityWarning` and a
+   * `confirmationToken` where the earlier source does not fit the piece's
+   * data; passing the token back as `confirmationToken` restores it anyway.
+   */
+  async restorePiecePattern(
+    space: DID,
+    change: Pick<PatternChange, "pieceId" | "revisionId" | "scope">,
+    confirmationToken?: string,
+  ): Promise<PieceUpdateSourceResponse> {
+    this.#check();
+    return await this.#client.updatePieceSource(
+      change.pieceId,
+      space,
+      { kind: "restore", revisionId: change.revisionId },
+      {
+        ...(confirmationToken !== undefined ? { confirmationToken } : {}),
+        ...(change.scope !== undefined ? { scope: change.scope } : {}),
+      },
+    );
+  }
+
+  /**
+   * Forks `space` as it stood at the point `seq` of its history, and returns
+   * the fork with a runtime of its own running it. The space itself is left
+   * as it is, whatever happens in the fork, until the fork is restored.
+   *
+   * @throws When this runtime's embedder supplied its connection, or when
+   * the principal may not write to the space.
+   */
+  async forkSpace(space: DID, seq: number): Promise<SpaceFork> {
+    this.#check();
+    const spawn = this.#spawnOnBranches;
+    if (spawn === undefined) {
+      throw new Error(
+        "a runtime whose embedder supplied its connection cannot fork a space",
+      );
+    }
+    // The prefix is the memory package's `HISTORY_FORK_BRANCH_PREFIX`, by
+    // which a compaction knows a leftover fork it may delete.
+    const branch = `history:${crypto.randomUUID()}`;
+    await this.#client.createSpaceBranch({ space, name: branch, forkSeq: seq });
+    let runtime: RuntimeInternals;
+    try {
+      runtime = await spawn({ [space]: branch });
+    } catch (error) {
+      // The failure to start is what the caller hears of, whatever becomes
+      // of deleting the branch nothing runs.
+      try {
+        await this.#client.deleteSpaceBranch({ space, name: branch });
+      } catch (deleteError) {
+        console.error(
+          `[RuntimeInternals] Failed to delete the branch ${branch}:`,
+          deleteError,
+        );
+      }
+      throw error;
+    }
+    return new SpaceFork(space, branch, seq, runtime, this.#client);
+  }
+
+  /**
+   * Restores `space` to the state the point `seq` of its history held, as
+   * one new step of that history. Returns the seq of the step, or
+   * `undefined` when the space already held the state.
+   *
+   * @throws When the principal is not an owner of the space.
+   */
+  async restoreSpace(space: DID, seq: number): Promise<number | undefined> {
+    this.#check();
+    return await this.#client.restoreSpace({ space, seq });
   }
 
   /** See RuntimeClient.registerSpaceHost — the site-table v0 hint API. */
@@ -1093,6 +1289,7 @@ export class RuntimeInternals extends EventTarget {
     apiUrl,
     memoryUrl,
     spaceHostMap,
+    branches,
     experimental,
     cfcEnforcementMode,
     cfcFlowLabels,
@@ -1141,6 +1338,7 @@ export class RuntimeInternals extends EventTarget {
       apiUrl,
       memoryUrl,
       spaceHostMap,
+      branches,
       experimental,
       cfcEnforcementMode,
       cfcFlowLabels,
@@ -1183,7 +1381,150 @@ export class RuntimeInternals extends EventTarget {
       client,
       { navigate, onConsole, onError },
       telemetry,
+      transport === undefined
+        ? (onBranches) =>
+          RuntimeInternals.create({
+            identity,
+            apiUrl,
+            memoryUrl,
+            spaceHostMap,
+            branches: onBranches,
+            experimental,
+            cfcEnforcementMode,
+            cfcFlowLabels,
+            cfcRenderCeiling,
+            trustSnapshot,
+            clientVersion,
+            clientBuild,
+            forwardWorkerConsole,
+            patternCoverage,
+            concurrentWatchRefresh,
+            awaitHealth,
+            iframeOuterFrameUrl,
+            getBuildHash,
+            workerUrl,
+            navigate,
+            onConsole,
+            onError,
+          })
+        : undefined,
     );
+  }
+}
+
+/**
+ * A fork of a space: a branch that holds the space's documents as they stood
+ * at one point of its history, and a runtime that runs it there. What that
+ * runtime writes to the space's documents stays in the fork and ends with
+ * it, whether the space is restored to the fork's point of history or the
+ * fork is discarded. What it writes to another space the principal may
+ * write to is kept on a branch of that space in the same way, and ends with
+ * the fork. The requests its effects send are real.
+ */
+export class SpaceFork {
+  readonly #space: DID;
+  readonly #branch: string;
+  readonly #seq: number;
+  readonly #runtime: RuntimeInternals;
+  readonly #origin: RuntimeClient;
+  #ended = false;
+  #deleted: Promise<void> | undefined;
+  #disposed: Promise<void> | undefined;
+
+  /**
+   * Constructs the fork of `space` on `branch`, taken at `seq`, which
+   * `runtime` runs and `origin`, the client of the runtime that forked it,
+   * restores and deletes.
+   */
+  constructor(
+    space: DID,
+    branch: string,
+    seq: number,
+    runtime: RuntimeInternals,
+    origin: RuntimeClient,
+  ) {
+    this.#space = space;
+    this.#branch = branch;
+    this.#seq = seq;
+    this.#runtime = runtime;
+    this.#origin = origin;
+  }
+
+  /** The space this is a fork of. */
+  get space(): DID {
+    return this.#space;
+  }
+
+  /** The name of the branch holding the fork. */
+  get branch(): string {
+    return this.#branch;
+  }
+
+  /** The point of the space's history the fork was taken at. */
+  get seq(): number {
+    return this.#seq;
+  }
+
+  /** The runtime running the fork, which opens the space on its branch. */
+  get runtime(): RuntimeInternals {
+    return this.#runtime;
+  }
+
+  /**
+   * Restores the space to the point of its history the fork was taken at,
+   * as one new step of that history, and ends the fork. What was done in the
+   * fork is not carried into the space: a fork is computed by the client
+   * that opened it, and the space takes its state from its own history.
+   * Returns the seq of the new step, or `undefined` when the space already
+   * held the state.
+   *
+   * @throws When the principal is not an owner of the space. The fork is
+   * then left as it was.
+   */
+  async restore(): Promise<number | undefined> {
+    if (this.#ended) throw new Error("the fork has ended");
+    const seq = await this.#origin.restoreSpace({
+      space: this.#space,
+      seq: this.#seq,
+    });
+    // The space is restored whatever becomes of the fork's own teardown,
+    // which a later `discard()` tries again.
+    try {
+      await this.discard();
+    } catch (error) {
+      console.error("[SpaceFork] Failed to end a restored fork:", error);
+    }
+    return seq;
+  }
+
+  /**
+   * Ends the fork: deletes its branch and disposes of its runtime. What was
+   * done in it stays in the space's store, unreachable from the space. A
+   * call after one that failed to delete the branch tries the deletion
+   * again.
+   *
+   * @throws When the branch could not be deleted or the runtime disposed of.
+   */
+  async discard(): Promise<void> {
+    this.#ended = true;
+    // The delete is sent before anything is awaited, so a caller that is
+    // about to dispose of the runtime that took the fork still gets it out.
+    const deleted = this.#deleted ??= this.#origin.deleteSpaceBranch({
+      space: this.#space,
+      name: this.#branch,
+    });
+    // A deletion that failed is forgotten, so the next call sends another.
+    deleted.catch(() => {
+      if (this.#deleted === deleted) this.#deleted = undefined;
+    });
+    // A runtime is disposed of once: a later call finds it disposed, so
+    // only the branch deletion is what a repeated `discard()` tries again.
+    const disposed = this.#disposed ??= this.#runtime.dispose();
+    try {
+      await disposed;
+    } finally {
+      await deleted;
+    }
   }
 }
 

@@ -27,6 +27,23 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the memory server's per-session walk and encode on the main thread, the
   four measurements that decide which change to make, the recipes for taking
   them, and how the overlapped commit is validated.
+- [Serving a piece's stored outputs while they are current](stored-output-currency.md)
+  keeps a durable record, per piece and per viewer of it, of what it read,
+  what it writes and which stored outputs a serving loop vouched for, marks
+  that record stale through the store when an input changes, and has the
+  demand pass leave a piece unstarted
+  only while its record proves every demanded output of it current, with a
+  mode that records and judges without acting so the judgment can be checked
+  first.
+- [Serving a stored output that depends on another space or on a wish](stored-output-currency-across-spaces.md)
+  continues that index across spaces: a reading space registers the
+  instances it read with their source, the source tells its readers when one
+  changed or its producer became stale, by a trigger that carries nothing
+  and a pull from a position, and demand travels upstream only along stale
+  edges; with it, a wish's own computations are recorded under an identity,
+  a slice that read the interval clock expires, and a computation the
+  scheduler runs without demand may be left unrun while nothing can observe
+  what it would write.
 - [What a create leaves on a serving worker's heap](serving-worker-heap.md)
   carries the work on what a piece a handler starts keeps alive on a serving
   worker: what has been released, what is left, and the process for finding the
@@ -335,6 +352,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   specification documents: where the work is, the rulings that are fixed, the
   questions the owner has to answer, and the reconciliation passes to make
   next.
+- [Compiled pattern language: measuring it in the real runtime](compiled-pattern-language-integration.md)
+  runs the prototype's executor inside the runtime, on its storage
+  transactions and CFC preparation and later its scheduler and sandbox, to
+  get costs the prototype alone cannot give: the options weighed, two
+  tracks with Topics as their shared target, six milestones with what each
+  measures, and what stays in the prototype.
 
 ## Concepts not planned for deployment
 

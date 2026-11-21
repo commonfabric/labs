@@ -1,9 +1,6 @@
-/**
- * Implementation of the root `deno task test` runner. The entry point is
- * tasks/test.ts; the logic lives here because `deno coverage` skips files
- * whose names end in test.ts, and the coverage-debt metric scores an
- * unmeasured file as fully uncovered.
- */
+#!/usr/bin/env -S deno run --allow-read --allow-write --allow-run --allow-env --allow-net
+
+/** The root `deno task test` runner, which `runRootTestTask()` carries out. */
 
 import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
@@ -18,8 +15,14 @@ import {
   recordsDir,
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
+import { pinShuffleSeed } from "@commonfabric/test-support/shuffle";
 import { withoutPackageParent } from "./package-layout.ts";
 import { DENO_TEST_TASK } from "./run-member-tests.ts";
+import {
+  finishRunRecording,
+  type RunRecording,
+  startRunRecording,
+} from "./test-records.ts";
 import {
   type FailedCommand,
   passed,
@@ -157,7 +160,7 @@ export async function testPackage(
  * that a run killed part way through keeps the attribution of every
  * package that finished.
  */
-async function readLeafReport(
+export async function readLeafReport(
   junitPath: string,
   scope: string,
   memberPath: string,
@@ -662,10 +665,85 @@ export async function runTests(
   return ok;
 }
 
-export async function main(): Promise<boolean> {
-  assertTaskTestsIncluded(await readWorkspaceMembers());
-  // A failure here returns rather than exits: the entry point's recording
-  // teardown runs in a finally that an exit would skip.
-  if (!await initializeDb()) return false;
-  return await runTests(Deno.cwd(), { recordResults: true });
+/**
+ * Runs every member of the workspace at `workspaceCwd`, which must include
+ * `tasks`, once `initialize` has set up the database dependencies, and
+ * records the run. Returns whether every member passed.
+ */
+export async function main(
+  workspaceCwd: string = Deno.cwd(),
+  initialize: (cwd: string) => Promise<boolean> = initializeDb,
+): Promise<boolean> {
+  assertTaskTestsIncluded(
+    await readWorkspaceMembers(path.join(workspaceCwd, "deno.jsonc")),
+  );
+  if (!await initialize(workspaceCwd)) return false;
+  return await runTests(workspaceCwd, { recordResults: true });
 }
+
+/** What the root `deno task test` reads from and does to its process. */
+export interface RootTestHost {
+  /** The process's environment, which every member's task inherits. */
+  env: Pick<Deno.Env, "set">;
+
+  /** Settles the seed this process and its children shuffle by. */
+  pinShuffleSeed: () => void;
+
+  startRecording: () => Promise<RunRecording>;
+  finishRecording: (recording: RunRecording) => Promise<void>;
+
+  /** Runs the suite, and returns whether it passed. */
+  run: () => Promise<boolean>;
+}
+
+/** The {@link RootTestHost} that is this Deno process. */
+const DENO_HOST: RootTestHost = {
+  env: Deno.env,
+  pinShuffleSeed,
+  startRecording: startRunRecording,
+  finishRecording: finishRunRecording,
+  run: main,
+};
+
+/**
+ * The root `deno task test`, given its arguments, and the status it exits
+ * with: 2 for any argument at all, 1 for a failing run, 0 for a passing one.
+ *
+ * The run owns test recording: with a personal key present it stamps a
+ * spool, points its producers at it, ships it when the run ends, and sweeps
+ * for orphans. Inside CI it joins the job's spool instead, and with neither
+ * the whole path is inert. Recording never changes the exit status, and is
+ * finished however the run ends.
+ */
+export async function runRootTestTask(
+  args: readonly string[],
+  host: RootTestHost = DENO_HOST,
+): Promise<number> {
+  if (args.length > 0) {
+    console.error(
+      "The root `test` task takes no arguments, and runs every package's " +
+        "tests. To pass flags such as `--filter`, run the task of the " +
+        "package holding the test:\n\n" +
+        "  cd packages/<package-name>\n" +
+        '  deno task test --filter "test name"\n\n' +
+        '"Running one test by name" in docs/development/TESTING.md says more.',
+    );
+    return 2;
+  }
+  // Settled before any member's task starts, so every leaf of this run
+  // shuffles the same way.
+  host.pinShuffleSeed();
+  const recording = await host.startRecording();
+  // The producers of this process and every child join an owned run through
+  // the inherited environment. A run that joined one already has it there.
+  if (recording.mode === "own") {
+    host.env.set(RECORDS_DIR_VARIABLE, recording.spool.dir);
+  }
+  try {
+    return await host.run() ? 0 : 1;
+  } finally {
+    await host.finishRecording(recording);
+  }
+}
+
+if (import.meta.main) Deno.exit(await runRootTestTask(Deno.args));

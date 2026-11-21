@@ -1,80 +1,130 @@
-import { assert } from "@std/assert";
+// Flat `Deno.test` cases: this package's tests also run in a browser through
+// `deno-web-test`, which does not support `@std/testing/bdd`.
+//
+// These cases run against `FakeIndexedDB`; `key-store.browser.test.ts` runs
+// the same store against a browser's own IndexedDB.
+
+import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 
 import { isNativeEd25519Supported } from "../src/ed25519/utils.ts";
 import { Identity } from "../src/identity.ts";
 import { KeyStore } from "../src/key-store.ts";
+import { FakeIndexedDB } from "./fake-indexed-db.ts";
 
-Deno.test("KeyStore can store and recover keys", async () => {
-  const store = await KeyStore.open("test-key-store-concurrent");
-  await store.clear();
+/** Writes `value` under `key` in the store `name` of `factory`, directly. */
+async function putRaw(
+  factory: FakeIndexedDB,
+  name: string,
+  key: string,
+  value: unknown,
+): Promise<void> {
+  const request = factory.database(name).transaction("key-store", "readwrite")
+    .objectStore("key-store").put(value, key);
+  await new Promise((resolve) => request.addEventListener("success", resolve));
+}
 
-  const key = await Identity.generate();
-  const did = key.verifier.did();
+Deno.test("KeyStore recovers a stored key pair holding material as one, with its DID", async () => {
+  const store = await KeyStore.open("material", new FakeIndexedDB());
+  const key = await Identity.generate({ implementation: "noble" });
+
   await store.set("key", key);
   const recovered = await store.get("key");
 
-  assert(recovered && did === recovered.verifier.did());
+  expect(recovered?.did()).toBe(key.did());
+  expect(recovered?.keyPair.hasMaterial).toBe(true);
+});
+
+Deno.test("KeyStore recovers a stored key pair holding handles as one, with its DID", async () => {
+  if (!await isNativeEd25519Supported()) return;
+  const store = await KeyStore.open("handles", new FakeIndexedDB());
+  const key = await Identity.generate({ implementation: "webcrypto" });
+
+  await store.set("key", key);
+  const recovered = await store.get("key");
+
+  expect(recovered?.did()).toBe(key.did());
+  expect(recovered?.keyPair.hasMaterial).toBe(false);
+});
+
+Deno.test("KeyStore returns `undefined` for a name it holds nothing under, and after `clear()`", async () => {
+  const store = await KeyStore.open("absent", new FakeIndexedDB());
+  expect(await store.get("key")).toBeUndefined();
+
+  await store.set("key", await Identity.generate({ implementation: "noble" }));
+  await store.clear();
+
+  expect(await store.get("key")).toBeUndefined();
+});
+
+Deno.test("KeyStore.open() reaches what an earlier open of the same name stored, and creates its object store once", async () => {
+  const factory = new FakeIndexedDB();
+  const key = await Identity.generate({ implementation: "noble" });
+  await (await KeyStore.open("shared", factory)).set("key", key);
+
+  const reopened = await KeyStore.open("shared", factory);
+
+  expect((await reopened.get("key"))?.did()).toBe(key.did());
+  expect(factory.database("shared").storeNames).toEqual(["key-store"]);
+  expect(await (await KeyStore.open("other", factory)).get("key"))
+    .toBeUndefined();
 });
 
 Deno.test("KeyStore.open() with no name opens `common-key-store`", async () => {
-  // The database name is persisted browser state, so it is pinned to its
-  // literal here rather than to the constant: reading the constant on both
-  // sides of the comparison would agree with itself no matter what the name
-  // became, and a silent change to it would orphan every key a user has already
-  // stored.
+  // Pinned to the literal: the name is persisted browser state, and a change
+  // to it would orphan every key a user has already stored.
 
-  assert(KeyStore.DEFAULT_DB_NAME === "common-key-store");
+  const factory = new FakeIndexedDB();
+  await KeyStore.open(undefined, factory);
 
-  const defaulted = await KeyStore.open();
-  await defaulted.clear();
-
-  const key = await Identity.generate();
-  await defaulted.set("key", key);
-
-  const named = await KeyStore.open("common-key-store");
-  const recovered = await named.get("key");
-  assert(recovered && key.did() === recovered.did());
-
-  await named.clear();
+  expect(KeyStore.DEFAULT_DB_NAME).toBe("common-key-store");
+  expect(factory.has("common-key-store")).toBe(true);
 });
 
-//
-// The two arms are stored differently -- bytes for one, `CryptoKey` handles
-// for the other -- and each names its own implementation, so a recovered key
-// that arrived through the wrong arm would sign as a different implementation
-// than it was stored as.
-//
+Deno.test("KeyStore throws for a stored value that is neither a pair of bytes nor a pair of keys", async () => {
+  const factory = new FakeIndexedDB();
+  const store = await KeyStore.open("corrupt", factory);
 
-Deno.test("KeyStore recovers a key pair holding material as one", async () => {
-  const store = await KeyStore.open("test-key-store-material");
-  await store.clear();
-
-  const key = await Identity.generate({ implementation: "noble" });
-  assert(key.keyPair.hasMaterial, "the arm this test names");
-  await store.set("key", key);
-  const recovered = await store.get("key");
-
-  assert(recovered && key.did() === recovered.did());
-  assert(
-    recovered.keyPair.hasMaterial,
-    "recovered as the arm it was stored as",
-  );
+  for (
+    const value of [
+      "key",
+      [new Uint8Array(32), new Uint8Array(32)],
+      { publicKey: new Uint8Array(32), privateKey: "secret" },
+    ]
+  ) {
+    await putRaw(factory, "corrupt", "key", value);
+    await expect(store.get("key")).rejects.toThrow(
+      "common-identity: Could not read stored key.",
+    );
+  }
 });
 
-Deno.test("KeyStore recovers a key pair holding handles as one", async () => {
-  if (!await isNativeEd25519Supported()) return;
+Deno.test("KeyStore rejects with the error a failed request reports", async () => {
+  const factory = new FakeIndexedDB();
+  const store = await KeyStore.open("failing", factory);
+  const failure = new DOMException("disk full", "QuotaExceededError");
+  factory.database("failing").failWith(failure);
 
-  const store = await KeyStore.open("test-key-store-handles");
-  await store.clear();
+  await expect(store.get("key")).rejects.toBe(failure);
+  await expect(
+    store.set("key", await Identity.generate({ implementation: "noble" })),
+  ).rejects.toBe(failure);
+  await expect(store.clear()).rejects.toBe(failure);
+});
 
-  const key = await Identity.generate({ implementation: "webcrypto" });
-  assert(!key.keyPair.hasMaterial, "the arm this test names");
-  await store.set("key", key);
-  const recovered = await store.get("key");
+Deno.test("KeyStore logs an open that is blocked and a later version change", async () => {
+  using log = stub(console, "log");
+  const factory = new FakeIndexedDB();
 
-  assert(recovered && key.did() === recovered.did());
-  assert(
-    !recovered.keyPair.hasMaterial,
-    "recovered as the arm it was stored as",
+  factory.blockNext();
+  await KeyStore.open("logged", factory);
+  expect(log.calls.map((call) => call.args)).toEqual([["KeyStore: Blocked"]]);
+
+  factory.database("logged").dispatchEvent(
+    Object.assign(new Event("versionchange"), { oldVersion: 1, newVersion: 2 }),
   );
+  expect(log.calls.map((call) => call.args)).toEqual([
+    ["KeyStore: Blocked"],
+    ["KeyStore: VersionChange", 1, 2],
+  ]);
 });

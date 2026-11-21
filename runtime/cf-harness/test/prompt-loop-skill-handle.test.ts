@@ -255,6 +255,9 @@ describe("prompt-loop delegate_task skillHandle", () => {
                       type: "search",
                       query: returnedToken ??
                         (location === "query" ? SKILL_TEXT : "public query"),
+                      // A non-text leaf, which the delegation boundary
+                      // passes through as it is.
+                      resultPage: 2,
                       ...(returnedToken === undefined
                         ? {}
                         : { [returnedToken]: "source note" }),
@@ -339,6 +342,9 @@ describe("prompt-loop delegate_task skillHandle", () => {
               expect(evidence.sources[0].title).toBe("Public title");
               expect(evidence.providerMetadata.searchCalls[0].action.query)
                 .toBe("public query");
+              expect(
+                evidence.providerMetadata.searchCalls[0].action.resultPage,
+              ).toBe(2);
             } else if (returnedToken !== undefined) {
               const raw = childMessages.find((message) =>
                 message.nativeModelToolResults !== undefined

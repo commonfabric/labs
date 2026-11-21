@@ -1,4 +1,4 @@
-import type { JSONSchema } from "@commonfabric/api";
+import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { isDeepFrozen } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
@@ -17,11 +17,21 @@ import {
 import { type CfcLabelView, mergeCfcLabelViews } from "./label-view-state.ts";
 import type { IFCLabel, LabelObservationClass } from "./types.ts";
 
+/** A schema node that declares `ifc`. */
+export type CfcDeclaringSchema = JSONSchemaObj & {
+  readonly ifc: NonNullable<JSONSchemaObj["ifc"]>;
+};
+
+/** Whether `schema` declares `ifc`. */
+const declaresIfc = (
+  schema: JSONSchemaObj,
+): schema is CfcDeclaringSchema => isObjectOrArray(schema.ifc);
+
 /** One `ifc` declaration found while walking a CFC schema. */
 export interface CfcSchemaEntry {
   readonly path: readonly string[];
   readonly label: IFCLabel;
-  readonly schema: JSONSchema;
+  readonly schema: CfcDeclaringSchema;
 
   /** The schema document that resolves local references inside `.schema`. */
   readonly root: JSONSchema;
@@ -134,7 +144,7 @@ const collectCfcSchemaEntries = (
       resolveCfcSchemaRefRoot(schema, schemaRoot),
     )
     : schemaRoot;
-  if (isObjectOrArray(resolved.ifc)) {
+  if (declaresIfc(resolved)) {
     entries.push({
       path,
       label: {
@@ -198,9 +208,12 @@ const collectCfcSchemaEntries = (
         // A negated schema does not describe declarations on real data.
         break;
       default:
-        // Unknown structural keywords contribute at the current position.
-        walk(child, path);
-        break;
+        // The cases above are the walk's default keyword set. A keyword added
+        // to that set needs a case of its own, or its `ifc` declarations
+        // would go unrecorded.
+        throw new Error(
+          `No CFC label rule for the subschema keyword ${keyword}`,
+        );
     }
   });
   return entries;

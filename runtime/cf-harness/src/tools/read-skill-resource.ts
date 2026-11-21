@@ -13,6 +13,7 @@ import type {
   HarnessSkillResourceRecord,
 } from "../contracts/skill.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
+import { fileSystemErrorCode } from "./file-errors.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
 const DEFAULT_MAX_RESOURCE_BYTES = 64_000;
@@ -267,29 +268,6 @@ const baseOutput = (
   diagnostics: options.diagnostics ?? [],
 });
 
-const errorOutput = (
-  options: {
-    outputId: string;
-    skill: string;
-    path: string;
-    code: HarnessSkillResourceReadErrorCode;
-    message: string;
-    diagnostics?: HarnessSkillDiagnostic[];
-  },
-): ReadSkillResourceToolOutput => ({
-  ...baseOutput({
-    outputId: options.outputId,
-    skill: options.skill,
-    path: options.path,
-    status: "error",
-    diagnostics: options.diagnostics,
-  }),
-  error: {
-    code: options.code,
-    message: options.message,
-  },
-});
-
 const findSkill = (
   skills: readonly HarnessSkillRecord[],
   name: string,
@@ -311,65 +289,64 @@ export const readSkillResourceTool: HarnessToolDefinition<
     const outputId = context.nextOutputId("read_skill_resource");
     const readAt = context.now();
     const maxBytes = validateMaxBytes(input.maxBytes);
-    let normalizedPath: string;
-    try {
-      normalizedPath = normalizeRequestedResourcePath(input.path);
-    } catch (error) {
-      const output = errorOutput({
-        outputId,
-        skill: input.skill,
-        path: input.path,
-        code: "resource_path_invalid",
-        message: describeFailure(error),
-      });
+    const fail = async (
+      options: {
+        skill?: string;
+        path: string;
+        code: HarnessSkillResourceReadErrorCode;
+        message: string;
+      },
+    ): Promise<ReadSkillResourceToolOutput> => {
+      const output: ReadSkillResourceToolOutput = {
+        ...baseOutput({
+          outputId,
+          skill: options.skill ?? input.skill,
+          path: options.path,
+          status: "error",
+        }),
+        error: { code: options.code, message: options.message },
+      };
       await context.recordSkillResourceRead(
         buildReadRecord({ output, runId: context.runId, readAt }),
       );
       return output;
+    };
+    let normalizedPath: string;
+    try {
+      normalizedPath = normalizeRequestedResourcePath(input.path);
+    } catch (error) {
+      return fail({
+        path: input.path,
+        code: "resource_path_invalid",
+        message: describeFailure(error),
+      });
     }
     if (context.skillRegistry === undefined) {
-      const output = errorOutput({
-        outputId,
-        skill: input.skill,
+      return fail({
         path: normalizedPath,
         code: "skill_registry_missing",
         message:
           "read_skill_resource requires a run-start skill registry; configure --skills-root before using this tool",
       });
-      await context.recordSkillResourceRead(
-        buildReadRecord({ output, runId: context.runId, readAt }),
-      );
-      return output;
     }
 
     const skill = findSkill(context.skillRegistry.skills, input.skill);
     if (skill === undefined) {
-      const output = errorOutput({
-        outputId,
-        skill: input.skill,
+      return fail({
         path: normalizedPath,
         code: "skill_not_found",
         message: `skill not found in registry: ${input.skill}`,
       });
-      await context.recordSkillResourceRead(
-        buildReadRecord({ output, runId: context.runId, readAt }),
-      );
-      return output;
     }
     const resource = findResource(skill, normalizedPath);
     if (resource === undefined) {
-      const output = errorOutput({
-        outputId,
+      return fail({
         skill: skill.name,
         path: normalizedPath,
         code: "resource_not_indexed",
         message:
           `resource not found in run-start registry for skill ${skill.name}: ${normalizedPath}`,
       });
-      await context.recordSkillResourceRead(
-        buildReadRecord({ output, runId: context.runId, readAt }),
-      );
-      return output;
     }
 
     const diagnostics: HarnessSkillDiagnostic[] = [];
@@ -383,76 +360,44 @@ export const readSkillResourceTool: HarnessToolDefinition<
       resolvedSkillDir = await Deno.realPath(skill.skillDir);
       resolvedResourcePath = await Deno.realPath(resource.resourcePath);
     } catch (error) {
-      const code = error instanceof Deno.errors.NotFound
-        ? "resource_not_found"
-        : error instanceof Deno.errors.PermissionDenied
-        ? "permission_denied"
-        : "unknown";
-      const output = errorOutput({
-        outputId,
+      return fail({
         skill: skill.name,
         path: normalizedPath,
-        code,
+        code: fileSystemErrorCode(error, "resource_not_found"),
         message: describeFailure(error),
       });
-      await context.recordSkillResourceRead(
-        buildReadRecord({ output, runId: context.runId, readAt }),
-      );
-      return output;
     }
     if (
       !isPathWithinRoot(resolvedSkillDir, resolvedResourcePath) ||
       !isPathWithinRoot(resolvedSkillsRoot, resolvedResourcePath)
     ) {
-      const output = errorOutput({
-        outputId,
+      return fail({
         skill: skill.name,
         path: normalizedPath,
         code: "resource_outside_root",
         message:
           `resource no longer resolves inside the skill directory and configured skills root: ${normalizedPath}`,
       });
-      await context.recordSkillResourceRead(
-        buildReadRecord({ output, runId: context.runId, readAt }),
-      );
-      return output;
     }
 
-    let stat: Deno.FileInfo;
     let content: Uint8Array;
     try {
-      stat = await Deno.stat(resolvedResourcePath);
-      if (!stat.isFile) {
-        const output = errorOutput({
-          outputId,
+      if (!(await Deno.stat(resolvedResourcePath)).isFile) {
+        return fail({
           skill: skill.name,
           path: normalizedPath,
           code: "resource_not_file",
           message: `resource is not a file: ${normalizedPath}`,
         });
-        await context.recordSkillResourceRead(
-          buildReadRecord({ output, runId: context.runId, readAt }),
-        );
-        return output;
       }
       content = await Deno.readFile(resolvedResourcePath);
     } catch (error) {
-      const code = error instanceof Deno.errors.NotFound
-        ? "resource_not_found"
-        : error instanceof Deno.errors.PermissionDenied
-        ? "permission_denied"
-        : "unknown";
-      const output = errorOutput({
-        outputId,
+      return fail({
         skill: skill.name,
         path: normalizedPath,
-        code,
+        code: fileSystemErrorCode(error, "resource_not_found"),
         message: describeFailure(error),
       });
-      await context.recordSkillResourceRead(
-        buildReadRecord({ output, runId: context.runId, readAt }),
-      );
-      return output;
     }
 
     const observedDigest = await sha256Digest(content);

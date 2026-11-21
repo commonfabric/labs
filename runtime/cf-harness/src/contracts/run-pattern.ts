@@ -23,6 +23,15 @@ export interface RunPatternToolInput {
    */
   patternId?: string;
 
+  /**
+   * A handle token for the piece whose source `sourceText` revises, as read
+   * with `read_piece_source`. The pattern published from this run then
+   * continues the version history of the pattern that piece runs, or is
+   * credited as a remix of it when someone else wrote it. Without it the
+   * published pattern starts a history of its own.
+   */
+  revises?: string;
+
   inputs?: Record<string, unknown>;
   resultSchema?: JSONSchema;
 }
@@ -39,6 +48,11 @@ export const RUN_PATTERN_INPUT_SCHEMA = {
       type: "string",
       description:
         "A published pattern's id, as search_patterns reports it. Give exactly one of sourceText and patternId.",
+    },
+    revises: {
+      type: "string",
+      description:
+        "With sourceText: the handle token of the piece whose source (from read_piece_source) this source revises. The published pattern continues that pattern's version history when it is yours, and is credited as a remix of it when someone else wrote it. Omit for a new pattern.",
     },
     description: {
       type: "string",

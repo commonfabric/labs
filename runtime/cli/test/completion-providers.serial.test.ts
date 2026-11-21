@@ -278,10 +278,15 @@ Deno.test("live candidates: unmapped slots ask for nothing", async () => {
 const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf piece ls -i ", "files", "*.key"],
   ["cf id did ", "files", "*.key"],
+  ["cf id pair https://example.test ", "files", "*.key"],
   // A delegation chain file, wherever the identity holds one and where
   // `cf delegation show` reads one.
   ["cf piece ls --delegations ", "files", "*.json"],
   ["cf delegation show ", "files", "*.json"],
+  // An index chain file, as `cf delegation issue --index` writes one, and the
+  // root-move delegation the same command writes with `--index-root`.
+  ["cf index join --chain ", "files", "*.json"],
+  ["cf index move-root ", "files", "*.json"],
   // Every command whose `--root` is the directory its sources resolve
   // against. The set is hand-maintained, so it is asserted whole.
   ["cf piece new --root ", "dirs", undefined],
@@ -291,10 +296,22 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf test --root ", "dirs", undefined],
   ["cf piece new --test ", "files", "*.tsx"],
   ["cf piece new ", "files", "*.tsx"],
+  ["cf pattern publish ", "files", "*.tsx"],
+  ["cf pattern publish --root ", "dirs", undefined],
+  ["cf pattern share ", "files", "*.tsx"],
+  ["cf pattern share --root ", "dirs", undefined],
+  ["cf pattern checkpoint ", "files", "*.tsx"],
+  ["cf pattern history ", "files", "*.tsx"],
+  ["cf pattern rollback ", "files", "*.tsx"],
+  ["cf pattern unpublish ", "files", "*.tsx"],
+  ["cf pattern stable ", "files", "*.tsx"],
+  ["cf pattern link ", "files", "*.tsx"],
+  ["cf pattern unshare ", "files", "*.tsx"],
   ["cf piece setsrc ", "files", "*.tsx"],
   ["cf check ", "files", "*.tsx"],
   ["cf test ", "files", "*.tsx"],
   ["cf piece new --datafile ", "files", undefined],
+  ["cf piece new --version-entry ", "files", "*.tsx"],
   ["cf piece new --input-file ", "files", undefined],
   ["cf view ", "files", undefined],
   ["cf exec ", "files", undefined],
@@ -459,6 +476,8 @@ Deno.test("provider keys report which commands each option provider answers on",
   assertEquals(options.get("schema"), ["cell get"]);
   assertEquals(options.get("root"), [
     "check",
+    "pattern publish",
+    "pattern share",
     "piece new",
     "piece setsrc",
     "piece survey",

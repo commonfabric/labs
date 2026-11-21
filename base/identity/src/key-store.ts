@@ -15,6 +15,33 @@ type StoredKeyPair =
   | CryptoKeyPair
   | { publicKey: Uint8Array; privateKey: Uint8Array };
 
+/** The part of an `IDBRequest` a key store reads. */
+export interface KeyStoreRequest<T> extends EventTarget {
+  readonly result: T;
+  readonly error: DOMException | null;
+}
+
+/** The part of an `IDBObjectStore` a key store uses. */
+export interface KeyStoreObjectStore {
+  get(key: string): KeyStoreRequest<unknown>;
+  put(value: unknown, key: string): KeyStoreRequest<unknown>;
+  clear(): KeyStoreRequest<unknown>;
+}
+
+/** The part of an `IDBDatabase` a key store uses. */
+export interface KeyStoreDatabase extends EventTarget {
+  transaction(
+    storeName: string,
+    mode: IDBTransactionMode,
+  ): { objectStore(name: string): KeyStoreObjectStore };
+  createObjectStore(name: string): unknown;
+}
+
+/** The part of an `IDBFactory` a key store uses to open its database. */
+export interface KeyStoreDatabaseFactory {
+  open(name: string, version: number): KeyStoreRequest<KeyStoreDatabase>;
+}
+
 const DEFAULT_DB_NAME = "common-key-store";
 const DEFAULT_STORE_NAME = "key-store";
 const DB_VERSION = 1;
@@ -30,10 +57,8 @@ export class KeyStore {
   /** Gets the `name` keypair. */
   async get(name: string): Promise<Identity | void> {
     const result = await this.#db.get(name);
-    if (result) {
-      return Identity.fromKeyPair(keyPairFromStored(result));
-    }
-    return result;
+    if (result === undefined) return;
+    return Identity.fromKeyPair(keyPairFromStored(result));
   }
 
   /** Sets the `name` keypair to `value`. */
@@ -52,33 +77,26 @@ export class KeyStore {
   }
 
   /**
-   * Opens a new instance of `KeyStore`. If no `name` is provided,
-   * `KeyStore.DEFAULT_DB_NAME` is used.
+   * Opens a new instance of `KeyStore`, holding its keys in the database
+   * `name` that `factory` opens. If no `name` is provided,
+   * `KeyStore.DEFAULT_DB_NAME` is used, and `factory` is the platform's
+   * IndexedDB unless one is given.
    */
-  static async open(name = KeyStore.DEFAULT_DB_NAME): Promise<KeyStore> {
-    const db = await DB.open(name, DB_VERSION, (event: Event) => {
-      const e = event as IDBVersionChangeEvent;
-      const { newVersion, oldVersion: _ } = e;
-      if (newVersion !== DB_VERSION) {
-        throw new Error("common-identity: Invalid DB version.");
-      }
-      if (!e.target) {
-        throw new Error("common-identity: No target on change event.");
-      }
-      const db: IDBDatabase = (e.target as IDBRequest).result;
-      db.createObjectStore(DEFAULT_STORE_NAME);
-    });
-    return new KeyStore(db);
+  static async open(
+    name = KeyStore.DEFAULT_DB_NAME,
+    factory: KeyStoreDatabaseFactory = globalThis.indexedDB,
+  ): Promise<KeyStore> {
+    return new KeyStore(await DB.open(factory, name, DB_VERSION));
   }
 }
 
 class DB {
-  #db: IDBDatabase;
-  constructor(db: IDBDatabase) {
+  #db: KeyStoreDatabase;
+  constructor(db: KeyStoreDatabase) {
     this.#db = db;
   }
 
-  get(key: string): Promise<StoredKeyPair | void> {
+  get(key: string): Promise<unknown> {
     const store = this.#getStore(DEFAULT_STORE_NAME, "readonly");
     return asyncWrap(store.get(key));
   }
@@ -88,18 +106,25 @@ class DB {
     return asyncWrap(store.put(value, key)).then(() => undefined);
   }
 
-  async clear() {
+  async clear(): Promise<void> {
     const store = this.#getStore(DEFAULT_STORE_NAME, "readwrite");
-    return await asyncWrap(store.clear());
+    await asyncWrap(store.clear());
   }
 
+  /**
+   * Opens the database `dbName` at `dbVersion` through `factory`, creating
+   * its object store when the database is new. Opening at one version only,
+   * an upgrade is always from nothing to that version.
+   */
   static async open(
+    factory: KeyStoreDatabaseFactory,
     dbName: string,
     dbVersion: number,
-    onUpgrade: (e: Event) => void,
   ) {
-    const req = globalThis.indexedDB.open(dbName, dbVersion);
-    once(req, "upgradeneeded", onUpgrade);
+    const req = factory.open(dbName, dbVersion);
+    once(req, "upgradeneeded", () => {
+      req.result.createObjectStore(DEFAULT_STORE_NAME);
+    });
     once(req, "blocked", (_) => {
       console.log("KeyStore: Blocked");
     });
@@ -114,7 +139,7 @@ class DB {
   #getStore(
     storeName: string,
     mode: "readonly" | "readwrite",
-  ): IDBObjectStore {
+  ): KeyStoreObjectStore {
     const tx = this.#db.transaction(storeName, mode);
     return tx.objectStore(storeName);
   }
@@ -158,7 +183,7 @@ function keyPairFromStored(stored: unknown): FabricKeyPair {
   throw new Error("common-identity: Could not read stored key.");
 }
 
-function asyncWrap<T>(request: IDBRequest<T>): Promise<T> {
+function asyncWrap<T>(request: KeyStoreRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     once(request, "success", (_e: Event): unknown => resolve(request.result));
     once(request, "error", (_e: Event): unknown => reject(request.error));

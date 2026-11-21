@@ -208,7 +208,7 @@ describe("memory v2 transaction path semantics", () => {
     expect(Array.from(batched.getReadActivities!())).toEqual(
       Array.from(individual.getReadActivities!()),
     );
-    expect(batched.getReactivityLog!()).toEqual(individual.getReactivityLog!());
+    expect(batched.getReactivityLog()).toEqual(individual.getReactivityLog());
     individual.abort();
     batched.abort();
   });

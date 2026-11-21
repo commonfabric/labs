@@ -55,12 +55,30 @@ export type PatternCoverageData = {
   hits: { fileName: string; id: number; count: number }[];
 };
 
-/** Default LCOV test name for pattern-coverage records (see {@link isPatternRuntimeTestName} in the gate). */
+/** Default LCOV test name for pattern-coverage records. */
 export const PATTERN_COVERAGE_TEST_NAME = "pattern-runtime";
 
 /** LCOV test name for pattern coverage collected through the integration jobs. */
 export const PATTERN_COVERAGE_INTEGRATION_TEST_NAME =
   "pattern-runtime-integration";
+
+/**
+ * LCOV test name for pattern coverage collected from the worker realms of the
+ * multi-runtime integration harness.
+ */
+export const PATTERN_COVERAGE_MULTI_RUNTIME_TEST_NAME =
+  "pattern-runtime-multi-runtime";
+
+/**
+ * A test name a pattern-coverage record carries on its own `TN:` line: the
+ * default, or the default followed by a hyphen and the path that collected
+ * it. The coverage readers in `tasks/lcov.ts` recognize the instrumentation's
+ * records by it, and score them differently from the records Deno's coverage
+ * writes.
+ */
+export type PatternCoverageTestName =
+  | typeof PATTERN_COVERAGE_TEST_NAME
+  | `${typeof PATTERN_COVERAGE_TEST_NAME}-${string}`;
 
 export class PatternCoverageCollector {
   #spans = new Map<string, PatternCoverageSpan>();
@@ -177,7 +195,9 @@ declare module "./harness/types.ts" {
 export async function writePatternCoverageLcov(
   collector: PatternCoverageCollector,
   outputPath: string,
-  options: PatternCoverageReportOptions & { testName?: string } = {},
+  options: PatternCoverageReportOptions & {
+    testName?: PatternCoverageTestName;
+  } = {},
 ): Promise<void> {
   await Deno.mkdir(dirname(outputPath), { recursive: true });
   await Deno.writeTextFile(
@@ -188,7 +208,7 @@ export async function writePatternCoverageLcov(
 
 export function patternCoverageReportToLcov(
   report: PatternCoverageReport,
-  testName: string = PATTERN_COVERAGE_TEST_NAME,
+  testName: PatternCoverageTestName = PATTERN_COVERAGE_TEST_NAME,
 ): string {
   const lines: string[] = [];
   for (const file of report.files) {

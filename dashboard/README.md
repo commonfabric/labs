@@ -52,6 +52,7 @@ dashboard/
   favicon-artwork.ts  build/test-only SVG source for those favicon copies
   version.ts    the browser/server compatibility version a page reloads on
   dashboard-message.ts  shared message storage and fade timing
+  dashboard-header.ts  the page header: identity, shared message, freshness indicator
   render.ts     renderTile(label, view) + the page shell/CSS
   detail-page.ts  the frame, navigation and type a drill-down page starts from
   live-page.ts  the frame of a live drill-down page, and the event streams that keep it current
@@ -86,12 +87,16 @@ its last-known value and shows a short reason (e.g. "source unreachable"), with
 the full error in the server log — so one unreachable source never blanks or
 breaks the board.
 
-The text field centered between the dashboard identity and freshness indicator
-is a shared message. Editing the field and leaving it saves the text for every
-connected dashboard and persists it in the dashboard cache. The message remains
-fully visible for two hours. It then fades linearly for four hours, after which
-the server replaces it with the empty string. A new edit starts the timing
-again.
+The text field filling the space between the dashboard identity and the
+freshness indicator is a shared message. On a screen narrower than 560 pixels
+it takes a row of its own below them. The badge is as wide as it is when it
+reads OFFLINE, and the freshness indicator as wide as it is for an age of four
+digits, so the field keeps its place as either changes. Only an age of five
+digits or more pushes it aside. Editing the field and leaving it saves the text
+for every connected dashboard and persists it in the dashboard cache. The
+message remains fully visible for two hours. It then fades linearly for four
+hours, after which the server replaces it with the empty string. A new edit
+starts the timing again.
 
 The trust, duration and recent-run tiles declare the workflow snapshots they
 read in `runSources`. A snapshot holds either a workflow's runs on main or its
@@ -347,8 +352,10 @@ keep `fabric-wall-run-lists-ci-history.json` and
 `fabric-wall-run-lists-ci-gantt.json`; and the commit CI Gantt's collector keeps
 `fabric-wall-run-lists-commit-ci-history.json` and
 `fabric-wall-run-lists-commit-ci-gantt.json`. A file holds, for each workflow,
-the runs of its head, whether they reach the end of the list, the oldest run
-each reader last read and when, and when the top of the list was last read. A
+the runs of its head, the oldest run each reader last read and when, and when
+the top of the list was last read. It records every head as not known to reach
+the end of the list, so a reading that needs runs past the last one held reads
+one page further down to see. A
 run keeps only the first line of its head commit's message, which is the only
 part any view shows, and a run taken from a file that holds more is cut to it. A
 `RunLists` takes a workflow's head from its file whenever it starts holding one,
@@ -391,7 +398,12 @@ their middle. A page that holds runs on both sides of the last run, but not the
 run itself, shows that run deleted, and it is dropped. The head remembers how
 far from its expected place the last run was found, which deleted runs still
 held above it make more than zero, and starts the next walk there. A page whose
-runs are not in order of falling id is rejected.
+runs are not in order of falling id is rejected. The list ends where the count
+of its runs that GitHub sends with each page says it does. GitHub sometimes
+answers with fewer runs than asked for from the middle of the list, so a page
+shorter than asked for that falls short of that count is rejected, as are a page
+holding runs past the count and a page without it. A reading rejected this way
+keeps the runs it held, and the next reading reads the page again.
 
 A run changes after it is listed: it finishes, or someone starts it again, which
 leaves it in its place in the list. The runs at the top of the list are read
@@ -708,8 +720,9 @@ the latest snapshot of each run source, and the ci tile's latest collection,
 so opening one costs no requests and never disagrees with the dashboard.
 
 Where a tile has more than one candidate for its sub line, the one that explains
-the color it is wearing wins. The test selection tile carries the test time a
-pull request would run, against the whole corpus's, under its headline share,
+the color it is wearing wins. The test selection tile carries the count of tests
+a pull request would run and their test time, each against the whole corpus's,
+under its headline shares,
 and gives that line up to whichever of three conditions is in force: the count
 of things the publisher found broken in the cost model where there is one,
 otherwise the lane past its budget where there is one, and otherwise the count
@@ -750,8 +763,8 @@ installation with the same permissions; see [Credentials](#credentials).
 | CI duration history → `/bench?view=ci` | labs and loom job, shard-group, and end-to-end workflow duration trends. The labs and loom duration tiles open their repository's view, which charts runs on main rather than the pull request runs the tiles measure | `GH_TOKEN` |
 | CI run Gantt → `/bench?view=gantt` | detailed labs or loom job phases from `scripts/ci-gantt.ts`, backed by the CI history cache | `GH_TOKEN` |
 | flaky tests | how many tests the test-selection publisher measured disagreeing with themselves often enough to keep off pull requests, read from the newest selection manifest. The headline names what it counts, so it reads `25 flaky tests`, or `no flaky tests` when there are none. The line under it says what the count was drawn from: the span of history a flake share is measured over, which the manifest's `FLAKE_WINDOW_DAYS` dial names, and how long ago the publisher measured. The sparkline plots the count across every available manifest. Which tests they are is on the page behind it. Amber from one, red from ten. Gray with a dash when no manifest is available, the newest readable manifest has an empty corpus, or none of the manifests it looked at can be read, naming the shape it found in that last case. Readable history remains visible when the newest object cannot be read | optional `GH_TOKEN` for publisher activity |
-| test selection | what share of the corpus's test time the newest selection manifest would have a pull request run, read from the same manifest. Each test counts once, at the cost the manifest measured for one execution of it; what a lane spends opening suites and repeating tests is in neither figure. Dividing tests more finely into separately recorded tests leaves the share where it was. The lanes' budget is fixed, so the share falls as the corpus's test time grows. The manifest's packing is built with nothing mandatory, so the share is the one a pull request touching no test would get; a real one re-packs against its own diff and spends part of the same budget on what that diff makes mandatory. Amber once that manifest is over eight hours old, because selection quality decays with it, and amber too while the corpus holds a test costing more on its own than a whole lane's budget, since no packing can place one and a pull request then runs it only where its own diff makes it mandatory. Red when a lane's projected work is past the budget the manifest was packed to, and red when the publisher found the cost model that manifest was packed by broken, in which case the tile links to the page's cost model section. Those three take the sub line off the test time, the broken model first and the overrun lane second. The sparkline plots the selected share across every available manifest, using each manifest's own corpus time. Gray on the same conditions as the flaky tests tile, including an empty latest corpus, and gray for a latest corpus with no test time. A manifest whose lanes name a test its corpus does not hold is read as a broken manifest | optional `GH_TOKEN` for publisher activity |
-| test selection detail → `/test-selection` | the manifest behind both test tiles, at full width: the selected share, the test time and the count of tests behind it, and the counts of lanes and flaky tests; then every lane against its budget and how many tests it holds, the cost model the lanes were packed by against what they spent (what the publisher found broken in it, how many lanes ran past their bound, and each suite's charges against the manifest before and against what its batches spent), every test held back as flaky with the rate it was measured at, and every test no lane can hold. Both tiles link here, the flaky tests tile straight to its flaky section. The page is live: an open copy shows a newly published manifest within about a minute, without reloading | none |
+| test selection | two shares of the corpus the newest selection manifest would have a pull request run, read from the same manifest: the share of its tests and the share of its test time, as "3.8% tests · 0.5% time". In the share of tests each separately recorded test counts once, however long it takes and however many times a lane repeats it, so a test file that runs whole and is recorded as one test counts as one. In the share of test time each test counts once at the cost the manifest measured for one execution of it, so it does not move when tests are recorded more finely, and what a lane spends opening suites and repeating tests is in neither share. The lanes' budget is a number of seconds, so the share of test time falls as the corpus's test time grows, and how many tests fill the budget depends on what each costs. A corpus with no test time shows a dash for that share. The manifest's packing is built with nothing mandatory, so the shares are the ones a pull request touching no test would get; a real one re-packs against its own diff and spends part of the same budget on what that diff makes mandatory. Amber once that manifest is over eight hours old, because selection quality decays with it, and amber too while the corpus holds a test costing more on its own than a whole lane's budget, since no packing can place one and a pull request then runs it only where its own diff makes it mandatory. Red when a lane's projected work is past the budget the manifest was packed to, and red when the publisher found the cost model that manifest was packed by broken, in which case the tile links to the page's cost model section. Those three take the sub line off the counts of tests and test time, the broken model first and the overrun lane second. The sparkline plots the share of tests across every available manifest, using each manifest's own corpus size. Gray on the same conditions as the flaky tests tile, including an empty latest corpus. A manifest whose lanes name a test its corpus does not hold is read as a broken manifest | optional `GH_TOKEN` for publisher activity |
+| test selection detail → `/test-selection` | the manifest behind both test tiles, at full width: each share beside the counts behind it, of tests and of test time, and the counts of lanes and flaky tests; then every lane against its budget and how many tests it holds, the cost model the lanes were packed by against what they spent (what the publisher found broken in it, how many lanes ran past their bound, and each suite's charges against the manifest before and against what its batches spent), every test held back as flaky with the rate it was measured at, and every test no lane can hold. Both tiles link here, the flaky tests tile straight to its flaky section. The page is live: an open copy shows a newly published manifest within about a minute, without reloading | none |
 | labs coverage debt | the repository's whole uncovered-line count and what a median day does to it, read from the coverage measurements each `main` run writes into the test-run record store, the newest of a day's that measured it in a run attempt that passed (`docs/development/COVERAGE.md`). A run attempt that failed measured through tests that failed or never ran, and reads high by as much as those tests would have covered, which can be thousands of lines; the store does not say whether a run passed, so the tile asks GitHub about each attempt it opens. A day on which no attempt passed has no measurement. A day the tile's cache file holds with a measurement that names no attempt is read from the store again when the store holds anything for that day, and otherwise is charted once GitHub says that run's latest attempt passed. The headline is the count; under it a signed rate gives the median day's move over the last three weeks, and the chart spans eight weeks with those days highlighted. Its vertical scale uses the highlighted days, so older extremes can extend outside the chart. Amber means that median is a rise, which takes more than half the days in the window, so a day that added debt says nothing on its own. It never turns red, and it goes gray rather than stand on a stale number: when five days have passed with nothing measured, and until the window holds a week of days to take a median over. A run whose pattern compile cache missed is passed over, because a cold run reaches branches a warm one does not and reads about a tenth of a percent low. It looks for a landing every five minutes, which costs a listing of the store for each of today and yesterday when none has happened; the figure itself cannot exist until the `main` run for a landed commit has finished and the relay has stored its coverage measurements | `GH_TOKEN` (or `GITHUB_TOKEN`) |
 | production | a direct synthetic HTTP check of the public commonfabric.com site, synthetic HTTP checks of `/_health` on estuary and rapids, plus a name or reachability check for all three and for the bastion, the production and staging shells, the LLM gateway, and the sandbox service. When every host is well the headline counts them up. When a host has nothing behind it at all, the headline names that host, as in `bastion down`, and counts them when there is more than one, as in `2 hosts down`. Otherwise it names the worst condition seen, such as a response time or an HTTP status. Estuary and rapids keep their response times in the body while the tile is green or orange. Commonfabric.com stays out of the body while it is good. Hosts without a health request stay out for as long as they answer, and a red tile drops all the green hosts. Red means the tile found nothing at the other end — a name with no A or AAAA record, a tailnet host the proxy cannot reach, or an HTTP request that never connected — and it also means a server health response other than 200, a health response over 1000 ms, or a commonfabric.com 5xx response. Orange means a health response over 500 ms, a commonfabric.com 4xx response or response over 2500 ms, or a resolver that failed, which leaves the tile unable to say either way. Hosts outside the tailnet are looked up by the dashboard itself. Tailnet hosts go through `PROD_PROXY`, because a dashboard that needs that proxy has no view of Tailscale's MagicDNS. Estuary and rapids are covered there by their health requests. The bastion has no health endpoint, so it gets a SOCKS5 connect that leaves the name for the proxy to resolve. The bastion records that connect in its own logs, so a bastion that answers is left alone for an hour and counts as reachable in between. One that does not answer is asked again on the next refresh, since a connect that reaches nothing leaves nothing behind. With no `PROD_PROXY` set, every host is looked up locally | optional `COMMON_FABRIC_URL`, `ESTUARY_URL`, `RAPIDS_URL`, `BASTION_HOST`, `PROD_PROXY`; `PROD_URL` remains an alias for `ESTUARY_URL` |
 | prod errors | SigNoz trace error rate for one service (errored spans / all spans): last-12h headline, with a per-hour sparkline over the retained trace history (~2 weeks) and the last-12h slice that feeds the headline highlighted. Scoped to `PROD_SERVICE` — the same SigNoz holds staging and one-off perf runs, whose rates are not production's. Gray (not red) when SigNoz is unreachable. Pops out to the SigNoz logs explorer | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `SIGNOZ_UI_URL` for the pop-out |
@@ -762,7 +775,7 @@ installation with the same permissions; see [Credentials](#credentials).
 | performance history → `/bench?view=runtime` | runtime benchmark trends, labs or loom CI duration history, and a detailed CI run Gantt. Historical views support windows from 1 through 45 days, date axes, and duration sorting. CI includes end-to-end workflow time, every job, and slowest-shard group lines | `GH_TOKEN` |
 | model spend | OpenAI + Anthropic + OpenRouter usage APIs. Headline is the projected full-month spend (extrapolated from the recent daily rate, spilling into last month when this month is under two weeks old), summed across providers. OpenAI and Anthropic (which expose per-day cost) are charted as one line each over ~45 days, with a recent daily-rate slice highlighted and each line's MTD in the right gutter; OpenRouter (monthly total only, abbreviated "OR") is folded into the totals. The vertical scale uses the highlighted days, so older extremes can extend outside the chart. The subtitle is the bullet-separated key (`OpenAI • Anthropic • OR $0`); the combined MTD sits in the header (the `aside` slot); the span the chart covers is in its bottom-left corner (the `duration` slot). A provider we can't read shows `$???` and drops the tile to gray, but the rest still chart and total; a provider whose cost report stopped being written more than four days ago is one of those | any of `OPENAI_ADMIN_KEY`, the `ANTHROPIC_FEDERATION_*` settings (or `ANTHROPIC_ADMIN_KEY` locally), `OPENROUTER_KEY`; optional `MODEL_MONTHLY_BUDGET` |
 | discord online | Discord gateway presence, team vs visitors over time | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` (Server Members + Presence intents) |
-| dau | distinct identities active per UTC day on one named service, counted from the `user.did` attribute on the `memory.transact` and `memory.subscriber.sync` spans in SigNoz. The headline is the last day that ran to the end (today is still filling, and a part-day always reads as a drop); the sparkline is the retained history. Gray while the named service has no such spans — which is the resting state until a deployment's tracing is switched on. It counts keypairs rather than people; see [dau](#dau) below | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `DAU_EXCLUDE_DIDS`, `SIGNOZ_UI_URL` |
+| dau | distinct people active per UTC day on one named service, counted from the `enduser.id` attribute the memory server sets on the `memory.session.open`, `memory.transact` and `memory.subscriber.sync` spans in SigNoz. The headline is yesterday, the last day that ran to the end (today is still filling, and a part-day always reads as a drop); the sparkline is the retained history. Gray while the named service has sent no spans at all — which is the resting state until a deployment's tracing is switched on — and gray, naming the last day it sent any, when it sent none yesterday, so a deployment that stopped exporting does not show an old count as current. A day the service exported with nobody in it is a zero. Keys that nobody linked by delegation count as separate people; see [dau](#dau) below | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `SIGNOZ_UI_URL` |
 | github users | organization members plus outside collaborators, with each roster's size charted over about two months. The headline counts unique users across both rosters | `GH_TOKEN` (with org Members read) |
 
 The **production** tile starts gray and says `waiting for connectivity` until
@@ -950,8 +963,8 @@ that take several minutes moves slowly.
 ### Test selection history
 
 The flaky tests and test selection tiles share a manifest reader and a cache of
-counts and test times in `fabric-wall-test-selection.json` under the dashboard
-cache directory. A cache file missing any of them is rebuilt from the store.
+counts in `fabric-wall-test-selection.json` under the dashboard cache
+directory. A cache file missing any of them is rebuilt from the store.
 Collection reads every page of the public manifest listing and plots every
 available manifest at its generation time. The listing determines the chart's
 span; the dashboard imposes no date window. A successful refresh removes cached
@@ -976,7 +989,7 @@ share one vertical scale, and an isolated measurement appears as a dot. A
 measured zero remains a measurement. An unreadable historical object adds a
 `history warning` badge; the next scheduled collection can fill that gap.
 The latest full manifest supplies the headlines and detail page. Historical
-collection retains only counts and test times and downloads at most three
+collection retains only counts and downloads at most three
 inventories at a time. Cached counts survive dashboard restarts. Cache failures
 add a warning without hiding readable measurements. The headline is published as
 soon as the latest manifest is readable, before historical collection finishes.
@@ -1460,34 +1473,35 @@ it.
 | `DASHBOARD_CACHE_DIR` | server caches | directory for all persistent dashboard cache files (default: the platform temp directory), including the `fabric-wall-run-lists-*.json` files that keep the run-list reader's runs across restarts. The first time a process takes the lock on the CI run index, a run-list file, the GitHub rate-limit ledger, the test-records history, or the runtime benchmark history, it removes the temporary files beside that file that interrupted writes left behind. |
 | `SIGNOZ_UI_URL` | prod errors, dau | browser-facing SigNoz URL for the explorer pop-outs: **prod errors** links to `/logs/logs-explorer` and **dau** to `/traces-explorer` under it. Defaults to `SIGNOZ_URL` when that is a public `https://` URL. An in-cluster `http://` URL, which a browser cannot reach, leaves both tiles with no pop-out at all, so set this whenever the server reaches SigNoz over one. |
 | `PROD_SERVICE` | prod errors, dau | the `service.name` production reports under in SigNoz, which both trace-reading tiles scope to. Defaults to `toolshed-production`. A name outside `[A-Za-z0-9._-]` is ignored, since it lands inside a query expression. |
-| `DAU_EXCLUDE_DIDS` | dau | comma-separated identity DIDs to leave out of the count — the server's own identity, `MEMORY_SERVICE_DIDS`, background services. Until it is set the count is an upper bound. See [dau](#dau) below. |
 
 <a id="dau"></a>
-**What the dau tile counts.** Distinct `user.did` values per UTC day, over the
-`memory.transact` and `memory.subscriber.sync` spans of one named service, read from
-the same SigNoz the prod errors tile uses. `user.did` is the memory session principal,
-which is the signature-checked `session.open` issuer, so no new instrumentation is
-involved. `docs/features/active-user-counting.md` records what the number means.
-Four things bound it, and they are worth knowing before quoting it:
+**What the dau tile counts.** Distinct `enduser.id` values per UTC day, over the
+`memory.session.open`, `memory.transact` and `memory.subscriber.sync` spans of one
+named service, read from the same SigNoz the prod errors tile uses. `enduser.id` is
+the person the memory server decided the session stands for: the first person's
+identity on the session's delegation chain, or else the signature-checked session
+principal, and nothing at all for a serving loop's own sessions, for service and
+delegating principals, and for a space's own key unless the space is a Home space or
+has history and no access list. `docs/features/active-user-counting.md` records the
+rules and what the number means. Three things bound it, and they are worth knowing
+before quoting it:
 
-- **It counts identities, not people.** An identity is a keypair. One person with a
-  browser mnemonic and a `cf id derive` passphrase is two; one key shared across a team
-  is one. The tile says "active identities" for that reason.
-- **Some identities are not people at all.** The server's own identity and the DIDs in
-  `MEMORY_SERVICE_DIDS` are principals in the same way a user is. Name them in
-  `DAU_EXCLUDE_DIDS`; until then the count is an upper bound.
-- **Read-only sessions are invisible.** `session.open` emits no span, so someone who
-  connects and only reads is never attributed, and a day of purely read-only traffic
-  reports zero.
+- **Unlinked keys are separate people.** One person with a browser mnemonic and an
+  unrelated `cf id derive` passphrase is two, unless one delegates to the other; one
+  key shared across a team is one.
+- **Keys the server is not told about count as people.** An automation key that is
+  not in `MEMORY_SERVICE_DIDS` looks like anyone else's.
 - **The history is as long as trace retention**, roughly a fortnight, and that retention
   is a live setting on the SigNoz database rather than anything this repository holds.
 
-Head sampling below 1.0 would not scale this number down, it would drop identities out
-of it, and no arithmetic afterwards would put them back.
+Head sampling below 1.0 would not scale this number down, it would drop people out of
+it, and no arithmetic afterwards would put them back.
 
-The tile is gray whenever the named service has no identity-bearing spans in the
-retained window, which is the resting state for a deployment whose tracing is switched
-off. It needs no second change to light up once that deployment starts exporting.
+The tile is gray whenever the named service sent no spans in the retained window, which
+is the resting state for a deployment whose tracing is switched off, and while it has
+sent spans only today, since today is not yet a complete day. It is also gray when the
+service sent nothing yesterday, naming the last day it sent any. It needs no second
+change to light up once that deployment has exported for a complete UTC day.
 
 Notes:
 

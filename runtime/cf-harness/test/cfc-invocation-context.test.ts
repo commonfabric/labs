@@ -1,4 +1,6 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
 
@@ -411,4 +413,50 @@ Deno.test("summarizeCfcInvocationRunManifest carries the manifest's read ceiling
       promptSlotPresent: false,
     },
   );
+});
+
+describe("cfc-invocation-context", () => {
+  describe("createHarnessCfcInvocationContext()", () => {
+    it("names only the manifest fields present on a prompt-slot influence atom", async () => {
+      // A Loom manifest that names its source but no wish or dispatch class
+      // contributes only the source to the atom's provenance.
+      const context = await createHarnessCfcInvocationContext({
+        sequence: 1,
+        runId: "run-labels",
+        createdAt: "2026-05-14T17:00:00.000Z",
+        toolId: "bash",
+        operation: "shell",
+        cfcEnforcementMode: "enforce-explicit",
+        cwd: "/workspace",
+        promptSlot: {
+          type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
+          source: { type: "cf-harness.test-input", surface: "cli" },
+          role: "direct-command",
+          kernelName: "cf-harness",
+          surface: "cli",
+        },
+        runManifest: {
+          present: true,
+          source: "loom",
+          promptSlotPresent: true,
+        },
+        command: "printf hello",
+        cfcInputLabelPaths: [["command"]],
+      });
+
+      expect(context.promptSlotInfluenceLabels?.entries).toEqual([{
+        path: ["command"],
+        label: {
+          integrity: [{
+            type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
+            version: 1,
+            role: "direct-command",
+            kernelName: "cf-harness",
+            surface: "cli",
+            runManifest: { source: "loom" },
+          }],
+        },
+      }]);
+    });
+  });
 });

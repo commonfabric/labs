@@ -30,8 +30,10 @@
  * checked against the real tree in the same suite.
  */
 
-import { fromFileUrl } from "@std/path/from-file-url";
-
+import {
+  DEFAULT_APP_PATTERN_SOURCE,
+  HOME_PATTERN_SOURCE,
+} from "../runtime/piece/src/system-pattern-url.ts";
 import {
   ACCEPTED_CONTRACT_BREAKS,
   type RequiredPatternOverride,
@@ -45,16 +47,7 @@ import {
   requiredPatternKeys,
   unmappedPatternUrls,
 } from "./pattern-vintage-lib.ts";
-
-/**
- * The repository root, absolute. Derived from this module's own location so
- * every gate resolves a record to the same file whatever directory the task
- * was invoked from — the workspace runner does not run them from the root.
- */
-const REPO_ROOT = fromFileUrl(new URL("..", import.meta.url)).replace(
-  /\/$/,
-  "",
-);
+import { REPO_ROOT } from "./pattern-files.ts";
 
 /** The registry-independent shape both kinds of entry share. */
 export interface BreakRegistryEntry {
@@ -270,40 +263,6 @@ export function guardUnevaluableExemptions(options: {
 }
 
 /**
- * Guard the shipped registries against the real tree, formatted for a task's
- * failure output. Returns `undefined` when every entry is permitted.
- */
-export function reportBreakRegistryFindings(options: {
-  requiredPatternKeys: ReadonlySet<string>;
-  recordExists: (repoRelativePath: string) => boolean;
-
-  /**
-   * Tier 1's unevaluable list, when the caller is the gate it exempts from.
-   * Omitted by Tier 2, which does not consult it.
-   */
-  unevaluable?: ReadonlySet<string>;
-}): string | undefined {
-  const findings = [
-    ...guardBreakRegistryEntries({
-      entries: collectBreakRegistryEntries(),
-      requiredPatternKeys: options.requiredPatternKeys,
-      recordExists: options.recordExists,
-    }),
-    ...(options.unevaluable === undefined ? [] : guardUnevaluableExemptions({
-      unevaluable: options.unevaluable,
-      requiredPatternKeys: options.requiredPatternKeys,
-    })),
-  ];
-  if (findings.length === 0) return undefined;
-  const lines = findings.map((finding) =>
-    `  ${finding.registry}: ${finding.pattern}\n    ${finding.detail}`
-  );
-  return `${findings.length} pattern-exemption entr` +
-    `${findings.length === 1 ? "y is" : "ies are"} not permitted:\n\n` +
-    lines.join("\n");
-}
-
-/**
  * The required-pattern set both gates hold their registries to, or the report
  * to fail with.
  *
@@ -320,6 +279,54 @@ export function deriveRequiredPatternKeys(
   const unmapped = unmappedPatternUrls(systemPatternUrls);
   if (unmapped.length > 0) return { error: reportUnmappedUrls(unmapped) };
   return { keys: new Set(requiredPatternKeys(systemPatternUrls)) };
+}
+
+/**
+ * The required-pattern set, once the registries have been judged against it,
+ * or the report to fail with.
+ *
+ * Both gates judge the registries before any pattern, through this one
+ * derivation, so they cannot come to different answers about what
+ * auto-updates. Each option defaults to what the gates use: the runtime's own
+ * system pattern URLs, the shipped registries, and records resolved under
+ * this repository.
+ */
+export function judgeBreakRegistries(options: {
+  systemPatternUrls?: readonly string[];
+  entries?: readonly BreakRegistryEntry[];
+  recordExists?: (repoRelativePath: string) => boolean;
+
+  /**
+   * Tier 1's unevaluable list, when the caller is the gate it exempts from.
+   * Omitted by Tier 2, which does not consult it.
+   */
+  unevaluable?: ReadonlySet<string>;
+}): { keys: ReadonlySet<string> } | { error: string } {
+  const required = deriveRequiredPatternKeys(
+    options.systemPatternUrls ??
+      [HOME_PATTERN_SOURCE, DEFAULT_APP_PATTERN_SOURCE],
+  );
+  if ("error" in required) return required;
+  const findings = [
+    ...guardBreakRegistryEntries({
+      entries: options.entries ?? collectBreakRegistryEntries(),
+      requiredPatternKeys: required.keys,
+      recordExists: options.recordExists ?? recordExistsUnder(),
+    }),
+    ...(options.unevaluable === undefined ? [] : guardUnevaluableExemptions({
+      unevaluable: options.unevaluable,
+      requiredPatternKeys: required.keys,
+    })),
+  ];
+  if (findings.length === 0) return required;
+  const lines = findings.map((finding) =>
+    `  ${finding.registry}: ${finding.pattern}\n    ${finding.detail}`
+  );
+  return {
+    error: `${findings.length} pattern-exemption entr` +
+      `${findings.length === 1 ? "y is" : "ies are"} not permitted:\n\n` +
+      lines.join("\n"),
+  };
 }
 
 /**

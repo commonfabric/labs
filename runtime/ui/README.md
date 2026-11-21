@@ -162,11 +162,11 @@ Useful references:
 
 ### Runtime And Interaction
 
-| Element        | Element           | Element          | Element         |
-| -------------- | ----------------- | ---------------- | --------------- |
-| `cf-autostart` | `cf-cell-link`    | `cf-drag-source` | `cf-draggable`  |
-| `cf-drop-zone` | `cf-keybind`      | `cf-piece`       | `cf-piece-menu` |
-| `cf-render`    | `cf-space-create` | `cf-toolbar`     |                 |
+| Element        | Element           | Element          | Element              |
+| -------------- | ----------------- | ---------------- | -------------------- |
+| `cf-autostart` | `cf-cell-link`    | `cf-drag-source` | `cf-draggable`       |
+| `cf-drop-zone` | `cf-keybind`      | `cf-piece`       | `cf-piece-menu`      |
+| `cf-render`    | `cf-space-create` | `cf-toolbar`     | `cf-pattern-install` |
 
 ### Retired
 

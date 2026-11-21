@@ -1,0 +1,145 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Item": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "subItems": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/SubItem"
+            },
+            "type": "array"
+          },
+          "value": {
+            "default": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "subItems"
+        ],
+        "type": "object"
+      },
+      "SubItem": {
+        "properties": {
+          "count": {
+            "default": 0,
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "count"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "globalCounter": {
+        "default": 0,
+        "type": "number"
+      },
+      "items": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "title": {
+        "default": "Render Test",
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "globalCounter",
+      "items"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/render-test/render-test.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Item": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "subItems": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/SubItem"
+            },
+            "type": "array"
+          },
+          "value": {
+            "default": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "subItems"
+        ],
+        "type": "object"
+      },
+      "SubItem": {
+        "properties": {
+          "count": {
+            "default": 0,
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "count"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "globalCounter": {
+        "default": 0,
+        "type": "number"
+      },
+      "items": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "title": {
+        "default": "Render Test",
+        "type": "string"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI",
+      "title",
+      "globalCounter",
+      "items"
+    ],
+    "type": "object"
+  }
+}

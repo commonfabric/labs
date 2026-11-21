@@ -592,6 +592,41 @@ describe("mergeCfcSchemaEnvelopes", () => {
     ).toThrow(/type changed incompatibly/);
   });
 
+  it("merges a `false` schema with itself where both sides declare it", () => {
+    // `never[]` compiles to `items: false`: an array that is always empty.
+    // A pattern update that changes the envelope elsewhere still walks that
+    // position on both sides, and must keep it rather than refuse.
+    const envelope = (extra: Record<string, JSONSchema>): JSONSchema => ({
+      type: "object",
+      properties: {
+        participants: { type: "array", items: false },
+        ...extra,
+      },
+    });
+    const merged = mergeCfcSchemaEnvelopes(
+      envelope({}),
+      envelope({ title: { type: "string" } }),
+    ) as JSONSchemaObj;
+    expect(merged.properties?.participants).toEqual({
+      type: "array",
+      items: false,
+    });
+    expect(merged.properties?.title).toEqual({ type: "string" });
+
+    // `false` against a schema that admits values is still refused.
+    expect(() =>
+      mergeCfcSchemaEnvelopes(
+        envelope({}),
+        {
+          type: "object",
+          properties: {
+            participants: { type: "array", items: { type: "string" } },
+          },
+        },
+      )
+    ).toThrow(/unsupported schema form at \/participants\/\*/);
+  });
+
   it("merges item schemas and object defaults", () => {
     const merged = mergeCfcSchemaEnvelopes({
       type: "array",

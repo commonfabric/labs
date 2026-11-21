@@ -2935,6 +2935,7 @@
         "dependencies": [
           "npm:@types/react-dom@19.2.5",
           "npm:@types/react@19.2.18",
+          "npm:happy-dom@^20.14.6",
           "npm:react-dom@19.2.8",
           "npm:react@19.2.8"
         ]
@@ -2973,7 +2974,8 @@
       },
       "dashboard": {
         "dependencies": [
-          "npm:@resvg/resvg-js@2.6.2"
+          "npm:@resvg/resvg-js@2.6.2",
+          "npm:happy-dom@^20.14.6"
         ]
       },
       "patterns": {
@@ -3033,6 +3035,7 @@
           "npm:@codemirror/collab@^6.1.1",
           "npm:@codemirror/state@^6.7.1",
           "npm:@opentelemetry/api@^1.9.1",
+          "npm:@opentelemetry/sdk-trace-base@^2.9.0",
           "npm:@types/ws@8.18.1",
           "npm:fflate@0.8.3",
           "npm:ws@8.22.0"

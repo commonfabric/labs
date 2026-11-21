@@ -1009,21 +1009,17 @@ describe("stage D seal-into-wave", () => {
         throw new Error("unexpected report after readback failure");
       },
     });
-    const prepare = engine.database.prepare.bind(engine.database);
+    const prepare = engine.prepare;
     let failures = 0;
     let outcome;
     {
-      using _prepare = stub(
-        engine.database,
-        "prepare",
-        ((sql: string) => {
-          if (sql.includes("SELECT seq, branch, class, holder, session_id")) {
-            failures++;
-            throw new Error("readback failed after commit");
-          }
-          return prepare(sql);
-        }) as typeof engine.database.prepare,
-      );
+      using _prepare = stub(engine, "prepare", (sql: string) => {
+        if (sql.includes("SELECT seq, branch, class, holder, session_id")) {
+          failures++;
+          throw new Error("readback failed after commit");
+        }
+        return prepare(sql);
+      });
       outcome = await wave.commitWave(sink);
     }
     await wave.settled();

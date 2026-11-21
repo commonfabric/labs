@@ -1,3 +1,10 @@
+/**
+ * A small site with Home, Books, and Book pages joined by a `Router` pattern,
+ * which picks the page matching the current path. Pages navigate with
+ * `cf-link`, and the book page reads its id from a route parameter
+ * (`/books/{id}`) and an `edition` query string.
+ */
+
 import {
   computed,
   NAME,
@@ -41,7 +48,7 @@ export interface MainOutput {
   [UI]: VNode;
 }
 
-const Home = pattern<HomeInput, HomeOutput>(() => {
+export const Home = pattern<HomeInput, HomeOutput>(() => {
   return {
     [NAME]: "Home",
     [UI]: (
@@ -57,7 +64,7 @@ const Home = pattern<HomeInput, HomeOutput>(() => {
   };
 });
 
-const Books = pattern<BooksInput, BooksOutput>(() => {
+export const Books = pattern<BooksInput, BooksOutput>(() => {
   return {
     [NAME]: "Books",
     [UI]: (
@@ -78,7 +85,7 @@ const Books = pattern<BooksInput, BooksOutput>(() => {
   };
 });
 
-const Book = pattern<BookInput, BookOutput>(({ route }) => {
+export const Book = pattern<BookInput, BookOutput>(({ route }) => {
   const bookId = computed(() => route.params.id);
   const edition = computed(() => route.query.edition || "unknown");
   return {

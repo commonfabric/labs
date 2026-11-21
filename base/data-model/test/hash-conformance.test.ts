@@ -47,13 +47,6 @@ const FIXTURE_URL = new URL(
  */
 const STUB_CODEC_CLASSES = ["FabricMap", "FabricSet"] as const;
 
-/**
- * The classes that bind no codec, and so have no text.
- *
- * TODO(danfuzz): Remove, with its use below, once `FabricRegExp` is deleted.
- */
-const NO_CODEC_CLASSES = ["FabricRegExp"] as const;
-
 /** One entry of the fixture, as `hash-conformance.md` defines it. */
 type FixtureEntry = TextWithMods & {
   readonly name: string;
@@ -235,13 +228,10 @@ describe("hash-conformance", () => {
       ...fabricPrimitiveClassesByName(),
       ...fabricInstanceClassesByName(),
     };
-    const uncovered: readonly string[] = [
-      ...STUB_CODEC_CLASSES,
-      ...NO_CODEC_CLASSES,
-    ];
+    const stubs: readonly string[] = STUB_CODEC_CLASSES;
     for (const [name, cls] of Object.entries(classes)) {
       expect({ name, covered: values.some((v) => v instanceof cls) })
-        .toEqual({ name, covered: !uncovered.includes(name) });
+        .toEqual({ name, covered: !stubs.includes(name) });
     }
   });
 
@@ -413,6 +403,38 @@ describe("hash-conformance", () => {
       });
     });
 
+    it("throws given spec bytes that are not hexadecimal, two digits to a byte", () => {
+      for (const spec of ["2g", "22 0"]) {
+        expect(() =>
+          hashConformanceFixtureTextForTestingOnly([
+            { name: "true", section: "s", make: () => true, spec },
+          ])
+        ).toThrow(
+          `Not lowercase hexadecimal bytes: ${spec.replaceAll(" ", "")}`,
+        );
+      }
+    });
+
+    it("throws what decoding the value's text and mods throws, other than a refusal", () => {
+      // A link holding itself directly in its payload is a value no patch can
+      // make, a link holding its payload frozen. Building one takes a getter
+      // in the payload, which reads the link once it exists.
+
+      let link: FabricValue = null;
+      link = new FabricLink(Object.freeze({
+        get a() {
+          return link;
+        },
+      }));
+      expect(() =>
+        hashConformanceFixtureTextForTestingOnly([
+          { name: "link", section: "s", make: () => link },
+        ])
+      ).toThrow(
+        'The patch at ["payload","a"] does not hold once all are made.',
+      );
+    });
+
     it("throws given `equals` naming no earlier case", () => {
       expect(() =>
         hashConformanceFixtureTextForTestingOnly([
@@ -451,19 +473,6 @@ describe("hash-conformance", () => {
           },
         ])
       ).toThrow("a and b: their hashes are equal, but neither names the other");
-    });
-
-    it("returns an entry requiring the flavors a case marks", () => {
-      const entry = soleEntryOf([
-        {
-          name: "flavored",
-          section: "s",
-          make: () => "a",
-          requires: { flavors: ["es2025"] },
-        },
-      ]);
-
-      expect(entry.requires).toEqual({ flavors: ["es2025"] });
     });
 
     it("returns an entry requiring the member count of a record past the floor", () => {

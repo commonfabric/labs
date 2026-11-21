@@ -38,6 +38,14 @@ describe("utf8Compare()", () => {
     expect(utf8Compare("abcd", "abc")).toBeGreaterThan(0);
   });
 
+  it("orders long strings without surrogates by their first difference, in either direction", () => {
+    const base = "abcdefghijklmnopqrstuvwxyz";
+
+    expect(utf8Compare(`${base}a`, `${base}b`)).toBeLessThan(0);
+    expect(utf8Compare(`${base}b`, `${base}a`)).toBeGreaterThan(0);
+    expect(utf8Compare(base, `${base}a`)).toBeLessThan(0);
+  });
+
   describe("strings with astral-plane characters", () => {
     it("returns `0` for two equal astral-plane characters", () => {
       expect(utf8Compare("😊", "😊")).toBe(0);

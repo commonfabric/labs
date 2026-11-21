@@ -122,8 +122,8 @@ export function parseWriteTable(
     ),
   );
   if (!m) return undefined;
+  // Exactly one alternative matched, and its capture is a non-empty name.
   const raw = m[1] ?? m[2] ?? m[3];
-  if (!raw) return undefined;
   // Schema-qualified (`main.t`, `"main"."t"`): the identifier capture stops at
   // the dot, so also reject when a `.` immediately follows the matched table
   // token. Either way → fail closed (we don't model cross-schema columns).
@@ -176,8 +176,8 @@ export function parseWriteParamColumns(
     const setCols = parseUpdateSetColumns(sql, blanked);
     if (setCols === undefined) return undefined;
     // SET params come first (one `?` each, before WHERE); remaining params (in
-    // WHERE/RETURNING) write no column.
-    if (setCols.length > count) return undefined;
+    // WHERE/RETURNING) write no column. Every SET column is an `ident = ?`
+    // assignment, so there are never more of them than placeholders.
     return Array.from(
       { length: count },
       (_, idx) => (idx < setCols.length ? setCols[idx] : null),
@@ -217,9 +217,9 @@ export function parseUpdateSetColumns(
     }
     region += c;
   }
-  if (depth !== 0) return undefined; // unbalanced → fail closed
   // The SET region must be ONLY simple `ident = ?` assignments (top-level
-  // commas). A parenthesis, subquery, or non-`?` value → fail closed.
+  // commas). A parenthesis, subquery, or non-`?` value → fail closed. An
+  // unbalanced region always holds a parenthesis, so it fails closed here too.
   if (region.includes("(") || region.includes(")")) return undefined;
   const assignments = region.split(",");
   const setCols: string[] = [];

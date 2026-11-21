@@ -15,7 +15,7 @@
  * a janitor outage locks nobody out.
  */
 
-import { readEnv } from "@commonfabric/test-support/records";
+import { type Environment, readEnv } from "@commonfabric/test-support/records";
 import { GCP_PROJECT, REPO } from "./test-records-config.ts";
 import { usernameOfDisplayName } from "./test-records-mint.ts";
 
@@ -63,7 +63,7 @@ export function keyHolderAccounts(
   return holders;
 }
 
-interface Clients {
+export interface Clients {
   gcpToken: string;
   githubToken?: string;
   fetchImpl: typeof fetch;
@@ -194,19 +194,24 @@ export async function runJanitor(clients: Clients): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
-  const gcpToken = readEnv("TEST_RECORDS_GCP_TOKEN");
+/**
+ * The clients the janitor runs with: the broker's token from `env`, which
+ * must be set, and a GitHub token where `env` carries one.
+ */
+export function clientsFromEnv(
+  env: Environment = Deno.env.get,
+  fetchImpl: typeof fetch = fetch,
+): Clients {
+  const gcpToken = readEnv("TEST_RECORDS_GCP_TOKEN", env);
   if (gcpToken === undefined || gcpToken.length === 0) {
     throw new Error("TEST_RECORDS_GCP_TOKEN is not set");
   }
-  const clients: Clients = { gcpToken, fetchImpl: fetch };
-  const githubToken = readEnv("GH_TOKEN") ?? readEnv("GITHUB_TOKEN");
+  const clients: Clients = { gcpToken, fetchImpl };
+  const githubToken = readEnv("GH_TOKEN", env) ?? readEnv("GITHUB_TOKEN", env);
   if (githubToken !== undefined && githubToken.length > 0) {
     clients.githubToken = githubToken;
   }
-  await runJanitor(clients);
+  return clients;
 }
 
-if (import.meta.main) {
-  await main();
-}
+if (import.meta.main) await runJanitor(clientsFromEnv());

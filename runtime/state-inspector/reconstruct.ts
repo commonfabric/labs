@@ -343,7 +343,8 @@ export function owningLink(
  * replicating the engine's `readRowForBranch` (`engine.ts`): take the latest
  * local row at/before `atSeq`; if the branch has NONE, inherit the parent's row
  * at `min(atSeq, fork_seq)`, on up to the root. Inheritance resolves WHICH
- * branch owns the visible row — it does NOT merge logs.
+ * branch owns the visible row; a patch row on a branch with no base of its own
+ * replays over what that branch inherits (`reconstructWithinBranch`).
  */
 function resolveBranchRow(
   space: SpaceDb,
@@ -368,14 +369,15 @@ function resolveBranchRow(
 }
 
 /**
- * Reconstruct a patched document WITHIN a single branch, replicating the
- * engine's `reconstructPatchedDocument`: pick a base — the latest `snapshot`
- * (if present and at/after the latest `set`/`delete`) else the latest
+ * Reconstruct a patched document on `branch`, replicating the engine's
+ * `reconstructPatchedDocument`: pick a base — the latest `snapshot` (if
+ * present and at/after the latest `set`/`delete`) else the latest
  * `set`/`delete` at/before `(rowSeq, rowOpIndex)` — then apply that branch's
  * `patch` rows strictly after the base up to the cut. A `set`/snapshot decodes
- * to its document; a `delete` (or no base) starts from `{}`. No cross-branch
- * composition: a child-local patch with no child base starts from `{}`, exactly
- * as the runtime reads it (NOT the inherited parent value).
+ * to its document and a `delete` starts from `{}`. With no base on the branch
+ * at all, its patches were written over the document it inherits, which its
+ * parent holds as of the fork point (`inheritedDocument`), and they replay
+ * over that, as the engine reads them.
  */
 function reconstructWithinBranch(
   space: SpaceDb,
@@ -384,7 +386,7 @@ function reconstructWithinBranch(
   id: string,
   rowSeq: number,
   rowOpIndex: number,
-  options: { exact?: boolean } = {},
+  options: { exact?: boolean; visited?: Set<string> } = {},
 ): StoredDocument {
   // Tuple bounds follow the revision index's order, so SQLite can seek to
   // the requested range instead of filtering the instance's entire history.
@@ -400,9 +402,11 @@ function reconstructWithinBranch(
     rowOpIndex,
   );
 
-  let doc: StoredDocument = base && base.op === "set"
+  let doc: StoredDocument | undefined = base && base.op === "set"
     ? storedDocument(base.data)
-    : {};
+    : base
+    ? {}
+    : undefined;
   let baseSeq = base ? base.seq : 0;
   let baseOpIndex = base ? base.op_index : -1;
 
@@ -437,6 +441,17 @@ function reconstructWithinBranch(
     }
   }
 
+  // No set, delete or snapshot on this branch: start from what it inherits.
+  if (doc === undefined) {
+    doc = inheritedDocument(
+      space,
+      branch,
+      scope,
+      id,
+      options.visited ?? new Set(),
+    );
+  }
+
   const patches = space.all<RevRow>(
     `SELECT seq, op_index, op, data FROM revision
      WHERE branch = ? AND id = ? AND scope_key = ? AND op = 'patch'
@@ -459,6 +474,62 @@ function reconstructWithinBranch(
     doc = applyPatchToDocument(doc, storedPatchList(p.data));
   }
   return doc;
+}
+
+/**
+ * The document `branch` inherits for `id`: what its parent holds, read in
+ * full, as of the fork point, or `{}` when the parent holds nothing there or
+ * the branch inherits nothing (the default branch, a store without a `branch`
+ * table, or a branch with no parent). This is the engine's fallback in
+ * `reconstructPatchedDocument` for patches with no base on their own branch,
+ * fork point `?? 0` included, and where a replay of a branch's own writes
+ * starts (`entityTimeline`). `visited` holds the branches already asked on
+ * this read, so a malformed cycle in `parent_branch` ends rather than recurs.
+ * Throws when the parent's document does not decode, or when the row it
+ * resolves to holds an operation other than `set`, `patch` or `delete`.
+ */
+export function inheritedDocument(
+  space: SpaceDb,
+  branch: string,
+  scope: string,
+  id: string,
+  visited: Set<string> = new Set(),
+): StoredDocument {
+  // The default branch is named "" (falsy) — test for it by value.
+  if (branch === "" || !hasTable(space, "branch") || visited.has(branch)) {
+    return {};
+  }
+  visited.add(branch);
+  const lineage = space.get<
+    { parent_branch: string | null; fork_seq: number | null }
+  >("SELECT parent_branch, fork_seq FROM branch WHERE name = ?", branch);
+  if (
+    !lineage || lineage.parent_branch === null ||
+    lineage.parent_branch === undefined
+  ) return {};
+  const resolved = resolveBranchRow(
+    space,
+    lineage.parent_branch,
+    scope,
+    id,
+    lineage.fork_seq ?? 0,
+  );
+  if (!resolved || resolved.row.op === "delete") return {};
+  if (resolved.row.op === "set") return storedDocument(resolved.row.data);
+  if (resolved.row.op !== "patch") {
+    // Replayed as a patch, an operation no reader understands would pass as
+    // a document; the engine refuses it too.
+    throw new Error(`Unsupported revision operation: ${resolved.row.op}`);
+  }
+  return reconstructWithinBranch(
+    space,
+    resolved.branch,
+    scope,
+    id,
+    resolved.row.seq,
+    resolved.row.op_index,
+    { visited },
+  );
 }
 
 /**
@@ -529,7 +600,8 @@ export type AbsenceStatus = Exclude<ReconstructOutcome["status"], "present">;
  * read path (`read()` → `readRowForBranch` → `reconstructPatchedDocument` in
  * `runtime/memory/v2`), proven identical by `reconstruct-parity.test.ts` which
  * drives the real engine. Branch inheritance resolves the visible ROW (not a
- * merged log); patched reconstruction stays within the resolved branch.
+ * merged log), and a patched row replays over its branch's base, or, with no
+ * base on that branch, over what the branch inherits at its fork point.
  *
  * A decode failure is returned as `undecodable` rather than thrown, so that one
  * corrupt entity does not abort a walk over a whole space.

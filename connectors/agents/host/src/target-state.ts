@@ -33,13 +33,14 @@ export async function agentTargetKey(
 
 export function defaultAgentsHostStateDirectory(
   readEnv: TargetStateEnvReader = (key) => Deno.env.get(key),
+  os: typeof Deno.build.os = Deno.build.os,
 ): string {
   const xdgStateHome = readEnv("XDG_STATE_HOME")?.trim();
   if (xdgStateHome) {
     return join(resolve(xdgStateHome), "commonfabric", "agents-host");
   }
 
-  if (Deno.build.os === "windows") {
+  if (os === "windows") {
     const localAppData = readEnv("LOCALAPPDATA")?.trim();
     if (!localAppData) {
       throw new Error(
@@ -53,7 +54,7 @@ export function defaultAgentsHostStateDirectory(
   if (!home) {
     throw new Error("HOME is required to locate durable agent host state");
   }
-  if (Deno.build.os === "darwin") {
+  if (os === "darwin") {
     return join(
       resolve(home),
       "Library",

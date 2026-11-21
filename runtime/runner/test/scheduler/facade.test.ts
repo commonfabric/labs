@@ -19,7 +19,7 @@ import {
   space,
   toMemorySpaceAddress,
 } from "../scheduler-test-utils.ts";
-import { captureLogs, type LogCapture } from "../support/log-capture.ts";
+import { type CapturedLogs, captureLogs } from "../support/captured-logs.ts";
 
 describe("facade", () => {
   let env: SchedulerTestRuntime;
@@ -231,6 +231,7 @@ describe("facade", () => {
         const origin = {
           isReadOnly: () => false,
           status: () => ({ status: "ready" }),
+          settledOutcome: () => undefined,
           addCommitCallback: (
             callback: (tx: unknown, result: { error?: Error }) => void,
           ) => settle.push((error) => callback(origin, { error })),
@@ -639,7 +640,7 @@ describe("facade", () => {
   });
 
   describe("debug logging", () => {
-    let debug: LogCapture;
+    let debug: CapturedLogs;
 
     beforeEach(() => {
       debug = captureLogs("scheduler");
@@ -666,7 +667,7 @@ describe("facade", () => {
       const actionId = env.runtime.scheduler.accessForTestingOnly.getActionId(
         effect,
       );
-      expect(debug.messages("schedule-unsubscribe")).toContainEqual([
+      expect(debug.messagesOf("schedule-unsubscribe")).toContainEqual([
         `Action: ${actionId}`,
         "Entities: 1",
       ]);
@@ -694,7 +695,7 @@ describe("facade", () => {
       const actionId = env.runtime.scheduler.accessForTestingOnly.getActionId(
         effect,
       );
-      expect(debug.messages("schedule-debounce")).toContainEqual([
+      expect(debug.messagesOf("schedule-debounce")).toContainEqual([
         `[DEBOUNCE] Action ${actionId} debounced for 50ms`,
       ]);
       expect(runs).toBe(runsBefore);
@@ -720,14 +721,14 @@ describe("facade", () => {
       );
       const trailing =
         `[DEBOUNCE] Computation ${actionId} trailing flush scheduled for 50ms`;
-      expect(debug.messages("schedule-debounce")).not.toContainEqual([
+      expect(debug.messagesOf("schedule-debounce")).not.toContainEqual([
         trailing,
       ]);
 
       await write(source, 2);
       await clock.settle();
 
-      expect(debug.messages("schedule-debounce")).toContainEqual([
+      expect(debug.messagesOf("schedule-debounce")).toContainEqual([
         trailing,
       ]);
     });
@@ -753,7 +754,7 @@ describe("facade", () => {
 
       access.maybeAutoDebounce(effect);
 
-      expect(debug.messages("schedule-debounce")).toEqual([[
+      expect(debug.messagesOf("schedule-debounce")).toEqual([[
         `[AUTO-DEBOUNCE] Action ${
           access.getActionId(effect)
         } auto-debounced (avg 60.0ms >= 50ms)`,

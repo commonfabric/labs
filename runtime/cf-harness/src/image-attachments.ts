@@ -5,7 +5,6 @@ import {
   type HarnessImageAttachment,
   type HarnessImageMediaType,
 } from "./contracts/image.ts";
-import type { OpenAIChatMessageContentPart } from "./gateway/openai-client.ts";
 
 const MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const IMAGE_MEDIA_TYPES = new Set<HarnessImageMediaType>([
@@ -365,7 +364,7 @@ export const snapshotHarnessImageAttachment = async (
 /** Materializes the recorded image for the model's request. */
 export const materializeImageAttachmentContentPart = async (
   attachment: HarnessImageAttachment,
-): Promise<OpenAIChatMessageContentPart> => {
+): Promise<{ type: "image_url"; image_url: { url: string } }> => {
   const bytes = await readImageAttachmentBytes(attachment);
   return {
     type: "image_url",

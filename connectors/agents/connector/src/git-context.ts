@@ -41,7 +41,6 @@ const runGitCommand: GitCommandRunner = async (args, signal) => {
   }).spawn();
   const abort = () => terminateChildProcess(child);
   signal?.addEventListener("abort", abort, { once: true });
-  if (signal?.aborted) abort();
   try {
     const output = await child.output();
     signal?.throwIfAborted();

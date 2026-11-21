@@ -107,7 +107,10 @@ called or bound, so its result is the same for every use of the body.
 Where the body is used, each formal input is bound to one of two things. An
 input bound to a slot root, such as the event, the state of a binding, the
 argument, or an element, gives entries of `Body.reads`: each entry is a slot
-at the entry's path. An input bound to a value the instance computed, the
+at the entry's path, together with the path in the body's argument at
+which the slot's value is placed, which is the formal input followed by
+the entry's path (`plan-and-label-templates.md` §1.1, `ReadInput`). An
+input bound to a value the instance computed, the
 result of another body or of expression code, gives entries of
 `Body.computed`: each holds the entry's path and class and the template of
 the producing expression at that path
@@ -873,6 +876,14 @@ that was read from an input and passed on unchanged. Today such a value
 carries the address it was read from (`annotateWithBackToCellSymbols` in
 `runtime/runner/src/schema.ts`), and a write of it stores a link. This
 document assumes that stays ([§13](#13-open-questions), question 2).
+By ruling, what is stored for an element that is a plain value in
+place of an array, or for a member of it, is a reference that names
+the collection, the element's key, and the path, and that resolves to
+the position the element has at each read and write
+(`plan-and-label-templates.md` §1.3). The footprint is the same for
+it: the body records `identity` and does not read the content. Over an
+array of references the stored reference is the link to the element's
+cell.
 
 The rule lets two bodies leave a cycle of links. A handler that stores
 what `center.get()` returned of an object in a new record stores a link
@@ -1134,6 +1145,64 @@ level through `box/children/*/children` as one subtree. With a type that
 refers to itself through a property and no array, `node.next`, the second
 entry is `node/next/next`, and the widened entry is at that path.
 
+**W6 over a value whose type declares no structure.** *Assumed,
+provisional (P38;* the continuation plan's question 312*).* W6 as stated
+above is decided by type: the type says where a path enters it again. A
+body can walk a value for which no type says that: a value with no type, a
+value of type `unknown`, and a value of an object type with an index
+signature. `headerOf` in `patterns/apps/weekly-calendar/view-walk.ts` walks
+a view of type `unknown` through helpers that read `children` and iterate.
+No position on its paths has a recursive type, so W6 by type never
+applies, and the analysis records every interleaving of `children` and `*`
+that the composed calls reach. The number of entries grows with the depth
+of the composition. Two rules widen such a path as W6 widens below a second
+entry. Both are forms of W6: the cause recorded in `Body.widenings` and
+the message of §5.3 are those of W6.
+
+- **A path that repeats.** An access, of a key or of an element, on a
+  projection whose path ends in a sequence of segments written twice in
+  direct succession, where the sequence holds at least one key, widens. So
+  does an access on a projection whose path ends in three `*` in direct
+  succession. The repeated sequence is taken to lead from a position of one
+  type to another position of the same type, so the position after the
+  second copy is taken as a second entry. A sequence of `*` alone repeats in
+  an array of arrays, `grid/*/*`, which is no recursive type, so two `*`
+  do not widen and three do. This rule looks at the path and not at the
+  type, so it applies on a path through declared types as well: on a
+  declared recursive type it applies at the position where W6 by type
+  applies or one sequence later, and W6 by type decides first.
+- **A key read again.** A read of the key `k`, by a property access or by
+  an element access with a string literal, widens where the type of the
+  value read declares no structure for the key (no type, `unknown`, or an
+  object type with an index signature), a path of the value already holds
+  `k`, the type is not the cut of a declared recursive type, and the value
+  was not reached through such a cut. The key that the path already holds
+  is taken as a second entry into the type of the position it first led
+  to.
+
+In both rules the entry is `value` at the position of the projection the
+access is made on, at the path without its last `*` segments, as for the
+second entry above. An observation at that position itself is recorded
+there, like any other.
+
+*Direction.* Both rules replace entries by a `value` entry that covers
+them (§5.4), and they apply in addition to W6 by type and never in its
+place. A footprint under them is equal to or wider than the footprint
+under W6 by type alone, and never narrower: a path through no recursive
+type that repeats a sequence with a key, such as `a/b/a/b` of a declared
+type whose members happen to repeat those names, widens where W6 by type
+does not.
+
+*Why W6 by type does not cover the case.* W6 by type needs a position of
+a type `T` reached from inside a value of type `T`. `unknown`, an absent
+type and an index signature declare no member types, so no position below
+such a value has a type that the analysis could compare with the type it
+started from.
+
+*Measured.* The prototype applies both rules (`square_end` and
+`holds_key` in `base/pattern-compiler/src/footprint.rs`). For `headerOf`
+the read entries fall from 28,799 to 45. No plan of the corpus changed.
+
 The following do not widen. They are listed because the current analysis
 ([§10](#10-relation-to-the-current-system)) treats several of them as if
 they did:
@@ -1221,6 +1290,46 @@ a hop whose read is dynamic ([§2.1](#21-abstract-values)), that
 observation is a journaled read of the reference at the position, and no
 static entry.
 
+**A removal removes in place.** By ruling (2026-11-20) the row of `h.remove(…)`,
+`h.removeByValue(…)` and `h.removeAll(…)` is the rule: the operation names the
+member to remove, the container's enumeration changes, and no kept element is
+written by the body. The analysis records no read of the elements for a removal:
+what the comparison with each member reads is a read of the runtime's operation,
+which the write record of the removal reports. The ruling also says that the
+kept elements are not labeled again with what the removal read, and that the
+label rule follows from the CFC specification and not from today's
+implementation. The rule is derived in `plan-and-label-templates.md` §2.5 ("The
+label rule of a removal through a handle"), and it differs by case. Over an
+array of references no kept element is labeled again, and which reference stands
+at a position is labeled once, at the container's `*` path. Over an array of
+plain values in place the elements from the first removed position on stand at
+other positions, and three further rulings of 2026-11-20 keep the row as it is:
+what the removal's decision read is stored once for the container, at its `*`
+path, and a read of a position joins it with the position's own entry; the
+stored label entries of a kept element move with it, by the runtime and with no
+write of the body; and a removal that finds no member is a label write of the
+container's enumeration. So a removal writes no position in either case. The
+result of another per-element construct has no handle to remove through. The
+prototype's executor removes in place: each run of removed positions next to
+each other is one splice of the stored list, and no member the list keeps is
+written (`Handle.remove`, `Handle.removeAll` and `Handle.#removeAt` of
+`base/pattern-compiler/exec/executor.ts`; `removeByValue` calls `removeAll`).
+
+**An addition names no stored element.** For `h.push(…)`, `h.pushAll(…)` and
+`h.addUnique(…)` the row is the rule as well: the container's enumeration and
+the added positions are written, and the elements the container held are not. By
+ruling (2026-11-20; Z74 of the continuation plan) an append puts the membership
+of the container on no position, neither on the one it writes nor on a position
+of a per-element result over the container. The label of what the container held
+therefore stays where it is stored, and provisionally (P39 of the continuation
+plan, the coordinator's decision) the container has an enumeration entry of its
+own that an addition replaces with the stored enumeration joined with what
+decided the addition, over an array of plain values in place and over an array
+of references. Milestone 4 of the integration builds it
+(`plan-and-label-templates.md` §2.5, "An addition through a handle").
+`h.addUnique(…)` of a member the container holds adds nothing, and is a label
+write of the enumeration as a removal that finds no member is.
+
 ### 6.2 Targets
 
 A write target is classified by what the analysis knows of its address.
@@ -1264,8 +1373,10 @@ A write target is classified by what the analysis knows of its address.
 - **Too broad to predict.** The narrowest static path the analysis can name
   for the write is a proper prefix of what is written. That is the case
   when the path below an anchored handle has a segment that is not static,
-  as in `counts.key(flavor).set(n)` or a write through `elementById`, where
-  the analysis can name `counts` and the write changes one child of it. It
+  as in `counts.key(flavor).set(n)`, where the analysis can name `counts`
+  and the write changes one child of it, or a write through
+  `elementById`, where it can name the list and the write changes the
+  record of one key, which is a cell of its own (§7.5). It
   is also the case when the analysis lost track of the handle, because it
   was passed to an unresolved call (W4) or reached through an analysis
   limit (W7), so that the write can be bounded only by the handles the body
@@ -1304,7 +1415,9 @@ instance computes").
   handle that can write, the body's record has a target or an envelope through
   that handle, and the position can hold no reference on any evaluation. The
   third holds where the producing template at the position is a `const`, a
-  `derive` of expression code, or a `fold`, and where a producing body has the
+  `derive` of expression code, or a `fold`, with an `output` node followed
+  to the template it names (`plan-and-label-templates.md` §3.2, "A
+  reference to an output"), and where a producing body has the
   abstract value `Computed`, or a record or a list it built, at the path and
   `Body.outputs` has no `reference` entry there. It does not hold for a path
   with a `reference` entry, for a path the body found below a hop whose read is
@@ -1411,6 +1524,21 @@ analysis decides the tier.
 | Side-writes whose targets are all static | Static side-write targets | One `WriteEdge` per target on the body. Each is one more output edge of the cone that runs the body. Where the target is a state cell or names its handle by a slot, the plan lists a `ConeEdge` from that cone to each cone with a slot that reads the target |
 | At least one side-write whose target is dynamic or too broad | Materializer | An `Operation` of kind `materializer` implemented by the body. Its declared write envelope is the body's `writes` and `envelopes` |
 
+By ruling the two kinds of body with side-writes are scheduled in two
+ways. A body whose writes go to a small, fixed set of targets that the
+compiler names is evaluated as part of an ordinary cone, and its write
+targets count as outputs of that cone for demand. A body whose write
+set is dynamic or very large is evaluated eagerly whenever one of its
+inputs changes (`scheduler-and-serving-loop.md` §4.3 and §7). The
+second and third rows of the table are those two kinds. *Assumed*
+(`execution-and-storage.md` §11, question 80): the table decides the
+kind, so "too broad" means a write whose narrowest static path is a
+proper prefix of what is written (§6.2), and no number of static
+targets makes a body a materializer. The plan needs no member that
+says which kind a cone is: the second row shows as edges in
+`Cone.writes`, and the third as an `Operation` whose body is in no cone
+(`plan-and-label-templates.md` §3.11).
+
 The classification is per body. A body with one write that is not static is
 a materializer for all of its writes, as a node with a declared envelope is
 today. Envelopes come from the analysis and never from observed writes,
@@ -1513,13 +1641,22 @@ reference rules of §3.8 apply to each path of the written value. A path
 that holds one projection of container, handle, reference, or factory
 type, whose path has no `*` segment, is a reference the body passed on,
 and its template is that projection's `identity` entry: the slot, or, for
-an entry of `Body.computed`, the entry's template. A path that holds one
+an entry of `Body.computed`, the entry's template, which is an `output`
+node where the value is an output of the plan and never a copy of that
+output's template (`plan-and-label-templates.md` §3.2, "A reference to
+an output"; provisional, P5). A path that holds one
 such projection whose path has a `*` segment, or alternatives of such
 projections, is a reference the body chose: its label is the label of the
 entry the reference came from, joined with the body's template as the
 label of the choice. A path that holds a reference the body found below a
 hop whose read is dynamic ([§2.1](#21-abstract-values)) is neither. It has
 the body's template, like a computed value.
+
+The plan holds the body's template once. Where it stands at more than
+one position, as it does for a body with two write edges, it is an entry
+of the plan's template table, and each write edge and each join that has
+it as an input names the entry (`plan-and-label-templates.md` §3.2, "A
+template written once"; provisional, P6).
 
 In a `handler`, an `action`, or an inline event handler, a path of the
 first kind carries the body's template as well, joined with the entry. A
@@ -1628,7 +1765,7 @@ The methods are those of `language-subset.md` §4.7. For a handle `h`:
 | --- | --- | --- |
 | `h.get()`, `h.sample()` | The projection `h->`, the root of the cell `h` links to | `identity` at `h`. What is done with the result is recorded below the hop |
 | `h.key("k")` | The handle `h` with `k` added to the path below its hop. Where the path passes through a position of handle type, the result is the handle at that position (below, "A handle that holds a handle") | Nothing |
-| `h.key(k)` with a key that is not static, `h.elementById(id)` | The handle at `*` below `h`. It is not anchored. `h.elementById(id)` on a handle of `U[]` has the type of a handle of the same kind of `U \| undefined`, and does not flatten (`language-subset.md` §4.7) | `value` at a key that is a scalar projection (§3). A read through the handle is dynamic (§7.2), and a write through it is too broad to predict ([§6.2](#62-targets)) |
+| `h.key(k)` with a key that is not static, `h.elementById(id)` | The handle at `*` below `h`. It is not anchored. `h.elementById(id)` on a handle of `U[]` has the type of a handle of the same kind of `U \| undefined`, and does not flatten (`language-subset.md` §4.7). By ruling the record it leads to is a cell of its own and no position of `h` (below, "The record of a key of a list") | `value` at a key that is a scalar projection (§3). A read through the handle is dynamic (§7.2), and a write through it is too broad to predict ([§6.2](#62-targets)) |
 | `h.resolveAsCell()` | `h`, resolved: reads through it are reads at `h->`, and a write through it lands where the resolution ends ([§6.2](#62-targets)) | A resolution of `h` (below) |
 | `h.for(cause)` | `h` | The cause, by the reference rule of [§3.8](#38-what-leaves-the-body) |
 | `h.getArgumentCell()` | A handle that is not anchored | `identity` at `h` |
@@ -1922,6 +2059,21 @@ envelope with its annotations, and the entries a constraint can list.
 
 ### 7.5 Link hops through data
 
+**The record of a key of a list.** By ruling the record that
+`h.elementById(id)` leads to is, as today, a cell of its own, named by
+the address of the list and the key (`elementById` in
+`runtime/runner/src/cell.ts`). It is not a member of the list until a
+reference to it is added, and a reader of the list's label does not
+cover it before that. So the entry "the handle at `*` below `h`" does
+not say that the record is stored at a position of `h`. *Assumed*
+(`execution-and-storage.md` §11, question 89): the analysis keeps that
+entry as the name of some record of the list `h`, since it cannot name
+the key. A read through the handle is dynamic, and a write through it
+is too broad to predict, as the table has it, and neither is a read or
+a write of a member of `h`. The list holds references to its records,
+so for a per-element construct over it this is the case of an array of
+references.
+
 There are three ways a body reaches another cell.
 
 - **A handle at a static path,** such as `state.composer`, or
@@ -2030,6 +2182,7 @@ what is specific to a body that is evaluated again follows it.
 | The callee, when it is an inline `pattern(...)` written at the call | The `Child` of the site has a `Closure` as its callee, and each value the inline pattern captures from the body is a path of `Closure.params`. A path is bound as a state path of a handler binding is bound ([§8.5](#85-binding-a-handler)), with what the inline pattern's plan reads below its `params` root in place of the handler's footprint (`plan-and-label-templates.md` §3.15, "How much a copy holds"). A handle, and a container passed on unchanged, record `identity` and stay links. A scalar, and a container the body computed, are copied by the rows §8.5 has for each: the body records the class the inline pattern's plan has at the path, and nothing where it has none (below) |
 | Each path of the argument | A `WriteEdge` with target `argument`, and the argument's members by the reference rule. A path that holds a passed reference is an edge with `reference` ([§6.5](#65-the-label-of-a-written-value)) |
 | `.for(tag)` | The tag by the reference rule. The site is `identifiedBy: "tag"` |
+| `asInstance()` | Nothing. The modifier takes no argument and is a constant of the site (`Child.asInstance`) |
 | `asScope(scope)` | Nothing. The scope is a constant of the site (`Child.scope`) |
 | `inSpace(space, options)` | The target, as one of the four kinds of `SpaceRequest`: `value` at an identifier or a name that is a scalar projection; for the space of a cell, what `spaceOf` of that cell records ([§8.4](#84-reading-context)); nothing for an anonymous space. Each of the options `grants`, `root`, `spaceKind`, and `selfOwned` that the site writes is consumed: a scalar records `value`, and a container records `value` over its subtree |
 | The link returned | A created value. In a `handler` or an `action` the child is created when the transaction commits (`plan-and-label-templates.md` §3.14), so at a site that is `identifiedBy: "order"` a read through the link in the same invocation finds no value and records nothing. At a site that is `identifiedBy: "tag"` a later event names the instance an earlier one made, so a read through the link is dynamic ([§7.5](#75-link-hops-through-data)). In a `lift` or a `computed` a read through the link is dynamic (below). The body can store the link, pass it on, and give it to `navigateTo` or `spaceOf` |

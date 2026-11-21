@@ -686,6 +686,20 @@ describe("running a member that cannot be handed a subset", () => {
     expect(suite.units).toEqual(["runtime/bakery#browser-test"]);
   });
 
+  it("returns no source for a unit no member holds", async () => {
+    const root = await workspace({
+      "./runtime/bakery": {
+        tasks: { test: "deno run -A test/run-tests.ts" },
+        files: ["test/glaze.test.ts", "test/run-tests.ts"],
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root, BAKERY_RUNS_WHOLE));
+    expect(suite.sourcesOf?.("runtime/bakery")).toEqual([
+      "runtime/bakery/test/glaze.test.ts",
+    ]);
+    expect(suite.sourcesOf?.("runtime/elsewhere")).toEqual([]);
+  });
+
   it("builds nothing for a unit no member holds", async () => {
     const root = await workspace({
       "./runtime/bakery": {

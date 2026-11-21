@@ -168,6 +168,21 @@ export const CHAT_START = { surface: "ChatStartSurface", action: "ChatStart" };
 const CHAT_SEND = { surface: "ChatSendSurface", action: "ChatSend" };
 const CHAT_REACT = { surface: "ChatReactSurface", action: "ChatReact" };
 
+/**
+ * The label a manager's list gives a direct room with no title whose
+ * counterpart is `did`, a `did:key`: `With ` and the principal as
+ * `shortDid()` in `../system/social-space/short-did.ts` shows it, whole when
+ * its key is 20 characters or fewer, and otherwise as its method and its
+ * key's last four characters.
+ */
+export function directRoomLabel(did: string): string {
+  if (!/^did:key:.+$/u.test(did)) {
+    throw new Error(`Not a \`did:key\`: ${did}`);
+  }
+  const key = [...did.slice("did:key:".length)];
+  return `With ${key.length > 20 ? `did:key:…${key.slice(-4).join("")}` : did}`;
+}
+
 // Words a message's body is drawn from. None of them is a word a benchmark
 // writes into the room itself.
 const VOCABULARY = [
@@ -444,7 +459,7 @@ async function profileSpaceOf(member: MemberSession): Promise<DID> {
  * Has the starter create the room from their manager, naming every other
  * member by address, and returns the room as the starter's runtime holds it.
  */
-async function createRoom(
+export async function createRoom(
   starter: MemberSession,
   others: readonly Identity[],
 ): Promise<Cell<unknown>> {
@@ -479,7 +494,7 @@ async function createRoom(
 }
 
 /** Starts the room in `member`'s runtime, beside their Home. */
-async function enterRoom(
+export async function enterRoom(
   member: MemberSession,
   room: Cell<unknown>,
 ): Promise<Cell<unknown>> {
@@ -499,7 +514,7 @@ function countOf(member: MemberSession): Cell<number | undefined> {
  * copy of the room counts `total` entries, which it does once the room has
  * recorded it.
  */
-async function writeAs(
+export async function writeAs(
   member: MemberSession,
   what: string,
   event: Record<string, unknown>,

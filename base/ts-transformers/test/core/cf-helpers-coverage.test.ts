@@ -12,6 +12,8 @@
  * whether the helper is detected.
  */
 
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
 import { assert, assertEquals, assertFalse, assertThrows } from "@std/assert";
 
 import ts from "typescript";
@@ -83,12 +85,16 @@ Deno.test("CFHelpers ignores __cfHelpers imported from a non-commonfabric module
 });
 
 Deno.test("CFHelpers ignores an import whose specifier is not a string literal", () => {
-  // A bare `import mod = require(...)` has no StringLiteral module specifier, so
-  // the `ts.isStringLiteral(moduleSpecifier)` guard rejects it.
-  const helpers = helpersFor(
-    `import __cfHelpers = require("commonfabric");`,
+  // A template literal parses as the module specifier, with the right text,
+  // but it is not a string literal.
+  assertFalse(
+    helpersFor("import { __cfHelpers } from `commonfabric`;")
+      .sourceHasHelpers(),
   );
-  assertFalse(helpers.sourceHasHelpers());
+  assert(
+    helpersFor('import { __cfHelpers } from "commonfabric";')
+      .sourceHasHelpers(),
+  );
 });
 
 Deno.test("CFHelpers ignores a default (non-named) import from commonfabric", () => {
@@ -347,4 +353,43 @@ Deno.test("injectCfHelpers throws when the source already uses the reserved help
     Error,
     `reserved helper symbol '${CF_HELPERS_IDENTIFIER}'`,
   );
+});
+
+describe("cf-helpers", () => {
+  describe("injectCfHelpers()", () => {
+    it("parses the source as JavaScript, TypeScript or JSX by its file name", () => {
+      const parseOf = (fileName?: string) => {
+        let parsed: ts.SourceFile | undefined;
+        injectCfHelpers("const x = 1;", fileName, (source, sourceFile) => {
+          parsed = sourceFile;
+          return source;
+        });
+        if (!parsed) throw new Error("The rewrite did not run.");
+        return {
+          javascript: (parsed.flags & ts.NodeFlags.JavaScriptFile) !== 0,
+          jsx: parsed.languageVariant === ts.LanguageVariant.JSX,
+        };
+      };
+      const js = { javascript: true, jsx: true };
+      const typescript = { javascript: false, jsx: false };
+      const tsx = { javascript: false, jsx: true };
+
+      expect(parseOf("/main.js")).toEqual(js);
+      expect(parseOf("/main.mjs")).toEqual(js);
+      expect(parseOf("/main.cjs")).toEqual(js);
+      expect(parseOf("/main.jsx")).toEqual(js);
+      expect(parseOf("/main.mts")).toEqual(typescript);
+      expect(parseOf("/main.tsx")).toEqual(tsx);
+      expect(parseOf("/main.json")).toEqual(tsx);
+      expect(parseOf()).toEqual(tsx);
+    });
+
+    it("keeps the `h` shim when a hoisted `var` in a block binds only other names", () => {
+      const keepsShim = (source: string): boolean =>
+        injectCfHelpers(source).includes("function h(...args: any[])");
+
+      expect(keepsShim("{ var other = 1; }")).toBe(true);
+      expect(keepsShim("{ var other = 1, h = 2; }")).toBe(false);
+    });
+  });
 });

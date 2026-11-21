@@ -12,14 +12,18 @@
  *    the owned cell seeds to EMPTY_SELF_MODEL via Default<> (the production
  *    home-local path; CT-1669 regression guard — see section B).
  *
+ * C) The streams Self exports, sent to that owned instance, and the
+ *    reflections its view lists.
+ *
  * Run: deno task cf test patterns/system/self/self.test.tsx --verbose
  */
 import {
+  action,
   assert,
-  computed,
   handler,
   pattern,
   TESTS,
+  UI,
   Writable,
 } from "commonfabric";
 import Self, {
@@ -41,6 +45,7 @@ import Self, {
   withoutNeurotype,
   withoutValueAt,
 } from "./self.tsx";
+import { hasText } from "../../tools/test-support/vnode-helpers.ts";
 
 // ---------------------------------------------------------------------------
 // Shared fixture data (no timestamps — helpers don't set them)
@@ -235,17 +240,20 @@ export default pattern(() => {
   // deploy, never by the injected tests). The fix seeds the owned cell via
   // `Default<typeof EMPTY_SELF_MODEL>`. We now read the ACTUAL owned cell (not an
   // injected stand-in), so this test fails if the seeding ever regresses.
+  // The assertions read the owned cell straight off the instance, not through
+  // a derivation of it that can lag behind, and guard the read, so a cell
+  // that has not landed fails the assertion with its operands reported rather
+  // than throwing.
   const selfOwned = Self({});
-  const ownedModel = computed(() => selfOwned.selfModel);
 
   const assert_owned_responses_empty = assert(
-    () => ownedModel.get().responses.length === 0,
+    () => selfOwned.selfModel.get()?.responses.length === 0,
   );
   const assert_owned_values_empty = assert(
-    () => ownedModel.get().values.length === 0,
+    () => selfOwned.selfModel.get()?.values.length === 0,
   );
   const assert_owned_neurotypes_empty = assert(
-    () => ownedModel.get().neurotypes.length === 0,
+    () => selfOwned.selfModel.get()?.neurotypes.length === 0,
   );
 
   // =========================================================================
@@ -485,6 +493,87 @@ export default pattern(() => {
   );
 
   // =========================================================================
+  // C) The streams Self exports, sent to the owned instance from section B,
+  //    and the reflections its view lists.
+  // =========================================================================
+
+  const action_stream_record_neurotype = action(() =>
+    selfOwned.recordNeurotype.send({
+      system: "big5",
+      result: "high openness",
+      detail: { openness: 90 },
+      source: "assessed",
+    })
+  );
+  // Each action sends one event, so the order the entries are appended in is
+  // the order of the steps.
+  const action_stream_add_craft = action(() =>
+    selfOwned.addValueCard.send({
+      title: "Craft",
+      description: "Do the work well",
+      weight: 3,
+      sourcePromptId: "p-craft",
+    })
+  );
+  const action_stream_add_rest = action(() =>
+    selfOwned.addValueCard.send({ title: "Rest" })
+  );
+  const action_stream_record_meaning = action(() =>
+    selfOwned.recordResponse.send({
+      promptId: "p-meaning",
+      prompt: "What gives your days meaning?",
+      answer: "Teaching my kids to cook.",
+      track: "meaning",
+    })
+  );
+  const action_stream_record_aside = action(() =>
+    selfOwned.recordResponse.send({
+      promptId: "p-free",
+      prompt: "Anything else?",
+      answer: "Private aside.",
+      track: "freeform",
+    })
+  );
+  const action_stream_remove = action(() => {
+    selfOwned.removeNeurotype.send({ system: "big5" });
+    selfOwned.removeValueCard.send({ index: 0 });
+  });
+
+  const assert_stream_neurotype_recorded = assert(() => {
+    const neurotypes = selfOwned.selfModel.get()?.neurotypes ?? [];
+    const entry = neurotypes[0];
+    return neurotypes.length === 1 &&
+      entry?.system === "big5" && entry.result === "high openness" &&
+      entry.detail?.openness === 90 && entry.source === "assessed" &&
+      typeof entry.recordedAt === "number";
+  });
+  const assert_stream_values_added = assert(() => {
+    const values = selfOwned.selfModel.get()?.values ?? [];
+    const [craft, rest] = values;
+    return values.length === 2 &&
+      craft?.title === "Craft" && craft.description === "Do the work well" &&
+      craft.weight === 3 && craft.sourcePromptId === "p-craft" &&
+      rest?.title === "Rest" && !("description" in rest) &&
+      !("weight" in rest) && !("sourcePromptId" in rest);
+  });
+  // Both answers are kept, and the view lists the meaning reflection alone.
+  const assert_stream_responses_recorded = assert(() => {
+    const responses = selfOwned.selfModel.get()?.responses ?? [];
+    return responses.length === 2 &&
+      responses[0]?.track === "meaning" &&
+      typeof responses[0]?.answeredAt === "number" &&
+      responses[1]?.answer === "Private aside." &&
+      hasText(selfOwned[UI], "What gives your days meaning?") &&
+      hasText(selfOwned[UI], "Teaching my kids to cook.") &&
+      !hasText(selfOwned[UI], "Private aside.");
+  });
+  const assert_stream_removed = assert(() =>
+    selfOwned.selfModel.get()?.neurotypes.length === 0 &&
+    selfOwned.selfModel.get()?.values.length === 1 &&
+    selfOwned.selfModel.get()?.values[0]?.title === "Rest"
+  );
+
+  // =========================================================================
   // Test Sequence
   // =========================================================================
   return {
@@ -585,6 +674,18 @@ export default pattern(() => {
       { action: action_remove_first_value_card },
       { assertion: assert_only_second_remains },
       { assertion: assert_second_value_title },
+
+      // === C: the exported streams, and the reflections the view lists ===
+      { action: action_stream_record_neurotype },
+      { assertion: assert_stream_neurotype_recorded },
+      { action: action_stream_add_craft },
+      { action: action_stream_add_rest },
+      { assertion: assert_stream_values_added },
+      { action: action_stream_record_meaning },
+      { action: action_stream_record_aside },
+      { assertion: assert_stream_responses_recorded },
+      { action: action_stream_remove },
+      { assertion: assert_stream_removed },
     ],
   };
 });

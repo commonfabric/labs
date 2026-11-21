@@ -1,5 +1,10 @@
 import { assertEquals } from "@std/assert";
-import { APICallError, InvalidPromptError, RetryError } from "ai";
+import {
+  APICallError,
+  InvalidPromptError,
+  NoObjectGeneratedError,
+  RetryError,
+} from "ai";
 
 import env from "@/env.ts";
 import {
@@ -82,6 +87,30 @@ Deno.test("the error types carry their own classification", () => {
   assertEquals(
     httpStatusForError(new LLMUpstreamError("busy", { upstreamStatus: 429 })),
     429,
+  );
+});
+
+Deno.test("a provider answer that could not be used is a bad gateway", () => {
+  assertEquals(
+    httpStatusForError(
+      new NoObjectGeneratedError({
+        message: "No object generated",
+        response: { id: "r", timestamp: new Date(0), modelId: "m" },
+        usage: {
+          inputTokens: 1,
+          inputTokenDetails: {
+            noCacheTokens: 1,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          },
+          outputTokens: 1,
+          outputTokenDetails: { textTokens: 1, reasoningTokens: 0 },
+          totalTokens: 2,
+        },
+        finishReason: "stop",
+      }),
+    ),
+    502,
   );
 });
 

@@ -8,7 +8,16 @@
  * pattern that can ship without an updatability proof.
  */
 
+import { fromFileUrl } from "@std/path/from-file-url";
+import { join } from "@std/path/join";
+import { relative } from "@std/path/relative";
 import { CONNECTOR_PATTERN_SOURCES } from "../connectors/pattern-sources.ts";
+
+/** The repository root, absolute, whatever directory a task was started in. */
+export const REPO_ROOT = fromFileUrl(new URL("..", import.meta.url)).replace(
+  /\/$/,
+  "",
+);
 
 export const PATTERNS_DIR = "patterns";
 
@@ -197,12 +206,22 @@ export async function collectPatternFiles(
   return files.sort();
 }
 
-/** Every authored pattern source across all registered source trees. */
-export async function collectAllPatternFiles(): Promise<string[]> {
-  const files = await Promise.all(
-    PATTERN_TREES.map((tree) => collectPatternFiles(tree.directory)),
+/**
+ * Every authored pattern source across all registered source trees, relative
+ * to `repoRoot`. Collected against that root rather than the process's own
+ * directory, since a test runs from wherever its package does.
+ */
+export async function collectAllPatternFiles(
+  repoRoot: string,
+): Promise<string[]> {
+  const found = await Promise.all(
+    PATTERN_TREES.map((tree) =>
+      collectPatternFiles(join(repoRoot, tree.directory))
+    ),
   );
-  return files.flat().sort();
+  return found.flat()
+    .map((file) => normalizePatternPath(relative(repoRoot, file)))
+    .sort();
 }
 
 /**

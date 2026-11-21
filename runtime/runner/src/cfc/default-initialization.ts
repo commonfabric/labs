@@ -3,7 +3,6 @@ import {
   isWalkableObjectOrArray,
   valueEqual,
 } from "@commonfabric/data-model";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
@@ -28,8 +27,11 @@ export function recordNewProtectedDefaults(
 ): void {
   // Without the previous declaration, absence cannot establish a new field.
   if (previousSchema === undefined) return;
+  // Only whether the document is a record is asked of it, so the read does
+  // not descend.
   const previous = tx.readValueOrThrow(target, {
     meta: ignoreReadForScheduling,
+    nonRecursive: true,
   });
   if (!isWalkableObjectOrArray(previous) || isWriteRedirectLink(previous)) {
     return;
@@ -97,9 +99,8 @@ function recordProtectedDefaults(
   // wildcard. Neither receives automatic initialization authority.
   for (const entry of cfcSchemaEntries(schema)) {
     if (
-      !isObjectOrArray(entry.schema) ||
-      (entry.schema.ifc?.writeAuthorizedBy === undefined &&
-        entry.schema.ifc?.writePolicyAnyOf === undefined) ||
+      (entry.schema.ifc.writeAuthorizedBy === undefined &&
+        entry.schema.ifc.writePolicyAnyOf === undefined) ||
       entry.path.length === 0 || entry.path.includes("*") ||
       !isNew(entry.path)
     ) continue;

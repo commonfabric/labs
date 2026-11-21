@@ -169,6 +169,21 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/agent-run-invalid-result-error-code-break.md",
   },
   {
+    // A run's error taxonomy gained `CFC_REFUSED`, for a run a read above the
+    // session's read ceiling ended. The baselines before these three are
+    // forgiven on this path by the two entries above.
+    pattern: "system/agent-run/agent-run.tsx",
+    baselines: [
+      "20261005T225922Z-ul1dLrvToVQT19gi",
+      "20261022T203732Z-tj02an-tceghMatZ",
+      "20261104T010939Z-L1bgKjZof1YeAWr9",
+    ],
+    paths: ["result.run.errorCode"],
+    reason:
+      "a run's errorCode gained CFC_REFUSED for a run a read above the session's read ceiling ended; no stored record holds it until a runner reports one, and every reader shows the code as text",
+    record: "docs/history/agent-run-cfc-refused-error-code-break.md",
+  },
+  {
     // The same ruling seen from the profile itself: both fields that left,
     // in the pointer it publishes and in the event `setInbox` takes.
     pattern: "system/profile-home/profile-home.tsx",
@@ -1700,8 +1715,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.deleteMessage.message.reactions[]",
       "result.$VIEWS.room.deleteReaction.message.reactions[]",
       "result.$VIEWS.room.editMessage.message.reactions[]",
-      "result.$VIEWS.room.messages.closeWindow",
-      "result.$VIEWS.room.messages.windows",
+      "result.$VIEWS.room.messages.closeWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.closeWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.closeWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.openWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.openWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.openWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.windows.*",
+      "result.messages.closeWindow.root.earlierVersions",
+      "result.messages.closeWindow.root.reactions[]",
+      "result.messages.closeWindow.root.replyTo.message",
+      "result.messages.openWindow.root.earlierVersions",
+      "result.messages.openWindow.root.reactions[]",
+      "result.messages.openWindow.root.replyTo.message",
+      "result.messages.windows.*",
       "result.$VIEWS.room.messages.latest.messages[].reactions[]",
       "result.$VIEWS.room.obliterateMessage.message.reactions[]",
       "result.$VIEWS.room.sendMessage.message.reactions[]",
@@ -1709,8 +1736,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.deleteMessage.message.reactions[]",
       "result.deleteReaction.message.reactions[]",
       "result.editMessage.message.reactions[]",
-      "result.messages.closeWindow",
-      "result.messages.windows",
       "result.messages.latest.messages[].reactions[]",
       "result.obliterateMessage.message.reactions[]",
       "result.sendMessage.message.reactions[]",
@@ -1726,7 +1751,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.editMessage.requestId",
       "result.$VIEWS.room.editMessage.version",
       "result.$VIEWS.room.editMessage.message.earlierVersions",
-      "result.$VIEWS.room.messages.openWindow",
       "result.$VIEWS.room.messages.latest.messages[].earlierVersions",
       "result.$VIEWS.room.obliterateMessage.requestId",
       "result.$VIEWS.room.obliterateMessage.version",
@@ -1746,7 +1770,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.editMessage.requestId",
       "result.editMessage.version",
       "result.editMessage.message.earlierVersions",
-      "result.messages.openWindow",
       "result.messages.latest.messages[].earlierVersions",
       "result.obliterateMessage.requestId",
       "result.obliterateMessage.version",
@@ -1792,7 +1815,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; the session's windows, which the room offers again, name messages in the shape the break gives every message",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -1838,8 +1862,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.deleteMessage.message.reactions[]",
       "result.$VIEWS.room.deleteReaction.message.reactions[]",
       "result.$VIEWS.room.editMessage.message.reactions[]",
-      "result.$VIEWS.room.messages.closeWindow",
-      "result.$VIEWS.room.messages.windows",
+      "result.$VIEWS.room.messages.closeWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.closeWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.closeWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.openWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.openWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.openWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.windows.*",
+      "result.messages.closeWindow.root.earlierVersions",
+      "result.messages.closeWindow.root.reactions[]",
+      "result.messages.closeWindow.root.replyTo.message",
+      "result.messages.openWindow.root.earlierVersions",
+      "result.messages.openWindow.root.reactions[]",
+      "result.messages.openWindow.root.replyTo.message",
+      "result.messages.windows.*",
       "result.$VIEWS.room.messages.latest.messages[].reactions[]",
       "result.$VIEWS.room.obliterateMessage.message.reactions[]",
       "result.$VIEWS.room.sendMessage.message.reactions[]",
@@ -1847,8 +1883,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.deleteMessage.message.reactions[]",
       "result.deleteReaction.message.reactions[]",
       "result.editMessage.message.reactions[]",
-      "result.messages.closeWindow",
-      "result.messages.windows",
       "result.messages.latest.messages[].reactions[]",
       "result.obliterateMessage.message.reactions[]",
       "result.sendMessage.message.reactions[]",
@@ -1864,7 +1898,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.editMessage.requestId",
       "result.$VIEWS.room.editMessage.version",
       "result.$VIEWS.room.editMessage.message.earlierVersions",
-      "result.$VIEWS.room.messages.openWindow",
       "result.$VIEWS.room.messages.latest.messages[].earlierVersions",
       "result.$VIEWS.room.obliterateMessage.requestId",
       "result.$VIEWS.room.obliterateMessage.version",
@@ -1884,7 +1917,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.editMessage.requestId",
       "result.editMessage.version",
       "result.editMessage.message.earlierVersions",
-      "result.messages.openWindow",
       "result.messages.latest.messages[].earlierVersions",
       "result.obliterateMessage.requestId",
       "result.obliterateMessage.version",
@@ -1936,7 +1968,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; the session's windows, which the room offers again, name messages in the shape the break gives every message",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -1961,8 +1994,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.deleteMessage.message.reactions[]",
       "result.$VIEWS.room.deleteReaction.message.reactions[]",
       "result.$VIEWS.room.editMessage.message.reactions[]",
-      "result.$VIEWS.room.messages.closeWindow",
-      "result.$VIEWS.room.messages.windows",
+      "result.$VIEWS.room.messages.closeWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.closeWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.closeWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.openWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.openWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.openWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.windows.*",
+      "result.messages.closeWindow.root.earlierVersions",
+      "result.messages.closeWindow.root.reactions[]",
+      "result.messages.closeWindow.root.replyTo.message",
+      "result.messages.openWindow.root.earlierVersions",
+      "result.messages.openWindow.root.reactions[]",
+      "result.messages.openWindow.root.replyTo.message",
+      "result.messages.windows.*",
       "result.$VIEWS.room.messages.latest.messages[].reactions[]",
       "result.$VIEWS.room.obliterateMessage.message.reactions[]",
       "result.$VIEWS.room.sendMessage.message.reactions[]",
@@ -1970,8 +2015,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.deleteMessage.message.reactions[]",
       "result.deleteReaction.message.reactions[]",
       "result.editMessage.message.reactions[]",
-      "result.messages.closeWindow",
-      "result.messages.windows",
       "result.messages.latest.messages[].reactions[]",
       "result.obliterateMessage.message.reactions[]",
       "result.sendMessage.message.reactions[]",
@@ -1989,7 +2032,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.editMessage.requestId",
       "result.$VIEWS.room.editMessage.version",
       "result.$VIEWS.room.editMessage.message.earlierVersions",
-      "result.$VIEWS.room.messages.openWindow",
       "result.$VIEWS.room.messages.latest.messages[].earlierVersions",
       "result.$VIEWS.room.obliterateMessage.requestId",
       "result.$VIEWS.room.obliterateMessage.version",
@@ -2011,7 +2053,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.editMessage.requestId",
       "result.editMessage.version",
       "result.editMessage.message.earlierVersions",
-      "result.messages.openWindow",
       "result.messages.latest.messages[].earlierVersions",
       "result.obliterateMessage.requestId",
       "result.obliterateMessage.version",
@@ -2065,7 +2106,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its per-user act outcomes are gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; the session's windows, which the room offers again, name messages in the shape the break gives every message",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -2114,8 +2156,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.deleteMessage.message.reactions[]",
       "result.$VIEWS.room.deleteReaction.message.reactions[]",
       "result.$VIEWS.room.editMessage.message.reactions[]",
-      "result.$VIEWS.room.messages.closeWindow",
-      "result.$VIEWS.room.messages.windows",
+      "result.$VIEWS.room.messages.closeWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.closeWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.closeWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.openWindow.root.earlierVersions",
+      "result.$VIEWS.room.messages.openWindow.root.reactions[]",
+      "result.$VIEWS.room.messages.openWindow.root.replyTo.message",
+      "result.$VIEWS.room.messages.windows.*",
+      "result.messages.closeWindow.root.earlierVersions",
+      "result.messages.closeWindow.root.reactions[]",
+      "result.messages.closeWindow.root.replyTo.message",
+      "result.messages.openWindow.root.earlierVersions",
+      "result.messages.openWindow.root.reactions[]",
+      "result.messages.openWindow.root.replyTo.message",
+      "result.messages.windows.*",
       "result.$VIEWS.room.messages.latest.messages[].reactions[]",
       "result.$VIEWS.room.messages.threads[].root.reactions[]",
       "result.$VIEWS.room.obliterateMessage.message.reactions[]",
@@ -2124,8 +2178,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.deleteMessage.message.reactions[]",
       "result.deleteReaction.message.reactions[]",
       "result.editMessage.message.reactions[]",
-      "result.messages.closeWindow",
-      "result.messages.windows",
       "result.messages.latest.messages[].reactions[]",
       "result.messages.threads[].root.reactions[]",
       "result.obliterateMessage.message.reactions[]",
@@ -2144,7 +2196,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.editMessage.requestId",
       "result.$VIEWS.room.editMessage.version",
       "result.$VIEWS.room.editMessage.message.earlierVersions",
-      "result.$VIEWS.room.messages.openWindow",
       "result.$VIEWS.room.messages.latest.messages[].earlierVersions",
       "result.$VIEWS.room.messages.threads[].root.earlierVersions",
       "result.$VIEWS.room.obliterateMessage.requestId",
@@ -2167,7 +2218,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.editMessage.requestId",
       "result.editMessage.version",
       "result.editMessage.message.earlierVersions",
-      "result.messages.openWindow",
       "result.messages.latest.messages[].earlierVersions",
       "result.messages.threads[].root.earlierVersions",
       "result.obliterateMessage.requestId",
@@ -2224,7 +2274,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its message windows are gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; the session's windows, which the room offers again, name messages in the shape the break gives every message",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -2934,5 +2985,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       reason:
         "This changes a type parameter in a way that makes it possible to avoid sending large amounts of unnecessary data. It doesn't affect the actual stored data, so it's a safe change.",
     },
+  },
+  {
+    pattern: "system/pattern-catalog/fake-catalog.tsx",
+    baselines: [
+      "20261115T040149Z-wpQ711UAcMmyeWw7",
+      "20261115T231252Z-zcGvv30wqSKYEMK7",
+      "20261116T011727Z-x7lnp7Wavmm2mwx8",
+      "20261119T015645Z-GeQ9sl5yAPihNip6",
+    ],
+    paths: ["argument.getItRequests", "result.getItRequests"],
+    reason:
+      "each request to get a pattern carries its own write policy and author label, so a host can check who asked and which handler wrote it; the list-wide policy cannot be changed in place",
+    record: "docs/history/pattern-catalog-get-it-entries-break.md",
   },
 ];

@@ -1882,9 +1882,6 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     }
     const existing = this.#sessions.get(session);
     if (existing !== undefined) return existing;
-    if (this.#closed) {
-      throw new Error("sandbox runtime is closed");
-    }
     if (this.#sessions.size >= RUNSC_MAX_SESSIONS) {
       throw new SandboxSessionUnavailableError(
         `this run already holds ${RUNSC_MAX_SESSIONS} sandbox sessions (${
@@ -1928,8 +1925,6 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       let exitCode: number | undefined;
       handle.exited.then((status) => {
         exitCode = status.exitCode;
-        state.ended = true;
-      }).catch(() => {
         state.ended = true;
       });
       const deadline = Date.now() + this.config.sessionStartTimeoutMs;

@@ -24,7 +24,8 @@ gives the profile. The streams are outputs of the surface, and the rendered
 surface binds them too, so a pattern that holds the surface reaches them either
 way. The name and the create itself stay gated: the name rides the trusted
 click's own event. This matches the posture profile-home already has, whose
-`setPicture` is ungated.
+`setPicture` asks for no trusted gesture, though it takes a picture from the
+profile's owner alone.
 
 The holder can also read the picture the user picked before they create, even
 one they then abandon: the rendered surface shows it (`cf-avatar`'s `bytes`).

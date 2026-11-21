@@ -2,6 +2,7 @@ export {
   decomposeSchema,
   recomposeSchema,
   SchemaNotDecomposableError,
+  SchemaNotRecomposableError,
 } from "./schema-decompose.ts";
 export { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 export { lookupSchemaDocument } from "./schema-registry.ts";
@@ -53,6 +54,8 @@ export {
   EXPERIMENTAL_FLAG_AUTHORITY,
   type ExperimentalFlagAuthority,
   experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
+  FOLLOWED_POSTURE_ENV,
   MAX_ENFORCEMENT_CFC_OPTIONS,
   MAX_ENFORCEMENT_SINK_CEILINGS,
   MAX_ENFORCEMENT_SINK_GOVERNANCE,
@@ -152,9 +155,9 @@ export {
   isCell,
   isReadableCell,
   isStream,
+  isWithheldDelivery,
   pullProjected,
   readProjected,
-  resolveWriteTarget,
   sendEvent,
   setCell,
   sinkProjected,
@@ -183,6 +186,7 @@ export {
 } from "./harness/index.ts";
 export {
   PATTERN_COVERAGE_INTEGRATION_TEST_NAME,
+  PATTERN_COVERAGE_MULTI_RUNTIME_TEST_NAME,
   PATTERN_COVERAGE_TEST_NAME,
   PatternCoverageCollector,
   type PatternCoverageData,
@@ -254,6 +258,8 @@ export {
   profileOwnership,
 } from "./profile-order.ts";
 export { loadProfileOwnerDocuments, profileOwnerAt } from "./profile-owner.ts";
+export { spaceMemberListAt } from "./builder/space-access.ts";
+export { joinSpaceMembers, spaceMembersAt } from "./space-members.ts";
 export { writtenPrincipalAt } from "./written-principal.ts";
 export {
   classifyPieceOriginString,
@@ -272,6 +278,8 @@ export {
   getPatternSetupIdentityRef,
   getPatternSource,
   getPieceReconciliation,
+  getPieceSourceDelegations,
+  getPieceSourceRecord,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
   isStoredArgumentSchemaRefusal,
@@ -461,6 +469,7 @@ export {
 } from "./sandbox/fabric-import-specifier.ts";
 export { type PinRewrite, rewriteFabricPins } from "./fabric-pin-rewrite.ts";
 export { DEFAULT_CELL_SCOPE } from "./scope.ts";
+export { startWithInputSources } from "./ensure-piece-running.ts";
 export {
   isPieceDocument,
   isPieceRoot,

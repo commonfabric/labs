@@ -153,8 +153,9 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     label: "test selection",
     view: {
       status: "good",
-      value: "2.9%",
-      sub: "16m 48s of 9h 29m test time",
+      value: "3.8%<small> tests · </small>0.5%<small> time</small>",
+      valueLabel: "3.8% of tests, 0.5% of test time",
+      sub: "2,833 of 74,547 · 7m of 24h",
       extra: history(),
       duration: 18 * DAY,
       aside: `<span class="running"><span class="rdot"></span>running</span><span class="hfacet" title="12h old">12h old</span>`,

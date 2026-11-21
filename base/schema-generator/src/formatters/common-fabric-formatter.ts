@@ -2,6 +2,7 @@ import type {
   AsCellEntry,
   MutableJSONSchema,
   MutableJSONSchemaObj,
+  MutableJSONValue,
   SchemaScope,
 } from "@commonfabric/api";
 import {
@@ -25,11 +26,11 @@ import type { SchemaGenerator } from "../schema-generator.ts";
 import {
   detectWrapperViaNode,
   extractDefaultBrandPayloadValue,
+  extractValueFromLiteralType,
   getArrayElementInfo,
   getPropertyNameText,
-  isEmptyObjectDefaultType,
+  primitiveLiteralValue,
   resolveWrapperNode,
-  type TypeWithInternals,
   withoutTypeNode,
 } from "../type-utils.ts";
 import {
@@ -66,7 +67,6 @@ import {
   type CellWrapperKind,
   getCellBrand,
   getCellWrapperInfo,
-  isCellBrand,
   wrapperKindToBrand,
 } from "../typescript/cell-brand.ts";
 import { hasDefaultMarker } from "../typescript/default-brand.ts";
@@ -100,10 +100,12 @@ import {
   readingOfLabelList,
   readingOfMetadataLabels,
   reportLabelReading,
+  reportUnreadProjectionPath,
 } from "../unread-label-diagnostics.ts";
 import { reportUnreadWriterBinding } from "../writer-binding-diagnostics.ts";
 import {
   bindWrittenArgument,
+  readBoundTypeNode,
   usesParameterUnreachably,
 } from "../type-parameter-bindings.ts";
 import { unionMembersInSourceOrder } from "./union-formatter.ts";
@@ -266,15 +268,12 @@ export const applyScopeToAsCellEntry = (
   if (typeof entry === "string") {
     return { kind: entry, scope };
   }
-  if (isObjectOrArray(entry)) {
-    // A cell another scope's wrapper caps is a wrapper nested in another with
-    // no cell between them, whose scope would replace the cap.
-    if (entry.scope !== undefined && entry.scope !== scope) {
-      throw nestedScopeError();
-    }
-    return { ...entry, scope };
+  // A cell another scope's wrapper caps is a wrapper nested in another with
+  // no cell between them, whose scope would replace the cap.
+  if (entry.scope !== undefined && entry.scope !== scope) {
+    throw nestedScopeError();
   }
-  return entry;
+  return { ...entry, scope };
 };
 
 /** Whether `schema` declares a cell: an object with an `asCell` entry. */
@@ -374,6 +373,38 @@ const unionBranches = (
       : []
   );
 };
+
+/**
+ * `schema` with `value` as its default, which JSON Schema 2020-12 allows
+ * beside a `$ref`, or `schema` alone, reported as a default nothing resolves
+ * (`reportUnresolvedDefault()`, at `node`), where `value` is not JSON, as it
+ * is where it or any part of it is `undefined`. A boolean schema becomes the
+ * object schema admitting the same values.
+ */
+const withDefault = (
+  schema: MutableJSONSchema,
+  value: unknown,
+  context: GenerationContext,
+  node?: ts.Node,
+): MutableJSONSchema => {
+  if (!isJSONValue(value)) {
+    reportUnresolvedDefault(context, node);
+    return schema;
+  }
+  if (schema === true) return { default: value };
+  if (schema === false) return { not: true, default: value };
+  return { ...schema, default: value };
+};
+
+/**
+ * Whether `value` is a string, a number, a boolean, `null`, or an array or an
+ * object of such values. A number may be `NaN`, an infinity or `-0`, which a
+ * default holds as the data model stores them.
+ */
+const isJSONValue = (value: unknown): value is MutableJSONValue =>
+  value === null || typeof value === "string" || typeof value === "number" ||
+  typeof value === "boolean" ||
+  (isObjectOrArray(value) && Object.values(value).every(isJSONValue));
 
 /** The error for a scope wrapper nested in another with no cell between. */
 export const nestedScopeError = (): Error =>
@@ -1268,7 +1299,7 @@ export function scopeOfAliasChain(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): SchemaScope | undefined {
-  const aliasSymbol = (type as TypeWithInternals).aliasSymbol;
+  const aliasSymbol = type.aliasSymbol;
   let declaration = aliasSymbol &&
     resolveAliasedSymbol(aliasSymbol, checker).declarations?.find(
       ts.isTypeAliasDeclaration,
@@ -1334,15 +1365,10 @@ export class CommonFabricFormatter implements TypeFormatter {
 
   constructor(schemaGenerator: SchemaGenerator) {
     this.#schemaGenerator = schemaGenerator;
-    if (!schemaGenerator) {
-      throw new Error(
-        "CommonFabricFormatter requires a SchemaGenerator instance",
-      );
-    }
   }
 
   supportsType(type: ts.Type, context: GenerationContext): boolean {
-    const aliasName = (type as TypeWithInternals).aliasSymbol?.name;
+    const aliasName = type.aliasSymbol?.name;
     if (scopeForWrapperName(aliasName) !== undefined) {
       return true;
     }
@@ -1374,7 +1400,7 @@ export class CommonFabricFormatter implements TypeFormatter {
 
     if (
       this.#resolveAliasChainInstantiation(
-        type as TypeWithInternals,
+        type,
         context,
         CFC_ALIAS_NAMES,
       )
@@ -1405,7 +1431,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     // Fallback: check via aliasSymbol for Default<T> when typeToTypeNode expanded the alias.
     // typeToTypeNode expands Default<T,V> to its branded union representation, losing the
     // "Default" type node. The type object itself still carries aliasSymbol = Default.
-    if (isDefaultAliasSymbol((type as TypeWithInternals).aliasSymbol)) {
+    if (isDefaultAliasSymbol(type.aliasSymbol)) {
       return true;
     }
 
@@ -1448,13 +1474,12 @@ export class CommonFabricFormatter implements TypeFormatter {
     const besideUndefined = this.#formatBesideTakenUndefined(type, context);
     if (besideUndefined) return besideUndefined;
 
-    const aliasType = type as TypeWithInternals;
-    const aliasScope = scopeForWrapperName(aliasType.aliasSymbol?.name);
+    const aliasScope = scopeForWrapperName(type.aliasSymbol?.name);
     if (aliasScope !== undefined) {
-      const innerType = aliasType.aliasTypeArguments?.[0];
+      const innerType = type.aliasTypeArguments?.[0];
       if (!innerType) {
         throw new Error(
-          `${aliasType.aliasSymbol?.name}<T> requires type argument`,
+          `${type.aliasSymbol?.name}<T> requires type argument`,
         );
       }
       const innerSchema = this.#schemaGenerator.formatChildType(
@@ -1466,7 +1491,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     const resolvedScopeAlias = this.#resolveAliasChainInstantiation(
-      aliasType,
+      type,
       context,
       SCOPE_WRAPPER_NAMES,
     );
@@ -1486,7 +1511,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     const resolvedCfcAlias = this.#resolveAliasChainInstantiation(
-      aliasType,
+      type,
       context,
       CFC_ALIAS_NAMES,
     );
@@ -1617,54 +1642,38 @@ export class CommonFabricFormatter implements TypeFormatter {
       return this.#formatDefaultType(resolvedWrapper.node, context, type);
     }
 
-    // Fallback: handle Default<T> detected via aliasSymbol when no type node is available.
-    // When typeToTypeNode expands Default<T,V), the node no longer says "Default" but
-    // the type object still carries aliasSymbol. Extract T from aliasTypeArguments[0]
-    // and V from aliasTypeArguments[1] so the default value is preserved in the schema.
-    const typeWithAlias = type as TypeWithInternals;
-    if (
-      isDefaultAliasSymbol(typeWithAlias.aliasSymbol) &&
-      typeWithAlias.aliasTypeArguments &&
-      typeWithAlias.aliasTypeArguments.length >= 1
-    ) {
-      const innerType = typeWithAlias.aliasTypeArguments[0]!;
-      const valueSchema = this.#schemaGenerator.formatChildType(
-        innerType,
+    // Fallback: handle Default<T> detected via aliasSymbol when no type node is
+    // available. When typeToTypeNode expands Default<T, V>, the node no longer
+    // says "Default" but the type object still carries aliasSymbol. T is
+    // aliasTypeArguments[0], and V, where the reference writes one,
+    // aliasTypeArguments[1]: the alias arguments of a reference through an
+    // import are the ones it writes, so `Default<T>` carries T alone, and is
+    // `Default<T, T>`.
+    const [innerType, defaultType] = isDefaultAliasSymbol(type.aliasSymbol)
+      ? type.aliasTypeArguments ?? []
+      : [];
+    if (innerType) {
+      // TODO(danfuzz): A default for a fabric-backed native disagrees with
+      // the value its type actually stores. `Date` and `Uint8Array` map to
+      // `{ type: "object" }` because they are stored as `FabricEpochNsec` /
+      // `FabricBytes`, but the default captured here is the authored TS
+      // literal. So
+      // `Default<Date, "2020-01-01T00:00:00.000Z">` emits
+      // `{ type: "object", default: "2020-01-01T00:00:00.000Z" }` -- a string
+      // standing in for an object, and not the form a read of that slot would
+      // ever produce. Decide how a default for these types is expressed
+      // (converted to the fabric form here, converted where the default is
+      // applied, or refused outright) instead of leaving the two disagreeing.
+      // The node-based path below attaches defaults the same way and needs
+      // the same answer.
+      return withDefault(
+        this.#schemaGenerator.formatChildType(innerType, context, undefined),
+        extractValueFromLiteralType(
+          defaultType ?? innerType,
+          context.typeChecker,
+        )?.value,
         context,
-        undefined,
       );
-
-      if (typeWithAlias.aliasTypeArguments.length >= 2) {
-        const defaultType = typeWithAlias.aliasTypeArguments[1]!;
-        const defaultValue = this.#extractDefaultValue(defaultType, context);
-        // TODO(danfuzz): A default for a fabric-backed native disagrees with
-        // the value its type actually stores. `Date`, `RegExp`, and
-        // `Uint8Array` map to `{ type: "object" }` because they are stored as
-        // `FabricEpochNsec` / `FabricRegExp` / `FabricBytes`, but the default
-        // captured here is the authored TS literal. So
-        // `Default<Date, "2020-01-01T00:00:00.000Z">` emits
-        // `{ type: "object", default: "2020-01-01T00:00:00.000Z" }` -- a string
-        // standing in for an object, and not the form a read of that slot would
-        // ever produce. Decide how a default for these types is expressed
-        // (converted to the fabric form here, converted where the default is
-        // applied, or refused outright) instead of leaving the two disagreeing.
-        // The node-based path below attaches defaults the same way and needs
-        // the same answer.
-        if (defaultValue !== undefined) {
-          if (typeof valueSchema === "boolean") {
-            return (valueSchema === false
-              ? { not: true, default: defaultValue }
-              : { default: defaultValue }) as MutableJSONSchemaObj;
-          }
-          (valueSchema as Record<string, unknown>).default = defaultValue;
-        } else {
-          reportUnresolvedDefault(context);
-        }
-      } else {
-        reportUnresolvedDefault(context);
-      }
-
-      return valueSchema;
     }
 
     const wrapperInfo = getCellWrapperInfo(type, context.typeChecker);
@@ -1714,42 +1723,10 @@ export class CommonFabricFormatter implements TypeFormatter {
       );
     }
 
-    // If we detected a wrapper syntactically but the current type is wrapped in
-    // additional layers (e.g., FactoryInput<Reactive<...>>), recursively unwrap using
-    // brand information until we reach the underlying wrapper.
-    const wrapperKinds: WrapperKind[] = [
-      "OpaqueCell",
-      "Cell",
-      "Stream",
-      "SqliteDb",
-      "ReadonlyCell",
-      "WriteonlyCell",
-      "ComparableCell",
-    ];
-    for (const kind of wrapperKinds) {
-      const unwrappedType = this.#recursivelyUnwrapOpaqueCell(
-        type,
-        kind,
-        context.typeChecker,
-      );
-      if (unwrappedType) {
-        const nodeToPass = this.#selectWrapperTypeNode(
-          n,
-          resolvedWrapper,
-          unwrappedType.kind,
-        );
-        return this.#formatWrapperType(
-          unwrappedType.typeRef,
-          nodeToPass,
-          context,
-          unwrappedType.kind,
-        );
-      }
-    }
-
-    const nodeName = this.#getTypeRefIdentifierName(n);
     throw new Error(
-      `Unexpected Common Fabric type: ${nodeName}`,
+      `Unexpected Common Fabric type: \`${
+        context.typeChecker.typeToString(type)
+      }\``,
     );
   }
 
@@ -1792,15 +1769,10 @@ export class CommonFabricFormatter implements TypeFormatter {
       ? getCellWrapperInfo(registeredWrapperType, context.typeChecker)
       : undefined;
 
-    let innerType: ts.Type;
-    try {
-      innerType = context.typeRegistry?.get(innerTypeNode) ??
-        (registeredWrapperInfo &&
-          this.#firstTypeArgument(registeredWrapperInfo.typeRef, context)) ??
-        context.typeChecker.getTypeFromTypeNode(innerTypeNode);
-    } catch {
-      innerType = context.typeChecker.getAnyType();
-    }
+    let innerType = context.typeRegistry?.get(innerTypeNode) ??
+      (registeredWrapperInfo &&
+        this.#firstTypeArgument(registeredWrapperInfo.typeRef, context)) ??
+      context.typeChecker.getTypeFromTypeNode(innerTypeNode);
 
     // Ahead of formatting, adopt the resolved type's inner only when the node's
     // inner is a bare named reference (a `TypeReferenceNode`) that degrades to
@@ -1871,16 +1843,6 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
     }
 
-    if (wrapperKind === "Stream") {
-      if (typeof innerSchema === "boolean") {
-        return this.#applyWrapperSemantics(innerSchema, "Stream");
-      }
-      return this.#applyWrapperSemantics(
-        innerSchema as MutableJSONSchemaObj,
-        "Stream",
-      );
-    }
-
     if (wrapperKind === "Cell") {
       const innerWrapper = resolveWrapperNode(
         innerTypeNode,
@@ -1930,11 +1892,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     // The payload carried by the wrapper's own type. A node the printer wrote
     // from a type has no scope to resolve against, so the checker reads it as
     // `any`, and a node-driven schema would then admit anything.
-    const typeWithAlias = type as TypeWithInternals | undefined;
-    const resolvedInner =
-      scopeForWrapperName(typeWithAlias?.aliasSymbol?.name) !== undefined
-        ? typeWithAlias?.aliasTypeArguments?.[0]
-        : undefined;
+    const resolvedInner = scopeForWrapperName(type?.aliasSymbol?.name) !==
+        undefined
+      ? type?.aliasTypeArguments?.[0]
+      : undefined;
     const brand = type && !resolvedInner
       ? this.#scopeBrand(type, context)
       : undefined;
@@ -1943,13 +1904,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       ? resolvedInner
       : undefined;
 
-    let innerType: ts.Type;
-    try {
-      innerType = context.typeRegistry?.get(innerTypeNode) ??
-        context.typeChecker.getTypeFromTypeNode(innerTypeNode);
-    } catch {
-      innerType = context.typeChecker.getAnyType();
-    }
+    const innerType = this.#resolveTypeNodeToType(innerTypeNode, context);
 
     const uninterpreted: ts.TypeNode[] = [];
     let innerSchema = this.#schemaGenerator.formatChildType(
@@ -2007,9 +1962,9 @@ export class CommonFabricFormatter implements TypeFormatter {
    * read at the member written for it, under the bindings it is written
    * with, so that what only its syntax names is kept. A cell there is
    * refused, as a cell beside `undefined` is anywhere, and so is a union
-   * whose other members do not read as one wrapper of that scope
-   * (`readScopedUnionMember()`). `undefined` where the node writes no such
-   * union.
+   * whose other members do not read as one wrapper of that scope, written
+   * once or more (`readScopedUnionMember()`). `undefined` where the node
+   * writes no such union.
    */
   #formatBesideTakenUndefined(
     type: ts.Type,
@@ -2025,8 +1980,16 @@ export class CommonFabricFormatter implements TypeFormatter {
     );
     const values = members.filter((member) => member !== "nullish");
     if (values.length === members.length) return undefined;
+    // Each member is read under the bindings the union is written with, so
+    // members the checker folds into one type read as that type.
     const [wrapper, ...rest] = values;
-    if (!wrapper || rest.length > 0 || wrapper.scope !== brand.scope) {
+    const readType = (node: ts.TypeNode) =>
+      readBoundTypeNode(node, written.context);
+    const wrapperType = wrapper && readType(wrapper.node);
+    if (
+      !wrapper || wrapper.scope !== brand.scope ||
+      rest.some((member) => !member || readType(member.node) !== wrapperType)
+    ) {
       throw scopeUnionUnreadError(brand.scope);
     }
     const schema = this.formatType(type, {
@@ -2058,7 +2021,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       scopeBrandRead: new Set([
         type,
         payload,
-        ...(type.isUnion() ? type.types : []),
+        ...alternativesOf(type),
       ]),
     };
     if (payload !== type) {
@@ -2140,7 +2103,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         // (`scopePayloadType()`), read as its payload.
         scopeBrandRead: new Set([
           payload,
-          ...(payload.isUnion() ? payload.types : []),
+          ...alternativesOf(payload),
         ]),
         scopePayloadNodes: { payload, nodes },
       },
@@ -2314,13 +2277,35 @@ export class CommonFabricFormatter implements TypeFormatter {
     return withValueRecordsOf({ ...schema, scope }, schema, context);
   }
 
+  /**
+   * Helper for `#formatWrapperType()`, which returns whether `node` names an
+   * interface or class that extends the wrapper `typeRef` rather than the
+   * wrapper itself. Such a type's arguments are its own parameters, as the
+   * kinds of an `IndexedCollections<Kinds>` are, and none of them is the
+   * wrapper's payload.
+   */
+  #namesSubtypeOf(
+    node: ts.TypeReferenceNode,
+    typeRef: ts.TypeReference,
+    context: GenerationContext,
+  ): boolean {
+    let named = context.typeChecker.getSymbolAtLocation(node.typeName);
+    if (named === undefined) return false;
+    if (named.flags & ts.SymbolFlags.Alias) {
+      named = context.typeChecker.getAliasedSymbol(named);
+    }
+    return (named.flags & (ts.SymbolFlags.Interface | ts.SymbolFlags.Class)) !==
+        0 && named !== typeRef.target.symbol;
+  }
+
   #formatWrapperType(
     typeRef: ts.TypeReference,
     typeRefNode: ts.TypeNode | undefined,
     context: GenerationContext,
     wrapperKind: WrapperKind,
   ): MutableJSONSchema {
-    const innerTypeFromType = typeRef.typeArguments?.[0];
+    // `getCellWrapperInfo()` reports a reference with a type argument.
+    const innerTypeFromType = this.#firstTypeArgument(typeRef, context)!;
 
     // Only extract innerTypeNode if the typeRefNode has type arguments AND
     // those arguments are not generic type parameters.
@@ -2329,7 +2314,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     let innerTypeNode: ts.TypeNode | undefined = undefined;
     if (
       typeRefNode && ts.isTypeReferenceNode(typeRefNode) &&
-      typeRefNode.typeArguments
+      typeRefNode.typeArguments &&
+      !this.#namesSubtypeOf(typeRefNode, typeRef, context)
     ) {
       const firstArg = typeRefNode.typeArguments[0];
       if (firstArg) {
@@ -2347,27 +2333,13 @@ export class CommonFabricFormatter implements TypeFormatter {
 
     // Resolve inner type, preferring type information but falling back to node
     // when wrapper references degrade to unknown/any/type-parameter.
-    let innerType: ts.Type | undefined = innerTypeFromType;
-    if (
-      (!innerType || this.#isUnusableInnerType(innerType)) &&
-      innerTypeNode
-    ) {
-      try {
-        const fromNode = context.typeRegistry?.get(innerTypeNode) ??
-          context.typeChecker.getTypeFromTypeNode(innerTypeNode);
-        if (fromNode && !this.#isUnusableInnerType(fromNode)) {
-          innerType = fromNode;
-        }
-      } catch {
-        // Leave innerType as-is and continue with conservative fallback.
+    let innerType = innerTypeFromType;
+    if (this.#isUnusableInnerType(innerType) && innerTypeNode) {
+      const fromNode = this.#resolveTypeNodeToType(innerTypeNode, context);
+      if (!this.#isUnusableInnerType(fromNode)) {
+        innerType = fromNode;
       }
     }
-    if (!innerType) {
-      throw new Error(
-        `${wrapperKind}<T> requires type argument`,
-      );
-    }
-
     // When we resolve aliases (e.g., StringCell -> Cell<string>), the resolved node's
     // type arguments may contain unbound generics (e.g., T) from the alias declaration.
     // In that case, we must NOT pass the node, since the type information has the
@@ -2423,17 +2395,6 @@ export class CommonFabricFormatter implements TypeFormatter {
         (instantiatedCell.typeRef.typeArguments ??
           context.typeChecker.getTypeArguments(instantiatedCell.typeRef))[0],
     );
-
-    // Stream<T>: can also reflect inner Cell-ness
-    if (wrapperKind === "Stream") {
-      if (typeof innerSchema === "boolean") {
-        return this.#applyWrapperSemantics(innerSchema, "Stream");
-      }
-      return this.#applyWrapperSemantics(
-        innerSchema as MutableJSONSchemaObj,
-        "Stream",
-      );
-    }
 
     // Cell<T>: disallow Cell<Stream<T>> to avoid ambiguous semantics
     if (
@@ -2554,102 +2515,12 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
-   * Recursively unwrap opaque-branded (OpaqueCell) layers to find a wrapper
-   * type (Cell/Stream/etc.). This handles cases like
-   * FactoryInput<OpaqueCell<Stream<T>>> where the target is wrapped in multiple
-   * opaque-branded layers due to the recursive definition of the FactoryInput
-   * type.
-   */
-  #recursivelyUnwrapOpaqueCell(
-    type: ts.Type,
-    targetWrapperKind: WrapperKind,
-    checker: ts.TypeChecker,
-    depth: number = 0,
-  ):
-    | { type: ts.Type; typeRef: ts.TypeReference; kind: WrapperKind }
-    | undefined {
-    // Prevent infinite recursion
-    if (depth > 10) {
-      return undefined;
-    }
-
-    // Check if this type itself is the target wrapper
-    if ((type.flags & ts.TypeFlags.Union) === 0) {
-      const wrapperInfo = getCellWrapperInfo(type, checker);
-      if (wrapperInfo && wrapperInfo.kind === targetWrapperKind) {
-        return { type, typeRef: wrapperInfo.typeRef, kind: wrapperInfo.kind };
-      }
-    }
-
-    // If this is a union (e.g., from FactoryInput<T>), check each member
-    if (type.flags & ts.TypeFlags.Union) {
-      const unionType = type as ts.UnionType;
-      for (const member of unionType.types) {
-        // Try to unwrap this member
-        const result = this.#recursivelyUnwrapOpaqueCell(
-          member,
-          targetWrapperKind,
-          checker,
-          depth + 1,
-        );
-        if (result) return result;
-      }
-    }
-
-    // If this is an opaque-branded cell, extract its type argument and recurse
-    if (this.#isOpaqueCellType(type, checker)) {
-      const innerType = this.#extractOpaqueCellTypeArgument(type, checker);
-      if (innerType) {
-        return this.#recursivelyUnwrapOpaqueCell(
-          innerType,
-          targetWrapperKind,
-          checker,
-          depth + 1,
-        );
-      }
-    }
-
-    return undefined;
-  }
-
-  /**
    * Extract the base type from FactoryInput<T>.
    */
   #getFactoryInputBase(type: ts.Type): ts.Type | undefined {
-    const aliasType = type as TypeWithInternals;
-    return aliasType.aliasSymbol?.name === "FactoryInput"
-      ? aliasType.aliasTypeArguments?.[0]
+    return type.aliasSymbol?.name === "FactoryInput"
+      ? type.aliasTypeArguments?.[0]
       : undefined;
-  }
-
-  /**
-   * Detects the opaque cell brand, carried by `OpaqueCell<T>`. Named for the
-   * brand it matches, not the `Reactive` annotation spelling: that is an
-   * identity alias for `T` (no runtime wrapper, no brand), so it cannot be
-   * detected structurally here — only `OpaqueCell` can.
-   */
-  #isOpaqueCellType(type: ts.Type, checker: ts.TypeChecker): boolean {
-    return isCellBrand(type, checker, "opaque");
-  }
-
-  /**
-   * Extract the type argument T from an opaque-branded cell (OpaqueCell<T>).
-   */
-  #extractOpaqueCellTypeArgument(
-    type: ts.Type,
-    checker: ts.TypeChecker,
-  ): ts.Type | undefined {
-    const wrapperInfo = getCellWrapperInfo(type, checker);
-    if (
-      !wrapperInfo ||
-      (wrapperInfo.kind !== "Reactive" && wrapperInfo.kind !== "OpaqueCell")
-    ) {
-      return undefined;
-    }
-
-    const typeArgs = wrapperInfo.typeRef.typeArguments ??
-      checker.getTypeArguments(wrapperInfo.typeRef);
-    return typeArgs && typeArgs.length > 0 ? typeArgs[0] : undefined;
   }
 
   #selectWrapperTypeNode(
@@ -2686,14 +2557,6 @@ export class CommonFabricFormatter implements TypeFormatter {
     return node.pos < 0 || node.end < 0;
   }
 
-  #getTypeRefIdentifierName(
-    node?: ts.TypeNode,
-  ): string | undefined {
-    if (!node || !ts.isTypeReferenceNode(node)) return undefined;
-    const tn = node.typeName;
-    return ts.isIdentifier(tn) ? tn.text : undefined;
-  }
-
   #isStreamType(type: ts.Type, checker: ts.TypeChecker): boolean {
     return getCellBrand(type, checker) === "stream";
   }
@@ -2708,12 +2571,8 @@ export class CommonFabricFormatter implements TypeFormatter {
       throw new Error("Default<T,V> requires 1 or 2 type arguments");
     }
 
-    const valueTypeNode = typeArgs[0];
+    const valueTypeNode = typeArgs[0]!;
     const defaultTypeNode = typeArgs[1] ?? valueTypeNode;
-
-    if (!valueTypeNode || !defaultTypeNode) {
-      throw new Error("Default<T,V> type arguments cannot be undefined");
-    }
     // Get the value type from the type nodes
     const valueType = context.typeRegistry?.get(valueTypeNode) ??
       context.typeChecker.getTypeFromTypeNode(valueTypeNode);
@@ -2757,28 +2616,11 @@ export class CommonFabricFormatter implements TypeFormatter {
       )?.value;
     }
 
-    if (defaultValue !== undefined) {
-      // TODO(danfuzz): This attaches a default without checking it against the
-      // shape its type stores -- see the marker on the type-based path above,
-      // which describes the fabric-backed-native mismatch and needs one answer
-      // covering both paths.
-      //
-      // JSON Schema Draft 2020-12 allows default as a sibling of $ref
-      // Simply add the default property directly to the schema
-      if (typeof valueSchema === "boolean") {
-        // Boolean schemas (true/false) cannot have properties directly
-        // For true: { default: value } (any value is valid)
-        // For false: { not: true, default: value } (no value is valid)
-        return (valueSchema === false
-          ? { not: true, default: defaultValue }
-          : { default: defaultValue }) as MutableJSONSchemaObj;
-      }
-      (valueSchema as any).default = defaultValue;
-    } else {
-      reportUnresolvedDefault(context, defaultTypeNode);
-    }
-
-    return valueSchema;
+    // TODO(danfuzz): This attaches a default without checking it against the
+    // shape its type stores -- see the marker on the type-based path above,
+    // which describes the fabric-backed-native mismatch and needs one answer
+    // covering both paths.
+    return withDefault(valueSchema, defaultValue, context, defaultTypeNode);
   }
 
   /**
@@ -2948,7 +2790,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
     | undefined {
     const checker = context.typeChecker;
-    const { aliasSymbol, aliasTypeArguments } = type as TypeWithInternals;
+    const { aliasSymbol, aliasTypeArguments } = type;
     if (!aliasSymbol) return undefined;
     if (mapsMembers(aliasSymbol, context)) {
       const operand = aliasTypeArguments?.[0];
@@ -3164,7 +3006,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     const reference = context.typeNode &&
       readThroughIdentityAliases(context.typeNode, checker);
     if (!reference || !ts.isTypeReferenceNode(reference)) {
-      const alias = (type as TypeWithInternals).aliasSymbol;
+      const alias = type.aliasSymbol;
       return alias
         ? this.#schemaGenerator.readAliasChain(
           type,
@@ -3428,12 +3270,7 @@ export class CommonFabricFormatter implements TypeFormatter {
   ): ts.Type {
     const known = context.printedFrom?.(node) ??
       context.typeRegistry?.get(node);
-    if (known) return known;
-    try {
-      return context.typeChecker.getTypeFromTypeNode(node);
-    } catch {
-      return context.typeChecker.getAnyType();
-    }
+    return known ?? context.typeChecker.getTypeFromTypeNode(node);
   }
 
   /**
@@ -3441,7 +3278,7 @@ export class CommonFabricFormatter implements TypeFormatter {
    * down a chain of aliases, with its arguments there.
    */
   #resolveAliasChainInstantiation(
-    typeWithAlias: TypeWithInternals,
+    typeWithAlias: ts.Type,
     context: GenerationContext,
     terminals: ReadonlySet<string>,
   ): ResolvedAliasChain | undefined {
@@ -3747,16 +3584,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     typeNode: ts.TypeNode,
     context: GenerationContext,
   ): ts.Type {
-    const fromRegistry = context.typeRegistry?.get(typeNode);
-    if (fromRegistry) {
-      return fromRegistry;
-    }
-
-    try {
-      return context.typeChecker.getTypeFromTypeNode(typeNode);
-    } catch {
-      return context.typeChecker.getAnyType();
-    }
+    return context.typeRegistry?.get(typeNode) ??
+      context.typeChecker.getTypeFromTypeNode(typeNode);
   }
 
   #getTypeAliasDeclarationForSymbol(
@@ -3890,6 +3719,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
       case "ProjectionPath":
         return this.#buildProjectionMetadata(
+          aliasName,
           aliasArgs,
           aliasArgNodes,
           context,
@@ -3901,6 +3731,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         );
       case "ProjectionOf":
         return this.#buildProjectionMetadata(
+          aliasName,
           aliasArgs,
           aliasArgNodes,
           context,
@@ -3915,7 +3746,14 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
   }
 
+  /**
+   * The lowered `ProjectionPath` or `ProjectionOf`, `aliasName`: the document
+   * read from and the path into it as a JSON Pointer
+   * (`#encodeJsonPointerPath()`). A path that does not read as one is
+   * reported (`reportUnreadProjectionPath()`), and lowers to no projection.
+   */
   #buildProjectionMetadata(
+    aliasName: string,
     aliasArgs: readonly ts.Type[],
     aliasArgNodes: readonly (ts.TypeNode | undefined)[] | undefined,
     context: GenerationContext,
@@ -3938,6 +3776,12 @@ export class CommonFabricFormatter implements TypeFormatter {
       readValue(options.pathIndex),
     );
     if (directPath === undefined) {
+      reportUnreadProjectionPath(
+        context,
+        aliasName,
+        aliasArgs[options.pathIndex],
+        aliasArgNodes?.[options.pathIndex],
+      );
       return undefined;
     }
 
@@ -3992,7 +3836,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
       const policyContext = { ...context, typeNode: node };
       const policy = this.#resolveAliasChainInstantiation(
-        context.typeChecker.getTypeFromTypeNode(node) as TypeWithInternals,
+        context.typeChecker.getTypeFromTypeNode(node),
         policyContext,
         WRITER_POLICY_ALIAS_NAMES,
       );
@@ -4144,11 +3988,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     ) {
       return false;
     }
-    const denoted = this.#resolveTypeNodeToType(
-      reference,
-      context,
-    ) as TypeWithInternals;
-    return denoted.aliasSymbol?.name === aliasName;
+    return this.#resolveTypeNodeToType(reference, context).aliasSymbol
+      ?.name === aliasName;
   }
 
   /**
@@ -4617,10 +4458,6 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
       return obj;
     }
-    if (typeNode.kind === ts.SyntaxKind.TrueKeyword) return true;
-    if (typeNode.kind === ts.SyntaxKind.FalseKeyword) return false;
-    if (typeNode.kind === ts.SyntaxKind.NullKeyword) return null;
-    if (typeNode.kind === ts.SyntaxKind.UndefinedKeyword) return undefined;
     return UNREAD;
   }
 
@@ -4640,15 +4477,8 @@ export class CommonFabricFormatter implements TypeFormatter {
         at.context,
       );
     }
-    if (type.flags & ts.TypeFlags.StringLiteral) {
-      return (type as ts.StringLiteralType).value;
-    }
-    if (type.flags & ts.TypeFlags.NumberLiteral) {
-      return (type as ts.NumberLiteralType).value;
-    }
-    if (type.flags & ts.TypeFlags.BooleanLiteral) {
-      return (type as { intrinsicName?: string }).intrinsicName === "true";
-    }
+    const primitive = primitiveLiteralValue(type, checker);
+    if (primitive !== undefined) return primitive;
     if (type.flags & ts.TypeFlags.Null) {
       return null;
     }
@@ -4798,7 +4628,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (at) {
       return at.argument.node
         ? this.#extractDefaultValueFromNode(at.argument.node, at.context)
-        : this.#extractDefaultValue(at.argument.type, at.context);
+        : extractValueFromLiteralType(at.argument.type, at.context.typeChecker)
+          ?.value;
     }
     // Handle typeof expressions (TypeQuery nodes)
     // These reference a variable's value, like: typeof defaultRoutes
@@ -4833,9 +4664,8 @@ export class CommonFabricFormatter implements TypeFormatter {
         if (!ts.isPropertySignature(member) || !member.name || !member.type) {
           const type = context.typeRegistry?.get(typeNode) ??
             context.typeChecker.getTypeFromTypeNode(typeNode);
-          return isEmptyObjectDefaultType(type, context.typeChecker)
-            ? {}
-            : undefined;
+          return extractValueFromLiteralType(type, context.typeChecker)
+            ?.value;
         }
         const propName = getPropertyNameText(member.name, context.typeChecker);
         if (propName === undefined) return undefined;
@@ -4851,50 +4681,10 @@ export class CommonFabricFormatter implements TypeFormatter {
       return obj;
     }
 
-    // Handle keywords
-    if (typeNode.kind === ts.SyntaxKind.NullKeyword) return null;
-    if (typeNode.kind === ts.SyntaxKind.UndefinedKeyword) return undefined;
-
     // Fallback: try to get the type and extract from it
     const type = context.typeRegistry?.get(typeNode) ??
       context.typeChecker.getTypeFromTypeNode(typeNode);
-    return this.#extractDefaultValue(type, context);
-  }
-
-  #extractDefaultValue(
-    type: ts.Type,
-    context: GenerationContext,
-  ): unknown {
-    // First try simple literal extraction
-    if (type.flags & ts.TypeFlags.StringLiteral) {
-      return (type as ts.StringLiteralType).value;
-    }
-    if (type.flags & ts.TypeFlags.NumberLiteral) {
-      return (type as ts.NumberLiteralType).value;
-    }
-    if (type.flags & ts.TypeFlags.BooleanLiteral) {
-      return (type as any).intrinsicName === "true";
-    }
-    if (type.flags & ts.TypeFlags.Null) {
-      return null;
-    }
-    if (type.flags & ts.TypeFlags.Undefined) {
-      return undefined;
-    }
-
-    // Empty type literals and mapped records need no value declaration.
-    if (isEmptyObjectDefaultType(type, context.typeChecker)) {
-      return {};
-    }
-
-    // For complex values (arrays/objects), try to extract from the type's symbol
-    // This is a simplified approach that works for many cases
-    const symbol = type.getSymbol();
-    if (symbol && symbol.valueDeclaration) {
-      return this.#extractComplexDefaultFromTypeSymbol(type, symbol, context);
-    }
-
-    return undefined;
+    return extractValueFromLiteralType(type, context.typeChecker)?.value;
   }
 
   #extractValueFromTypeQuery(
@@ -4924,28 +4714,6 @@ export class CommonFabricFormatter implements TypeFormatter {
     return extractLiteralValueOfSymbol(symbol, context.typeChecker)?.value;
   }
 
-  #extractComplexDefaultFromTypeSymbol(
-    type: ts.Type,
-    symbol: ts.Symbol,
-    context: GenerationContext,
-  ): unknown {
-    // Try to extract from the symbol's value declaration initializer (AST-based)
-    const extracted = this.#extractValueFromSymbol(symbol, context);
-    if (extracted !== undefined) {
-      return extracted;
-    }
-
-    // Check if this is an empty object type (no properties, object type)
-    if (
-      (type.flags & ts.TypeFlags.Object) !== 0 &&
-      context.typeChecker.getPropertiesOfType(type).length === 0
-    ) {
-      return {};
-    }
-
-    return undefined;
-  }
-
   /**
    * Check if a type is the undefined type.
    * Extracted for clarity and consistency with UnionFormatter.
@@ -4962,11 +4730,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     schema: MutableJSONSchema,
     wrapperKind: WrapperKind,
   ): MutableJSONSchema {
+    // Every wrapper kind has a brand.
     const propertyValue = wrapperKindToBrand(wrapperKind);
-    // If we couldn't determine a valid wrapper brand, return the schema as-is
-    if (propertyValue === undefined) {
-      return schema;
-    }
 
     if (typeof schema === "boolean") {
       return schema === false
@@ -4980,28 +4745,17 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
-   * Return a single schema or wrap multiple schemas in anyOf.
-   * Handles empty array by returning true (any value is valid).
-   * Deduplicates identical schemas before wrapping.
+   * The schema `schemas`, a non-empty list, holds, or an `anyOf` of them where
+   * they differ, with each identical schema kept once.
    */
   #maybeWrapInAnyOf(
     schemas: MutableJSONSchema[],
   ): MutableJSONSchema {
-    if (schemas.length === 0) {
-      return true;
-    } else if (schemas.length === 1) {
-      return schemas[0]!;
-    } else {
-      // Deduplicate identical schemas. `valueEqual` (Object.is at leaves) is
-      // the honest comparison: a `JSON.stringify` dedup key collides distinct
-      // values (`-0`/`0`, `NaN`/`Infinity`) and is key-order sensitive.
-      const unique = dedupeByValueEqual(schemas);
-
-      if (unique.length === 1) {
-        return unique[0]!;
-      }
-      return { anyOf: unique };
-    }
+    // `valueEqual` (Object.is at leaves) is the honest comparison: a
+    // `JSON.stringify` dedup key collides distinct values (`-0`/`0`,
+    // `NaN`/`Infinity`) and is key-order sensitive.
+    const unique = dedupeByValueEqual(schemas);
+    return unique.length === 1 ? unique[0]! : { anyOf: unique };
   }
 
   /**
@@ -5058,33 +4812,20 @@ export class CommonFabricFormatter implements TypeFormatter {
         continue;
       }
 
-      // Check if this member is a wrapper type via type structure
-      const wrapperInfo = getCellWrapperInfo(memberType, context.typeChecker);
-
-      if (wrapperInfo) {
-        // Format as a wrapper type
-        // Try to get the wrapper node for better processing
-        const wrapperNodeInfo = memberNode
-          ? resolveWrapperNode(memberNode, context.typeChecker)
-          : undefined;
-
-        const schema = this.#formatWrapperType(
+      // Every other member is a wrapper (`#isWrapperUnion()`), formatted at
+      // its node where it has one, for proper name hoisting.
+      const wrapperInfo = getCellWrapperInfo(memberType, context.typeChecker)!;
+      const wrapperNodeInfo = memberNode
+        ? resolveWrapperNode(memberNode, context.typeChecker)
+        : undefined;
+      schemas.push(
+        this.#formatWrapperType(
           wrapperInfo.typeRef,
-          wrapperNodeInfo?.node, // Pass node if available for proper name hoisting
+          wrapperNodeInfo?.node,
           context,
           wrapperInfo.kind,
-        );
-        schemas.push(schema);
-      } else {
-        // Not a wrapper - use standard formatting
-        // Pass the member node if available to preserve named type hoisting
-        const schema = this.#schemaGenerator.formatChildType(
-          memberType,
-          context,
-          memberNode, // Pass node to preserve named type information
-        );
-        schemas.push(schema);
-      }
+        ),
+      );
     }
 
     return this.#maybeWrapInAnyOf(schemas);

@@ -24,7 +24,10 @@
 // spaces activate on their first session, event, warm request, or
 // session-implying authored admission.
 
-import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
+import {
+  type AdmittedCommitNotice,
+  isServingSessionOf,
+} from "@commonfabric/memory/v2/server";
 import { acquireServerExecutionEnabler } from "@commonfabric/memory/v2";
 import {
   type Engine,
@@ -370,15 +373,35 @@ export class ExecutorHost {
       // demand pass (the arrival re-arm's trigger); an inactive space
       // waits for the session-open / admission activation triggers.
       // The serving runtime's OWN loopback session (the service
-      // principal) is dropped: its tracked-set growth is the serving
-      // graph's own reads (a wave's derivations re-traversed on push),
-      // not client demand — counting it in `pushGrowthWakes` and waking
-      // the loop spins an extra cycle and demand pass that finds no
-      // client delta (W1 review MINOR-4).
-      demandChanged: (space, reason, principal) => {
-        if (principal === this.#options.serviceIdentity) return;
+      // principal's serving session) is dropped: its tracked-set growth
+      // is the serving graph's own reads (a wave's derivations
+      // re-traversed on push), not client demand — counting it in
+      // `pushGrowthWakes` and waking the loop spins an extra cycle and
+      // demand pass that finds no client delta (W1 review MINOR-4).
+      demandChanged: (
+        space,
+        reason,
+        principal,
+        _sessionId,
+        servingOwn,
+        notDemand,
+      ) => {
+        if (
+          isServingSessionOf(
+            { principal, servingOwn, notDemand },
+            this.#options.serviceIdentity,
+          )
+        ) {
+          return;
+        }
         const existing = this.#spaces.get(space);
         if (existing?.active) existing.noteDemandChanged(reason);
+      },
+      // A dormant space judges every root when it next activates, so only
+      // an active loop is told.
+      currencyChanged: (space) => {
+        const existing = this.#spaces.get(space);
+        if (existing?.active) existing.noteCurrencyChanged();
       },
     });
     registerServingLoopStatsProvider(() => this.stats());
@@ -558,8 +581,13 @@ export class ExecutorHost {
     // input the authorization verdict that revokes a session has. Every
     // serving runtime is told, not just this space's: the session that
     // starves is typically a CROSS-SPACE replica — a served dispatch's
-    // argument link into the viewer's home space, whose pre-genesis
-    // session that space's genesis ACL de-authorized. Latch-only and
+    // argument link into another space, whose session the change revoked,
+    // such as one bound to an owner the list no longer names. (A home
+    // space's genesis ACL revokes no serving session: the memory server
+    // binds a pre-genesis one to the owner it names,
+    // `Server.#bindToNewOwner`. A genesis whose owner the binding cannot
+    // stand for, such as a profile's own DID, binds nothing and can still
+    // revoke it.) Latch-only and
     // no-op unless a runtime actually holds a terminated session for the
     // space, so the fan-out costs one map walk per ACL-doc admission. Only
     // this server's admissions reach here; a list that changes on another
@@ -704,7 +732,10 @@ export class ExecutorHost {
     // ACTIVE criteria like the admission and reactivation paths: the
     // service's OWN sessions (loopback planes) are not client demand,
     // and activating on one would hold a runtime and the lease with no
-    // client demanding anything.
+    // client demanding anything. The exclusion goes by the session's
+    // connection, not its principal alone: a local toolshed signs with
+    // the key its operator's client also uses, and that client's session
+    // is demand.
     if (
       !this.#options.server.hasLiveSessionsForSpace(space, {
         excludePrincipal: this.#options.serviceIdentity,

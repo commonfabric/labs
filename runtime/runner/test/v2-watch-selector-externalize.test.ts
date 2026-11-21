@@ -308,6 +308,38 @@ describe("v2-watch", () => {
       }
     });
 
+    describe("over a stored document that does not fit the reference to it", () => {
+      // The document's local ref names a definition it does not have, so
+      // decomposing the reference succeeds and recomposing it inline does
+      // not: the refusal is handled as a decomposition refusal is.
+
+      const dangling: JSONSchemaObj = {
+        type: "object",
+        title: "dangling-local-ref",
+        properties: { broken: { $ref: "#/$defs/MissingMember" } },
+      };
+      const hash = internSchemaAsTaggedHashString(dangling);
+      const selector = { path: [], schema: { $ref: `cid:${hash}` } };
+
+      it("passes the selector through when the space persists the document", () => {
+        setContentAddressedSchemasConfig(false);
+        registerSchemaDocument(hash, dangling);
+        expect(externalizeSyncSelector(selector, () => true)).toBe(selector);
+      });
+
+      it("throws naming the document when the space does not persist it", () => {
+        setContentAddressedSchemasConfig(true);
+        registerSchemaDocument(hash, dangling);
+        const externalizing = () =>
+          externalizeSyncSelector(selector, () => false);
+        expect(externalizing).toThrow(SelectorClosureUnavailableError);
+        expect(externalizing).toThrow(`target space [${hash}]`);
+        expect(externalizing).toThrow(
+          "Unresolvable local ref in schema document",
+        );
+      });
+    });
+
     it("throws rather than emitting a reference the registry cannot back", () => {
       // The client's send-only-what-you-can-back obligation, enforced at
       // the emission gate: forwarding the ref would only move this failure

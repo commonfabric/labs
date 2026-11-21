@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
@@ -8,12 +9,16 @@ import { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   DEFAULT_MAX_OUTSTANDING_EFFECTS,
+  DEFAULT_SERVING_COMPILE_WORKERS,
+  DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB,
   DEFAULT_SPARE_SERVING_WORKERS,
   ensureSpaceRootsFromEnv,
+  MIN_SERVING_WORKER_HEAP_LIMIT_MB,
   ownerRoutingFromEnv,
   serverExecutionPolicyFromEnv,
   serverExecutionRoute,
   serverExecutionWorkerFromEnv,
+  servingCompileFromEnv,
   servingWorkerPoolFromEnv,
   startServerExecutionHost,
   stopServerExecutionHost,
@@ -187,6 +192,93 @@ describe("serverExecutionPolicyFromEnv", () => {
     expect(warnings[0]).toContain("SERVER_EXECUTION_OVERLAP_COMMIT");
   });
 
+  it("returns the currency index mode for `record` and `skip`, with its epoch, and no mode for anything else", () => {
+    const warnings: string[] = [];
+    const policyWith = (env: Record<string, string>) =>
+      serverExecutionPolicyFromEnv(
+        envOf({ ...env, SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0" }),
+        (m) => warnings.push(m),
+      );
+    expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "record" })).toEqual({
+      currencyIndex: "record",
+      storeReadThrough: true,
+    });
+    expect(
+      policyWith({
+        SERVER_EXECUTION_CURRENCY_INDEX: "skip",
+        SERVER_EXECUTION_CURRENCY_EPOCH: "release-7",
+      }),
+    ).toEqual({
+      currencyIndex: "skip",
+      currencyEpoch: "release-7",
+      storeReadThrough: true,
+    });
+    expect(
+      policyWith({
+        SERVER_EXECUTION_CURRENCY_INDEX: "off",
+        SERVER_EXECUTION_CURRENCY_EPOCH: "release-7",
+      }),
+    ).toEqual({ storeReadThrough: true });
+    expect(warnings).toEqual([]);
+    expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "true" })).toEqual({
+      storeReadThrough: true,
+    });
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("SERVER_EXECUTION_CURRENCY_INDEX");
+  });
+
+  it("returns the `record` mode, with a warning, for `skip` with no epoch", () => {
+    const warnings: string[] = [];
+    expect(
+      serverExecutionPolicyFromEnv(
+        envOf({
+          SERVER_EXECUTION_CURRENCY_INDEX: "skip",
+          SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0",
+        }),
+        (m) => warnings.push(m),
+      ),
+    ).toEqual({ currencyIndex: "record", storeReadThrough: true });
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("SERVER_EXECUTION_CURRENCY_EPOCH");
+  });
+
+  it("returns the `skip` mode under the build's epoch where a build is named and the mode is unset, and the mode and epoch the environment names over those", () => {
+    const warnings: string[] = [];
+    const policyWith = (env: Record<string, string>) =>
+      serverExecutionPolicyFromEnv(
+        envOf({ ...env, SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0" }),
+        (m) => warnings.push(m),
+        { currencyEpoch: "build-9" },
+      );
+    expect(policyWith({})).toEqual({
+      currencyIndex: "skip",
+      currencyEpoch: "build-9",
+      storeReadThrough: true,
+    });
+    expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "record" })).toEqual({
+      currencyIndex: "record",
+      currencyEpoch: "build-9",
+      storeReadThrough: true,
+    });
+    expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "off" })).toEqual({
+      storeReadThrough: true,
+    });
+    expect(policyWith({ SERVER_EXECUTION_CURRENCY_EPOCH: "release-7" }))
+      .toEqual({
+        currencyIndex: "skip",
+        currencyEpoch: "release-7",
+        storeReadThrough: true,
+      });
+    expect(warnings).toEqual([]);
+    expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "true" })).toEqual({
+      currencyIndex: "skip",
+      currencyEpoch: "build-9",
+      storeReadThrough: true,
+    });
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain('stays "skip"');
+  });
+
   it("threads the parked-runtime retention knob, the literal 0 included; garbage reads as unset with a warning", () => {
     const warnings: string[] = [];
     const cases: [string, number][] = [
@@ -227,18 +319,116 @@ describe("serverExecutionPolicyFromEnv", () => {
   });
 });
 
+describe("servingCompileFromEnv()", () => {
+  it("returns the default worker count and the given directory when no knob is set", () => {
+    const warnings: string[] = [];
+    for (
+      const env of [{}, {
+        SERVER_EXECUTION_COMPILE_WORKERS: "",
+        SERVER_EXECUTION_COMPILE_CACHE_DIR: "",
+      }]
+    ) {
+      expect(
+        servingCompileFromEnv(
+          envOf(env),
+          "/cache/compiled",
+          (m) => warnings.push(m),
+        ),
+      ).toEqual({
+        compileWorkers: DEFAULT_SERVING_COMPILE_WORKERS,
+        compileCacheDir: "/cache/compiled",
+      });
+    }
+    expect(warnings).toEqual([]);
+  });
+
+  it("returns each knob's value over the defaults", () => {
+    const warnings: string[] = [];
+    expect(
+      servingCompileFromEnv(
+        envOf({
+          SERVER_EXECUTION_COMPILE_WORKERS: "3",
+          SERVER_EXECUTION_COMPILE_CACHE_DIR: "/shared/compiled",
+        }),
+        "/cache/compiled",
+        (m) => warnings.push(m),
+      ),
+    ).toEqual({ compileWorkers: 3, compileCacheDir: "/shared/compiled" });
+    expect(warnings).toEqual([]);
+  });
+
+  it("names no directory where neither the knob nor the caller does", () => {
+    expect(servingCompileFromEnv(envOf({}), undefined).compileCacheDir)
+      .toBeUndefined();
+  });
+
+  it("warns and takes the default for a worker count that is not a positive integer", () => {
+    for (const raw of ["0", "-1", "1.5", "abc", "99999999999999999999"]) {
+      const warnings: string[] = [];
+      expect(
+        servingCompileFromEnv(
+          envOf({ SERVER_EXECUTION_COMPILE_WORKERS: raw }),
+          undefined,
+          (m) => warnings.push(m),
+        ).compileWorkers,
+      ).toBe(DEFAULT_SERVING_COMPILE_WORKERS);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("SERVER_EXECUTION_COMPILE_WORKERS");
+    }
+  });
+});
+
 describe("servingWorkerPoolFromEnv()", () => {
-  it("returns the toolshed's spare count alone when no knob is set", () => {
+  /** What the pool takes from a toolshed when no knob says otherwise. */
+  const DEFAULTS = {
+    // Four, so that 16 toolsheds on one host at the default heap limit come
+    // to 128 GB at most, where 16 each came to 512 GB.
+    maxWorkers: 4,
+    spareWorkers: DEFAULT_SPARE_SERVING_WORKERS,
+    heapLimitMb: DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB,
+  };
+
+  it("returns no heap limit for the literal `0`, and the least limit as it is given", () => {
+    const warnings: string[] = [];
+    expect(
+      servingWorkerPoolFromEnv(
+        envOf({ SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB: "0" }),
+        (m) => warnings.push(m),
+      ),
+    ).toEqual({
+      maxWorkers: DEFAULTS.maxWorkers,
+      spareWorkers: DEFAULT_SPARE_SERVING_WORKERS,
+    });
+    expect(
+      servingWorkerPoolFromEnv(
+        envOf({
+          SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB: String(
+            MIN_SERVING_WORKER_HEAP_LIMIT_MB,
+          ),
+        }),
+        (m) => warnings.push(m),
+      ),
+    ).toEqual({
+      maxWorkers: DEFAULTS.maxWorkers,
+      spareWorkers: DEFAULT_SPARE_SERVING_WORKERS,
+      heapLimitMb: MIN_SERVING_WORKER_HEAP_LIMIT_MB,
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it("returns the toolshed's worker cap, spare count and heap limit when no knob is set", () => {
     const warnings: string[] = [];
     for (
       const env of [{}, {
         SERVER_EXECUTION_MAX_WORKERS: "",
         SERVER_EXECUTION_SPARE_WORKERS: "",
+        SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB: "",
         SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB: "",
+        SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS: "",
       }]
     ) {
       expect(servingWorkerPoolFromEnv(envOf(env), (m) => warnings.push(m)))
-        .toEqual({ spareWorkers: DEFAULT_SPARE_SERVING_WORKERS });
+        .toEqual(DEFAULTS);
     }
     expect(warnings).toEqual([]);
   });
@@ -250,14 +440,18 @@ describe("servingWorkerPoolFromEnv()", () => {
         envOf({
           SERVER_EXECUTION_MAX_WORKERS: "1",
           SERVER_EXECUTION_SPARE_WORKERS: "0",
+          SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB: "512",
           SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB: "2048",
+          SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS: "300",
         }),
         (m) => warnings.push(m),
       ),
     ).toEqual({
       maxWorkers: 1,
       spareWorkers: 0,
+      heapLimitMb: 512,
       heapBudgetBytes: 2048 * 1024 * 1024,
+      watchdogLimitMs: 300_000,
     });
     expect(warnings).toEqual([]);
   });
@@ -269,7 +463,26 @@ describe("servingWorkerPoolFromEnv()", () => {
         ["SERVER_EXECUTION_MAX_WORKERS", "many"],
         ["SERVER_EXECUTION_SPARE_WORKERS", "-1"],
         ["SERVER_EXECUTION_SPARE_WORKERS", "1.5"],
+        // Below what a worker holds before it serves anything.
+        ["SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB", "1"],
+        [
+          "SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB",
+          String(MIN_SERVING_WORKER_HEAP_LIMIT_MB - 1),
+        ],
+        ["SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB", "1.5"],
         ["SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", "0"],
+        // Shorter than the interval a worker posts heartbeats at.
+        ["SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS", "9"],
+        ["SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS", "1.5"],
+        // A safe integer whose milliseconds or bytes are not.
+        [
+          "SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS",
+          String(Math.floor(Number.MAX_SAFE_INTEGER / 1000) + 1),
+        ],
+        [
+          "SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB",
+          String(Math.floor(Number.MAX_SAFE_INTEGER / (1024 * 1024)) + 1),
+        ],
         ["SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB", "2e3"],
         // Long enough a run of digits to parse to `Infinity`.
         ["SERVER_EXECUTION_MAX_WORKERS", "9".repeat(400)],
@@ -281,7 +494,7 @@ describe("servingWorkerPoolFromEnv()", () => {
           envOf({ [name]: raw }),
           (m) => warnings.push(m),
         ),
-      ).toEqual({ spareWorkers: DEFAULT_SPARE_SERVING_WORKERS });
+      ).toEqual(DEFAULTS);
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain(`${name}=${JSON.stringify(raw)}`);
     }
@@ -686,6 +899,82 @@ describe("startServerExecutionHost with owner routing", () => {
       await stopServerExecutionHost();
       await server.close();
     }
+  });
+});
+
+describe("startServerExecutionHost's report of its policy knobs", () => {
+  // Starts a main-thread loop under `knobs`, and returns what it logged and
+  // warned while starting.
+  const reportFor = async (knobs: Record<string, string>) => {
+    const server = new MemoryServer({
+      store: new URL(`memory://policy-report-${crypto.randomUUID()}`),
+      subscriptionRefreshDelayMs: 0,
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      sessionOpenAuth: { audience: "did:key:z6Mk-policy-report" },
+    });
+    const identity = await Identity.fromPassphrase("policy report service");
+    const logged: string[] = [];
+    const warned: string[] = [];
+    try {
+      using _log = stub(console, "log", (...args: unknown[]) => {
+        logged.push(args.map(String).join(" "));
+      });
+      using _warn = stub(console, "warn", (...args: unknown[]) => {
+        warned.push(args.map(String).join(" "));
+      });
+      startServerExecutionHost({
+        server,
+        identity,
+        apiUrl: new URL("http://toolshed.test"),
+        envGet: (name) =>
+          ({
+            EXPERIMENTAL_SERVER_EXECUTION: "true",
+            SERVER_EXECUTION_ENSURE_SPACE_ROOTS: "false",
+            SERVER_EXECUTION_OWNER_ROUTING: "false",
+            ...knobs,
+          })[name],
+      });
+    } finally {
+      await stopServerExecutionHost();
+      await server.close();
+    }
+    return { logged, warned };
+  };
+
+  it("reports a flush deadline cap longer than the deadline as growing", async () => {
+    const { logged, warned } = await reportFor({
+      SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS: "400",
+    });
+
+    expect(logged.some((line) => line.includes("up to 400 ms"))).toBe(true);
+    expect(warned).toEqual([]);
+  });
+
+  it("warns that it ignores a flush deadline cap no longer than the deadline", async () => {
+    const { logged, warned } = await reportFor({
+      SERVER_EXECUTION_FLUSH_DEADLINE_MS: "200",
+      SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS: "200",
+    });
+
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(
+      "ignoring SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS=200 (no longer than " +
+        "the 200 ms deadline)",
+    );
+    expect(logged.some((line) => line.includes("flush deadline grows")))
+      .toBe(false);
+  });
+
+  it("reports the overlapped wave commit only when it is on", async () => {
+    const on = await reportFor({ SERVER_EXECUTION_OVERLAP_COMMIT: "true" });
+    const off = await reportFor({});
+
+    const mentionsOverlap = (lines: string[]) =>
+      lines.some((line) => line.includes("overlapped wave commit ON"));
+    expect(mentionsOverlap(on.logged)).toBe(true);
+    expect(mentionsOverlap(off.logged)).toBe(false);
+    expect(off.logged.some((line) => line.includes("flush deadline")))
+      .toBe(false);
   });
 });
 

@@ -315,13 +315,8 @@ export async function gather(options: GatherOptions): Promise<void> {
   );
 }
 
-function usage(): never {
-  console.error(
-    "usage: test-records-gather.ts --out <dir> --job <name> " +
-      "[--shard <label>] [--variant <name>] [--junit <spec>]...",
-  );
-  Deno.exit(2);
-}
+const USAGE = "usage: test-records-gather.ts --out <dir> --job <name> " +
+  "[--shard <label>] [--variant <name>] [--junit <spec>]...";
 
 /**
  * Parses the command line into gather options, or returns undefined for a
@@ -374,19 +369,29 @@ export function parseGatherArgs(
   return options;
 }
 
-async function main(): Promise<void> {
-  const options = parseGatherArgs(Deno.args);
-  if (options === undefined) usage();
-  const spoolDir = recordsDir();
+/**
+ * Gathers what a command line names, with `spoolDir` the enclosing run's
+ * spool if there is one, and returns the exit status: 2 for a malformed
+ * command line, and 0 otherwise, since telemetry never fails the job.
+ */
+export async function runGatherCommand(
+  args: readonly string[],
+  spoolDir: string | undefined,
+): Promise<number> {
+  const options = parseGatherArgs(args);
+  if (options === undefined) {
+    console.error(USAGE);
+    return 2;
+  }
   if (spoolDir !== undefined) options.spoolDir = spoolDir;
-  await gather(options);
+  try {
+    await gather(options);
+  } catch (error) {
+    console.warn(`test records: gathering failed: ${error}`);
+  }
+  return 0;
 }
 
 if (import.meta.main) {
-  try {
-    await main();
-  } catch (error) {
-    // Telemetry never fails the job; a usage error above still exits 2.
-    console.warn(`test records: gathering failed: ${error}`);
-  }
+  Deno.exit(await runGatherCommand(Deno.args, recordsDir()));
 }

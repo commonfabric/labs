@@ -339,8 +339,8 @@ procedure. Its record is the "Runtime-owned-store derived admission" entry in
 
 The own-space residency addition is a nonconforming semantic gap that still
 needs a ruling. Its proposal,
-[specs#71](https://github.com/commonfabric/specs/pull/71), is closed without
-merging. It admits more at the strict default, with no default-off dial and
+[specs#71](https://github.com/commonfabric/specs/pull/71), is open and
+unruled. It admits more at the strict default, with no default-off dial and
 no separate `SPEC-PENDING` marker; the existing residency marker names specs#68.
 This does not satisfy step 4 above. @danfuzz has authorized regular labs pull
 requests ahead of unresolved specs dependencies during this development phase;
@@ -368,7 +368,8 @@ its trigger reads among it; a setup that carries the
 stored result's name over is not build-decided, so its membership keeps the
 full join. On a result document holding nothing but references, the stamp is
 re-minted at every setup, whether or not the setup writes the value; on one
-holding data as well, only a setup that writes the root re-mints it.
+holding data as well, only a setup that writes the root re-mints it, and the
+root's value entry is re-derived at an asking setup's restatement (below).
 It narrows what is stored at strict, with no default-off dial, so it does not
 satisfy step 4 above; its two deciding sites carry the `SPEC-PENDING` marker.
 The snapshot is pinned at that pull request's head, the one place the pin
@@ -376,6 +377,45 @@ names an unmerged commit, so that the kernel manifest can carry the section's
 two functions; the next regeneration after the ruling repins it to specs
 `main`. @danfuzz directed landing it this way. The conformance statement's §9
 records the gap.
+
+A result document's value entry at a restatement (§8.9.1.3) implements
+[specs#98](https://github.com/commonfabric/specs/pull/98), stacked on
+[specs#88](https://github.com/commonfabric/specs/pull/88), ahead of its
+ruling, as a nonconforming semantic gap. An asking setup that finds a result
+holding data beside its references unchanged re-derives the root's value entry
+from its transaction's flow join, as its write of the root would, and drops
+the derived value entries below the root as that write would. A result holding
+data and no reference at any depth is left as stored: whether specs#98 means to
+cover it is a question there
+([comment](https://github.com/commonfabric/specs/pull/98#issuecomment-6899569496)).
+A setup that is not asking restates no unchanged result at all. One the runtime
+starts on its own, to repair a piece, to adopt a newer release of the source a
+piece follows, on open or while it runs, or to carry on with a pattern an
+earlier transaction chose (`runtimeStarted` in `runner.ts`), is asking where it
+is handed a transaction, and re-mints an unchanged wiring's membership, which is
+what specs#98's `restateResultWiring` requires of every restating setup, but
+does not restate an unchanged data root's value entry. So both leave that value
+entry as stored. Whether such an adopted release is an asking setup is a
+question on specs#98
+([comment](https://github.com/commonfabric/specs/pull/98#issuecomment-6897565858));
+until it is answered, the runtime treats it as not asking. So a hidden view
+heals at an update a caller asks for, whether or not the update touches the
+view, except where the update leaves the view's sub-pattern on the pattern it
+had: that setup's read of the name it would carry over takes the stamp again,
+and healing it needs a ruling that such a read of an absent name decides nothing
+written. It does not heal at an adopted release that leaves the view unchanged;
+any update that rewrites the view replaces its value entry as a write does. The
+restatement mints no existence entry, and leaves the existence entry as it is.
+It changes what is stored at strict, with no default-off dial, and it is not
+fail-closed: asked, it lowers a stale value stamp, and it can raise one from a
+restating setup's decision reads. So it does not satisfy step 4 above, and is
+recorded here as an exception. Its four deciding sites, in `cfc/prepare.ts`,
+carry the `SPEC-PENDING` marker. The snapshot stays pinned at specs#88's head
+(`239fc839`), whose `restateResultWiring` lacks the value re-derivation specs#98
+adds, so the kernel manifest's row for that function records today's decision
+until the next regeneration after the ruling. @danfuzz authorized landing this
+ahead of the ruling, without a flag, on 2026-11-14. The conformance statement's
+§9 records the gap.
 
 The owner release by intent (§8.12.7 route 2d) implements
 [specs#90](https://github.com/commonfabric/specs/pull/90) ahead of its ruling.
@@ -388,6 +428,124 @@ marker. The snapshot stays pinned at specs#88's head, which does not define
 the route's pseudocode, so the kernel manifest carries no row for it until the
 next regeneration after the ruling. @danfuzz directed landing it this way. The
 conformance statement's §8 records the gap.
+
+The release that appends a write-policy alternative (§8.15.13 carve-out (c))
+implements [specs#96](https://github.com/commonfabric/specs/pull/96), stacked on
+[specs#52](https://github.com/commonfabric/specs/pull/52), ahead of its ruling.
+A stored `writePolicyAnyOf` is matched by content rather than by position, and a
+release may append an alternative whose writer's module it installs, where one
+stored alternative has the same keys and contract, a writer claim that differs
+from the appended one's only in the symbol it binds, and that module or one the
+space attests it succeeds. A later schema may omit a stored alternative, which
+the merge keeps as stored, in every write. It admits more than the pin at
+strict, with no default-off dial, so it does not satisfy step 4 above. Its four
+deciding sites, the merge's matching and its append, and the keep rule's
+matching and its admission, carry the `SPEC-PENDING` marker, and their citations
+of sections the snapshot does not hold are exempted in
+`tasks/check-cfc-correspondence.ts`. @danfuzz ruled that it lands at the strict
+default with no default-off dial, recorded here as a nonconforming semantic gap,
+pending [specs#96](https://github.com/commonfabric/specs/pull/96). His reason,
+in his words: "CFC is not a gate for chat". He ruled on 2026-11-15 that keeping
+an omitted alternative lands the same way, following specs#96 as amended
+(§8.15.6.1, "Write-Policy Alternatives"). The conformance statement's §10
+records the gap.
+
+The restatement of a setup replay's carried-over argument slots (§8.15.4)
+implements [specs#67](https://github.com/commonfabric/specs/pull/67) ahead of
+its ruling. A setup of a piece over its stored argument records each slot it
+carries over, preparation defers a protected field's writer requirements at or
+under one where the transaction changes nothing there, and the persist loop
+waives the deferred refusal where the envelope it would store declares the same
+policy throughout the document and the same labels at, above and below each
+deferred field, leaving out, in a release, the positions beneath held links,
+and the claims at new fields. In a release, the comparison that stores the
+derived envelope also counts as unchanged a position whose write policy the
+release extended: the stored alternatives begin the derived list, element for
+element and in order, each further alternative is one the release may append
+under [specs#96](https://github.com/commonfabric/specs/pull/96) (§8.15.13
+carve-out (c)), and every other claim at the position is the same. A position
+whose logical path the comparison cannot tell, or that is at, above or beneath
+a deferred field, is compared exactly. specs#67 as amended says the same, in
+§8.15.4's replayed-setup restatement. Its set of paths whose writer refusal is
+discharged is decided against the stored envelope's requirements; the
+runtime's is decided against every schema the write answers to, the stored
+envelope among them, so it holds those paths and can hold more, and compares
+more positions exactly. The waiver admits more than the pin at strict, with no
+default-off dial, so it does not satisfy step 4 above; the deferral it
+discharges carries the `SPEC-PENDING` marker for specs#67. @danfuzz ruled on
+2026-11-17 that the part counting a release's append as no change lands the
+same way, ahead of that ruling, as he ruled for specs#96 and specs#103. The
+conformance statement's §10 records the gap.
+
+The resolution that certifies a new JavaScript action node's static read set
+(`#collectStaticReadTargetsWithCompleteness` in `runner.ts`) implements
+[specs#100](https://github.com/commonfabric/specs/pull/100) ahead of its
+ruling. A setup that instantiates such a node resolves each declared input
+through the node's argument to the cell the action will read, and the result
+goes into the scheduler's certificate of the action's reads, which decides
+only whether and when the action runs, and into nothing the setup writes; the
+action's own run reads the same links as ordinary labeled reads. The reads
+carry `STATIC_READ_TARGET_READ`
+(`runtime/runner/src/cfc/static-read-target-read.ts`): `machineryRead`, as
+the runtime's wiring reads do, and `schedulerDependencyRead`, which
+dependency seeding (`#populateDeclaredSchedulerReads`) carries alone. The
+scheduler marker decides what they consume: the flow join and the runtime
+read ceiling skip them, while conflict detection and the egress and sink
+consumed set keep them. §8.10.1 excludes such reads only in a transaction used
+for nothing but dependency discovery, and §18.6.2's conditional classes are
+wiring and write-destination reads, so the pull request proposes a third
+class, dependency-discovery reads, which covers both sites and is narrower
+than §8.10.1's exclusion. It changes what is stored at strict, with no
+default-off dial, and it is not fail-closed: a result document whose setup
+instantiates such a node no longer takes the label stored at the slots its
+inputs resolve through. So it does not satisfy step 4 above. The action's own
+run still consumes that label, and without the change a view that reads its
+labeled cell is hidden by any update that rewrites it. @danfuzz authorized
+landing this ahead of the ruling, without a flag, on 2026-11-14, at
+@jkomoros's request. The `SPEC-PENDING` marker sits beside the constant, in a
+file `check-cfc-correspondence` governs. The conformance statement's §2
+records the gap.
+
+Staging a source update's delegations after its transition commits, and
+recording them in the piece's `pieceSourceDelegations` meta member, implements
+[specs#101](https://github.com/commonfabric/specs/pull/101) ahead of its
+ruling, and its markers name it. The transition reads
+the piece's data, so delegation lists it staged on compile-cache records took
+that data's flow label, and every later setup of the module consumed it and
+could be refused. The transition now writes the lists only into the member,
+through the runtime's meta seam, naming the pattern they are for: every
+delegation edge of the piece's history with the history positions it was
+recorded at, and the closed delegations of that pattern's modules over them
+along non-increasing positions. A grant whose staging failed stays missing from
+the records where nothing of the piece's carries it there, and three readers of
+the records are refused it. A runtime from before the member that makes any
+transition of the piece after the failed staging is refused the grant, and is
+granted nothing more. Another piece's source update from the ungranted module
+after the failed staging is refused it, and carries the loss into that piece's
+records, so it too is only refused. Another piece's module writing through a
+link after the failed staging is refused it, and is granted nothing more. A
+cache transaction of its own then stages them on the records, after the
+commit. A runtime that starts or swaps the piece registers the closed entries
+whose module is in the successor's verified closure, reads nothing else, and
+writes nothing. It admits more at strict, with no default-off dial, so it does
+not satisfy step 4 above. Its two deciding sites carry the `SPEC-PENDING`
+marker. @danfuzz authorized landing this design ahead of the ruling, without a
+flag, on 2026-11-14. The conformance statement's §11 records the gap, what it
+gives up, and what it leaves to a separate repair.
+
+The repair of compile-cache records that carry a flow stamp
+(`repairCompileCacheStamps()` in `compilation-cache/cell-cache.ts`) implements
+[specs#103](https://github.com/commonfabric/specs/pull/103) ahead of its
+ruling. The load ahead of a setup erases a stamped compiled record and
+rewrites a stamped source record to the value the compile-cache writer stores
+for its identity, removing every `derived` and `structure` entry, existence
+entries included, under an implementation identity reserved for the repair. It
+lowers stored labels at strict, with no default-off dial, so it is not
+fail-closed and does not satisfy step 4 above. Its two deciding sites, the
+computation of what to write and the transaction method that writes it, carry
+the `SPEC-PENDING` marker. @danfuzz authorized landing it ahead of the ruling,
+without a flag, on 2026-11-14 and 2026-11-15. The conformance statement's §11
+records it.
 
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by

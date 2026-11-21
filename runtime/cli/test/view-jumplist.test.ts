@@ -11,8 +11,9 @@ import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
 import { parseDocument } from "../lib/view/languages/typescript/parse.ts";
 import type { Line } from "../lib/view/model.ts";
+import { overlayBox } from "../lib/view/render.ts";
 import { Session } from "../lib/view/session.ts";
-import { gitBlobName } from "./view-helpers.ts";
+import { cellOf, drawnRows, gitBlobName, mouseKey } from "./view-helpers.ts";
 
 function press(s: Session, ...names: string[]): void {
   for (const name of names) {
@@ -239,6 +240,58 @@ Deno.test("jumplist: the mouse wheel moves three entries", () => {
   assertEquals(s.view().overlay?.selectedLine, 0);
 });
 
+Deno.test("jumplist: pressing the mouse on an entry selects it", () => {
+  const s = diffSession(SHOW);
+  press(s, "i");
+  assertEquals(s.view().overlay?.selectedLine, 0);
+  const at = cellOf(drawnRows(s), "▸ src/app.test.ts");
+  s.handleKey(mouseKey(true, at));
+  assertEquals(s.view().overlay?.selectedLine, 2);
+  s.handleKey(mouseKey(false, at));
+  assertEquals(s.view().overlay?.selectedLine, 2, "the list stays open");
+  press(s, "enter");
+  assertEquals(s.view().message, "Jumped to src/app.test.ts");
+});
+
+Deno.test("jumplist: pressing the mouse on an entry clears the message", () => {
+  const s = diffSession(TWO_FILES);
+  press(s, "i", "T");
+  assert(s.view().message !== "", "T reports what it hid");
+  s.handleKey(mouseKey(true, cellOf(drawnRows(s), "▸ src/app.ts")));
+  assertEquals(s.view().message, "");
+});
+
+Deno.test("jumplist: pressing the mouse off the entries keeps the selection", () => {
+  const s = diffSession(SHOW);
+  press(s, "i", "down");
+  assertEquals(s.view().overlay?.selectedLine, 1);
+  const { x, y, boxW, boxH } = overlayBox(s.width, s.height);
+  const first = y + 1; // the row of the first entry
+  for (
+    const at of [
+      cellOf(drawnRows(s), "Counts: normal"),
+      { x: x + 1, y }, // the top border
+      { x, y: first }, // the left border
+      { x: x + boxW - 1, y: first }, // the right border
+      { x: x + 1, y: y + boxH - 1 }, // the bottom border
+      { x: x - 1, y: first }, // left of the box
+    ]
+  ) {
+    s.handleKey(mouseKey(true, at));
+    assertEquals(s.view().overlay?.selectedLine, 1, JSON.stringify(at));
+  }
+  s.handleKey(mouseKey(false, cellOf(drawnRows(s), "▸ src/app.test.ts")));
+  assertEquals(s.view().overlay?.selectedLine, 1, "a release selects nothing");
+});
+
+Deno.test("jumplist: pressing the mouse on a filtered entry selects it", () => {
+  const s = diffSession(SHOW);
+  press(s, "i", "/");
+  type(s, "app");
+  s.handleKey(mouseKey(true, cellOf(drawnRows(s), "▸ src/app.test.ts")));
+  assertEquals(s.view().overlay?.selectedLine, 1);
+});
+
 Deno.test("jumplist: space pages the selection down", () => {
   const s = diffSession(LOG);
   press(s, "i");
@@ -257,6 +310,27 @@ Deno.test("jumplist: selecting the last entry reveals the summary", () => {
     "Counts: normal",
     "All files +4 −4 · Shown files +4 −4",
   ]);
+});
+
+Deno.test("jumplist: pressing the mouse on a scrolled entry selects it", () => {
+  const s = diffSession(CATEGORY_FILES, 12);
+  press(s, "i", "pagedown");
+  const overlay = s.view().overlay!;
+  assertEquals(overlay.scroll, 1);
+  const text = overlay.lines[1].text.trim();
+  s.handleKey(mouseKey(true, cellOf(drawnRows(s), text)));
+  assertEquals(s.view().overlay?.selectedLine, 1);
+});
+
+Deno.test("jumplist: pressing the mouse on the last entry reveals the summary", () => {
+  const s = diffSession(CATEGORY_FILES, 12);
+  press(s, "i");
+  const overlay = s.view().overlay!;
+  assertEquals(overlay.scroll, 0);
+  const text = overlay.lines[3].text.trim();
+  s.handleKey(mouseKey(true, cellOf(drawnRows(s), text)));
+  assertEquals(s.view().overlay?.selectedLine, 3);
+  assertEquals(s.view().overlay?.scroll, 1);
 });
 
 Deno.test("jumplist: a one-row overlay can reveal the summary total", () => {

@@ -1,12 +1,11 @@
 import { dirname, fromFileUrl, join, resolve } from "@std/path";
 import { CF_PERMISSION_FLAGS } from "../../lib/cf-permissions.ts";
-import { CAPTURE_STOP_SIGNAL } from "./capture-deno-inspector-profile-lib.ts";
 import {
-  createProfileOutputRelay,
   DEFAULT_SUMMARY_PATTERN,
   DISABLED_SUMMARY_PATTERN,
+  findInspectorWebSocketUrl,
   inspectWaitFlag,
-  type KillableProcess,
+  mirrorCaptureOutput,
   mirrorOutput,
   parseProfileArgs,
   pickInspectPort,
@@ -14,6 +13,7 @@ import {
   profilingChildEnv,
   slugifyProfileName,
   waitForCliStatusOrStopOnCaptureFailure,
+  watchOutput,
 } from "./cf-profile-lib.ts";
 
 const { options, cliArgs } = parseProfileArgs(Deno.args);
@@ -72,19 +72,12 @@ const cliCommand = new Deno.Command(Deno.execPath(), {
   stderr: "piped",
 }).spawn();
 
-const captureStopState = { sent: false };
 const inspectorUrl = Promise.withResolvers<string>();
 const cliStatusPromise = cliCommand.status;
-const captureRef: { current?: KillableProcess } = {};
-const { onCliOutput, stopCapture } = createProfileOutputRelay({
-  captureRef,
-  captureStopState,
-  // SIGTERM, not SIGINT, so an interactive Ctrl-C stays available to the user;
-  // the capture handles both identically, and its exit-time guard covers this
-  // signal (see guardCaptureStopSignal).
-  captureStopSignal: CAPTURE_STOP_SIGNAL,
-  onInspectorUrl: (url) => inspectorUrl.resolve(url),
-});
+const onCliOutput = watchOutput(
+  findInspectorWebSocketUrl,
+  (url) => inspectorUrl.resolve(url),
+);
 const stdoutDone = mirrorOutput(
   cliCommand.stdout,
   Deno.stdout,
@@ -128,28 +121,23 @@ const capture = new Deno.Command(Deno.execPath(), {
   clearEnv: true,
   env: childEnv,
   stdin: "null",
-  stdout: "inherit",
+  stdout: "piped",
   stderr: "inherit",
 }).spawn();
-captureRef.current = capture;
 
-const captureStatusPromise = (async () => {
-  const status = await capture.status;
-  captureStopState.sent = true;
-  return status;
-})();
-const cliStopState = { sent: false };
+// The capture stops on its own when the CLI's program finishes, which it
+// learns from the inspector, and the CLI exits once the capture disconnects.
+const captureResultPromise = Promise.all([
+  capture.status,
+  mirrorCaptureOutput(capture.stdout, Deno.stdout),
+]).then(([status, { targetFinished }]) => ({ status, targetFinished }));
 const cliStatus = await waitForCliStatusOrStopOnCaptureFailure(
   cliStatusPromise,
-  captureStatusPromise,
-  cliStopState,
+  captureResultPromise,
   cliCommand,
 );
 await Promise.all([stdoutDone, stderrDone]);
-if (!captureStopState.sent) {
-  stopCapture();
-}
-const captureStatus = await captureStatusPromise;
+const { status: captureStatus } = await captureResultPromise;
 
 await Deno.writeTextFile(
   metaPath,

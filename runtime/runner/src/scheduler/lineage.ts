@@ -69,8 +69,16 @@ export class SpeculationLineage {
       // which in read contexts is runtime.readTx()) never commits: it is not
       // a speculative launch. Treat it as confirmed — "pending" would park
       // cross-space events forever and addCommitCallback() throws on it.
-      const originStatus = origin.isReadOnly?.()
+      // An origin that has settled is recorded as it settled, with no
+      // callback, since one added now would never run: a requeued follow-up
+      // records its origin again long after that origin committed. Its
+      // settled outcome decides, not its status, which still reads `ready`
+      // once a commit sealed into a destination has settled.
+      const settled = origin.settledOutcome();
+      const originStatus = origin.isReadOnly?.() || settled === "committed"
         ? "done"
+        : settled === "failed"
+        ? "error"
         : origin.status().status;
       record = {
         status: originStatus === "done"

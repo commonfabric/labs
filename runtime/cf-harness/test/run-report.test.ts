@@ -1,4 +1,6 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import { readHarnessRunReport } from "../src/artifacts.ts";
 import { createHarnessRunReport } from "../src/contracts/run-report.ts";
 
@@ -214,4 +216,34 @@ Deno.test("run reports end the timeline with the run's terminal reason and drop 
     report.timeline.map((entry) => [entry.kind, entry.terminalReason]),
     [["run_started", undefined], ["run_finished", "setup_error"]],
   );
+});
+
+describe("run-report", () => {
+  describe("createHarnessRunReport()", () => {
+    it("ends the timeline with a finish entry naming no reason for a run that recorded none", () => {
+      const report = createHarnessRunReport({
+        runState: {
+          runId: "ended-without-reason",
+          status: "completed",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:02.000Z",
+          endedAt: "2026-01-01T00:00:02.000Z",
+          cfcEnforcementMode: "disabled",
+          policyEvents: [],
+          policyDecisions: [],
+          toolOutputs: [],
+        },
+        model: "ended-model",
+        modelTurns: 0,
+        toolActivity: [],
+      });
+
+      const finished = report.timeline.at(-1);
+      expect(finished?.kind).toBe("run_finished");
+      expect(finished?.status).toBe("completed");
+      expect(finished !== undefined && "terminalReason" in finished).toBe(
+        false,
+      );
+    });
+  });
 });

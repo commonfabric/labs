@@ -882,4 +882,262 @@ describe("editWithRetry absence reconciliation", () => {
       await server.close();
     }
   });
+
+  describe("an action that throws", () => {
+    // Client A stores `stored-doc`, `chain-0` and `chain-1`; `body` runs
+    // against client B, a cold replica of the same space, which has loaded
+    // none of them. A read of a document B has not loaded is what a read after
+    // a release pass dropped that document is, so B's first read of each finds
+    // it absent.
+    const withColdReader = async (
+      body: (reader: {
+        runtime: Runtime;
+        storageManager: EmulatedStorageManager;
+      }) => Promise<void>,
+    ): Promise<void> => {
+      const server = newSharedServer();
+      const smA = EmulatedStorageManager.connectTo(server, { as: signer });
+      const runtimeA = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: smA,
+      });
+      let smB: EmulatedStorageManager | undefined;
+      let runtimeB: Runtime | undefined;
+      try {
+        const txA = runtimeA.edit();
+        runtimeA.getCell(space, "stored-doc", valueSchema, txA)
+          .set({ value: 42 });
+        for (const id of ["chain-0", "chain-1"]) {
+          runtimeA.getCell(space, id, valueSchema, txA).set({ value: 1 });
+        }
+        await txA.commit().settled;
+        await smA.synced();
+
+        smB = EmulatedStorageManager.connectTo(server, { as: signer });
+        runtimeB = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: smB,
+        });
+        await body({ runtime: runtimeB, storageManager: smB });
+      } finally {
+        await runtimeB?.dispose();
+        await runtimeA.dispose();
+        await smB?.close();
+        await smA.close();
+        await server.close();
+      }
+    };
+
+    // Reads `stored-doc` in `tx`, and throws as a check that requires it
+    // does when the read finds it absent.
+    const requireStored = (
+      runtime: Runtime,
+      tx: IExtendedStorageTransaction,
+    ) => {
+      const stored = runtime.getCell(space, "stored-doc", valueSchema, tx)
+        .get();
+      if (stored === undefined) throw new Error("stored-doc is unavailable");
+      return stored;
+    };
+
+    it("runs again once a document it found absent has loaded, and commits", async () => {
+      await withColdReader(async ({ runtime }) => {
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          const stored = requireStored(runtime, tx);
+          runtime.getCell(space, "reader-own-doc", valueSchema, tx)
+            .set({ value: stored.value });
+          return stored.value;
+        });
+
+        expect(result.error).toBeUndefined();
+        expect(result.ok).toBe(42);
+        expect(runs).toBe(2);
+      });
+    });
+
+    it("reports the throw without running again when every document it read is loaded", async () => {
+      await withColdReader(async ({ runtime }) => {
+        await runtime.getCell(space, "stored-doc", valueSchema).sync();
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          requireStored(runtime, tx);
+          throw new Error("refused for another reason");
+        });
+
+        expect(runs).toBe(1);
+        expect(result.error?.name).toBe("StorageTransactionAborted");
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: refused for another reason",
+        );
+      });
+    });
+
+    it("reports the throw without running again when the documents it found absent are absent everywhere", async () => {
+      await withColdReader(async ({ runtime }) => {
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          runtime.getCell(space, "never-written-doc", valueSchema, tx).get();
+          throw new Error("never-written-doc is unavailable");
+        });
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: never-written-doc is unavailable",
+        );
+      });
+    });
+
+    it("reports the throw of the run after the document loaded, when that run throws too", async () => {
+      await withColdReader(async ({ runtime }) => {
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          const stored = requireStored(runtime, tx);
+          throw new Error(`refused at value ${stored.value}`);
+        });
+
+        expect(runs).toBe(2);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: refused at value 42",
+        );
+        const error = result.error as { reason?: unknown } | undefined;
+        expect((error?.reason as Error).message).toBe("refused at value 42");
+      });
+    });
+
+    it("reports the throw without running again when no retry budget is left", async () => {
+      await withColdReader(async ({ runtime }) => {
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          requireStored(runtime, tx);
+        }, 0);
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: stored-doc is unavailable",
+        );
+      });
+    });
+
+    it("runs again once for each document it found absent, until its retry budget is spent", async () => {
+      await withColdReader(async ({ runtime }) => {
+        // Each run reads the chain in order and throws at the first document
+        // it finds absent, so each run finds one more loaded than the last.
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          for (const id of ["chain-0", "chain-1"]) {
+            if (
+              runtime.getCell(space, id, valueSchema, tx).get() === undefined
+            ) {
+              throw new Error(`${id} is unavailable`);
+            }
+          }
+        }, 1);
+
+        expect(runs).toBe(2);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: chain-1 is unavailable",
+        );
+      });
+    });
+
+    it("reports the throw, with its transaction aborted, when naming the documents it found absent fails", async () => {
+      await withColdReader(async ({ runtime, storageManager }) => {
+        storageManager.pendingLoadGeneration = () => {
+          throw new Error("load bookkeeping is unavailable");
+        };
+        let runs = 0;
+        let attempt: IExtendedStorageTransaction | undefined;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          attempt = tx;
+          requireStored(runtime, tx);
+        });
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: stored-doc is unavailable",
+        );
+        expect(attempt!.status().status).toBe("error");
+      });
+    });
+
+    it("reports the throw when counting the documents it found absent fails", async () => {
+      await withColdReader(async ({ runtime, storageManager }) => {
+        storageManager.open(space).presentCount = () => {
+          throw new Error("the replica cannot count");
+        };
+        let runs = 0;
+        const result = await runtime.editWithRetry((tx) => {
+          runs++;
+          requireStored(runtime, tx);
+        });
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry action threw: Error: stored-doc is unavailable",
+        );
+      });
+    });
+
+    it("reports its owner's cancellation, without running again, when the owner cancels while the document loads", async () => {
+      await withColdReader(async ({ runtime, storageManager }) => {
+        const owner = new AbortController();
+        const loadsSettled = storageManager.loadsSettled.bind(storageManager);
+        storageManager.loadsSettled = (keys) => {
+          owner.abort(new Error("the owner went away"));
+          return loadsSettled(keys);
+        };
+        let runs = 0;
+        const result = await runtime.editWithRetry(
+          (tx) => {
+            runs++;
+            requireStored(runtime, tx);
+          },
+          undefined,
+          { signal: owner.signal },
+        );
+
+        expect(runs).toBe(1);
+        expect(result.error?.name).toBe("StorageTransactionAborted");
+        expect(result.error?.message).toBe(
+          "editWithRetry stopped because its owner canceled",
+        );
+      });
+    });
+
+    it("reports its owner's cancellation when the owner cancels while the document loads and counting then fails", async () => {
+      await withColdReader(async ({ runtime, storageManager }) => {
+        const owner = new AbortController();
+        const loadsSettled = storageManager.loadsSettled.bind(storageManager);
+        storageManager.loadsSettled = (keys) => {
+          owner.abort(new Error("the owner went away"));
+          return loadsSettled(keys);
+        };
+        storageManager.open(space).presentCount = () => {
+          throw new Error("the replica cannot count");
+        };
+        let runs = 0;
+        const result = await runtime.editWithRetry(
+          (tx) => {
+            runs++;
+            requireStored(runtime, tx);
+          },
+          undefined,
+          { signal: owner.signal },
+        );
+
+        expect(runs).toBe(1);
+        expect(result.error?.message).toBe(
+          "editWithRetry stopped because its owner canceled",
+        );
+      });
+    });
+  });
 });

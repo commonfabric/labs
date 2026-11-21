@@ -1,3 +1,10 @@
+/**
+ * A phone-style home screen with a bottom tab bar (Home, Search, Inbox,
+ * Profile), task cards, shortcuts, and artifact tiles, plus a button that
+ * opens a New Task sheet and shows a confirmation toast. It demonstrates
+ * mobile-oriented `cf-` components such as `cf-tab-bar`, `cf-modal`, and
+ * `cf-toast`, styled with a custom `cf-theme`.
+ */
 import {
   action,
   computed,
@@ -199,11 +206,10 @@ export default pattern<MobileAppDemoInput, MobileAppDemoOutput>(() => {
         <cf-screen>
           {computed(() => {
             const tab = activeTab.get();
-            const content = tabContent[tab] ?? tabContent.home;
-            const isHome = tab === "home";
+            // A tab with no content of its own shows the home surface.
+            const content = tabContent[tab] ?? HOME_CONTENT;
 
-            if (isHome) {
-              const home = content as typeof HOME_CONTENT;
+            if (content === HOME_CONTENT) {
               return (
                 <cf-vscroll style="padding: 0 16px 100px;">
                   <cf-vstack gap="4" style="padding-top: 8px;">
@@ -213,10 +219,10 @@ export default pattern<MobileAppDemoInput, MobileAppDemoOutput>(() => {
                         level={1}
                         style="font-size: clamp(2rem, 5vw, 3rem); letter-spacing: -0.05em; line-height: 1.05; margin: 0 0 4px;"
                       >
-                        {home.heading}
+                        {content.heading}
                       </cf-heading>
                       <cf-text variant="body-large" tone="muted">
-                        {home.subtitle}
+                        {content.subtitle}
                       </cf-text>
                     </div>
 
@@ -235,7 +241,7 @@ export default pattern<MobileAppDemoInput, MobileAppDemoOutput>(() => {
                         </cf-hstack>
                         <cf-separator />
                         <cf-vstack gap="2">
-                          {(home.tasks ?? [])
+                          {(content.tasks ?? [])
                             .filter((t: TaskItem) => t.section === section)
                             .map((task: TaskItem) => (
                               <cf-card style="--cf-card-background: var(--cf-theme-color-surface);">
@@ -276,7 +282,7 @@ export default pattern<MobileAppDemoInput, MobileAppDemoOutput>(() => {
                       <cf-separator />
                       <cf-hscroll fadeEdges>
                         <cf-hstack gap="3" style="padding-bottom: 4px;">
-                          {(home.shortcuts ?? []).map((sc: ShortcutItem) => (
+                          {(content.shortcuts ?? []).map((sc: ShortcutItem) => (
                             <cf-card style="--cf-card-background: var(--cf-theme-color-surface); --cf-card-backdrop-blur: 8px; min-width: 88px; width: 88px;">
                               <cf-vstack
                                 gap="1"
@@ -311,7 +317,7 @@ export default pattern<MobileAppDemoInput, MobileAppDemoOutput>(() => {
                       </cf-hstack>
                       <cf-separator />
                       <cf-grid columns="2" gap="3">
-                        {(home.artifacts ?? []).map((
+                        {(content.artifacts ?? []).map((
                           artifact: ArtifactItem,
                         ) => (
                           <div
