@@ -77,6 +77,7 @@ import {
   settingsForDeployedClient,
   type SpaceCellContents,
   SpaceNotFoundError,
+  spaceRootLinked,
   startWithInputSources,
 } from "@commonfabric/runner";
 import type {
@@ -141,6 +142,7 @@ import {
 } from "./piece-origin.ts";
 import { ensurePrivateInboxOf } from "./private-inbox.ts";
 import { repairProfileRootsOf } from "./profile-space-root.ts";
+import { sendHandled } from "./send-handled.ts";
 import { type ShareIntake, startShareIntakeOf } from "./share-intake.ts";
 import { addPieceHandlerOf, compileProgram, instanceTx } from "./utils.ts";
 export {
@@ -2490,11 +2492,13 @@ export class PiecesController<T = unknown> {
   /**
    * Creates a space owned by this controller's identity, records it in the
    * identity's Home space list under `label` and in its site table as served by
-   * this runtime's host, and returns its DID. This controller must be over the
-   * identity's Home space, where both records live.
+   * this runtime's host, and returns its DID once Home's handler has recorded
+   * it. This controller must be over the identity's Home space, where both
+   * records live. Under server execution the serving runtime runs that
+   * handler, and this runtime does not load Home's pattern to run it too.
    *
-   * @throws If this controller is over any other space, or if the memory
-   *   server refuses the new space's genesis commit.
+   * @throws If this controller is over any other space, if the memory server
+   *   refuses the new space's genesis commit, or if Home's handler fails.
    */
   async createSpace(label?: string): Promise<MemorySpace> {
     this.#assertHomeSpace("create a space");
@@ -2505,7 +2509,7 @@ export class PiecesController<T = unknown> {
       );
     }
     const space = await this.runtime.createSpace();
-    await home.key("addSpace").send({ did: space, name: label ?? "" });
+    await sendHandled(home.key("addSpace"), { did: space, name: label ?? "" });
     await this.#recordServingHosts([space], "created");
     return space;
   }
@@ -2531,7 +2535,7 @@ export class PiecesController<T = unknown> {
       const name = row.name;
       if (typeof name !== "string" || name.length === 0) continue;
       const did = isDID(name) ? name : await legacySpaceDid(name);
-      await home.key("adoptSpace").send({ name, did });
+      await sendHandled(home.key("adoptSpace"), { name, did });
       adopted.push(did);
     }
     await this.#recordServingHosts(adopted, "adopted");
@@ -2810,6 +2814,29 @@ export class PiecesController<T = unknown> {
         source: customUrl || DEFAULT_APP_PATTERN_SOURCE,
         cause: "space-root",
       };
+    }
+
+    // A client that replicates views runs no root, and leaves creating one to
+    // the serving runtime, whose activation of the space creates it from the
+    // system source (`ensureSpaceRootPattern`). That runtime does not read a
+    // custom `defaultAppUrl`, so a root from one is still created here.
+    if (
+      (patternConfig.source === HOME_PATTERN_SOURCE ||
+        patternConfig.source === DEFAULT_APP_PATTERN_SOURCE) &&
+      this.runtime.viewScopedReplicationRequested &&
+      await this.runtime.viewReplication.enable(this.getSpace())
+    ) {
+      const servedRoot = await timePiecePhase(
+        "ensureDefaultPattern.servedRoot",
+        async () => {
+          await spaceRootLinked(this.runtime, this.getSpace());
+          return await this.getDefaultPattern(false);
+        },
+      );
+      if (!servedRoot) {
+        throw new Error("Failed to create or find default pattern");
+      }
+      return await this.#startEnsuredDefaultPattern(servedRoot, reconcile);
     }
 
     // The creation half is the SHARED core (the runner's
