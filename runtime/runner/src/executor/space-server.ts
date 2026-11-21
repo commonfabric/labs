@@ -7591,6 +7591,10 @@ export class SpaceServer implements TransactionSealDestination {
     }
     this.#upstreamStalledRests = 0;
     const released = currency.abandonAllUpstream();
+    // The rows demanded for what was given up on are withdrawn here: the
+    // next demand pass sends them only where it has a root to judge.
+    currency.takeUpstreamChanged();
+    this.#syncCarriedDemand();
     logger.info?.("currency-upstream-stalled", () => [
       `space ${this.#options.space}: came to rest with something stale ` +
       "upstream and nothing under way; gave up on it, releasing " +
