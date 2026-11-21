@@ -10150,3 +10150,29 @@ Topics at 100, 1,000 and 2,000 topics on the runtime's storage.
      `plan.json` and `emit.json` is the output of the merged crate: 48 files
      changed, by `handle: true` on entries of `Body.reads` and by four fixtures
      whose patterns the committed files named without a hash.
+
+568. **The write records of an instance the executor makes were recorded under
+     the plan it was started with** (`compare/runtime-transactions.ts`). An
+     instance of another artifact, one a function body instantiates (ES §2.8) or
+     one of a pattern compiled alone, gives write records that name the records
+     of that artifact's plan (`NamedOutputInputs.instance` says which instance).
+     The adapter recorded every `plan-write` input with the compiled pattern of
+     the instance the executor was started with. The runtime then instantiated
+     the template the starting plan has at the same index. Where that plan has a
+     record there, the label stored for the made instance's write was the label
+     of an unrelated record, instantiated with the made instance's slot
+     bindings: in the fixture `instantiate-labeled.tsx` the output `shout` of
+     the made `Row` was labeled with the template of the output `note` of the
+     pattern that makes it. Where it has none, the commit was refused, "a
+     plan-write names a record the plan lacks": the three such refusals of
+     `apps/base/contacts.tsx` in the corpus run, and every `addTopic` of Topics,
+     whose made topic writes the request of a `wish` (`{cone: 1, write: 0}` of
+     `topic.tsx`, where the board's cone 1 has no write). Fixed: the executor
+     names each instance it makes of another artifact to the hook
+     `TransactionHooks.instantiated` before the instance writes, the adapter
+     registers that artifact with the runtime (`CompiledPlanRegistry`), and the
+     records of a transaction are kept per compiled pattern, each with a table
+     of inputs of its own, since a `plan-inputs` input is of one compiled
+     pattern. The test: the fixture's records of the made instance are recorded
+     under another compiled pattern than those of the instance that makes it,
+     and its commit is accepted.
