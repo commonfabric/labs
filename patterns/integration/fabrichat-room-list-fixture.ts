@@ -56,7 +56,7 @@ export const ROOMS = 3;
 export const HANDLE = { type: "unknown", asCell: ["cell"] } as const;
 
 /** One row of the list, as a client that draws natively declares it. */
-const ROW = {
+export const ROW = {
   type: "object",
   properties: {
     room: HANDLE,
