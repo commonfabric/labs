@@ -81,10 +81,15 @@ const LIST = new RegExp(
 const ENDS_WITH_SEMICOLON = /;[^\S\n]*(?:\}[^\S\n]*)*$/;
 const OPENS_OR_CLOSES = /^[}<]|[{}]$/;
 const BEFORE_COMMENT = /[\s;{}]/;
-/** The part of a line before its comment: text other than quotes and `#`,
- * quoted strings, and a `#` inside a word. */
-const CODE =
-  /^(?:[^"'#]|"(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?|(?<=[^\s;{}])#)*/;
+const WORD_BREAK = String.raw`[\s;,{}()[\]]`;
+const QUOTED_STRING = String.raw`"(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?`;
+/** The part of a line before its comment: text other than quotes and `#`, a
+ * quoted string that starts a word, a quote inside a word, and a `#` inside a
+ * word, as the scanner reads each. */
+const CODE = new RegExp(
+  String.raw`^(?:[^"'#]|(?<!(?!${WORD_BREAK}).)(?:${QUOTED_STRING})` +
+    String.raw`|(?<=(?!${WORD_BREAK}).)["']|(?<=[^\s;{}])#)*`,
+);
 const LINE_END = /[^\S\n]*(?:\n|$)/y;
 const SPACE = /\s/;
 const ENTRY_KEYS: ReadonlySet<string> = new Set(["alarm", "template"]);

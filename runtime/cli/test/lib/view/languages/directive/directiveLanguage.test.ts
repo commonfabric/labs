@@ -521,6 +521,12 @@ describe("directiveLanguage", () => {
       'add_header X "bar # baz";\nc\n  3;',
     );
     expect(classesOf(quoted, '"bar # baz"')).toEqual(["string"]);
+
+    const apostrophe = directiveLanguage.highlightLines(
+      "info: the server's load # a;\nnext x # note",
+    );
+    expect(classesOf(apostrophe, "# note")).toEqual([]);
+    expect(classesOf(apostrophe, "note")).toEqual(["plain"]);
     expect(classesOf(quoted, "3")).toEqual(["number"]);
   });
 
