@@ -29,6 +29,7 @@ import {
   isLink,
   type MemorySpace,
   parseLink,
+  pullFromServer,
   Runtime,
   sendEvent,
 } from "@commonfabric/runner";
@@ -82,6 +83,8 @@ const registration: SharedSpaceRegistration = {
 };
 
 interface HomeSurface {
+  $UI: unknown;
+  socialSpaceCollection: { $UI: unknown };
   sharedSpaces: SharedSpaceInterface;
   sharedSpaceCatalog: SharedSpaceCatalog;
   registerSharedSpace: SharedSpaceRegistration;
@@ -394,6 +397,7 @@ async function withHome(
   ) => Promise<void>,
   decorateWaveCommitSink?: ExecutorHostOptions["decorateWaveCommitSink"],
   connect: (server: Server) => Server = (server) => server,
+  onServingRuntime?: (space: string, runtime: Runtime) => void,
 ) {
   const server = new Server({
     namesInstances: namesInstancesByDefault,
@@ -450,6 +454,7 @@ async function withHome(
             servingPosture: true,
             experimental: { serverExecution: true },
           });
+          onServingRuntime?.(space, runtime);
           return Promise.resolve({
             runtime,
             dispose: async () => {
@@ -2709,6 +2714,120 @@ describe("Home chat manager and a deleted room", () => {
         { stuckLabel: "the forgotten room listed as deleted" },
       );
       expect(deleted[0]).toMatchObject({ kind: "direct", counterpart: BOB });
+    });
+  });
+});
+
+describe("Home's Social spaces list", () => {
+  /** Registers a saved entry for each of `spaces`. */
+  async function registerAll(
+    runtime: Runtime,
+    home: Cell<HomeSurface>,
+    spaces: string[],
+  ) {
+    for (const space of spaces) {
+      await invoke(runtime, home.key("registerSharedSpace"), {
+        ...registration,
+        space,
+        offer: { from: "did:key:catalog-sender", id: space },
+      }, `register ${space}`);
+    }
+  }
+
+  /**
+   * The cell bound to the `$value` of the first `cf-tabs` element of the view
+   * `root` holds, following links as {@link renderedText} does.
+   */
+  async function tabsValue(runtime: Runtime, root: Cell<unknown>) {
+    const visit = async (
+      value: unknown,
+      base: Cell<unknown>,
+    ): Promise<Cell<string> | undefined> => {
+      if (isLink(value)) {
+        const cell = runtime.getCellFromLink(parseLink(value, base));
+        await cell.pull();
+        return visit(cell.getRaw(), cell);
+      }
+      if (Array.isArray(value)) {
+        for (const each of value) {
+          const found = await visit(each, base);
+          if (found !== undefined) return found;
+        }
+      } else if (isObjectNotArray(value)) {
+        const props = value.props;
+        if (
+          value.name === "cf-tabs" && isObjectNotArray(props) &&
+          isLink(props.$value)
+        ) {
+          return runtime.getCellFromLink(parseLink(props.$value, base))
+            .asSchema<string>({ type: "string" });
+        }
+        if ("children" in value) return visit(value.children, base);
+      }
+      return undefined;
+    };
+    await root.pull();
+    return await visit(root.getRaw(), root);
+  }
+
+  /** The scheduler nodes `runtime`'s graph holds. */
+  const nodeCount = (runtime: Runtime) =>
+    runtime.scheduler.getGraphSnapshot().nodes.filter((node) =>
+      node.type === "effect" || node.type === "computation"
+    ).length;
+
+  it("holds the same number of serving nodes for one entry and for three while its tab is hidden", async () => {
+    // A client demands Home's whole view, the panels its tabs hide included,
+    // so a row the hidden list derived would cost Home's serving runtime nodes
+    // for every entry.
+
+    const serving = new Map<string, Runtime>();
+    await withHome(
+      true,
+      async (runtime, home) => {
+        const list = home.key("socialSpaceCollection").key("$UI");
+        const spaces = ["one", "two", "three"].map((name) =>
+          `did:key:social-list-${name}`
+        );
+        await registerAll(runtime, home, spaces.slice(0, 1));
+        expect(await pullFromServer(runtime, list)).toBe(true);
+        const homeRuntime = serving.get(owner.did())!;
+        const forOne = nodeCount(homeRuntime);
+        await registerAll(runtime, home, spaces.slice(1));
+        expect(await pullFromServer(runtime, list)).toBe(true);
+        const saved = await home.key("sharedSpaces").key("view").pull();
+
+        expect(saved.status === "ready" ? saved.saved.length : 0).toBe(3);
+        expect(nodeCount(homeRuntime)).toBe(forOne);
+        const text = await renderedText(runtime, list);
+        for (const space of spaces) expect(text).not.toContain(space);
+      },
+      undefined,
+      undefined,
+      (space, runtime) => serving.set(space, runtime),
+    );
+  });
+
+  it("shows a row for every entry once its tab is selected", async () => {
+    await withHome(true, async (runtime, home) => {
+      const list = home.key("socialSpaceCollection").key("$UI");
+      const spaces = ["one", "two", "three"].map((name) =>
+        `did:key:social-list-${name}`
+      );
+      await registerAll(runtime, home, spaces);
+      const tab = await tabsValue(
+        runtime,
+        home.key("$UI"),
+      );
+      expect(tab?.get()).toBe("spaces");
+      const { error } = await runtime.editWithRetry((tx) => {
+        tab!.withTx(tx).set("social-spaces");
+      });
+      expect(error).toBeUndefined();
+      expect(await pullFromServer(runtime, list)).toBe(true);
+      const text = await renderedText(runtime, list);
+
+      for (const space of spaces) expect(text).toContain(space);
     });
   });
 });
