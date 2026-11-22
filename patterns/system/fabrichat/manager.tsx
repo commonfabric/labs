@@ -41,8 +41,10 @@
  *
  * The people the user's rooms list, each by the principal their profile
  * attests, are what the manager's rendering offers to name a new group's
- * members by, so that each is offered the group, and what a member added by
- * principal alone is offered a room through.
+ * members by, so that each is offered the group, once a session asks for
+ * them. A member added to a room by principal alone is offered it through the
+ * profiles the rosters of the direct room shared with them, and of the room
+ * itself, list.
  */
 import {
   type Cell,

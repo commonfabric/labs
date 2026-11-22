@@ -522,16 +522,20 @@ outcome back as the add's `delivery`.
   took one.
 - **Effect:** offers the room to the person (see [offers](#offers)): through
   the share inbox `profile` points at, or, with no `profile`, through each
-  distinct inbox the profiles `people` lists for `member` point at, once per
-  inbox, as this user reads `people`. The first of those profiles is added to
-  the room's participants, wherever it points. A person with no profile known
-  for them gets a notice instead. It grants nobody anything. The offer is sent
-  by an event of its own that follows, which reads where the profiles point
-  apart from the request's outcome and records nothing: a profile's inbox
-  pointer can carry a label, such as its owner's `PersonalSpace`, that this
-  user's records don't admit.
+  distinct inbox the profiles attesting `member` point at, once per inbox,
+  that the roster of the direct room this user shares with them (`direct`)
+  lists, and then the room's own roster, as they read when the request is
+  handled. It reads no other room, so a person this user knows only from
+  another room is not found. The first of those profiles is added to the
+  room's participants, wherever it points. A person with no profile found for
+  them gets a notice instead. It grants nobody anything. The rosters are read
+  by an event of its own, through links that event types as rooms, which
+  records the outcome. The offer is sent by a further event, which reads where
+  the profiles point apart from the request's outcome and records nothing: a
+  profile's inbox pointer can carry a label, such as its owner's
+  `PersonalSpace`, that this user's records don't admit.
 - **Outcome:** `done` with `delivery`, `offered` or `noticed`, and no entry:
-  `noticed` for a person with no profile known for them, and otherwise
+  `noticed` for a person with no profile found for them, and otherwise
   `offered`, wherever the profiles point;
   or `refused` if this user's catalog doesn't list the room, the room space's
   access list grants this user a level other than OWNER, the link isn't to a

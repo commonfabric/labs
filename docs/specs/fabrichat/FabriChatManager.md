@@ -271,12 +271,16 @@ Someone a user adds to a room later is told of it through `offerRoom`, which
 the room's `addMember` sends once it has granted them access. It runs as an
 event of its own, after the add has committed, and offers the room through the
 same steps as step 3: through the profile the add named, or, for an add naming
-only an address, through the profiles `people` lists for that person, as the
-user sending it reads `people`, from an event of its own like step 3's, so
-that its own transaction reads no inbox pointer. It records `noticed` under the
-request's id at once for a person with no profile known for them, and
-`offered` for anyone else, wherever their profiles point. The room reads it
-back as the add's `delivery`.
+only an address, through the profiles attesting that person that the roster of
+the user's direct room with them lists, and then the room's own roster, from
+an event of its own like step 3's, so that its own transaction reads no inbox
+pointer. The rosters are read in an event of their own (`offerMember`), whose
+links to the two rooms are typed as rooms where the manager's records hold
+them as handles; it reads no other room, so a person the user knows only from
+another group room is not found. That event records `noticed` under the
+request's id for a person with no profile found for them, and `offered` for
+anyone else, wherever their profiles point. The room reads it back as the
+add's `delivery`.
 
 ## Prerequisites
 

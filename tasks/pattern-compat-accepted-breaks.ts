@@ -3065,7 +3065,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       rulingBy: "Dan",
       on: "2026-11-22",
       reason:
-        "choosing option Q42-A ('… `people` would become per-session, which is likely a contract break …, declared under FabriChat's break policy')",
+        "accepting the break: `people` becomes per-session and is derived only from rooms a session has asked about, so a served Home no longer reads every room's roster (wording proposed by the lead and accepted by Dan)",
     },
   },
 ];

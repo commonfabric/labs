@@ -666,8 +666,9 @@ with them.
   naming the person and the `profile` when the add has one, under a
   `requestId` composed of the room's space and the add's own. The manager
   offers them the room through their profile's share inbox, or, given only
-  their address, through the profiles its `people` lists for them, and
-  otherwise produces a notice for them. An add with no manager to send to,
+  their address, through the profiles the rosters of the reader's direct room
+  with them and of this room list for them, and otherwise produces a notice
+  for them. An add with no manager to send to,
   because the reader has none or theirs hasn't resolved yet, tells the person
   nothing more.
 - **Refused:** a direct room, whose space keeps its two members; an address
