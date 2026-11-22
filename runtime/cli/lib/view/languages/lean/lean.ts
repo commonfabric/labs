@@ -11,13 +11,13 @@
  * the rest. A declaration ends at its last token before the next command.
  */
 
-import type { Document, Line, StructureNode, TokenClass } from "../../model.ts";
+import type { Document, Line, TokenClass } from "../../model.ts";
 import { flattenStructure } from "../../model.ts";
 import { linesFromClasses, OPENING_BRACKETS } from "../classes.ts";
 import {
   type LocatedEntry,
-  structureNode,
   structureSource,
+  structureTree,
 } from "../structure.ts";
 
 // Lean's letter-like characters: Latin letters and `_`, Greek letters other
@@ -659,15 +659,12 @@ export function leanLines(text: string): Line[] {
 export function leanDocument(text: string): Document {
   const scanner = new Scanner(text);
   const source = structureSource(text);
-  const node = (entry: Entry, depth: number): StructureNode =>
-    structureNode(
-      source,
-      entry,
-      depth,
-      (inner) => entry.children.map((child) => node(child, inner)),
-    );
-  const entries = structureEntries(text, scanner);
-  const structure = entries.map((entry) => node(entry, 0));
+  const structure = structureTree(
+    source,
+    structureEntries(text, scanner),
+    (entry) => entry,
+    (entry) => entry.children,
+  );
   return {
     text,
     lines: linesFromClasses(text, scanner.classes, source.lineStarts),

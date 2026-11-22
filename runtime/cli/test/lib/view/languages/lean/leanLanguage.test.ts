@@ -5,6 +5,8 @@ import {
   languageForFile,
   languageForName,
 } from "../../../../../lib/view/languages/language.ts";
+import { parseDiff } from "../../../../../lib/view/diff.ts";
+import { buildDiffDocument } from "../../../../../lib/view/diffdoc.ts";
 import { leanLanguage } from "../../../../../lib/view/languages/lean/language.ts";
 import type { Line, TokenClass } from "../../../../../lib/view/model.ts";
 
@@ -470,6 +472,33 @@ describe("leanLanguage", () => {
     expect(classesIn('def f := throwError"bad {e}"', "throwError")).toEqual([
       "identifier",
     ]);
+  });
+
+  it("lists scopes nested deeper than the call stack, in a file and in a diff", () => {
+    const depth = 20_000;
+    const source = "namespace A\n".repeat(depth) + "def f := 1\n";
+    const document = leanLanguage.parseDocument(source);
+
+    expect(document.flatStructure.length).toBe(depth + 1);
+    expect(document.flatStructure.at(-1)).toMatchObject({
+      label: "def f",
+      depth,
+    });
+
+    const lines = source.split("\n").slice(0, -1);
+    const diff = [
+      "--- a/Deep.lean",
+      "+++ b/Deep.lean",
+      `@@ -0,0 +1,${lines.length} @@`,
+      ...lines.map((line) => `+${line}`),
+      "",
+    ].join("\n");
+    const { doc } = buildDiffDocument(diff, parseDiff(diff)!, {
+      resolve: () => null,
+      read: () => null,
+    });
+    expect(doc.flatStructure.filter((node) => node.label === "def f").length)
+      .toBe(1);
   });
 
   it("reconstructs incomplete input exactly", () => {

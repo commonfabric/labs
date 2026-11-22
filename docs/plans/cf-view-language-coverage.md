@@ -662,10 +662,10 @@ unless the token before it cannot end a term, as `:=`, `by`, `where`, and `,`
 cannot. So an `open … in` inside a proof stays part of the proof, and a command
 that a library defines, such as Mathlib's `notation3`, ends the declaration
 before it. Structure lists namespaces, sections, and `mutual` blocks, each
-closed by an `end`, and the definitions, theorems, lemmas, abbreviations,
-instances, examples, axioms, opaque constants, Mathlib's irreducible
-definitions, structures, classes, and inductive and coinductive types inside
-them. An `end` that names a dotted namespace closes one scope for each
+closed by an `end` or the end of the input, and the definitions, theorems,
+lemmas, abbreviations, instances, examples, axioms, opaque constants, Mathlib's
+irreducible definitions, structures, classes, and inductive and coinductive
+types inside them. An `end` that names a dotted namespace closes one scope for each
 component. A declaration starts at its first modifier or attribute and ends at
 its last token before the next command. A declaration that names nothing, such
 as an anonymous instance, takes as its label its signature on its first line,
@@ -695,10 +695,9 @@ grammar, and its median was under 4 milliseconds in every round. Each
 100-kilobyte input built to slow the scanner that was measured, such as one
 line of 25,000 words, 50,000 unclosed attribute lists, or an interpolated
 string opening 100,000 braces, took under 100 milliseconds of CPU time to parse
-with structure, and the time grew linearly with the input. The exception is
-deep nesting: about 2,000 unclosed `namespace` or `section` lines overflow the
-stack in the structure-tree code that every language shares, as 2,000 nested
-XML elements do.
+with structure, and the time grew linearly with the input. The structure
+tree, its flattened list, and its projection into a diff are built with
+explicit stacks, so 20,000 nested scopes build as a few do.
 
 The `lean-toolchain` language colors the repository that publishes the
 toolchain, such as `leanprover`'s `lean4`, as a type name, and the release

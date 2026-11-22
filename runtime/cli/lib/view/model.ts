@@ -312,13 +312,13 @@ export function flattenStructure(
   nodes: readonly StructureNode[],
 ): StructureNode[] {
   const out: StructureNode[] = [];
-  const walk = (ns: readonly StructureNode[]) => {
-    for (const n of ns) {
-      out.push(n);
-      walk(n.children);
+  const pending = nodes.toReversed();
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    out.push(node);
+    for (let at = node.children.length - 1; at >= 0; at--) {
+      pending.push(node.children[at]);
     }
-  };
-  walk(nodes);
+  }
   return out;
 }
 
