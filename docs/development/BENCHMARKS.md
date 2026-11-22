@@ -122,6 +122,15 @@ the Topics read and graph limits ([below](#the-read-budget), tests of the
 regression shows up as trend drift on the dashboard rather than as a failing
 check.
 
+The dashboard (https://dashboard.saga-castor.ts.net/, on the tailnet) serves
+the numbers behind its benchmark tiles and `/bench` page as JSON, read from
+what it already holds, so reading them costs no GitHub requests:
+`/bench/tiles.json`, `/bench/runs.json` and `/bench/steps.json`. "Benchmark
+data as JSON" in `dashboard/README.md` describes them, and how to read them to
+find the commits behind a rise a tile reports. Download `bench-results`
+artifacts from GitHub only for what the dashboard does not hold: runs older
+than its 45-day window, and the raw report with its sample counts.
+
 Most packages with benches define a `bench` task for running them locally
 (see `runtime/runner/deno.jsonc`); otherwise invoke `deno bench` on a
 single file.
