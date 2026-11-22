@@ -11,6 +11,13 @@
  * machine at once.
  *
  * - `executor`: the executor with its documents in memory.
+ * - `runner`: the board as a compiled piece in the runner
+ *   (`startCompiledPiece` of `runtime/runner/src/compiled/piece.ts`), with
+ *   the experimental option `compiledPatterns` on. Every call of the runtime
+ *   is that of the arm `today-labeled`: the topics and the inputs are cells
+ *   written with `Cell.set` under the same schemas, an edit is a `Cell.set`
+ *   of a topic's title, a create is `Cell.send` on `addTopic`, and a step
+ *   ends when the scheduler is idle with no commit pending.
  * - `storage`: the executor with its documents in the runtime's storage
  *   (`../runtime-transactions.ts`), in a runtime that serves the space with
  *   the experimental option `compiledPatterns` on. Each topic and each
@@ -112,6 +119,10 @@ import {
 import { readStoredCfcMetadata } from "../../../../runtime/runner/src/cfc/metadata.ts";
 import { diffAndUpdate } from "../../../../runtime/runner/src/data-updating.ts";
 import { resolveLocalProgram } from "../../../../runtime/runner/src/harness/local-program.deno.ts";
+import {
+  type CompiledPiece,
+  startCompiledPiece,
+} from "../../../../runtime/runner/src/compiled/piece.ts";
 import type { NormalizedFullLink } from "../../../../runtime/runner/src/link-types.ts";
 import { createSigilLinkFromParsedLink } from "../../../../runtime/runner/src/link-utils.ts";
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
@@ -240,7 +251,7 @@ export type Facts = {
 };
 
 /** The arms of a run. */
-type Arm = "executor" | "storage" | "today" | "today-labeled";
+type Arm = "executor" | "storage" | "runner" | "today" | "today-labeled";
 
 /** One measured step. */
 export type Step = {
@@ -1154,6 +1165,8 @@ const count = (name: string): number => {
 
 /** A step of today's runtime, with its preparations where it stores labels. */
 export type TodayStep = Step & {
+  /** On the arm `runner`: what the compiled piece did in the step. */
+  compiled?: Record<string, number>;
   /** The preparations of Contextual Flow Control, and their time. */
   preparations: number;
   prepareMs: number;
@@ -1167,9 +1180,15 @@ export type TodayStep = Step & {
 const runToday = async (
   { topics, names }: Board,
   labeled: boolean,
+  /**
+   * Whether the board runs as a compiled piece (`startCompiledPiece`), in
+   * place of today's piece (`Runtime.run`): the arm `runner`. Every other
+   * call of the runtime is the same.
+   */
+  asCompiledPiece = false,
 ): Promise<(Baseline | TodayStep)[]> => {
   const size = topics.length;
-  const arm = labeled ? "today-labeled" : "today";
+  const arm = asCompiledPiece ? "runner" : labeled ? "today-labeled" : "today";
   const signer = labeled
     ? await labeledSigner()
     : await Identity.fromPassphrase(`topics-scale ${size}`);
@@ -1180,7 +1199,11 @@ const runToday = async (
     apiUrl: new URL(import.meta.url),
     storageManager,
     ...(labeled ? { cfcFlowLabels: "persist" as const } : {}),
+    ...(asCompiledPiece
+      ? { experimental: { compiledPatterns: true }, servingPosture: true }
+      : {}),
   });
+  let piece: CompiledPiece | undefined;
   const changed = new Set<string>();
   storageManager.subscribe({
     // deno-lint-ignore no-explicit-any
@@ -1194,16 +1217,19 @@ const runToday = async (
   });
   const steps: (Baseline | TodayStep)[] = [];
   try {
-    const program = await resolveLocalProgram(
-      (resolver) => runtime.harness.resolve(resolver),
-      {
-        main: `${repository}patterns/${BOARD}`,
-        root: repository,
-      },
-    );
-    const compiled = await runtime.patternManager.compilePattern(program, {
-      space,
-    });
+    const emittedBoard = asCompiledPiece ? await emitted() : undefined;
+    const compiled = asCompiledPiece
+      ? undefined
+      : await runtime.patternManager.compilePattern(
+        await resolveLocalProgram(
+          (resolver) => runtime.harness.resolve(resolver),
+          {
+            main: `${repository}patterns/${BOARD}`,
+            root: repository,
+          },
+        ),
+        { space },
+      );
     record(steps, {
       arm,
       size,
@@ -1255,13 +1281,36 @@ const runToday = async (
     const result = runtime.getCell<Record<string, unknown>>(
       space,
       "topics scale",
-      compiled.resultSchema,
+      compiled?.resultSchema,
     );
     const settle = async () => {
       await result.pull();
       await runtime.settled();
+      // The commits the scheduler made are counted to the step that
+      // caused them, on every arm of this function.
+      await runtime.scheduler.idleWithPendingCommits();
+      if (piece !== undefined && piece.refusals.length > 0) {
+        throw new Error(
+          `The storage refused a commit of the piece: ${piece.refusals[0]}`,
+        );
+      }
     };
+    // The result of the compiled piece as the executor holds it, under the
+    // schema of the result: the runtime's own read does not follow a link
+    // whose path crosses an array by key.
+    const heldByExecutor = () =>
+      piece!.instance.store.read(
+        new Ref(piece!.instance.id, []),
+        undefined,
+        false,
+        piece!.instance.schemaOf(emittedBoard!.board.plan.resultSchema),
+      ) as Record<string, unknown>;
     const read = () => {
+      if (piece !== undefined) {
+        const value = heldByExecutor();
+        JSON.stringify(value);
+        return value;
+      }
       const tx = runtime.edit();
       try {
         const value = result.withTx(tx).get();
@@ -1272,6 +1321,7 @@ const runToday = async (
       }
     };
     const facts = (): Facts => {
+      if (piece !== undefined) return factsOf(heldByExecutor());
       const tx = runtime.edit();
       try {
         const plain = (path: string) => result.withTx(tx).key(path).get();
@@ -1311,6 +1361,11 @@ const runToday = async (
     const measure = async (step: string, change: () => Promise<void>) => {
       resetAllTimingStats();
       changed.clear();
+      const before = piece === undefined ? undefined : {
+        records: piece.transactions.counts,
+        piece: piece.counts,
+        evaluations: piece.instance.counts.evaluations,
+      };
       const began = performance.now();
       await change();
       await settle();
@@ -1318,12 +1373,32 @@ const runToday = async (
       read();
       const done = performance.now();
       const preparations = timed("extended-storage-transaction/prepareCfc");
+      const after = piece?.transactions.counts;
       record(steps, {
         arm,
         size,
         step,
         settle: round(settled - began),
         read: round(done - settled),
+        ...(piece === undefined || after === undefined ? {} : {
+          compiled: {
+            evaluations: piece.instance.counts.evaluations -
+              (before?.evaluations ?? 0),
+            events: piece.counts.events - (before?.piece.events ?? 0),
+            derivations: piece.counts.derivations -
+              (before?.piece.derivations ?? 0),
+            changesByOthers: piece.counts.changesByOthers -
+              (before?.piece.changesByOthers ?? 0),
+            reads: after.reads - (before?.records.reads ?? 0),
+            writes: after.writes - (before?.records.writes ?? 0),
+            recordsGiven: after.recordsGiven -
+              (before?.records.recordsGiven ?? 0),
+            recordsRecorded: after.recordsRecorded -
+              (before?.records.recordsRecorded ?? 0),
+            recordBytes: after.recordBytes -
+              (before?.records.recordBytes ?? 0),
+          },
+        }),
         work: count("scheduler/scheduler/run/action"),
         commits: count("storage.v2.transaction/commit/commitNative"),
         documents: changed.size,
@@ -1343,7 +1418,23 @@ const runToday = async (
     };
     await measure("load", () =>
       commit((tx) => {
-        runtime.run(tx, compiled, argument, result.withTx(tx));
+        if (emittedBoard === undefined) {
+          runtime.run(tx, compiled, argument, result.withTx(tx));
+          return;
+        }
+        piece = startCompiledPiece(
+          runtime,
+          tx,
+          emittedBoard.board,
+          argument,
+          result.withTx(tx),
+          {
+            artifacts: emittedBoard.artifacts,
+            now: 1_000_000,
+            secret: "the secret of the comparison",
+            countRecordBytes: true,
+          },
+        );
       }));
     for (const at of edited(size)) {
       await measure(`edit topic ${at}`, () =>
@@ -1359,6 +1450,7 @@ const runToday = async (
         }));
     }
   } finally {
+    piece?.stop();
     await runtime.dispose();
     await close();
   }
@@ -1407,10 +1499,12 @@ if (import.meta.main) {
       ? await runStorage(board)
       : arm === "today" || arm === "today-labeled"
       ? await runToday(board, arm === "today-labeled")
+      : arm === "runner"
+      ? await runToday(board, true, true)
       : undefined;
     if (steps === undefined) {
       console.error(
-        "usage: scale.ts executor|storage|today|today-labeled [sizes | --seed <seed>]",
+        "usage: scale.ts executor|storage|runner|today|today-labeled [sizes | --seed <seed>]",
       );
       Deno.exit(2);
     }
