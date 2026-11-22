@@ -286,6 +286,43 @@ describe("startCompiledPiece()", () => {
     ]);
   });
 
+  it("evaluates one row for a member that another writer put first in an array of references", async () => {
+    const cells = ["one", "two", "three"].map((title, index) => {
+      const cell = runtime.getCell<unknown>(space, `item ${index}`);
+      return { cell, value: { id: `i${index}`, title, done: false } };
+    });
+    const items = runtime.getCell<unknown[]>(space, "items of references");
+    const seed = runtime.edit();
+    for (const { cell, value } of cells) cell.withTx(seed).set(value);
+    items.withTx(seed).set(cells.slice(1).map(({ cell }) => cell));
+    expect((await seed.commit().settled).error).toBeUndefined();
+    const { piece, result } = await started("lists", "Plain", () => ({
+      items,
+    }));
+    const evaluations = piece.instance.counts.elementEvaluations;
+
+    // The array is written whole, each position with another link.
+    const tx = runtime.edit();
+    items.withTx(tx).set(cells.map(({ cell }) => cell));
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await settled();
+
+    expect(piece.instance.result()).toEqual({
+      rows: [
+        { label: "one:false" },
+        { label: "two:false" },
+        { label: "three:false" },
+      ],
+    });
+    expect(read(result, "rows")).toEqual([
+      { label: "one:false" },
+      { label: "two:false" },
+      { label: "three:false" },
+    ]);
+    expect(piece.instance.counts.elementEvaluations - evaluations).toBe(1);
+  });
+
   it("holds each document in memory and does not read it again for a later event", async () => {
     const { piece, result } = await started(
       "handler",

@@ -185,7 +185,13 @@ export type StreamOfExecutor = StreamPosition["stream"];
 export type ChangeByOther = {
   doc: string;
   path: string[];
-  value: unknown;
+  value?: unknown;
+  /**
+   * For a change of the members of an array at the path: the one run of
+   * positions that differs, as the position it starts at, how many members
+   * the array lost there, and the members it holds there now.
+   */
+  splice?: { start: number; removed: number; members: unknown[] };
 };
 
 /**
@@ -416,7 +422,8 @@ export class RuntimeTransactions implements TransactionHooks {
             : undefined;
           const own = source !== undefined && this.#own.has(source);
           const byOther: ChangeByOther[] = [];
-          for (const { address, after } of notification.changes) {
+          const seen = new Set<string>();
+          for (const { address, before, after } of notification.changes) {
             const doc = this.#byEntity.get(address.id);
             if (doc === undefined) continue;
             if (this.#entries.has(doc)) this.#touched.add(doc);
@@ -427,16 +434,42 @@ export class RuntimeTransactions implements TransactionHooks {
             ) continue;
             // A change names its path below the member `value` of what the
             // entity holds, and carries the whole of that after the change.
-            const path = address.path.slice(1);
-            let value: unknown = isWalkableObjectNotArray(after)
+            const held = isWalkableObjectNotArray(after)
               ? after.value
               : undefined;
-            for (const segment of path) {
-              value = isWalkableObjectNotArray(value) || Array.isArray(value)
-                ? (value as Record<string, unknown>)[segment]
-                : undefined;
+            const was = isWalkableObjectNotArray(before)
+              ? before.value
+              : undefined;
+            // A change below a position that holds a link, before or after
+            // it, is a change of what that position holds.
+            const path = aboveLinks(address.path.slice(1), was, held);
+            // A change of a member of an array, or of how many it has, is
+            // given as one of the array: the executor then finds which
+            // members stayed by their keys, where the changes of a moved
+            // member's positions one by one would name each a new member.
+            const at = path.length > 0 &&
+                Array.isArray(valueAt(held, path.slice(0, -1)))
+              ? path.slice(0, -1)
+              : path;
+            const text = JSON.stringify([doc, at]);
+            if (seen.has(text)) continue;
+            seen.add(text);
+            const now = valueAt(held, at);
+            const then = valueAt(was, at);
+            if (!Array.isArray(now) || !Array.isArray(then)) {
+              byOther.push({ doc, path: at, value: this.#decode(now) });
+              continue;
             }
-            byOther.push({ doc, path, value: this.#decode(value) });
+            const splice = spliceBetween(then, now);
+            byOther.push({
+              doc,
+              path: at,
+              splice: {
+                start: splice.start,
+                removed: splice.removed,
+                members: splice.members.map((member) => this.#decode(member)),
+              },
+            });
           }
           if (own && notification.type === "commit") {
             const handed = this.#own.get(source!);
@@ -1656,6 +1689,63 @@ export class RuntimeTransactions implements TransactionHooks {
     return value;
   }
 }
+
+/**
+ * The one run of positions in which two arrays differ, as the splice that
+ * makes `after` of `before`: the members before the run and behind it are
+ * the same in both, by identity or by their JSON text. The work is the
+ * number of members.
+ */
+const spliceBetween = (
+  before: readonly unknown[],
+  after: readonly unknown[],
+): { start: number; removed: number; members: unknown[] } => {
+  const same = (a: unknown, b: unknown) =>
+    a === b || JSON.stringify(a) === JSON.stringify(b);
+  const shorter = Math.min(before.length, after.length);
+  let start = 0;
+  while (start < shorter && same(before[start], after[start])) start += 1;
+  let end = 0;
+  while (
+    end < shorter - start &&
+    same(before[before.length - 1 - end], after[after.length - 1 - end])
+  ) end += 1;
+  return {
+    start,
+    removed: before.length - end - start,
+    members: after.slice(start, after.length - end),
+  };
+};
+
+/**
+ * The shortest prefix of `path` at which `before` or `after` holds a link,
+ * or `path` where neither holds one on the way.
+ */
+const aboveLinks = (
+  path: readonly string[],
+  before: unknown,
+  after: unknown,
+): string[] => {
+  for (let length = 0; length < path.length; length++) {
+    const prefix = path.slice(0, length);
+    if (
+      isPrimitiveCellLink(valueAt(before, prefix)) ||
+      isPrimitiveCellLink(valueAt(after, prefix))
+    ) return prefix;
+  }
+  return [...path];
+};
+
+/** What a value holds at a path, or `undefined` where it holds nothing. */
+const valueAt = (value: unknown, path: readonly string[]): unknown => {
+  let at = value;
+  for (const segment of path) {
+    at = isWalkableObjectNotArray(at) || Array.isArray(at)
+      ? (at as Record<string, unknown>)[segment]
+      : undefined;
+  }
+  return at;
+};
 
 /**
  * The runtime's read shape of a plan's observation class (PL §2.2). A read

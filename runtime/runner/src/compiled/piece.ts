@@ -232,9 +232,18 @@ export class CompiledPiece {
    */
   #changedByOthers(changes: ChangeByOther[]): void {
     if (!this.#started || this.#stopped) return;
-    for (const { doc, path, value } of changes) {
+    for (const { doc, path, value, splice } of changes) {
       this.#counts.changesByOthers += 1;
-      this.instance.store.write(new Ref(doc, path), value);
+      const ref = new Ref(doc, path);
+      if (splice === undefined) this.instance.store.write(ref, value);
+      else {
+        this.instance.store.splice(
+          ref,
+          splice.start,
+          splice.removed,
+          splice.members,
+        );
+      }
     }
     this.#invalidate();
   }
