@@ -1192,10 +1192,12 @@ export interface ChatRoomView {
 
   /**
    * Those who joined the room itself, each added once through
-   * `addParticipant`, in the order they were added. Unlike `participants`, it
-   * lists no author it doesn't hold, and no participant of another space, so
-   * it is read from the roster alone. Like `participants`, it is a claim, not
-   * proof of access.
+   * `addParticipant`, in the order they were added; absent until someone
+   * joins, and in a room nobody can join. Unlike `participants`, it lists no
+   * author it doesn't hold, and no participant of another space: it is a link
+   * to the roster the room stores, so a reader reads what is stored, whether
+   * or not any runtime has derived anything of the room since. Like
+   * `participants`, it is a claim, not proof of access.
    */
   roster?: ProfileCell[];
 
