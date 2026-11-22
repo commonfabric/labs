@@ -23,6 +23,7 @@ import {
 const NAVIGATION =
   "patterns/integration/topic-board-navigation.bench.ts";
 const SCALE = "patterns/integration/topic-board-scale.bench.ts";
+const SETUP = "patterns/integration/fabrichat-setup.bench.ts";
 
 const STATS = {
   min: 1,
@@ -57,6 +58,9 @@ const completeBenches = (): Bench[] => [
   bench(CALIBRATION_FILE, null, "integer arithmetic"),
   bench(NAVIGATION, "topic board", "journey"),
   bench(SCALE, "topic board scale", "100"),
+  bench(SETUP, "fabrichat setup", "home cold"),
+  bench(SETUP, "fabrichat setup", "home warm"),
+  bench(SETUP, "fabrichat setup", "room"),
 ];
 
 describe("bench-report", () => {
@@ -159,14 +163,17 @@ describe("bench-report", () => {
   });
 
   describe("KEY_BENCHMARKS", () => {
-    // Spelled out rather than read from the constant: these two strings are
-    // the dashboard's side of a contract with two benchmark files, and a test
+    // Spelled out rather than read from the constant: these strings are the
+    // dashboard's side of a contract with three benchmark files, and a test
     // that reads the constant agrees with whatever it comes to say.
 
-    it("is the topic board journey and the 100-topic board load", () => {
+    it("is the topic board journey, the 100-topic board load, and the FabriChat Home and room setup", () => {
       expect([...KEY_BENCHMARKS]).toEqual([
         `${NAVIGATION} > topic board/journey`,
         `${SCALE} > topic board scale/100`,
+        `${SETUP} > fabrichat setup/home cold`,
+        `${SETUP} > fabrichat setup/home warm`,
+        `${SETUP} > fabrichat setup/room`,
       ]);
     });
   });
@@ -175,6 +182,11 @@ describe("bench-report", () => {
     it("returns `true` for each key benchmark", () => {
       expect(isKeyBenchmark(`${NAVIGATION} > topic board/journey`)).toBe(true);
       expect(isKeyBenchmark(`${SCALE} > topic board scale/100`)).toBe(true);
+      expect(isKeyBenchmark(`${SETUP} > fabrichat setup/home cold`))
+        .toBe(true);
+      expect(isKeyBenchmark(`${SETUP} > fabrichat setup/home warm`))
+        .toBe(true);
+      expect(isKeyBenchmark(`${SETUP} > fabrichat setup/room`)).toBe(true);
     });
 
     it("returns `false` for a group that carries more than its stable name", () => {
@@ -190,6 +202,8 @@ describe("bench-report", () => {
     it("returns `false` for another benchmark in the same file", () => {
       expect(isKeyBenchmark(`${NAVIGATION} > topic board/crossref`))
         .toBe(false);
+      expect(isKeyBenchmark(`${SETUP} > fabrichat setup/profile`)).toBe(false);
+      expect(isKeyBenchmark(`${SETUP} > fabrichat setup/reopen`)).toBe(false);
     });
   });
 
@@ -205,6 +219,9 @@ describe("bench-report", () => {
         `${CALIBRATION_FILE} > integer arithmetic`,
         `${NAVIGATION} > topic board/journey`,
         `${SCALE} > topic board scale/100`,
+        `${SETUP} > fabrichat setup/home cold`,
+        `${SETUP} > fabrichat setup/home warm`,
+        `${SETUP} > fabrichat setup/room`,
       ]);
     });
 
@@ -301,7 +318,7 @@ describe("bench-report", () => {
         .toContain(`no "${SCALE} > topic board scale/100"`);
     });
 
-    it("returns both key benchmarks when neither is in the report", () => {
+    it("returns every key benchmark when none is in the report", () => {
       const benches = [
         bench(CALIBRATION_FILE, null, "integer arithmetic"),
         bench(NAVIGATION, "topic board", "crossref"),

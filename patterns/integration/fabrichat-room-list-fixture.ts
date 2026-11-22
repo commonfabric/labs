@@ -30,6 +30,7 @@ import {
 } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
+import type { ModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 import {
   CHAT_START,
   closeMember,
@@ -353,17 +354,22 @@ export class RoomListServer {
     },
   ): Promise<Client> {
     const { controller, arrived, refused } = await this.startRecording(person);
-    const waits = new MemberWaits(controller.runtime.scheduler);
-    if (early) {
-      const root = await controller.getDefaultPattern(false);
-      if (root === undefined) throw new Error("The person has no Home");
-      root.key("chatManager").key("$VIEWS").key("chats").asSchema<Chats>(CHATS)
-        .sink(() => {});
+    try {
+      const waits = new MemberWaits(controller.runtime.scheduler);
+      if (early) {
+        const root = await controller.getDefaultPattern(false);
+        if (root === undefined) throw new Error("The person has no Home");
+        root.key("chatManager").key("$VIEWS").key("chats")
+          .asSchema<Chats>(CHATS).sink(() => {});
+      }
+      const home = (await controller.ensureDefaultPattern()).getCell();
+      if (adopt) await controller.adoptCatalogRooms();
+      await this.settle(controller);
+      return { controller, home, waits, arrived, refused };
+    } catch (error) {
+      await controller.dispose();
+      throw error;
     }
-    const home = (await controller.ensureDefaultPattern()).getCell();
-    if (adopt) await controller.adoptCatalogRooms();
-    await this.settle(controller);
-    return { controller, home, waits, arrived, refused };
   }
 
   /**
@@ -552,14 +558,20 @@ export class RoomListServer {
     }
   }
 
-  /** Starts a server in the posture the run resolves. */
-  static async start(): Promise<RoomListServer> {
+  /**
+   * Starts a server in the posture the run resolves. A serving loop in this
+   * process compiles into `cache`, the clients' shared cache unless another is
+   * named.
+   */
+  static async start(
+    cache: ModuleByteCache = moduleByteCache,
+  ): Promise<RoomListServer> {
     const serve = (request: Request) => systemPatternsRoute().serve(request);
     if (serving) {
       const served = await listenServingMemoryServer({
         serve,
         aclMode: "enforce",
-        ...(runsInWorker() ? {} : { moduleByteCache }),
+        ...(runsInWorker() ? {} : { moduleByteCache: cache }),
       });
       return new RoomListServer(
         served,
