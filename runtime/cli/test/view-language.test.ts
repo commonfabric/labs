@@ -46,6 +46,7 @@ import { propertiesLanguage } from "../lib/view/languages/properties/language.ts
 import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
 import { iniLanguage } from "../lib/view/languages/ini/language.ts";
 import { orgLanguage } from "../lib/view/languages/org/language.ts";
+import { gitAttributesLanguage } from "../lib/view/languages/gitattributes/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
@@ -163,6 +164,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("r8"), proguardLanguage);
   assertEquals(languageForName("ini"), iniLanguage);
   assertEquals(languageForName("dosini"), iniLanguage);
+  assertEquals(languageForName("gitattributes"), gitAttributesLanguage);
   assertEquals(languageForName("xml"), xmlLanguage);
   assertEquals(languageForName("svg"), xmlLanguage);
   assertEquals(languageForName("plist"), xmlLanguage);
@@ -190,6 +192,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "properties",
     "ini",
     "proguard",
+    "gitattributes",
     "xml",
     "org",
     "binary",
@@ -233,6 +236,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "cfg",
     "proguard",
     "r8",
+    "gitattributes",
     "xml",
     "svg",
     "plist",

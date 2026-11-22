@@ -921,6 +921,10 @@ describe("diffcounts", () => {
   });
 
   describe("commentOnlyFiles", () => {
+    it("returns no files for text that is not a unified diff", () => {
+      expect(commentOnlyFiles("just some text\n", [])).toEqual([]);
+    });
+
     it("returns true for files whose changes touch only comments", async () => {
       expect(
         await commentOnly(

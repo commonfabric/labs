@@ -38,7 +38,8 @@ INI, which covers Ansible configuration and inventories and the configuration
 files of Python tools, has syntax highlighting and a structure tree of sections
 and the keys and hosts in each. Org mode has syntax highlighting, with each
 source block colored as the language it names, and a structure tree of
-headlines.
+headlines. Git attributes files have syntax highlighting and a structure tree
+of their patterns and macro definitions.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -59,16 +60,16 @@ remain outside diff editing and semantic source loading.
 
 Python, Swift, Kotlin, TOML, HCL, and shell run on Tree-sitter through a shared,
 language-neutral adapter, which Go and HTML will use as well. Java
-properties, INI, ProGuard rules, XML, makefiles, and Org mode use focused
-scanners.
+properties, INI, ProGuard rules, Git attributes, XML, makefiles, and Org mode
+use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, TOML, HCL, shell,
-makefile, Java properties, INI, ProGuard, XML, Org mode, and diff support to
-honest handling of every textual syntax in the active `commonfabric`
-repositories.
+makefile, Java properties, INI, ProGuard, Git attributes, XML, Org mode, and
+diff support to honest handling of every textual syntax in the active
+`commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -622,7 +623,8 @@ file reconstructed exactly.
 - [ ] Add Dockerfile, including every `Dockerfile.*` variant.
 - [x] Add Makefile and `.mk`.
 - [ ] Add Git, Docker, Deno, and Bazel ignore files.
-- [ ] Add Git attributes, modules, hooks, and worktree-include syntax.
+- [x] Add Git attributes files.
+- [ ] Add Git modules and worktree-include syntax.
 - [ ] Add dotenv files and compound examples.
 - [x] Add INI, Ansible configuration, and inventory files.
 - [ ] Add systemd units, tmpfiles configuration, and surveyed directive
@@ -677,6 +679,48 @@ class. The scanner re-colors 100 kilobytes of inventory and configuration text
 in under 2 milliseconds at the 95th percentile, and each 100-kilobyte input
 built to slow it that was measured, such as unclosed quotes or a single line of
 25,000 words, in under 6. The fixture comes from Infra.
+
+Git attributes are implemented ahead of the rest of this stage. Git hooks
+select shell through their shebangs, as Stage 4 describes. A November 13, 2026
+read of the local checkouts of 32 of the organization's repositories found four
+`.gitattributes` files, one each in Labs, Loom, Infra, and the
+`commonfabric-weaver` repository, with 11 path-change events on them in the six
+months before the read. The name `.gitattributes` selects the language in any
+directory, without reading the source.
+
+The language uses a focused scanner rather than Tree-sitter. A line holds a
+pattern followed by attributes, separated by blanks, and no line depends on
+another. The scanner follows Git's own reader. `languages/glob.ts` colors a
+pattern as Git's wildcard matching reads it: `*`, `?`, and bracket expressions,
+including character classes such as `[:space:]`, as regular-expression syntax,
+`/` and an escaping backslash as punctuation, and the rest as a string. A quoted
+pattern is colored after its C-style quoting is removed, and a pattern whose
+quoting is not valid runs to the first blank. An attribute's name is a property
+name, after an optional `-` or `!`, and a value after `=` is a string. A pattern
+that starts `[attr]` defines a macro, whose name the structure tree lists beside
+each pattern and indexes for definition peeks. Git reads macro definitions only
+in a repository's top-level file, which a file's name does not show, so the
+scanner colors them in every file. Git ignores a whole line when a name on it is
+not one Git accepts, when its pattern starts with `!`, or when it is 2,048 bytes
+long or longer, not counting a carriage return before its line feed. A `#` after
+the start of a line is such a name rather than a comment. The scanner leaves
+those lines uncolored and out of the structure tree. A pattern followed by one
+`name=value` attribute is also an Ansible inventory host line, so the INI
+fixture and the Loom Git attributes fixture declare each other as highlighting
+peers. The fixtures come from all four repositories.
+
+Every character other than white space in the four files has a token class,
+and each file reconstructs exactly. The machine that measured the scanner was
+too loaded for elapsed-time percentiles to mean anything: the INI scanner's
+95th percentiles there were over 150 milliseconds, against under 2 recorded
+for it. The figures are therefore the mean processor time of 200 runs. On 100
+kilobytes built from the four files, a full highlight takes 2.3 milliseconds, a
+document parse 3.1, and a re-color after one edit 2.8. The INI scanner takes
+1.7, 2.6, and 1.9 on 100 kilobytes of an Infra inventory, measured the same
+way. Of the 100-kilobyte inputs built to slow the scanner, 20,000 lines that
+each open a bracket expression and a character class that nothing closes take
+7.0 milliseconds to highlight and 15 to parse, and one line of 20,000
+attributes takes 2.0 to highlight.
 
 Completion gate: every surveyed exact-name and compound-name operational file
 selects without content guessing.
