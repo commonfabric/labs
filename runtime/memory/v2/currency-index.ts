@@ -434,10 +434,6 @@ INSERT OR REPLACE INTO currency_decide (
 )
 VALUES (:branch, :slice, :piece, :id, :instance_key, :seq)
 `),
-  selectDecides: engine.prepare(`
-SELECT id, instance_key, seq FROM currency_decide
-WHERE branch = :branch AND slice = :slice AND piece = :piece
-`),
   // The rows for one slot, of whichever slices' runs wrote it.
   selectDeciders: engine.prepare(`
 SELECT slice, piece, seq FROM currency_decide
@@ -476,15 +472,25 @@ SELECT piece, seq FROM currency_vouch INDEXED BY idx_currency_vouch_id
 WHERE branch = :branch AND slice = :scope_key AND id = :id AND seq < :seq
   AND held = 1
 `),
-  // The slices that read one instance, each with its mark.
-  selectMarkedReadersOfInstance: engine.prepare(`
-SELECT r.slice AS slice, r.piece AS piece, s.mark AS mark
-FROM currency_read r INDEXED BY idx_currency_read_entity
+  // The readers of every slot one slice decides, where the slice's row
+  // stands at the slot's head. One statement for the slice, starting from
+  // its decide rows: a slice decides two slots for each document a session's
+  // run writes, so a statement for each slot is thousands for one walk.
+  selectReadersOfDecided: engine.prepare(`
+SELECT DISTINCT r.slice AS slice, r.piece AS piece, s.mark AS mark,
+  d.instance_key AS instance_key
+FROM currency_decide d
+LEFT JOIN head h
+  ON h.branch = d.branch AND h.id = d.id AND h.scope_key = d.instance_key
+CROSS JOIN currency_read r INDEXED BY idx_currency_read_entity
+  ON r.branch = d.branch AND r.entity_space = :space AND r.entity = d.id
 CROSS JOIN currency_slice s
   ON s.branch = r.branch AND s.slice = r.slice AND s.piece = r.piece
-WHERE r.branch = :branch AND r.entity_space = :space AND r.entity = :id
-  AND (r.entity_scope_key = :scope_key
+WHERE d.branch = :branch AND d.slice = :slice AND d.piece = :piece
+  AND d.seq >= COALESCE(h.seq, 0)
+  AND (r.entity_scope_key = d.instance_key
     OR r.entity_scope_key = '${ANY_INSTANCE}')
+  AND NOT (r.piece = :piece AND r.slice = :slice)
 `),
   selectReadersOfInstance: engine.prepare(`
 SELECT slice, piece FROM currency_read
@@ -627,6 +633,9 @@ SELECT 1 AS found FROM currency_export WHERE branch = :branch LIMIT 1
   selectExportsOfId: engine.prepare(`
 SELECT scope_key FROM currency_export WHERE branch = :branch AND id = :id
 `),
+  selectExportedIds: engine.prepare(`
+SELECT DISTINCT id FROM currency_export WHERE branch = :branch
+`),
   selectReadersMovedSince: engine.prepare(`
 SELECT r.reader AS reader, MAX(e.position) AS position
 FROM currency_export e INDEXED BY idx_currency_export_position
@@ -736,33 +745,22 @@ const readersOf = (
   // while its row stands at the slot's head, and its readers are then
   // readers of the slice: one at the slot's own key, whoever wrote it, and
   // one at a viewer's key where this slice is in that viewer's chain.
-  const decided = statements.selectDecides.all({
+  const decided = statements.selectReadersOfDecided.all({
     branch,
+    space,
     slice: ref.slice,
     piece: ref.piece,
-  }) as Array<{ id: string; instance_key: string; seq: number }>;
+  }) as Array<SliceRef & { mark: CurrencyMark; instance_key: string }>;
   if (decided.length === 0) return readers;
   const seen = new Set(readers.map(refKey));
-  for (const { id, instance_key, seq } of decided) {
-    if (seq < headOfInstance(context, id, instance_key)) continue;
-    for (
-      const reader of statements.selectMarkedReadersOfInstance.all({
-        branch,
-        space,
-        id,
-        scope_key: instance_key,
-      }) as Array<SliceRef & { mark: CurrencyMark }>
-    ) {
-      if (reader.piece === ref.piece && reader.slice === ref.slice) continue;
-      if (
-        reader.slice !== instance_key &&
-        !sliceChain(reader.slice).includes(ref.slice)
-      ) continue;
-      const key = refKey(reader);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      readers.push(reader);
-    }
+  for (const { slice, piece, mark, instance_key } of decided) {
+    if (
+      slice !== instance_key && !sliceChain(slice).includes(ref.slice)
+    ) continue;
+    const key = refKey({ slice, piece });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    readers.push({ slice, piece, mark });
   }
   return readers;
 };
@@ -1132,6 +1130,15 @@ const advance = (context: Context): CurrencyMarked[] => {
       ?.seq;
   const slices =
     (statements.countSlices.get({ branch }) as { count: number }).count;
+  // An index that holds rows it tells its readers and no cursor starts over
+  // with its records dropped (`open()` in `engine.ts`). Each such row says
+  // what those records made of its instance, so each is brought up to date.
+  if (cursor === undefined && context.touched !== undefined) {
+    const exported = statements.selectExportedIds.all({ branch }) as Array<
+      { id: string }
+    >;
+    for (const { id } of exported) context.touched.ids.add(id);
+  }
   const seqs = new Map<string, { ref: SliceRef; seq: number }>();
   const becameMarked: SliceRef[] = [];
   if (slices > 0) {
@@ -2034,6 +2041,18 @@ export const applyCurrencyImports = (
     /** The slices that read an entry and stood marked `1`. */
     const waiting = new Map<string, SliceRef>();
     for (const { id, scopeKey, head, stale } of options.entries) {
+      // An entry that says what the index already holds of the instance
+      // changes no slice: each that read it was marked, or left waiting,
+      // when the entry was first applied or when its own record was stored.
+      // A registration returns every instance a batch read, so most entries
+      // are such.
+      const held = statements.selectImport.get({
+        branch,
+        source,
+        id,
+        scope_key: scopeKey,
+      }) as { head: number; stale: number } | undefined;
+      if (held?.head === head && (held.stale !== 0) === stale) continue;
       statements.upsertImport.run({
         branch,
         source,

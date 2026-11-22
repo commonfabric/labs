@@ -2592,7 +2592,11 @@ const dropUnslicedCurrencyTables = (database: Database): void => {
  * redirect under the slice at the redirect's own key, and hold no row that
  * says whether a slice was stored not vouched for. The index holds nothing a
  * serving loop does not record again, so such a store loses its records once
- * and every piece of it starts on its next demand.
+ * and every piece of it starts on its next demand. What the store tells the
+ * spaces that read it stays, as does what it heard from the spaces it reads:
+ * a space that kept its records goes on hearing of a change here, and the
+ * index brings each row it tells up to date the first time it is changed
+ * with no cursor (`advance()` in `currency-index.ts`).
  */
 const dropCurrencyRecordsBeforeDecides = (database: Database): void => {
   if (

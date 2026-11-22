@@ -1741,6 +1741,65 @@ describe("currency-index", () => {
         });
       });
 
+      it("holds a root once for two pieces beneath it that read the first one's output, and names both as the ones whose reads hold it", () => {
+        storeChain();
+        const asOf = write("of:outer", "computed:nestedA", "computed:nestedB");
+        store(asOf, [
+          record("of:nestedA", {
+            under: ["of:outer"],
+            reads: [derived("computed:a")],
+            produces: ["computed:nestedA"],
+          }),
+          record("of:nestedB", {
+            under: ["of:outer"],
+            reads: [derived("computed:a")],
+            produces: ["computed:nestedB"],
+          }),
+          record("of:outer"),
+        ]);
+        write("of:in");
+        advance();
+
+        const { held } = judgeCurrencyRoots(engine, {
+          space: SPACE,
+          roots: ["of:outer"],
+          rows: [
+            { id: "computed:nestedA", scopeKey: "space" },
+            { id: "computed:nestedB", scopeKey: "space" },
+          ],
+          epoch: EPOCH,
+        });
+        expect(held.map(({ root, readers }) => ({
+          root,
+          readers: [...readers].sort(),
+        }))).toEqual([{
+          root: "of:outer",
+          readers: ["of:nestedA", "of:nestedB"],
+        }]);
+      });
+
+      it("refuses the one that read no one instance of what the first one writes, once the first one's input changed", () => {
+        // A read that names no instance names no instance to demand of the
+        // first one, so starting the reader's own piece is what is left.
+
+        const asOf = storeChain();
+        store(asOf, [
+          record("of:b", {
+            reads: [derived("computed:a", ANY_INSTANCE)],
+            produces: ["computed:b"],
+          }),
+        ]);
+        write("of:in");
+        advance();
+
+        expect(upstreamOf(["of:b"])).toEqual({
+          servable: [],
+          refused: ["of:b"],
+          held: [],
+          upstream: [],
+        });
+      });
+
       it("refuses the last one when what it read is an instance the first one writes and, stored not vouched for, does not vouch for", () => {
         // The first one ran for the instance and was recorded, so a further
         // run of it vouches for no more.
@@ -1986,6 +2045,26 @@ describe("currency-index", () => {
           2,
           0,
         ]);
+      });
+
+      it("marks `1` a clean slice of another piece that read the slot at the viewer's key, once an input of the slice that wrote it changed", () => {
+        const asOf = storeForAlice();
+        store(Math.max(asOf, write("of:reader")), [
+          record("of:reader", {
+            slices: [{
+              key: ALICE_USER,
+              vouched: true,
+              reads: [{ ...derived("computed:out"), scopeKey: "space" }],
+              vouches: [],
+            }],
+          }),
+        ]);
+        expect(markOf("of:reader", ALICE_USER)).toBe(0);
+
+        write({ id: "of:prefs", scope: "user" });
+        advance();
+
+        expect(markOf("of:reader", ALICE_USER)).toBe(1);
       });
 
       it("stores marked `1` a slice of another piece that read the slot at the viewer's key while the slice that wrote it is marked", () => {
@@ -2529,6 +2608,38 @@ describe("currency-index", () => {
         writeSource("of:far");
 
         expect(pull()).toEqual([]);
+      });
+
+      it("returns stale what a piece computes, once the source's index starts over with its records dropped", () => {
+        // What `open()` leaves of an index it drops the records of: the rows
+        // the store tells its readers, and no cursor.
+
+        storeReading("of:piece", "computed:far");
+        const asOf = storeProducer();
+        pull();
+        source.database.exec(`
+          DELETE FROM currency_slice;
+          DELETE FROM currency_read;
+          DELETE FROM currency_write;
+          DELETE FROM currency_vouch;
+          DELETE FROM currency_cursor;
+        `);
+
+        const pulled = pullCurrencyExports(source, {
+          space: SOURCE,
+          reader: SPACE,
+          since: selectCurrencySourcePosition(engine, {
+            space: SPACE,
+            source: SOURCE,
+          }),
+        });
+
+        expect(pulled.entries).toEqual([{
+          id: "computed:far",
+          scopeKey: "space",
+          head: asOf,
+          stale: true,
+        }]);
       });
     });
 

@@ -243,7 +243,10 @@ ends by bringing what the store reports of its registered instances up to
 date, for the documents a commit wrote and the pieces whose slices changed,
 so finding the readers to tell is one read of the rows that moved. A row
 takes a position when it changes, and none when its instance is first
-registered, since the space registering it is handed the row.
+registered, since the space registering it is handed the row. An index
+that starts over with its records dropped keeps these rows, and the first
+call that changes it brings every one of them up to date, so a reader
+that kept its records hears that what it read is no longer vouched for.
 
 ### A circle of triggers
 
