@@ -29,19 +29,24 @@ asked. The per-user derivation and its readers are gone.
 
 Against each recorded baseline that declares `people` `PerUser`, the
 pattern-update proof reports a changed scope at `result.people` and
-`result.$VIEWS.chats.people`: 12 of the manager's baselines
+`result.$VIEWS.chats.people`: 13 of the manager's baselines
 (`system/fabrichat/manager.tsx`), and 42 of Home's (`system/home/home.tsx`),
 whose result types its `chatManager` as `FabriChatManagerOutput`, at the same
-paths under `result.chatManager`.
+paths under `result.chatManager`. Those are every baseline of either pattern
+that declares `people` `PerUser`; the contracts recorded with this change
+declare it `PerSession`, and are gated against as usual.
 
-Four entries already named some of those baselines, for the outgoing notices
-declared per user and for the room handles. Each names these paths beside its
-own, and cites this record for them; the baselines no entry named are named by
-two entries of this record's. Four older entries, for the add-member offer and
-for the views declared per user, named `people` against baselines that declare
-it `PerSession`. The proof no longer blames `people` there, and the gate
-refuses an entry naming a path none of its pairs blames, so those paths left
-those entries.
+Five entries already named some of those baselines. The entry for the room
+policy's `maxAttachments` named the `people` paths already, for its earlier
+baselines, which declare `people` `PerSession`; of its baselines, only the last
+now blames them. The four for the outgoing notices declared per user and for the
+room handles name these paths beside their own. Each of the five cites this
+record for them. The 8 manager baselines and 19 Home baselines no entry named
+are named by two entries of this record's. Four older entries, for the
+add-member offer and for the views declared per user, named `people` against
+baselines that declare it `PerSession`. The proof no longer blames `people`
+there, and the gate refuses an entry naming a path none of its pairs blames, so
+those paths left those entries.
 
 ## What a running piece sees
 

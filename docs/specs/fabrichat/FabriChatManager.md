@@ -31,8 +31,9 @@ nothing else: deriving it reads no room. Every link to a room the manager
 stores, in `roomMembership`, `direct`, `requests` and `outgoingNotices`, is
 declared a handle with nothing behind it (`Cell<unknown>`), so a read of any of
 them, Home's own sync among them, keeps the link and loads no room. The
-derivations that read rooms, `people` from the listed rooms' rosters and the
-notices with nothing left to tell from each notice's room's roster, first
+derivations that read rooms, `people` from the listed rooms' rosters, for a
+session that has sent `askForPeople`, and the notices with nothing left to
+tell from each notice's room's roster, first
 re-type the links to `ChatRoomLink`, which declares the rosters; nothing else
 reads them. `outgoingNotices` leaves those notices out in a derivation of its
 own, which also leaves out a notice of a room the catalog says is deleted, and
@@ -45,10 +46,13 @@ catalog, each asks the memory server whether its notice's room's space is
 deleted, which opens that space; a notice of a room the catalog marks deleted
 is dropped from what the manager stores by its next request naming a room, so
 that its instance stops asking. `people` re-types each link where it reads
-that room's roster, in an instance of its own per room, and each notice's
-instance re-types its notice's room the same way. Each instance's argument
-holds the handle, so no list the manager stores types a room as more than a
-handle; a reader that syncs such a list would walk into every room it names.
+that room's roster, in an instance of its own per room, which runs only once
+the session has asked: until then the rooms list `people` is drawn from is
+empty, so a session that hasn't asked runs no instance and reads no roster.
+Each notice's instance re-types its notice's room the same way. Each
+instance's argument holds the handle, so no list the manager stores types a
+room as more than a handle; a reader that syncs such a list would walk into
+every room it names.
 The roster instances each run by their room's link, so a room listed,
 forgotten, listed again or adopted from the catalog starts or stops its own
 instance and leaves every other room's as it was, and telling the rooms apart
@@ -57,13 +61,14 @@ The notices' instances run over the notices in the order the manager stores
 them, so a notice dropped moves the instances of the notices after it.
 
 The manager wishes for `#profile` twice. The user's wish, stored per user,
-supplies the profile `rooms`, `people` and `outgoingNotices` are derived from,
-which are the user's. A second wish, declared `PerSession`, supplies the profile
-each session finds for itself: whether the start controls are disabled, the chat
-address the rendering shows, and the profile each act is taken as are derived
-from it, each per session. A session whose wish finds no profile, or fails,
-writes that into its own instance of the second wish, never over the one
-another session of the user reads (see
+supplies the profile `rooms`, `people` and `outgoingNotices` are derived from.
+`rooms` and `outgoingNotices` are the user's; `people` is derived per session,
+since whether it lists anyone is the session's own. A second wish, declared
+`PerSession`, supplies the profile each session finds for itself: whether the
+start controls are disabled, the chat address the rendering shows, and the
+profile each act is taken as are derived from it, each per session. A session
+whose wish finds no profile, or fails, writes that into its own instance of the
+second wish, never over the one another session of the user reads (see
 [`ChatManagerOutput`](ChatManagerOutput.md#scopes)).
 
 Each saved membership lists its room, with what its handler recorded: the

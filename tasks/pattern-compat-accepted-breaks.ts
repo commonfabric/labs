@@ -1369,10 +1369,11 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // manager's request outcomes carry the policy through the rooms they
     // link.
     //
-    // These baselines also report the scope the manager's `people` declares,
-    // which `fabrichat-view-scopes-per-user-break.md` records, in the result
-    // role. The entry names both paths, and the last baseline, recorded with
-    // that scope, reports the policy alone.
+    // The last baseline, recorded with `people` declared per user, also
+    // reports the scope `people` declares now, per session, which
+    // `fabrichat-people-asked-break.md` records, in the result role; the
+    // baselines before it declare `people` per session as well. The entry
+    // names both paths.
     pattern: "system/fabrichat/manager.tsx",
     baselines: [
       "20261011T221322Z-ESDR30hfSt52JJjG",
@@ -1419,7 +1420,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "a room's policy states `maxAttachments`, an optional number, where its schema took any value; no stored policy holds the key" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
       "; and the outgoing notices are declared per user as well (docs/history/fabrichat-outgoing-notices-per-user-break.md)" +
-      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)",
+      "; and the manager's room links are handles that declare nothing of the room (docs/history/fabrichat-room-handles-break.md)" +
+      "; and the people are declared per session, listed only for a session that has asked for them (docs/history/fabrichat-people-asked-break.md)",
     record: "docs/history/fabrichat-max-attachments-break.md",
   },
   {
