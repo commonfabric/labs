@@ -94,6 +94,12 @@ describe("glob", () => {
       expect(runs("[[:word:]]", "go")).toEqual([["[[:word:]]", "regex"]]);
     });
 
+    it("reads a `^` that negates a class name in the Go syntax only", () => {
+      expect(runs("[[:^alpha:]]", "go")).toEqual([["[[:^alpha:]]", "regex"]]);
+      expect(runs("[[:^alpha:]]")).toEqual([["[[:^alpha:]]", "string"]]);
+      expect(runs("[[:^foo:]]", "go")).toEqual([["[[:^foo:]]", "string"]]);
+    });
+
     it("opens no class with a `[` that ends a range", () => {
       expect(runs("[a-[:x:]]]")).toEqual([
         ["[a-[:x:]", "regex"],

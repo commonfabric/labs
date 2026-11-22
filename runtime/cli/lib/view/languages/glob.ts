@@ -10,9 +10,10 @@
  * backslash escapes and no `[:name:]` class holds. A `[` that ends a range,
  * as in `[a-[]`, opens no class, and a class whose name the tool does not
  * know makes the expression invalid. In Go's syntax, only `^` negates an
- * expression, a class name runs to the first `:]`, a `]` or `-` where a member
- * starts makes the expression invalid unless a class comes before the `-`, and
- * so does a range that ends in an unescaped `-` or runs backwards. Those are
+ * expression, a class name runs to the first `:]` and may start with a `^` that
+ * negates the class, a `]` or `-` where a member starts makes the expression
+ * invalid unless a class comes before the `-`, and so does a range that ends in
+ * an unescaped `-` or runs backwards. Those are
  * the only checks the Go syntax makes of what Docker accepts; it does not
  * check Go's escapes, nor follow Docker's rewriting of a `*` or `?` inside a
  * bracket expression into an expression of its own. Git
@@ -152,7 +153,10 @@ function bracketEnd(
       if (close === end && !go) return -1;
       if (close < end && close > at + 2 && text[close - 1] === ":") {
         const name = text.slice(at + 2, close - 1);
-        if (!(go ? GO_CLASSES : GIT_CLASSES).has(name)) return -1;
+        const known = go
+          ? GO_CLASSES.has(name.startsWith("^") ? name.slice(1) : name)
+          : GIT_CLASSES.has(name);
+        if (!known) return -1;
         at = close + 1;
         low = -1;
         afterClass = true;

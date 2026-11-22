@@ -697,17 +697,18 @@ including character classes such as `[:space:]`, as regular-expression syntax,
 pattern is colored after its C-style quoting is removed, and a pattern whose
 quoting is not valid runs to the first blank. An attribute's name is a property
 name, after an optional `-` or `!`, and a value after `=` is a string. A pattern
-that starts `[attr]` defines a macro, whose name the structure tree lists beside
-each pattern and indexes for definition peeks. Git reads macro definitions only
-in a repository's top-level file, which a file's name does not show, so the
-scanner colors them in every file. Git ignores a whole line when a name on it is
-not one Git accepts, when its pattern starts with `!`, or when it is 2,048 bytes
-long or longer, not counting a carriage return before its line feed. A `#` after
-the start of a line is such a name rather than a comment. The scanner leaves
-those lines uncolored and out of the structure tree. A pattern followed by one
-`name=value` attribute is also an Ansible inventory host line, so the INI
-fixture and the Loom Git attributes fixture declare each other as highlighting
-peers. The fixtures come from all four repositories.
+written `[attr]name`, with a name after the prefix, defines a macro, whose name
+the structure tree lists beside each pattern and indexes for definition peeks.
+Git reads macro definitions only in a repository's top-level file, which a
+file's name does not show, so the scanner colors them in every file. Git ignores
+a whole line when a name on it is not one Git accepts, when its pattern starts
+with `!`, or when it is 2,048 bytes long or longer, not counting a carriage
+return before its line feed. A `#` after a line's pattern is such a name rather
+than a comment. The scanner leaves those lines uncolored and out of the
+structure tree. A pattern followed by one `name=value` attribute is also an
+Ansible inventory host line, so the INI fixture and the Loom Git attributes
+fixture declare each other as highlighting peers. The fixtures come from all
+four repositories.
 
 Every character other than white space in the four files has a token class,
 and each file reconstructs exactly. The machine that measured the scanner was
