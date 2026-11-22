@@ -15,6 +15,19 @@
  * who is looking, in an instance of their own, and the one rule below
  * releases each instance to the principal it was computed for.
  *
+ * What the table derives from a view, `describeSeat`'s line and the count
+ * of cards held, is that principal's as the view is: the rule is applied
+ * where the view is read, and what is computed from it carries the release.
+ * `handAgainstState` reads the sealed state as well, so nobody is shown what
+ * it computes.
+ *
+ * TODO(cfc): two derivations are still withheld from the principal they are
+ * for. One first computed before the table's setup keeps, on the fact that it
+ * exists, the label of the sealed view it was first computed from. And the
+ * list of seat labels is reached through a document every principal shares,
+ * which declares the sealed clause of the view the list is mapped from.
+ * DERIVED-RELEASE-FINDING.md beside this file says what each needs.
+ *
  * Nothing here is per seat. The table keeps no list of who may read what, no
  * key for a seat and no copy of a view: who holds a seat is a fact inside the
  * sealed state, and the release follows it.
@@ -24,6 +37,7 @@
  * change it rests on.
  */
 import {
+  computed,
   type Confidential,
   currentPrincipal,
   type Default,
@@ -350,6 +364,27 @@ export const peek = lift((
   { state }: { state: Game | null | undefined },
 ): string => gameOf(state).hands.map((hand) => hand.join(" ")).join(" | "));
 
+/**
+ * One line about the seat a view is of. It reads a view and nothing else, so
+ * what it computes is as released as the view it was handed.
+ */
+export const describeSeat = lift((
+  { view }: { view: TableView },
+): string =>
+  view.seat === -1
+    ? `watching, ${view.deck} cards left`
+    : `seat ${view.seat}, holding ${view.hand.join(" ")}`
+);
+
+/**
+ * A view's hand beside the size of the deck it was dealt from, read from the
+ * sealed state. Reading the state makes what it computes as sealed as the
+ * state, whatever else it read.
+ */
+export const handAgainstState = lift((
+  { view, state }: { view: TableView; state: Game | null | undefined },
+): string => `${view.hand.join(" ")} of ${gameOf(state).deck.length}`);
+
 //
 // The table
 //
@@ -367,8 +402,20 @@ export interface CardTableOutput {
   /** What the principal looking may see of the table. */
   view: TableView;
 
+  /** One line about the seat of the principal looking. */
+  summary: string;
+
+  /** How many cards the principal looking holds. */
+  held: number;
+
+  /** A label for each seat, written for the principal looking. */
+  seats: { label: string }[];
+
   /** Every hand, which nobody is shown. */
   peek: string;
+
+  /** The principal's hand beside the deck's size, which nobody is shown. */
+  mixed: string;
 
   /** Propose a move, as whoever sends it. */
   move: Stream<Move>;
@@ -376,6 +423,11 @@ export interface CardTableOutput {
 
 const CardTable = pattern<CardTableInput, CardTableOutput>(({ state }) => {
   const view = viewFor({ state });
+  const summary = describeSeat({ view });
+  const held = computed(() => view.hand.length);
+  const seats = view.counts.map((cards) => ({
+    label: computed(() => cards === 0 ? "no cards" : `${cards} cards`),
+  }));
   return {
     [NAME]: "Card table: hidden hands, one view per viewer",
     [UI]: (
@@ -385,11 +437,20 @@ const CardTable = pattern<CardTableInput, CardTableOutput>(({ state }) => {
           <div id="table-seat">Your seat: {view.seat}</div>
           <div id="table-hand">Your hand: {view.hand}</div>
           <div id="table-deck">Cards left: {view.deck}</div>
+          <div id="table-summary">{summary}</div>
+          <div id="table-held">Cards held: {held}</div>
+          <ul id="table-seats">
+            {seats.map((seat) => <li>{seat.label}</li>)}
+          </ul>
         </cf-vstack>
       </cf-screen>
     ),
     view,
+    summary,
+    held,
+    seats,
     peek: peek({ state }),
+    mixed: handAgainstState({ view, state }),
     move: move({ state }),
   };
 });

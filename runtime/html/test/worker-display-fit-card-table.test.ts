@@ -545,6 +545,120 @@ Deno.test("display fit of the card table", async (t) => {
   });
 });
 
+/** The cells the table derives from its view and nothing else. */
+const DERIVED = ["summary", "held"] as const;
+
+/** Computes everything `table` derives from its view. */
+const derive = async (table: Table): Promise<void> => {
+  for (const derived of [...DERIVED, "seats", "mixed"]) {
+    await at(table, derived).pull();
+  }
+};
+
+Deno.test("display fit of what the card table derives from a view", async (t) => {
+  await atTable(async ({ space, alice, bob, carol, table, join }) => {
+    const bobsTable = await join(bob, table);
+    await derive(table);
+    await derive(bobsTable);
+    const moves = await play({ alice, bob }, table, bobsTable, true);
+    // Carol opens the table once it is dealt, so her instances of what it
+    // derives are first computed from a view the rule already releases.
+    const carolsTable = await join(carol, table);
+    await seen(carolsTable, moves);
+    await derive(carolsTable);
+    await derive(table);
+    await derive(bobsTable);
+
+    await t.step("shows a principal a lift of their own view", () => {
+      expect(at(carolsTable, "summary").get()).toBe(
+        "watching, 46 cards left",
+      );
+      expect(refusal(carol, at(carolsTable, "summary"), space))
+        .toBeUndefined();
+    });
+
+    await t.step("shows a principal a computed over their own view", () => {
+      expect(at(carolsTable, "held").get()).toBe(0);
+      expect(refusal(carol, at(carolsTable, "held"), space)).toBeUndefined();
+    });
+
+    await t.step("shows it still once the view has changed", async () => {
+      await send(alice, table, "move", { kind: "draw" });
+      await seen(carolsTable, moves + 1);
+      await derive(carolsTable);
+      expect(at(carolsTable, "summary").get()).toBe(
+        "watching, 45 cards left",
+      );
+      expect(refusal(carol, at(carolsTable, "summary"), space))
+        .toBeUndefined();
+    });
+
+    await t.step("shows nobody what another's view was derived into", () => {
+      for (const derived of DERIVED) {
+        for (const viewer of [alice, bob]) {
+          expect(refusal(viewer, at(carolsTable, derived), space, carol))
+            .toBeDefined();
+        }
+        expect(refusal(carol, at(table, derived), space, alice))
+          .toBeDefined();
+        expect(refusal(carol, at(bobsTable, derived), space, bob))
+          .toBeDefined();
+      }
+    });
+
+    await t.step(
+      "shows nobody a derivation that read the state too",
+      async () => {
+        await derive(table);
+        expect(String(at(table, "mixed").get())).toContain(handOf(table)[0]);
+        expect(refusal(alice, at(table, "mixed"), space)).toBeDefined();
+        expect(refusal(carol, at(carolsTable, "mixed"), space)).toBeDefined();
+        expect(refusal(bob, at(table, "mixed"), space, alice)).toBeDefined();
+      },
+    );
+
+    await t.step(
+      "withholds a derivation first computed before the first move",
+      () => {
+        // TODO(cfc): Alice's and Bob's instances were created while the
+        // table had no state `move` wrote, so the view they were computed
+        // from was sealed, and the label on a path's existence is the one
+        // its creation had (CFC §8.12.8, freeze-at-creation). Every later
+        // value is released; the existence label never is.
+        // `DERIVED-RELEASE-FINDING.md` beside the pattern has the ruling
+        // this needs.
+
+        expect(at(table, "summary").get()).toBe(
+          `seat 0, holding ${handOf(table).join(" ")}`,
+        );
+        for (const derived of DERIVED) {
+          expect(refusal(alice, at(table, derived), space)).toBeDefined();
+          expect(refusal(bob, at(bobsTable, derived), space)).toBeDefined();
+        }
+      },
+    );
+
+    await t.step("withholds a list mapped from a view", () => {
+      // TODO(cfc): every clause on Carol's list and its items is released
+      // to her. What refuses is the document the map's result is reached
+      // through, which every principal shares. It carries the sealed clause
+      // as declared policy, from the join the builder takes over a node's
+      // inputs when the graph is assembled, and no evidence about a value
+      // releases a declaration. `DERIVED-RELEASE-FINDING.md` has the detail.
+
+      expect(at(carolsTable, "seats").get()).toEqual([
+        { label: "4 cards" },
+        { label: "no cards" },
+        { label: "3 cards" },
+        { label: "no cards" },
+      ]);
+      expect(refusal(carol, at(carolsTable, "seats"), space)).toBeDefined();
+      expect(refusal(alice, at(carolsTable, "seats"), space, carol))
+        .toBeDefined();
+    });
+  });
+});
+
 Deno.test("display fit of the card table for an owner with no seat", async (t) => {
   await atTable(async ({ space, alice, bob, table, join }) => {
     const bobsTable = await join(bob, table);
@@ -731,3 +845,31 @@ Deno.test("display fit of the card table on a serving runtime", async (t) => {
     });
   }, true);
 });
+
+Deno.test(
+  "display fit of what the card table derives on a serving runtime",
+  async (t) => {
+    await atTable(async ({ space, alice, bob, carol, table, join }) => {
+      const bobsTable = await join(bob, table);
+      const moves = await play({ alice, bob }, table, bobsTable, true);
+      const carolsTable = await join(carol, table);
+      await seen(carolsTable, moves);
+      await until(
+        at(carolsTable, "summary"),
+        (summary) => summary === "watching, 46 cards left",
+      );
+
+      await t.step("shows a principal a lift of their own view", () => {
+        expect(refusal(carol, at(carolsTable, "summary"), space))
+          .toBeUndefined();
+      });
+
+      await t.step("shows nobody what another's view was derived into", () => {
+        expect(refusal(alice, at(carolsTable, "summary"), space, carol))
+          .toBeDefined();
+        expect(refusal(bob, at(carolsTable, "summary"), space, carol))
+          .toBeDefined();
+      });
+    }, true);
+  },
+);

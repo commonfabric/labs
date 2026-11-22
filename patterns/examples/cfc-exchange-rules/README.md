@@ -84,6 +84,16 @@ option, which is off by default. `MODULE-NAMED-AUDIENCE-PROPOSAL.md` is the
 specification change it rests on, with the cases that ran and what the change
 leaves open.
 
+What a pattern derives from a released value is as released as the value. A rule
+guarded only by evidence about the value it releases, as every rule here that
+names a `TransformedBy` is, is applied where a `computed`, a `lift` or a handler
+reads that value, and what that code writes carries the clause as the rule left
+it. A derivation that also read something no rule releases keeps that input's
+clause. `derived-release.test.tsx` shows both over `blessed-computation.tsx`'s
+tally. Two cases are still withheld, both at the card table and both recorded in
+`DERIVED-RELEASE-FINDING.md`: a derivation first computed while its input was
+still sealed, and a list a pattern maps from a released value.
+
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
 as the policy subject and requires that exact manifest to be installed in the
@@ -108,6 +118,7 @@ Run:
 deno task cf check patterns/examples/cfc-exchange-rules/direct-release.tsx --show-transformed --no-run
 deno task cf test patterns/examples/cfc-exchange-rules/direct-release.test.tsx
 deno task cf test patterns/examples/cfc-exchange-rules/blessed-computation.test.tsx
+deno task cf test patterns/examples/cfc-exchange-rules/derived-release.test.tsx
 deno task cf test patterns/examples/cfc-exchange-rules/blessed-object.test.tsx
 deno task cf test patterns/examples/cfc-exchange-rules/custody-projector.test.tsx
 deno task cf test patterns/examples/cfc-exchange-rules/custody-answer-room.test.tsx

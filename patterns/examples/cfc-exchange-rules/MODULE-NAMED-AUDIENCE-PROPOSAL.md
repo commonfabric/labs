@@ -16,9 +16,11 @@ Each claim about the runtime says how it is known:
 
 The specification text quoted here was read from a checkout of
 `commonfabric/specs` at its `main` branch on 2026-11-21. The labs pin is
-`239fc839`, the head of specs#88. The quoted sections (§5.3, §8.9.3, §8.9.4,
-§15's `TransformedBy` row) were not compared between the two, so a reviewer with
-the pin checked out should confirm them there.
+`239fc839`, the head of specs#88. §5.3 is the same text at both (**ran**, on
+2026-11-22: `git diff 239fc839 main -- cfc/05-policy-architecture.md` is empty).
+The other quoted sections (§8.9.3, §8.9.4, §15's `TransformedBy` row) were not
+compared between the two, so a reviewer with the pin checked out should confirm
+them there.
 
 ## The case
 
@@ -142,8 +144,15 @@ rule add that principal to the policy's clause?
 - **It is value-intrinsic (§5.3).** The rule's only precondition is an integrity
   claim "bound to the exact current value and present in the consumed label", so
   it is "applied at observation, and values derived from that observation carry
-  the exchanged confidentiality". A viewer's own derivations of their view stay
-  theirs.
+  the exchanged confidentiality". What a viewer's instance derives from their
+  view carries the clause with `User(viewer)` beside the policy, so it is theirs
+  and nobody else's (**ran**: `cfc-exchange-at-observation.test.ts`, and the
+  display test's "derives from a view" cases). Labs did not do this until the
+  change recorded under "Three labs changes classed as conforming"; the flow
+  stage joined labels as stored, and a derivation stayed sealed to everyone. Two
+  derivations are still withheld from their viewer, for reasons that are not
+  this rule's: one first computed while the view was still sealed, and a list
+  mapped from the view. "What this leaves open" has both.
 - **Nothing is stored per recipient.** One computation node, one instance for
   each principal who looks, and the label of an instance names only the
   principal whose instance it is.
@@ -164,6 +173,16 @@ attempt that did not ask, an attempt the runtime answered with no principal, and
 an attempt whose runs were answered with more than one mint no such atom. A
 `viewer`-bearing atom is never retained as an input witness: it states who one
 attempt was for, which is no fact about an attempt that reads its output."
+
+This sentence is in tension with §5.3 as it stands, which says of a
+value-intrinsic rule that "The integrity that satisfied the rule is recorded as
+a witness on the derived value's `TransformedBy`", so that "the reduction stays
+auditable". Under the sentence above the atom that satisfied the viewer rule is
+not recorded on what is derived; what records the release there is the clause
+itself, which holds `User(viewer)`. The ruling should say which it wants. The
+branch does what the sentence above says (**ran**: the derived label in the
+display test's trace carried `TransformedBy{describeSeat}` and no witness naming
+a viewer), which under-claims integrity.
 
 **§8.7, a new subsection, "Release to the viewer of a computation".** "A module
 policy MAY release the output of an endorsed computation to the principal the
@@ -234,13 +253,24 @@ Theorems:
    `User(q)` are equal, where `f` is the endorsed computation and every instance
    is stamped by the mint. A principal learns the function's value at their own
    identity and nothing else of the state.
-3. **The viewer does not survive derivation.** For any attempt that reads a
-   `viewer`-bearing output, no atom it mints carries that `viewer` unless the
-   runtime supplied the same principal to it. This is `retainedWitnesses`
-   leaving the atom out, plus the meet.
+3. **The viewer does not survive derivation as integrity.** For any attempt that
+   reads a `viewer`-bearing output, no atom it mints carries that `viewer`
+   unless the runtime supplied the same principal to it. This is
+   `retainedWitnesses` leaving the atom out, plus the meet. The release does
+   survive as confidentiality, by §5.3: the attempt's output carries the clause
+   the rule left, `Policy ∨ User(viewer)`, and theorem 5 is about that.
 4. **Leaving the atom out of the witnesses under-claims.** Every atom the
    reading attempt mints holds with the `viewer`-bearing atoms removed from its
    inputs' integrity.
+
+5. **A derivation is released to its inputs' viewers and to no one else.** For
+   an attempt whose every confidential input is a `viewer`-bearing output for
+   `q`, the output's label admits `q` and no other principal. For an attempt
+   that also read an input the rule does not release, the output's label admits
+   no principal that input's label does not; for one that read outputs for two
+   viewers, it admits neither. This is §5.3's carry composed with the CNF join:
+   each input contributes its own clause, and a principal must satisfy every
+   one.
 
 A hypothesis, stated as prose beside an abstracted definition and not as a
 theorem: the principal the runtime supplies to an attempt is the principal whose
@@ -263,7 +293,7 @@ Rejected variants, as `decide`-checked counterexamples in the examples module:
 
 If the model for an attempt's viewer does not exist when this is filed, the
 deferral is an entry in `cfc/notes/FUTURE-SPEC-WORK.md`, "Viewer Release
-Follow-Ups", with the four theorems under `### Formal proof tasks`.
+Follow-Ups", with the five theorems under `### Formal proof tasks`.
 
 ### Conformance statement
 
@@ -285,20 +315,25 @@ All **ran**, in `runtime/html/test/worker-display-fit-card-table.test.ts` (three
 principals, each in a client runtime of their own on one memory server) unless
 another file is named.
 
-| Case                                                                                        | Outcome                                                                                                                |
-| ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| A player reads their own instance of the view                                               | Released, the hand and each card of it                                                                                 |
-| A watcher reads their own instance                                                          | Released, and it holds no hand                                                                                         |
-| Any principal's ceiling against another principal's instance                                | Refused                                                                                                                |
-| The table's owner, with no seat                                                             | Their own instance holds no hand; a player's instance is refused them                                                  |
-| A request to sit that names another principal                                               | Seats the sender                                                                                                       |
-| The owner binds `move` from another module over the live state                              | Makes the owner's own moves; the witness holds; the owner is shown no hand                                             |
-| The owner runs the module a second time over the live state                                 | Computes the owner's own view again, and shows none of it                                                              |
-| Another module's handler writes the state                                                   | Refused at commit, "writeAuthorizedBy requires a trusted verified binding identity"                                    |
-| A player leaves their seat                                                                  | Their instance holds no hand at its next computation                                                                   |
-| The state, and a function of it no rule names                                               | Refused to everyone                                                                                                    |
-| The serving loop computes the view for two demanders (`executor-fan-out.test.ts`, case (q)) | Each instance holds its own principal's value, stamped with that principal and the writer's witness                    |
-| The same table with a serving runtime running its handlers and computations                 | The memory server stores each principal's instance stamped with them; each is shown their own, and refused the other's |
+| Case                                                                                                           | Outcome                                                                                                                |
+| -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| A player reads their own instance of the view                                                                  | Released, the hand and each card of it                                                                                 |
+| A watcher reads their own instance                                                                             | Released, and it holds no hand                                                                                         |
+| Any principal's ceiling against another principal's instance                                                   | Refused                                                                                                                |
+| The table's owner, with no seat                                                                                | Their own instance holds no hand; a player's instance is refused them                                                  |
+| A request to sit that names another principal                                                                  | Seats the sender                                                                                                       |
+| The owner binds `move` from another module over the live state                                                 | Makes the owner's own moves; the witness holds; the owner is shown no hand                                             |
+| The owner runs the module a second time over the live state                                                    | Computes the owner's own view again, and shows none of it                                                              |
+| Another module's handler writes the state                                                                      | Refused at commit, "writeAuthorizedBy requires a trusted verified binding identity"                                    |
+| A player leaves their seat                                                                                     | Their instance holds no hand at its next computation                                                                   |
+| The state, and a function of it no rule names                                                                  | Refused to everyone                                                                                                    |
+| A lift or a `computed` over the view, in the instance of a principal who opened the table after its first move | Released to that principal, and again after the view changes                                                           |
+| The same derivation, against any other principal's ceiling                                                     | Refused                                                                                                                |
+| A lift that read the view and the state                                                                        | Refused to everyone, the view's own principal included                                                                 |
+| A lift or a `computed` over the view, in an instance first computed before the first move                      | Refused to its own principal (`DERIVED-RELEASE-FINDING.md`, cause 2)                                                   |
+| A list mapped from a list in the view                                                                          | Refused to its own principal (`DERIVED-RELEASE-FINDING.md`, cause 3)                                                   |
+| The serving loop computes the view for two demanders (`executor-fan-out.test.ts`, case (q))                    | Each instance holds its own principal's value, stamped with that principal and the writer's witness                    |
+| The same table with a serving runtime running its handlers and computations                                    | The memory server stores each principal's instance stamped with them; each is shown their own, and refused the other's |
 
 | Ruling | Ruled by | Date | Notes |
 | ------ | -------- | ---- | ----- |
@@ -329,7 +364,33 @@ another file is named.
   runtime holds.)
 - **The label names the viewer.** An instance's stored label holds its viewer's
   identifier, in a document already keyed by that principal. The shared
-  documents hold no viewer (**ran**, case (q)).
+  documents hold no viewer (**ran**, case (q)). What a principal's instance
+  derives from their view holds the identifier too, in the clause the rule left,
+  and those documents are instances of the same principal (**ran**: the derived
+  cells in the display test are user-scoped). A handler that read a view and
+  wrote a shared document would store that clause there; no test writes one
+  (**inferred**).
+- **A derivation created before the release stays withheld.** A path's existence
+  label is the join of the run that created it and is never replaced (§8.12.8,
+  freeze-at-creation). The table's state is `null` until its setup, so a view
+  computed then is sealed, and a `computed` or a `lift` over the view that first
+  runs then keeps a sealed existence label however often it is recomputed. A
+  principal who opens the table before its first move is refused their own
+  derivations; one who opens it afterwards is shown theirs (**ran**: the display
+  test, "withholds a derivation first computed before the first move" and "shows
+  a principal a lift of their own view"). Labs conforms to §8.12.8 here, so this
+  needs a ruling. `DERIVED-RELEASE-FINDING.md` beside this file gives three
+  options and recommends that a computation's result take its existence label
+  from its setup.
+- **A list mapped from the view stays withheld.** The builder gives every node's
+  output the join of what its inputs' schemas declare, and a map's result
+  container stores it as declared policy, which no evidence about a value
+  releases. The list and its items are released to their principal; the document
+  they are reached through is not (**ran**: "withholds a list mapped from a
+  view"; the route by which the declaration is stored is **inferred**). So a
+  pattern can show fields of its view by path, and a `computed` or a `lift` over
+  them, and cannot yet reshape a list of seats with `.map`.
+  `DERIVED-RELEASE-FINDING.md` says what that needs.
 - **A lift's output through a link is still unwitnessed.** A second run handed
   the state through a link computes the caller's own view and is shown none of
   it (labs gap D). That is fail-closed, and nothing in this proposal needs it
@@ -347,9 +408,9 @@ another file is named.
   reads nothing labeled and its write names no writer (**ran, not kept**: the
   first form of case (q)). That is the pinned "unattributed input" rule.
 
-## Two labs changes classed as conforming
+## Three labs changes classed as conforming
 
-Both are on the branch, each in a commit of its own with a test. They are
+All are on the branch, each in a commit of its own with a test. They are
 recorded here so that a reviewer with the specification can check the class.
 
 **A record its writer reads and sets keeps the writer's stamp.** §8.9.3 gives
@@ -372,8 +433,21 @@ field equal before and after kept the stamp of an earlier run. The change
 records an action's result write as a whole-value destination, as `Cell.set` is.
 Test: the same file, "a projection computed before the writer's first move".
 
-If either is ruled a semantic gap instead, it needs a marker and the option's
-gate, and the text above is the proposal.
+**The flow stage exchanges a label where it is read.** §5.3: "A runtime MUST
+evaluate exchange wherever a label is consumed: when a value is observed into a
+computation", and of a value-intrinsic rule, "values derived from that
+observation carry the exchanged confidentiality". Labs evaluated exchange at its
+release gates and nowhere else, so a rule's evidence was gone by the time a gate
+read anything derived. The change runs the value-intrinsic rules at each
+location an observation consumed, on the evidence about the value there, and
+joins what they leave. It is not specific to this proposal: it reproduces on
+`origin/main` with `blessed-computation.tsx`, and the commit applies there
+unchanged. Tests: `runtime/runner/test/cfc-exchange-at-observation.test.ts`,
+`derived-release.test.tsx`, and the display test's "derives from a view" cases.
+`DERIVED-RELEASE-FINDING.md` is the full account.
+
+If any of the three is ruled a semantic gap instead, it needs a marker and the
+option's gate, and the text above is the proposal.
 
 ## The six refusals, classified
 
@@ -425,6 +499,17 @@ Not posted.
 > `User(viewer)` to the policy clause. The proposal, in ruling form with the
 > pseudocode delta and the theorems it needs, is
 > `MODULE-NAMED-AUDIENCE-PROPOSAL.md` on the same branch.
+>
+> **What a pattern can do with its view.** It can show any field of it by path,
+> and a `computed` or a `lift` over it: we found labs was not carrying a
+> value-intrinsic rule's result to derived values as §5.3 and D5 require, and
+> fixed that in general (it reproduced on `main` with no viewer code). Two
+> things are still withheld, and neither is about this rule. A derivation first
+> computed before the table's first move keeps a sealed existence label under
+> §8.12.8's freeze-at-creation, which I think wants a ruling that a
+> computation's result takes its existence label from its setup. And a `.map`
+> over a list in the view is refused on the join the builder declares on the
+> map's container. `DERIVED-RELEASE-FINDING.md` has both.
 >
 > **What that withdraws from this thread.** For the custodian-owner case, my
 > questions about a carried `Members` clause, about players seating themselves,
