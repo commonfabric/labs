@@ -290,20 +290,20 @@ Deno.test("the first CI wave leaves runner capacity for another run", async () =
       `two overlapping runs must fit within GitHub's ` +
       `${githubParallelRunnerLimit}-runner limit`,
   );
-  // A run's lanes wait for the job counting them, so what holds them is the
-  // cap: half the limit for a pull request's run, and two thirds for the full
-  // run.
   assert(
     LANES_MAX <= githubParallelRunnerLimit / 2,
-    `a run may take ${LANES_MAX} lanes, more than half of GitHub's ` +
+    `a pull request may take ${LANES_MAX} lanes, more than half of GitHub's ` +
       `${githubParallelRunnerLimit}-runner limit`,
   );
+  const parallel = ci.jobs.tests!.strategy?.["max-parallel"];
+  assert(parallel !== undefined && parallel > 0);
   assert(
-    FULL_LANES_MAX <= githubParallelRunnerLimit * 2 / 3,
-    `the full run may take ${FULL_LANES_MAX} lanes, which leaves less than a ` +
-      `third of GitHub's ${githubParallelRunnerLimit}-runner limit for ` +
-      `anything else`,
+    parallel <= githubParallelRunnerLimit * 2 / 3,
+    `the test matrix may use ${parallel} runners at once, which leaves ` +
+      `less than a third of GitHub's runner capacity for anything else`,
   );
+  assert(FULL_LANES_MAX > parallel);
+  assert(FULL_LANES_MAX <= 256, "a job matrix may contain at most 256 jobs");
 });
 
 Deno.test("every step we name carries a phase marker", async () => {
@@ -488,7 +488,11 @@ interface Job {
   permissions?: Record<string, string>;
   env?: Record<string, string>;
   outputs?: Record<string, string>;
-  strategy?: { "fail-fast"?: boolean; matrix?: Record<string, unknown> };
+  strategy?: {
+    "fail-fast"?: boolean;
+    "max-parallel"?: number;
+    matrix?: Record<string, unknown>;
+  };
   steps?: Step[];
 }
 
