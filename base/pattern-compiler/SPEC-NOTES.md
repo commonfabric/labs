@@ -10592,3 +10592,100 @@ note says `map`, it names the case. `PL` is `plan-and-label-templates.md`.
      the fields the handle's schema declares and not on the member's whole
      document, or `crossrefTable` over a `map` that copies the two fields; no
      record for a row whose value and label inputs stayed.
+
+## Milestone 3, first round: a compiled piece in the runner
+
+Notes 579 on are about the first round of milestone 3 of
+`docs/plans/compiled-pattern-language-integration.md` (2026-11-22): behind the
+experimental option `compiledPatterns` the runner starts a piece from a plan.
+Note 579 is the build plan, written before any code. Whenever a note says `map`,
+it names the case.
+
+579. **The build plan.** The steps, in the order they are built.
+     - _Where the code lives (provisional decision P50)._ The executor stays in
+       `base/pattern-compiler/exec/` and imports nothing of `runtime/`. The part
+       that touches storage, the scheduler and Contextual Flow Control lives in
+       `runtime/runner/src/compiled/` and imports the executor by relative path,
+       which runs with the order of the layers (`runtime/` imports `base/`).
+       `runtime.ts` and `index.ts` of the runner do not import `src/compiled/`,
+       so a runtime with the option off loads none of it. The executor is not
+       made a workspace package in this round: the directory also holds
+       `compare/`, a harness that imports the runner, and a workspace member
+       there would be a production import from `base/` to `runtime/` and a cycle
+       between two packages. The plan for it: `exec/` becomes the member
+       `@commonfabric/pattern-executor` and `compare/` moves beside the runner's
+       benchmarks.
+     - _What moves._ `compare/runtime-transactions.ts` moves to
+       `runtime/runner/src/compiled/transactions.ts` as it is, and the file in
+       `compare/` re-exports it, so the harnesses and tests of milestones 1, 2
+       and 4 run unchanged. `compare/` keeps every harness and gains the one of
+       step 7 (`compare/runner-path.ts`).
+     - _Step 1, start._
+       `startCompiledPiece(runtime, tx, artifact, argument,
+       resultCell)`
+       in `runtime/runner/src/compiled/piece.ts`, the call beside `Runtime.run`.
+       It refuses with the option off. The result document of the instance is
+       the entity of `resultCell`, every other document the executor makes is
+       the entity `of:<identifier>` of the cell's space, and the creation and
+       the first derivation are written into `tx`, which the caller commits as
+       it commits the transaction it gives `Runtime.run`. Value code is
+       evaluated as the executor evaluates it; no sandbox.
+     - _Step 2, events._ The executor tells the piece of each stream whose
+       identifier an evaluation computes (a new option of `Instance`), and
+       stores for it a document that holds the runtime's stream marker. The
+       piece registers one event handler of the runtime's scheduler for the link
+       to that document (`Scheduler.addEventHandler`), so `Cell.send` on the
+       member of the result reaches it. The handler runs the compiled handler in
+       the transaction the scheduler gives it (a new entry of `Instance` that
+       handles one event and settles nothing) and the scheduler commits. The
+       derivation is one action of the scheduler for the piece, an effect, which
+       the piece invalidates (`Scheduler.invalidateAction`) when the executor
+       has marked something; it runs `Instance.settle()` in the scheduler's
+       transaction. _Settled_ for a compiled piece is what it is for any piece:
+       `Runtime.idle()` resolves when no event is queued and the derivation
+       action is not invalid; the harness awaits it and then the commits
+       (`Scheduler.idleWithPendingCommits()`). Provisional decision P51: one
+       scheduler action for a piece; which cones run is decided by the
+       executor's marking inside it. The alternative, a scheduler node for each
+       cone instance, puts the executor's memo into the scheduler and is the
+       design's scheduler, which the prototype has to hold first. Provisional
+       decision P52: an event sent through the runtime is held by the
+       scheduler's queue and is not appended to a stream document, and no
+       watermark is written; the stream document of `execution-and-storage.md`
+       §4.7 belongs to the serving loop of milestone 6. Provisional decision
+       P53: every transaction the executor opens within one call of the
+       scheduler (a request transaction and the derivation behind it) is written
+       into the scheduler's one transaction.
+     - _Step 3, the store._ The executor's store stays the copy in memory that
+       keeps the identity of arrays (`KeyState`). A document the executor did
+       not make is read from the replica when it is first reached (`Store`
+       option `load`), and never again: the change channel replaces what changed
+       (step 4). Each position read is journaled in the transaction as today
+       (`TransactionHooks.read`).
+     - _Step 4, writes by others._ The piece subscribes to the storage
+       notifications. A commit whose source is no transaction of the piece and
+       that changed a document the executor holds is applied to the store
+       outside any transaction (`Store.write`, which marks the readers), and the
+       derivation action is invalidated.
+     - _Step 7 on the fixtures of growth, built before steps 5 and 6_, so that
+       both have a harness that measures them: `compare/runner-path.ts` starts
+       today's piece with `Runtime.run` and the compiled piece with
+       `startCompiledPiece`, sends with `Cell.send`, writes with `Cell.set`,
+       awaits settled, compares the results and reports per event the time, the
+       commits, the documents written and the preparation's counters. Then
+       Topics on the measurement worktree.
+     - _Step 6._ A read through a handle registers the position read; the
+       records of rows a `lift` writes are given for the rows that changed.
+     - _Step 5, rows as documents (note 575)._ In `transactions.ts`, selectable
+       by an option of the piece, with the boundary taken from the plan when it
+       is loaded.
+     - _Stubbed, with the reason._ A commit of the piece that the storage
+       refuses after the executor went on: the piece stops and reports it; the
+       withdrawal of milestone 6 is not built. Documents that are not in the
+       replica when they are reached read as absent (no sync, no network). A
+       piece is not started again from what it stored (no resume). An effect's
+       request leaves through nothing (`Instance.outbox`). The shell does not
+       render a compiled piece: a link whose path crosses an array by key and
+       the nesting of the rendered tree stay the executor's forms. A
+       continuous-integration job that builds the crate is not added; the tests
+       of the runner path load the checked-in artifacts of `compare/fixtures/`.
