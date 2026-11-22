@@ -1,6 +1,6 @@
 ---
 name: perf-investigation
-description: Investigate Common Fabric slowness end to end — measure it, attribute it to a phase and then to a cause, and land the fix wherever it turns out to belong. Use when something is slow, when it gets slower as the data grows, when asked to profile, benchmark, or measure a scaling curve, or when a performance fix needs proving rather than asserting. A slow pattern is the usual entry point; the cause is as often in the runtime.
+description: Investigate Common Fabric slowness end to end — measure it, attribute it to a phase and then to a cause, and land the fix wherever it turns out to belong. Use when something is slow, when it gets slower as the data grows, when asked to profile, benchmark, or measure a scaling curve, when a performance fix needs proving rather than asserting, or when the dashboard's benchmark tiles report a rise and the commit behind it has to be found. A slow pattern is the usual entry point; the cause is as often in the runtime.
 ---
 
 # Performance Investigation
@@ -41,6 +41,17 @@ then you understand the problem and it no longer looks like a trap. If an
 investigation ends with only a pattern fix, ask what made the cost invisible —
 the answer is usually a rule worth writing down, and sometimes a runtime change
 that makes the cheap spelling the natural one.
+
+## A rise the dashboard reports
+
+When the starting point is a benchmark tile on the team dashboard rather than
+something slow in hand, the first question is which commit, and the dashboard
+already holds the answer as JSON in `/bench/tiles.json` and `/bench/steps.json`.
+"Benchmark data as JSON" in `dashboard/README.md` says how to read them to find
+the commits behind a rise, and defines the fields. Read those before downloading
+`bench-results` artifacts: every download costs requests from the GitHub quota
+the whole team shares, and the dashboard has already fetched them. Once the
+window is a handful of commits, the instruments below take over.
 
 ## Instruments, cheapest first
 
