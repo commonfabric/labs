@@ -230,8 +230,8 @@ export interface VintageRuntime {
  *   still all there in `revision`, which is where `cf inspect history`,
  *   `timeline` and `diff` read them from.
  *
- * The engine's own use is unaffected either way: `sameStoredOriginal`
- * (`memory/v2/engine.ts`) is a string equality reached only through
+ * The engine's own use is unaffected either way: `storesCommit()`
+ * (`memory/v2/stored-commit.ts`) is reached only through
  * `SELECT_EXISTING_COMMIT`, keyed `session_id`+`local_seq`, and a fresh replay
  * session cannot match a stored session id. Commit ROWS always stay, so
  * `MAX(seq)` allocation and the `revision.commit_seq` foreign key are intact.
@@ -241,9 +241,10 @@ export interface VintageRuntime {
  * 50 targets actually materialized, and the two produced byte-identical output
  * including all 18 failure diagnostics.
  *
- * The right long-term fix is in the engine — storing a hash of the operations
- * rather than the operations — at which point this becomes a no-op and should
- * be deleted.
+ * The engine stores a digest in place of the operations for a derived commit
+ * only (`docs/specs/memory-v2/02-storage.md`). These fixtures hold authored
+ * commits alone, which the engine stores whole, so the transform still removes
+ * operations the engine keeps.
  */
 function compactVintageStore(path: string): void {
   const db = new Database(path);

@@ -239,7 +239,10 @@ Deno.test("oracle: reports a store whose commits keep only a digest of their rea
 Deno.test("oracle: does not certify a store when a forged commit's reads are stored as a digest", async () => {
   const { engine, path } = await seedContendedStore();
   close(engine);
-  forge(path, encodeStoredCommit(forgedCommit, false));
+  forge(
+    path,
+    encodeStoredCommit(forgedCommit, { reads: false, operations: true }),
+  );
 
   const space = openSpace(path);
   try {
@@ -689,7 +692,7 @@ Deno.test("oracle: does not count a digest of pending reads only", async () => {
           basisSeq: 0,
         }],
       },
-    }, false),
+    }, { reads: false, operations: true }),
   );
 
   const space = openSpace(path);

@@ -208,6 +208,8 @@ interface Commit {
   branch: BranchId;
   sessionId: SessionId;
   localSeq: number;
+  // A stored commit may hold a digest in place of its reads, its operations
+  // or both (02-storage.md §3.3).
   original: ClientCommit | BranchLifecycleWrite;
   resolution: {
     seq: number;

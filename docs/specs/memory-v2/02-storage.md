@@ -138,23 +138,53 @@ CREATE INDEX idx_commit_invocation_ref ON commit (invocation_ref);
 `/memory/transact`. Creating or deleting a branch appends no `commit` row
 (section 8).
 
-A `ClientCommit`'s read set decides its own admission. A server stores
-digests unless it is opened with them off (`MEMORY_STORE_READS_DIGEST=false`),
-and keeps a read set only where something reads it afterward. That is the genesis receipt at seq 1, and
-a commit whose `patch` the server accepted as an identity
-([03-commit-model.md](./03-commit-model.md) §3.6.1), whose reads a later
-pending read through that layer consults (§3.6.3). Any other commit that
-carries reads is stored in digest form: every member but `reads`, and a
-`digest` member of the whole submission in their place. A `digest` member
-the client submitted is replaced, and the digest covers it.
+The log holds a `ClientCommit` as submitted, except for two members it can
+leave out: its `reads` and its `operations`. Each is left out under its own
+rule, given below, and a commit both rules cover is stored without either. A
+stored commit that lacks one of them holds a `digest` member of the whole
+submission in its place. A `digest` member the client submitted is replaced,
+and the digest covers it.
 
 ```json
 { "sha256": "<SHA-256 of the whole submitted commit's encoding, unpadded base64url>",
-  "bytes": 7417893, "confirmed": 55570, "pending": 0 }
+  "bytes": 7417893, "confirmed": 55570, "pending": 0, "operations": 7 }
 ```
 
-A replay is matched against either form (§3.7.4 of the commit model). Both
-determine the whole submission, up to a SHA-256 collision. The byte length and
+`sha256` and `bytes` are taken over the UTF-8 bytes of the whole submitted
+encoding, reads and operations included. `confirmed` and `pending` are present
+when the stored commit holds no `reads`, and `operations` when it holds no
+`operations`; each counts what the commit carried. Every other member is
+stored as it arrived. A stored form is recognized by its shape: a commit
+without its `reads` or without its `operations`, which no `ClientCommit` can
+be, holding a digest with the counts for what it lacks.
+
+**Reads.** A `ClientCommit`'s read set decides its own admission. A server
+stores digests of reads unless it is opened with them off
+(`MEMORY_STORE_READS_DIGEST=false`), and keeps a read set only where something
+reads it afterward. That is the genesis receipt at seq 1, and a commit whose
+`patch` the server accepted as an identity
+([03-commit-model.md](./03-commit-model.md) §3.6.1), whose reads a later
+pending read through that layer consults (§3.6.3). Any other commit that
+carries reads is stored without them.
+
+**Operations.** A derived commit is stored without its operations when its
+`seq` is not 1 and it carries at least one operation, every one a `set`,
+`patch` or `delete`. Each of those operations that wrote anything is in
+`revision` at the commit's `seq` and its operation index. A derived commit
+holding a `sqlite`, `apply-op` or `release-op-field` operation keeps its
+operations: a `sqlite` operation's statement is stored nowhere else, and the
+operation-field tables join to the whole request. A commit of any other class
+keeps its operations.
+
+The engine also writes a revision of its own into a derived commit that touches
+a stream's entries document: the patch of that document's `eventWatermark`, at
+the operation index after the highest one the commit's operations wrote. That
+index can be `digest.operations` or more, or the index of an operation that
+wrote nothing, so nothing in a commit stored without its operations tells such
+a revision from one an operation wrote.
+
+A replay is matched against every form (§3.7.4 of the commit model). Each
+determines the whole submission, up to a SHA-256 collision. The byte length and
 counts are for the reader of the log; nothing in admission reads them.
 Offline readers cannot replay a read set stored this way, nor one compaction
 hollowed, nor a read at a basis older than what compaction kept of the
@@ -166,12 +196,16 @@ have today, is recorded in
 [verifiable-execution/implementation-plan.md](../verifiable-execution/implementation-plan.md)
 §2.6.
 
-Every server reads both forms whether or not it stores digests. A server from
-before digest-form rows refuses a retry of a commit stored with a digest as a
-replay mismatch, so a deployment rolling back to such a version first turns
-digests off, deploys, and lets the commits already stored with digests settle,
-so that none is still being retried or read as a pending layer when the older
-version starts.
+Every server reads every form, whether or not it stores digests of reads. A
+server from before a form refuses a retry of a commit stored in it as a replay
+mismatch. For a commit stored without its reads, a deployment rolling back to
+such a version first turns digests off, deploys, and lets the commits already
+stored with digests settle, so that none is still being retried or read as a
+pending layer when the older version starts. A commit stored without its
+operations is a derived commit, which only the process that made it resubmits,
+because its session names that process (`server-side-execution/protocol.md`
+§2). A server started from an older version therefore receives no retry of
+one, and its offline readers list such a commit with no operations.
 
 `resolution` stores server-side decisions:
 
