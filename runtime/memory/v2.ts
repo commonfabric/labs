@@ -798,8 +798,8 @@ export const identityOfScopeKey = (
  * (protocol.md §1's transaction identity model, §7's closed metadata list).
  * The wave's envelope carries the SpaceServer's service identity — no user
  * principal, no session — so the identity the envelope can no longer
- * express rides here, per write, at action-run granularity. Two distinct
- * things, never conflated:
+ * express rides here, per write, at action-run granularity. Three
+ * distinct things, the first two never conflated:
  *
  * - ADDRESSING — `scopeKey`, the explicit instance a scoped write lands
  *   in. The engine keys rows by it; admission REQUIRES it on every scoped
@@ -812,6 +812,10 @@ export const identityOfScopeKey = (
  *   action). Recorded, not read: no enforcement path consumes it today
  *   (protocol.md §1 — audit/forensics, and the anticipated signature
  *   graduation).
+ * - PRODUCER — `action`, the durable identity of the action whose run
+ *   made the write, the one the run's basis rows are keyed by
+ *   (serving-loop.md §3b). With the attribution it names the run, so a
+ *   stored write says which run produced it. Recorded, not read.
  *
  * Server-internal carriage like `commitClass` and `holder`: `ClientCommit`
  * cannot express annotations, and no session-facing path supplies them.
@@ -826,6 +830,7 @@ export type DerivedWriteAnnotation = {
   scopeKey?: string;
   actingUser?: string;
   actingSession?: string;
+  action?: string;
 };
 
 export type Reference = string & {

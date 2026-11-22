@@ -3142,8 +3142,14 @@ describe("stage F serving loop", () => {
       );
     await awaitAdmitted(server, () => demandedKeyCommits().length >= 2);
     expect(demandedKeyCommits().length).toBe(2);
+    // A commit also annotates the writes of runs that act as nobody, which
+    // name their action alone.
     for (const annotations of demandedKeyCommits()) {
       for (const annotation of annotations) {
+        if (
+          annotation.scopeKey === undefined &&
+          annotation.actingUser === undefined
+        ) continue;
         expect(annotation.actingUser).toBe(demanded.principal);
         expect(annotation.actingSession).toBeUndefined();
       }

@@ -1705,9 +1705,9 @@ tx SEALS into the wave accumulator instead of committing to the store.
 Sealing fires everything commit fires today: the read log feeds the graph
 and basis rows (§3b), CFC evaluates against this action's reads (§3c),
 and the action's passed writes join the wave — carrying the run's
-identity annotations with them: the acting identity and, on scoped
-writes, the explicit `scope_key` (protocol.md §1's transaction
-identity model). Attach at SEAL time, when the run still knows who
+identity annotations with them: the acting identity, the id of the
+action and, on scoped writes, the explicit `scope_key` (protocol.md
+§1's transaction identity model). Attach at SEAL time, when the run still knows who
 it ran as (the demand's instance or the event's stamped actor); the
 wave commit step only batches what sealing attached — by then no
 single "current user" exists to consult, which is the model, not a
