@@ -972,10 +972,11 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "properties",
-    // A shell or make variable assignment, an HCL or DOT attribute, and an INI
-    // key are each a `name=value` line, and shell, make, HCL, DOT, and INI
-    // color the name as properties files color their keys.
-    highlightingPeers: ["hcl", "shell", "make", "ini", "dot"],
+    // A shell or make variable assignment, an HCL or DOT attribute, an INI
+    // key, and a dotenv variable are each a `name=value` line, and shell,
+    // make, HCL, DOT, INI, and dotenv color the name as properties files
+    // color their keys.
+    highlightingPeers: ["hcl", "shell", "make", "ini", "dot", "dotenv"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "b457431c6f5e32305a2e6feb7901f8d05a9b2f6e",
     surveyPath: "android/gradle/wrapper/gradle-wrapper.properties",
@@ -1040,6 +1041,51 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "subgraph", className: "storageKeyword" },
     afterEvidence: { text: "subgraph", className: "storageKeyword" },
     incompleteEvidence: { text: "subgraph", className: "storageKeyword" },
+  },
+  {
+    languageId: "dotenv",
+    // A dotenv line is a `name=value` line, and properties files, INI, shell,
+    // make, and HCL color the name as dotenv colors a variable's.
+    highlightingPeers: ["properties", "ini", "shell", "make", "hcl"],
+    surveyRepository: "labs",
+    surveyCommit: "60cd866374f5b59bdf16c8469ad3f71cd35ac040",
+    surveyPath: "runtime/toolshed/.env.example",
+    before: new URL("./dotenv-labs/before.env", import.meta.url),
+    after: new URL("./dotenv-labs/after.env", import.meta.url),
+    incomplete: new URL("./dotenv-labs/incomplete.env", import.meta.url),
+    selection: {
+      filenames: [
+        "runtime/toolshed/.env.example",
+        "runtime/toolshed/.env.test",
+        ".env",
+        ".env.development.local",
+        "airtable/config.env.example",
+        "memory-router/deploy/toolshed-env.example",
+      ],
+      aliases: ["dotenv"],
+      unclaimedFilenames: [
+        "ansible/roles/ci-mac/files/brew.env",
+        "k8s/components/kyverno/release.env",
+      ],
+    },
+    beforeEvidence: { text: "LOG_LEVEL", className: "propertyName" },
+    afterEvidence: { text: "LOG_LEVEL", className: "propertyName" },
+    incompleteEvidence: { text: "LOG_LEVEL", className: "propertyName" },
+  },
+  {
+    languageId: "dotenv",
+    // Shell colors the operator of a `${NAME:-default}` expansion as dotenv
+    // does.
+    highlightingPeers: ["shell"],
+    surveyRepository: "commonfabric-weaver",
+    surveyCommit: "c62f7166d063baab093da0874f745b490c02c643",
+    surveyPath: "apple/scripts/asc-account.env",
+    before: new URL("./dotenv-weaver/before.env", import.meta.url),
+    after: new URL("./dotenv-weaver/after.env", import.meta.url),
+    incomplete: new URL("./dotenv-weaver/incomplete.env", import.meta.url),
+    beforeEvidence: { text: ":-", className: "operator" },
+    afterEvidence: { text: ":-", className: "operator" },
+    incompleteEvidence: { text: ":-", className: "operator" },
   },
   {
     languageId: "proguard",
@@ -1150,6 +1196,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "xml",
+    // An attribute alone on its line is a dotenv `name=value` line, and dotenv
+    // colors the name as XML colors an attribute's.
+    highlightingPeers: ["dotenv"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "6cc0468bdafdf8dc44cd86faba60ff5912ead945",
     surveyPath: "android/app/src/main/AndroidManifest.xml",

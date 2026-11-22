@@ -49,6 +49,7 @@ import { leanToolchainLanguage } from "./lean-toolchain/language.ts";
 import { propertiesLanguage } from "./properties/language.ts";
 import { iniLanguage } from "./ini/language.ts";
 import { dotLanguage } from "./dot/language.ts";
+import { dotenvLanguage } from "./dotenv/language.ts";
 import { tomlLanguage } from "./toml/language.ts";
 import { hclLanguage } from "./hcl/language.ts";
 import {
@@ -262,12 +263,14 @@ export interface SharedExtension {
 /**
  * Declarative names that select a language. Extensions include their leading
  * dot and compare without case. Exact filenames and regular-expression
- * patterns match a path's basename. Aliases name explicit language overrides.
- * Interpreters match the command words extracted from a shebang, whose first
- * word is the executable's basename. Signatures are text that only a source in
- * this language starts with, such as an XML declaration, compared exactly.
- * Shared extensions name syntaxes that one extension cannot tell apart, and
- * pair each with the source evidence that settles it.
+ * patterns match a path's basename, and a pattern claims only a name that no
+ * language's extension or exact filename claims. Aliases name explicit
+ * language overrides. Interpreters match the command words extracted from a
+ * shebang, whose first word is the executable's basename. Signatures are text
+ * that only a source in this language starts with, such as an XML
+ * declaration, compared exactly. Shared extensions name syntaxes that one
+ * extension cannot tell apart, and pair each with the source evidence that
+ * settles it.
  */
 export interface LanguageMetadata {
   readonly extensions: readonly string[];
@@ -287,8 +290,8 @@ export interface Language {
   /**
    * Stable identifier, such as `"typescript"`, `"markdown"`, `"json"`,
    * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"kotlin"`, `"shell"`,
-   * `"make"`, `"org"`, `"directive"`, `"dockerfile"`, `"binary"`, or
-   * `"plain-text"`.
+   * `"make"`, `"org"`, `"directive"`, `"dockerfile"`, `"dotenv"`, `"binary"`,
+   * or `"plain-text"`.
    */
   readonly id: string;
 
@@ -498,9 +501,7 @@ let languages: readonly Language[] | undefined;
 
 /**
  * Every language the pager knows, most specific first, built on first use.
- * Plain text remains the fallback after metadata selection. The Dockerfile
- * language claims names by their prefix, so it comes after every language that
- * claims an extension, and `Dockerfile.sh` is shell.
+ * Plain text comes last and remains the fallback after metadata selection.
  *
  * The list is lazy so this module's top level never reads the concrete language
  * singletons: they and this module form an import cycle (a language's semantic
@@ -537,9 +538,11 @@ function allLanguages(): readonly Language[] {
     bazelrcLanguage,
     shellLanguage,
     makeLanguage,
+    dockerfileLanguage,
     propertiesLanguage,
     iniLanguage,
     dotLanguage,
+    dotenvLanguage,
     proguardLanguage,
     gitAttributesLanguage,
     xmlLanguage,
@@ -547,7 +550,6 @@ function allLanguages(): readonly Language[] {
     directiveLanguage,
     binaryLanguage,
     plainTextLanguage,
-    dockerfileLanguage,
   ];
 }
 
@@ -577,22 +579,26 @@ export function createByteLanguageDetector(): {
   };
 }
 
-/** Whether metadata claims a filename. */
-export function metadataMatchesFilename(
+/** Whether metadata claims a filename by its extension or its exact name. */
+export function metadataNamesFilename(
   metadata: LanguageMetadata,
   fileName: string | undefined,
 ): boolean {
   if (fileName === undefined) return false;
   const filename = basename(fileName);
   const lower = filename.toLowerCase();
-  if (
-    metadata.extensions.some((extension) =>
-      lower.endsWith(extension.toLowerCase())
-    )
-  ) {
-    return true;
-  }
-  if (metadata.filenames.includes(filename)) return true;
+  return metadata.extensions.some((extension) =>
+    lower.endsWith(extension.toLowerCase())
+  ) || metadata.filenames.includes(filename);
+}
+
+/** Whether one of the metadata's filename patterns matches a filename. */
+export function metadataPatternMatchesFilename(
+  metadata: LanguageMetadata,
+  fileName: string | undefined,
+): boolean {
+  if (fileName === undefined) return false;
+  const filename = basename(fileName);
   return metadata.filenamePatterns.some((pattern) =>
     regularExpressionMatches(pattern, filename)
   );
@@ -680,14 +686,21 @@ function decodeTextInput(
   };
 }
 
-/** The language filename metadata selects, or undefined when none claims it. */
+/**
+ * The language filename metadata selects, or undefined when none claims it. A
+ * filename pattern claims a name only when no language claims it by extension
+ * or exact name, so a pattern such as dotenv's `.env.*` leaves `.env.json` to
+ * JSON.
+ */
 export function languageMatchingFilename(
   fileName: string | undefined,
 ): Language | undefined {
-  for (const language of allLanguages()) {
-    if (metadataMatchesFilename(language.metadata, fileName)) return language;
-  }
-  return undefined;
+  return allLanguages().find((language) =>
+    metadataNamesFilename(language.metadata, fileName)
+  ) ??
+    allLanguages().find((language) =>
+      metadataPatternMatchesFilename(language.metadata, fileName)
+    );
 }
 
 /** The language a shared extension, a shebang, or a signature selects from

@@ -23,8 +23,9 @@ import {
   languageMatchingSources,
   type LanguageMetadata,
   languageNames,
-  metadataMatchesFilename,
   metadataMatchesSharedExtension,
+  metadataNamesFilename,
+  metadataPatternMatchesFilename,
   renderedLinesFor,
 } from "../lib/view/languages/language.ts";
 import type { LanguageDecoder } from "../lib/view/languages/decoder.ts";
@@ -71,6 +72,7 @@ import { gitAttributesLanguage } from "../lib/view/languages/gitattributes/langu
 import { leanLanguage } from "../lib/view/languages/lean/language.ts";
 import { leanToolchainLanguage } from "../lib/view/languages/lean-toolchain/language.ts";
 import { dotLanguage } from "../lib/view/languages/dot/language.ts";
+import { dotenvLanguage } from "../lib/view/languages/dotenv/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
@@ -117,13 +119,20 @@ Deno.test("language metadata matches extensions, exact names, and compound patte
     sharedExtensions: [{ extension: ".shared", content: /^demo:/ }],
   };
 
-  assert(metadataMatchesFilename(metadata, "/repo/source.DEMO"));
-  assert(metadataMatchesFilename(metadata, "/repo/BUILD"));
-  assert(metadataMatchesFilename(metadata, "containers/Dockerfile.x86_64"));
-  assert(metadataMatchesFilename(metadata, "containers/DOCKERFILE.debug"));
-  assert(!metadataMatchesFilename(metadata, "/repo/build"));
-  assert(!metadataMatchesFilename(metadata, "/repo/demo"));
-  assert(!metadataMatchesFilename(metadata, undefined));
+  assert(metadataNamesFilename(metadata, "/repo/source.DEMO"));
+  assert(metadataNamesFilename(metadata, "/repo/BUILD"));
+  assert(!metadataNamesFilename(metadata, "containers/Dockerfile.x86_64"));
+  assert(
+    metadataPatternMatchesFilename(metadata, "containers/Dockerfile.x86_64"),
+  );
+  assert(
+    metadataPatternMatchesFilename(metadata, "containers/DOCKERFILE.debug"),
+  );
+  assert(!metadataPatternMatchesFilename(metadata, "/repo/BUILD"));
+  for (const name of ["/repo/build", "/repo/demo", undefined]) {
+    assert(!metadataNamesFilename(metadata, name));
+    assert(!metadataPatternMatchesFilename(metadata, name));
+  }
 });
 
 Deno.test("language metadata claims a shared extension only with its evidence", () => {
@@ -137,7 +146,7 @@ Deno.test("language metadata claims a shared extension only with its evidence", 
     sharedExtensions: [{ extension: ".shared", content: /^demo:/ }],
   };
 
-  assert(!metadataMatchesFilename(metadata, "/repo/source.shared"));
+  assert(!metadataNamesFilename(metadata, "/repo/source.shared"));
   assert(
     metadataMatchesSharedExtension(metadata, "/repo/source.shared", "demo:"),
   );
@@ -221,6 +230,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("gitattributes"), gitAttributesLanguage);
   assertEquals(languageForName("dot"), dotLanguage);
   assertEquals(languageForName("graphviz"), dotLanguage);
+  assertEquals(languageForName("dotenv"), dotenvLanguage);
   assertEquals(languageForName("xml"), xmlLanguage);
   assertEquals(languageForName("svg"), xmlLanguage);
   assertEquals(languageForName("plist"), xmlLanguage);
@@ -262,9 +272,11 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "bazelrc",
     "shell",
     "make",
+    "dockerfile",
     "properties",
     "ini",
     "dot",
+    "dotenv",
     "proguard",
     "gitattributes",
     "xml",
@@ -272,7 +284,6 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "directive",
     "binary",
     "plain-text",
-    "dockerfile",
   ]);
   expect(languageNames()).toEqual([
     "typescript",
@@ -332,6 +343,9 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "make",
     "makefile",
     "mk",
+    "dockerfile",
+    "docker",
+    "containerfile",
     "properties",
     "java-properties",
     "ini",
@@ -340,6 +354,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "dot",
     "graphviz",
     "gv",
+    "dotenv",
     "proguard",
     "r8",
     "gitattributes",
@@ -361,9 +376,6 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "plain-text",
     "text",
     "plaintext",
-    "dockerfile",
-    "docker",
-    "containerfile",
   ]);
 });
 
