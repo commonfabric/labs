@@ -945,8 +945,27 @@ export type PlanInputs = {
   /** The elements of each collection a `fold` names. */
   readonly elements?: { readonly [collection: number]: PlanElements };
 
-  /** The addresses the reads of each `Plan.dynamicReads` entry read. */
+  /**
+   * The addresses the reads of each `Plan.dynamicReads` entry read. Where
+   * `dynamicGroups` has the entry, one address for each group of positions
+   * the reads went through that hold one label.
+   */
   readonly dynamic?: { readonly [reads: number]: readonly CfcAddress[] };
+
+  /**
+   * For an entry of `dynamic` that lists one address for each group of
+   * positions with equal labels: the number of positions the reads went
+   * through, and the number of groups, which is the number of addresses
+   * listed. An address stands for the positions of its group and for no
+   * other: a position whose label differs from every listed one is
+   * listed itself.
+   */
+  readonly dynamicGroups?: {
+    readonly [reads: number]: {
+      readonly positions: number;
+      readonly groups: number;
+    };
+  };
 
   /**
    * The inputs of the cone instance of each output an `output` node or an

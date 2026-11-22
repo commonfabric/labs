@@ -910,6 +910,41 @@ export class RuntimeTransactions implements TransactionHooks {
   }
 
   /**
+   * The positions a body read through a handle as a write record lists
+   * them: one address for each group of positions whose stored labels have
+   * one identifier, for a read of the value and for the reference observed
+   * there, and the number of positions and of groups where that leaves a
+   * position out. The label of the reads is the join of the labels of the
+   * positions, so the positions of a group add to it what the listed one
+   * adds. A position with no identifier, such as one the transaction in
+   * progress wrote, is listed itself. The grouping follows ruling Z75 (c),
+   * which names the members of one container by one member of each group.
+   */
+  #groupedReads(addresses: readonly Address[]): {
+    listed: CfcAddress[];
+    groups?: { positions: number; groups: number };
+  } {
+    const seen = new Set<string>();
+    const listed: CfcAddress[] = [];
+    for (const address of addresses) {
+      const value = this.labelOf(address.doc, address.path, "value");
+      const reference = value === undefined
+        ? undefined
+        : this.labelOf(address.doc, address.path, "identity");
+      if (value !== undefined && reference !== undefined) {
+        const key = `${value}|${reference}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
+      listed.push(this.#cfcAddress(address));
+    }
+    return listed.length === addresses.length ? { listed } : {
+      listed,
+      groups: { positions: addresses.length, groups: listed.length },
+    };
+  }
+
+  /**
    * The index, in the runtime's table of inputs of the transaction in
    * progress, of the entry `index` of the executor's table `table`, as the
    * runtime reads it. An entry is given an index again where what decides
@@ -938,6 +973,14 @@ export class RuntimeTransactions implements TransactionHooks {
           count,
         })),
       };
+    // The reads through a handle, with one address for each group of
+    // positions that hold one label (`#groupedReads`).
+    const dynamic = place.dynamic === undefined
+      ? undefined
+      : entries(place.dynamic, (addresses) => this.#groupedReads(addresses));
+    const grouped = Object.entries(dynamic ?? {}).filter(([, { groups }]) =>
+      groups !== undefined
+    );
     const formed = interner.inputs({
       slots: this.#slots(table, place.slots),
       ...(place.selections === undefined
@@ -955,10 +998,12 @@ export class RuntimeTransactions implements TransactionHooks {
       ...(place.elements === undefined
         ? {}
         : { elements: entries(place.elements, elements) }),
-      ...(place.dynamic === undefined ? {} : {
-        dynamic: entries(
-          place.dynamic,
-          (addresses) => addresses.map((address) => this.#cfcAddress(address)),
+      ...(dynamic === undefined ? {} : {
+        dynamic: entries(dynamic, ({ listed }) => listed),
+      }),
+      ...(grouped.length === 0 ? {} : {
+        dynamicGroups: Object.fromEntries(
+          grouped.map(([read, { groups }]) => [read, groups!]),
         ),
       }),
       ...(place.outputs === undefined ? {} : {

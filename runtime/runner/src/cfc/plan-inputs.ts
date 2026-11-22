@@ -34,6 +34,7 @@ export type NestedPlanInputs = {
   };
   readonly elements?: { readonly [collection: number]: NestedPlanElements };
   readonly dynamic?: { readonly [reads: number]: readonly CfcAddress[] };
+  readonly dynamicGroups?: PlanInputs["dynamicGroups"];
   readonly outputs?: { readonly [output: number]: NestedPlanInputs };
 };
 
@@ -136,6 +137,9 @@ export class PlanInputsInterner {
       ...(nested.dynamic === undefined
         ? {}
         : { dynamic: Object.fromEntries(ordered(nested.dynamic)) }),
+      ...(nested.dynamicGroups === undefined ? {} : {
+        dynamicGroups: Object.fromEntries(ordered(nested.dynamicGroups)),
+      }),
       ...(nested.outputs === undefined ? {} : {
         outputs: Object.fromEntries(
           ordered(nested.outputs).map(([output, inputs]) => [
@@ -227,6 +231,9 @@ export const nestedPlanInputs = (
       ),
     }),
     ...(inputs.dynamic === undefined ? {} : { dynamic: inputs.dynamic }),
+    ...(inputs.dynamicGroups === undefined
+      ? {}
+      : { dynamicGroups: inputs.dynamicGroups }),
     ...(inputs.outputs === undefined ? {} : {
       outputs: Object.fromEntries(
         Object.entries(inputs.outputs).map(([output, at]) => [
