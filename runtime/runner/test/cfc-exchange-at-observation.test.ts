@@ -11,7 +11,11 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
-import type { CfcPolicyRecordInput } from "../src/cfc/policy.ts";
+import {
+  buildCfcPolicyArtifactManifest,
+  cfcPolicyManifestDocId,
+  type CfcPolicyRecordInput,
+} from "../src/cfc/policy.ts";
 import type {
   CfcPolicyEvaluationMode,
   ImplementationIdentity,
@@ -220,6 +224,35 @@ const derive = async (
   expect((await tx.commit().settled).error).toBeUndefined();
 };
 
+/**
+ * One computation under `DERIVE` that reads the document `input` shallowly,
+ * as a read that stops at a container does, and writes what it saw to
+ * `output`. Returns how the commit settled.
+ */
+const deriveShallow = async (
+  runtime: Runtime,
+  input: string,
+  output: string,
+) => {
+  const tx = runtime.edit();
+  setCfcImplementationIdentity(tx, DERIVE);
+  const seen = tx.readOrThrow({
+    space,
+    scope: "space",
+    id: idOf(runtime, input, tx),
+    type: "application/json",
+    path: ["value"],
+  }, { nonRecursive: true });
+  tx.writeOrThrow({
+    space,
+    scope: "space",
+    id: idOf(runtime, output, tx),
+    path: ["value"],
+  }, JSON.stringify(seen));
+  tx.prepareCfc();
+  return await tx.commit().settled;
+};
+
 /** The clauses the value stamp of the document `cause` carries. */
 const clausesOf = (runtime: Runtime, cause: string): unknown[] => {
   const tx = runtime.readTx();
@@ -355,6 +388,224 @@ describe("exchange at observation", () => {
         await derive(runtime, ["tally"], "derived");
         expect(clausesOf(runtime, "derived")).toEqual([SEALED]);
       }, { rules: SINK_SCOPED_RULES });
+    });
+  });
+
+  describe("a shallow read of a list", () => {
+    // A read that stops at a container observes how long the list is, and
+    // the length's own stamp says who last changed it.
+
+    const seedList = (runtime: Runtime, lengthWriter: ImplementationIdentity) =>
+      seed(runtime, "list", ["2-1", "1-2"], [{
+        path: [],
+        origin: "derived",
+        observes: "shape",
+        label: { confidentiality: [SEALED] },
+      }, {
+        path: [],
+        origin: "derived",
+        observes: "value",
+        label: { confidentiality: [SEALED], integrity: [transformedBy(TALLY)] },
+      }, {
+        path: ["length"],
+        origin: "derived",
+        observes: "value",
+        label: {
+          confidentiality: [SEALED],
+          integrity: [transformedBy(lengthWriter)],
+        },
+      }]);
+
+    it("carries no clause where the rule's code wrote the length too", async () => {
+      await withRuntime(async (runtime) => {
+        await seedList(runtime, TALLY);
+        const settled = await deriveShallow(runtime, "list", "derived");
+        expect(settled.error).toBeUndefined();
+        expect(clausesOf(runtime, "derived")).toEqual([]);
+      });
+    });
+
+    it("keeps the sealed clause where other code wrote the length", async () => {
+      await withRuntime(async (runtime) => {
+        await seedList(runtime, OTHER);
+        const settled = await deriveShallow(runtime, "list", "derived");
+        expect(settled.error).toBeUndefined();
+        expect(clausesOf(runtime, "derived")).toEqual([SEALED]);
+      });
+    });
+  });
+
+  describe("an evaluation that runs out of fuel", () => {
+    // Dropping one alternative of a clause tightens it, so keeping the
+    // clauses as read would be the looser label: the attempt fails instead
+    // (§5.3.2).
+
+    const viewers = Array.from({ length: 65 }, (_, i) => `did:key:viewer-${i}`);
+    const NARROWING_RULES: CfcPolicyRecordInput[] = [{
+      id: "narrow",
+      rules: viewers.map((viewer) => ({
+        id: `narrow-${viewer}`,
+        appliesTo: cfcAtom.user(viewer),
+        preCondition: {
+          integrity: [{
+            type: CFC_ATOM_TYPE.TransformedBy,
+            identity: {
+              kind: "verified",
+              moduleIdentity: "module:table",
+              symbol: "tallyBallot",
+            },
+          }],
+        },
+        post: { dropClause: true },
+      })),
+    }];
+
+    it("fails the derivation rather than join the clauses as read", async () => {
+      await withRuntime(async (runtime) => {
+        await seed(runtime, "wide", "2-1", [{
+          path: [],
+          origin: "derived",
+          observes: "value",
+          label: {
+            confidentiality: viewers.map(releasedTo),
+            integrity: [transformedBy(TALLY)],
+          },
+        }]);
+        const tx = runtime.edit();
+        setCfcImplementationIdentity(tx, DERIVE);
+        const value = runtime.getCell(space, "wide", undefined, tx).getRaw();
+        tx.writeOrThrow({
+          space,
+          scope: "space",
+          id: idOf(runtime, "derived", tx),
+          path: ["value"],
+        }, JSON.stringify(value));
+        tx.prepareCfc();
+        const settled = await tx.commit().settled;
+        expect(String(settled.error?.message)).toContain("exhausted fuel");
+      }, { rules: NARROWING_RULES });
+    });
+
+    it("narrows the clauses where the rules converge", async () => {
+      await withRuntime(async (runtime) => {
+        await seedStamped(runtime, "narrowed", "2-1", [transformedBy(TALLY)]);
+        await seed(runtime, "two", "2-1", [{
+          path: [],
+          origin: "derived",
+          observes: "value",
+          label: {
+            confidentiality: viewers.slice(0, 2).map(releasedTo),
+            integrity: [transformedBy(TALLY)],
+          },
+        }]);
+        await derive(runtime, ["two"], "derived");
+        expect(clausesOf(runtime, "derived")).toEqual([SEALED]);
+      }, { rules: NARROWING_RULES });
+    });
+  });
+
+  describe("a module policy named at many locations", () => {
+    // The manifest is resolved once for the pass, not once per location: a
+    // resolution reads the manifest document and binds it into the commit.
+
+    const artifact = buildCfcPolicyArtifactManifest({
+      formatVersion: 1,
+      moduleIdentity: "module:table",
+      symbol: "rules",
+      template: {
+        templateVersion: 1,
+        exchangeRules: [{
+          name: "release-tally",
+          preCondition: {
+            confidentiality: [{ thisPolicy: true }],
+            integrity: [{
+              type: CFC_ATOM_TYPE.TransformedBy,
+              identity: {
+                kind: "verified",
+                moduleIdentity: "module:table",
+                symbol: "tallyBallot",
+              },
+            }],
+          },
+          postCondition: { confidentiality: [], integrity: [] },
+        }],
+        dependencies: { authorityOnly: [], dataBearing: [] },
+        integrityRequirements: {},
+      },
+    });
+    const policyRef = {
+      type: CFC_ATOM_TYPE.Policy,
+      policyRefKind: "module",
+      moduleIdentity: artifact.manifest.moduleIdentity,
+      symbol: artifact.manifest.symbol,
+      policyDigest: artifact.policyDigest,
+    } as const;
+    const POLICY = { ...policyRef, subject: space } as CfcAtom;
+
+    /** Derives from `rows` stamped rows; returns the manifest reads made. */
+    const manifestReadsFor = async (rows: number): Promise<number> => {
+      let reads = 0;
+      await withRuntime(async (runtime) => {
+        // A write a schema labels with the policy installs its manifest in
+        // the space.
+        runtime.registerCfcPolicyManifests(space, [artifact]);
+        const install = runtime.edit();
+        runtime.getCell(
+          space,
+          "installs-policy",
+          {
+            type: "string",
+            ifc: {
+              confidentiality: [{
+                ...policyRef,
+                subject: { __ctOwningSpace: true },
+              }],
+            },
+          } as const,
+          install,
+        ).set("x");
+        expect((await install.commit().settled).error).toBeUndefined();
+        await seed(
+          runtime,
+          "rows",
+          Array.from({ length: rows }, (_, i) => `row-${i}`),
+          Array.from({ length: rows }, (_, i) => ({
+            path: [String(i)],
+            origin: "derived" as const,
+            observes: "value" as const,
+            label: {
+              confidentiality: [POLICY],
+              integrity: [transformedBy(TALLY)],
+            },
+          })),
+        );
+        const tx = runtime.edit();
+        setCfcImplementationIdentity(tx, DERIVE);
+        const value = runtime.getCell(space, "rows", undefined, tx).getRaw();
+        tx.writeOrThrow({
+          space,
+          scope: "space",
+          id: idOf(runtime, "derived", tx),
+          path: ["value"],
+        }, JSON.stringify(value));
+        tx.prepareCfc();
+        const manifestId = `of:${
+          cfcPolicyManifestDocId(artifact.policyDigest)
+        }`;
+        reads = tx.getReactivityLog().reads.filter((read) =>
+          read.id === manifestId ||
+          read.id === cfcPolicyManifestDocId(artifact.policyDigest)
+        ).length;
+        expect((await tx.commit().settled).error).toBeUndefined();
+        expect(clausesOf(runtime, "derived")).toEqual([]);
+      }, { rules: [] });
+      return reads;
+    };
+
+    it("reads the manifest as often for many locations as for one", async () => {
+      const one = await manifestReadsFor(1);
+      expect(one).toBeGreaterThan(0);
+      expect(await manifestReadsFor(20)).toBe(one);
     });
   });
 

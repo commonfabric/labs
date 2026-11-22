@@ -5394,6 +5394,11 @@ const deriveFlowJoinImpl = (
     tx.getCfcState().policySnapshot?.records.some((record) =>
       record.rules.some(isValueIntrinsicExchangeRule)
     ) ?? false;
+  // The module policies this pass resolved, so that each is read once rather
+  // than once per location: a read binds the manifest into the commit and
+  // adds its document's reads to the journal, and nothing this pass does
+  // writes a manifest.
+  const manifests = new Map<string, unknown>();
   /**
    * Returns `clauses`, the confidentiality one observation of the document
    * `document` in `space` consumed, as the value-intrinsic rules leave it:
@@ -5402,12 +5407,22 @@ const deriveFlowJoinImpl = (
    * matches it (`access-integrity.ts`). `entries`, `path` and `nonRecursive`
    * are what the observation's label was resolved from, and `evidence`
    * returns the entries a location's evidence is resolved over where those
-   * are not `entries`.
+   * are not `entries`. `membership` returns the further locations a read
+   * that stops at a container consumes: the container's length, whose
+   * writer the evidence at the container does not speak for.
    *
    * The clauses come back as read where the policy-evaluation dial is not
-   * `enforce`, where no location carries evidence, and where an evaluation
-   * ran out of fuel or could not resolve a policy it needed: an exchange
-   * only ever loosens, so keeping the label read is the fail-closed answer.
+   * `enforce` and where no location carries evidence. A policy that cannot
+   * be resolved fires none of its rules, so the clause naming it stays as
+   * read on the derived value and the gate that later reads it decides on
+   * it again (§5.3.2: "leaves the original label unchanged").
+   *
+   * Throws where an evaluation runs out of fuel, failing the transaction.
+   * Keeping the label as read is not the strict side there: a `dropClause`
+   * rule on a clause of several alternatives removes one, which tightens it,
+   * and §5.3.2 makes exhaustion "a hard boundary failure (fail closed), not
+   * permission to continue with a partially rewritten label", as the gates
+   * treat it.
    */
   const exchangedAtObservation = (
     document: string,
@@ -5417,6 +5432,7 @@ const deriveFlowJoinImpl = (
     path: readonly string[],
     nonRecursive: boolean | undefined,
     evidence: () => readonly LabelMapEntry[] | undefined,
+    membership: () => readonly ConsumedLocation[],
   ): readonly CfcConfClause[] => {
     if (
       policyEvaluationMode !== "enforce" || clauses.length === 0 ||
@@ -5425,18 +5441,20 @@ const deriveFlowJoinImpl = (
     ) {
       return clauses;
     }
-    const locations = consumedLocations(
-      document,
-      entries,
-      path,
-      nonRecursive,
-      evidence(),
-    );
+    const locations = [
+      ...consumedLocations(
+        document,
+        entries,
+        path,
+        nonRecursive,
+        evidence(),
+      ),
+      ...(nonRecursive === true ? membership() : []),
+    ];
     if (locations.every((location) => location.evidence.length === 0)) {
       return clauses;
     }
-    let incomplete = false;
-    const exchanged = exchangeEachObservation(
+    return exchangeEachObservation(
       clauses,
       locations,
       (consumed, evidence) => {
@@ -5448,14 +5466,16 @@ const deriveFlowJoinImpl = (
           "observing",
           space,
           admitsRulesOfKind("value-intrinsic"),
+          manifests,
         );
-        incomplete ||= outcome.exhausted ||
-          outcome.resolutionFailures.length > 0 ||
-          outcome.grantResolutionUnavailable;
+        if (outcome.exhausted) {
+          throw new Error(
+            `cfc policy evaluation exhausted fuel observing ${document}`,
+          );
+        }
         return outcome.confidentiality;
       },
-    );
-    return incomplete ? clauses : exchanged.confidentiality;
+    ).confidentiality;
   };
   // Each pass owns its snapshots: prepare can run again after metadata writes.
   const metadataByDoc = new Map<string, {
@@ -5821,6 +5841,31 @@ const deriveFlowJoinImpl = (
             indexFor("value"),
           );
         };
+        // A read that stops at a container observes its membership: for a
+        // list, how long it is. The length is a value of its own, stamped by
+        // whoever last changed it, and nothing else the read consumes says
+        // who that was. Its value stamps are a location of the read, both
+        // for the input witnesses and for exchange, so that neither a
+        // witness nor a release survives a list other code truncated. A
+        // record's key named `length` is read the same way, which can only
+        // withhold. Resolved on first use.
+        let lengthEntriesMemo: readonly LabelMapEntry[] | undefined;
+        const lengthPath = [...logicalPath, "length"];
+        const lengthEntries = (): readonly LabelMapEntry[] =>
+          lengthEntriesMemo ??= document.metadata === undefined ||
+              observation.nonRecursive !== true ||
+              observation.shape === "followRef"
+            ? []
+            : consumedEntriesForRead(
+              document.metadata,
+              lengthPath,
+              { nonRecursive: true, consumes: "value", ...exclusion },
+              indexFor("value"),
+            ).filter((entry) => pathKey(entry.path) === pathKey(lengthPath));
+        const membership = (): readonly ConsumedLocation[] =>
+          observation.shape === "followRef" || lengthEntries().length === 0
+            ? []
+            : consumedLocations(key, lengthEntries(), lengthPath, true);
         // What joins of this observation, exchanged where it was observed.
         // A read declared onward joins what it consumed at the slots; what
         // it consumed at its own path lands on the target it names, and is
@@ -5847,6 +5892,7 @@ const deriveFlowJoinImpl = (
               logicalPath,
               observation.nonRecursive,
               observationEvidence,
+              membership,
             ),
           );
         }
@@ -5863,6 +5909,7 @@ const deriveFlowJoinImpl = (
               logicalPath,
               true,
               observationEvidence,
+              membership,
             ),
           );
         }
@@ -5888,33 +5935,13 @@ const deriveFlowJoinImpl = (
           };
           return computed.witnesses;
         });
-        // A read that stops at a container observes its membership: for a
-        // list, how long it is. The length is a value of its own, stamped by
-        // whoever last changed it, and nothing else the read consumes says
-        // who that was, so a list other code truncated would otherwise keep
-        // every surviving member's witness. Its value stamps are a location
-        // of the read. A record's key named `length` is read the same way,
-        // which can only withhold a witness.
-        const lengthWitnesses = document.metadata === undefined ||
-            observation.nonRecursive !== true ||
-            observation.shape === "followRef" || identity === undefined ||
-            inputWitnesses?.length === 0
-          ? undefined
-          : (() => {
-            const lengthPath = [...logicalPath, "length"];
-            const lengthEntries = consumedEntriesForRead(
-              document.metadata!,
-              lengthPath,
-              { nonRecursive: true, consumes: "value", ...exclusion },
-              indexFor("value"),
-            ).filter((entry) =>
-              pathKey(entry.path) ===
-                pathKey(lengthPath)
-            );
-            return lengthEntries.length === 0
-              ? undefined
-              : observationInputWitnesses(lengthEntries, lengthPath, true);
-          })();
+        // The membership a read that stops at a container observes is a
+        // location of its input witnesses (see `lengthEntries`).
+        const lengthWitnesses =
+          identity === undefined || inputWitnesses?.length === 0 ||
+            lengthEntries().length === 0
+            ? undefined
+            : observationInputWitnesses(lengthEntries(), lengthPath, true);
         document.witnesses.set(`${labelKey}#length`, () =>
           lengthWitnesses);
       }
@@ -12057,6 +12084,10 @@ export const describeSinkReleaseRefusal = (
  * consumption commits atomically with the release.
  *
  * `admitsRule`, when given, restricts the evaluation to the rules it admits.
+ * `manifests`, when given, holds the module policies already resolved, by
+ * space and reference, and takes those this evaluation resolves: a caller
+ * that evaluates many times within one pass, and writes no manifest in
+ * between, resolves each once.
  */
 const evaluateGatedConfidentiality = (
   tx: IExtendedStorageTransaction,
@@ -12068,6 +12099,7 @@ const evaluateGatedConfidentiality = (
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
   admitsRule?: (rule: ExchangeRule) => boolean,
+  manifests?: Map<string, unknown>,
 ): {
   confidentiality: readonly CfcConfClause[];
   exhausted: boolean;
@@ -12110,7 +12142,14 @@ const evaluateGatedConfidentiality = (
           if (typeof destinationSpace === "function" && space === undefined) {
             return undefined;
           }
-          return tx.resolveCfcPolicyManifest(reference, space);
+          if (manifests === undefined) {
+            return tx.resolveCfcPolicyManifest(reference, space);
+          }
+          const key = stringTupleKey([space ?? "", JSON.stringify(reference)]);
+          if (manifests.has(key)) return manifests.get(key);
+          const resolved = tx.resolveCfcPolicyManifest(reference, space);
+          manifests.set(key, resolved);
+          return resolved;
         },
       ),
     },
