@@ -10397,3 +10397,197 @@ Topics at 100, 1,000 and 2,000 topics on the runtime's storage.
      in `apps/base/contacts.tsx` and `apps/calendar/calendar.tsx`, 12 fields of
      rows of instances a handler makes, which hold the atoms of their own plan
      where the stub left the join.
+
+## Round n: the label of a row's position, three label defects fixed, the write record shortened, and what one edit of Topics still costs
+
+Notes 572 on are about round n of milestone 2 (2026-11-21): six ordered steps on
+the Topics branch. Steps 1, 2, 3, 5 and 6 are built. Step 4, the rows of a `map`
+as documents of their own, is not built and has a plan (note 575). Whenever a
+note says `map`, it names the case. `PL` is `plan-and-label-templates.md`.
+
+572. **A read of a row of a `map` takes the label of what decided the row's
+     position (question 353).** A `map` over the result of a `lift` that is an
+     array of references stores its rows in place, and each row's own entries
+     replaced the label of the array in the runtime's resolution. The runtime
+     already stores what decides each position of the result of a per-element
+     construct once, as `*`-child templates of the structure component, for a
+     record marked `membersChanged`, and joins them into a read of a position.
+     The executor gave the mark only for a kept output whose plan entry has a
+     collection and only for a change at the array itself. It now gives it for
+     every output that holds the result of a per-element construct, directly or
+     through the template of an output it names (`#recordedOutputs`, `members`),
+     and for a write at the array or above it. The runtime joins into the
+     templates of a container held within a member of another such container the
+     outer container's templates of the same class
+     (`prepareBoundaryCommitSteps`, inside the block marked `SPEC-PENDING` for
+     specs pull request 91). Tests (`compare/test/runtime-transactions.test.ts`,
+     the fixture `ordered-rows.tsx`): a `map` over the result of a `lift` that
+     is an array of references, at the load, after a writer changes one rank,
+     and after a writer adds an item whose rank puts its row last and first; a
+     `map` over an array of references whose order a handler changes; a `map`
+     over an array of plain values in place; and a `map` over plain values in
+     place within a row of the first. The first, the handler case and the nested
+     case failed before the change for the stated reason. The harness's leaf
+     check of the step `reorder topic 0` on the board `sorted-references` with a
+     clause for each topic: 25 changed leaves, 0 lacking the clause, where 12
+     lacked it.
+573. **A handler's reference to a kept output (question 354, a; provisional
+     decision P47).** A handler whose binding state names an output and observes
+     it as a reference alone was given a handle to a copy of the output's value
+     in a document of its own, and the slot was bound as `{ output }`, so a push
+     took the output's whole label. Binding the slot as a constant alone is
+     unsound: the copy holds what the output holds, and it then stored the join
+     of the handler's transaction, without the output's clauses. _Decision:_ for
+     a kept output at a path with no element position, named by a binding in no
+     element, the handler is given a handle to the position of the result
+     document that holds the output, which refuses a write (PL §3.11), and the
+     slot is bound as a constant of the plan (PL §2.2). What the handler stores
+     is a link to that position, and a read through it takes the label stored
+     there. An output with no stored position of its own, and a binding within
+     an element, keep the copy and the output's label. _Alternative:_ a write
+     record for the copy with the output's template. _Test:_ the fixture
+     `identity-state.tsx`. On the board `filing-order` with four topics and a
+     clause for each, after one `addTopic` 14 entries of the cards hold every
+     clause, those of the created topic's own card, where 46 did; the array
+     `topics` and the namespace hold none where 5 entries held all four.
+574. **A document a `lift` writes for a row has the record of that `lift`
+     (question 354, b; provisional decision P48).** The plan has a write edge
+     for the cells a body makes at a call site (`target.kind: "created"`). The
+     executor notes each position of a cell of its own that the body of a cone
+     writes (`#noteCreatedWrite`) and, when the body has returned, gives one
+     record for each under that edge with the template instantiated once
+     (`#recordCreated`). _Decision:_ every such row takes the label of
+     everything the `lift` read, and not of what it had read when it wrote the
+     row; the records then differ in their target alone and the runtime takes
+     them as one, where a record per row with the reads so far is one entry of
+     the table of inputs per row, each as long as the list. They are given as
+     records of a write that left the value as it was, which the runtime honors
+     for a path the transaction wrote as well. _Not covered:_ a body whose write
+     edges name several call sites, and a handler's cells; both keep the join of
+     the transaction. _Defect that stays:_ a change of a label alone, at a
+     position the `lift` read, does not form the labels of the rows again until
+     the `lift` runs again; the record of an output has this through
+     `#noteRecord`, and the rows have nothing like it. _Cost found:_ the first
+     `addTopic` after a load brings a new clause into what `cardRowsByActivity`
+     and `crossrefTable` read, so every row of both and everything derived from
+     them is labeled again in that one event. The preparation of that commit
+     compared each of thousands of paths of the result document with every
+     other: 28.8 s at 1,000 topics. Three passes now find their candidates by
+     prefix (`valueWriteTargets`, `recreatedAt`, and the covered paths at or
+     below a written path), and the commit takes 15.5 s at 1,000 topics and 53.6
+     s at 2,000, of which the preparation is 7.2 s and 27.0 s; before this round
+     the same event took 5.9 s at 1,000. It is still more than linear. Two
+     passes that are left as they were compare each cleared existence entry with
+     each written path (`frozenConfidentialityFor` and the pass behind it). A
+     stub with a plan: index the cleared entries by path, and give no record for
+     a row whose value and whose inputs' label identifiers are those of the run
+     before.
+575. **The rows of a `map` as documents of their own: not built (step 4,
+     question 356).** `#toPart` and `#toPlace` keep an account of part documents
+     beside the one value the store holds for each document (note 523); the
+     adapter writes the result as one document. What was examined and what the
+     plan is:
+     - _Where the boundary is known._ The array of a `map` in a view stands at a
+       path that `#recordedOutputs` and the units (`Unit.place`) know, and not
+       at the path of the collection's own output, which for the cards is an
+       interim output named by `$UI`. The rule is static per collection: the
+       construct is `map`, the collection is in no element, its source is an
+       output whose body declares references at `*` (`Body.outputs`) or a slot
+       whose schema declares the array or its items as cells, and the plan has
+       an output below `*` (a record or a view node; a row with no output below
+       `*` is a scalar and stays in place).
+     - _Where to build it._ In the adapter, with one hook of the executor that
+       names, before a splice of such an array, the document, the path and the
+       keys of the rows. The adapter then stores each row in a document named by
+       the result, the path and the key, writes links in the array, and
+       translates every address at or below a row: the targets of records, the
+       addresses of bindings, `read`, `labelOf`, and, back to the executor's
+       addresses, the label changes it reports. A read at or above the array
+       reads every row document. The `*`-child templates of note 572 stay at the
+       array, so the link at a position carries the label of the order and the
+       row document its own.
+     - _What it does not remove alone._ On every board the result document also
+       holds `mentionable`, one row for each topic, so an edit of a title writes
+       the result document either way. The rows of every per-topic collection in
+       the result have to be documents, or a commit has to carry the label
+       entries it changes and not those of the whole document.
+     - _One entry at the root of a row document._ Sound in the runtime's
+       resolution where no entry below the root exists and the root holds an
+       entry for each class a read consumes (`shape`, `value`, `enumerate`),
+       since a more specific entry replaces a less specific one and an absent
+       one does not. Not built.
+     - _The other route._ A pattern called through `asInstance()` in the body of
+       the `map` is an instance with a result document of its own (rulings Z35
+       and Z36). `asInstance()` is no member of today's `commonfabric`, so a
+       board written so does not pass `cfcheck` and has no arm `today`.
+576. **A write record lists one position for the positions read through a handle
+     that hold one label (step 5; provisional decision P49).** The growth of a
+     record was in `PlanInputs.dynamic`, 6 to 9 addresses a topic in each record
+     of an output of a `lift` over the whole list; the slots were grouped
+     already. _Decision:_ the adapter lists one address for each group of
+     positions whose stored labels have one identifier, for a read of the value
+     and for the reference observed there, and states the number of positions
+     and of groups in `PlanInputs.dynamicGroups`; a position with no identifier
+     is listed itself. The executor's table keeps every position, so that a
+     change of the label of one finds the record (`#noteRecord`). The runtime
+     resolves the addresses listed, as it does for the members of a container
+     under ruling Z75 (c), and does not check the count. _Alternative:_ grouping
+     in the executor, which then needs the table of groups of note 548 for these
+     positions. The record bytes of one edit of `main`: 20,451, 117,655 and
+     225,657 at 100, 1,000 and 2,000 topics, where they were 150,328, 1,446,333
+     and 2,896,335 with fewer records. What still grows is the list of documents
+     of the row records of note 574, about 108 bytes a topic for each edit.
+577. **The pattern (step 6).** In `board-filing-order.tsx` and
+     `board-sorted-references.tsx`, `mentionable` is a `map` over the board's
+     array of topic references whose rows are plain values in place. It gives a
+     row to a member that reads as `undefined`, where the `lift` gives none.
+     `namesTable` is a row for each entry of a record of references, and the
+     language has no per-element construct over a record. `crossrefTable` is a
+     join and `crossrefIndexOf` a grouping by name into a record, and the
+     language has no construct that keeps either up to date. The facts the arms
+     `executor`, `storage` and `today` read of the board are equal after each
+     step at 100 topics.
+578. **One edit still grows with the board, at the rate it did.** One process
+     per arm, board and size; an edit is the median of three edits. An 18-core
+     machine at load averages of 6 to 12.
+
+     | One edit, ms                        | 100 | 1,000 | 2,000 |
+     | ----------------------------------- | --: | ----: | ----: |
+     | `main`, before the round            | 249 | 2,557 | 6,984 |
+     | `main`, steps 1, 2, 3 and 5         | 260 | 2,680 | 7,295 |
+     | `filing-order`, steps 1, 2, 3 and 5 | 196 | 2,015 | 5,091 |
+     | `filing-order`, with step 6         | 232 | 2,369 | 5,888 |
+     | `sorted-references`, steps 1 to 5   | 222 | 2,314 | 4,681 |
+     | `sorted-references`, with step 6    | 251 | 2,555 | 6,965 |
+     | `main`, executor in memory          |  20 |   171 |   398 |
+     | `filing-order`, executor in memory  |  10 |    79 |   183 |
+     | `main`, today's runtime             | 392 | 4,116 | 8,138 |
+     | `filing-order`, today's runtime     | 335 | 3,155 | 7,665 |
+
+     What the edit of `filing-order` with step 6 is made of at 1,000 topics, the
+     middle edit: the executor's own work 95 ms; the hook that takes the records
+     of writes that left their value 106 ms; the end of the transaction 736 ms,
+     of which the preparation is 589 ms; and 1,861 ms from the executor's return
+     until every commit has settled. Each part is ten times what it is at 100
+     topics. Three causes remain:
+     - _The result document is written by every edit and holds every row._ It
+       holds 21 label entries a topic for the cards and, with step 6, 8 more for
+       the rows of `mentionable`: 29,052 entries and 10 MB at 1,000 topics. The
+       preparation and the memory server's handling of the commit follow the
+       size of that document. Step 6 made this part larger.
+     - _`crossrefTable` runs again on every edit of a title._ It reads the
+       mentions and the number of each topic through handles, and the executor
+       records the root of each member's document as read, so a change of any
+       field of a topic runs it again: 8 evaluations for each edit at every
+       size, one of them over the whole list, 6 positions a topic read through
+       the transaction, and one record for each of its rows. `topicsByActivity`
+       of `sorted-references` is the same. The executor in memory shows it: 79
+       ms at 1,000 topics on `filing-order`.
+     - _The records of rows whose value stayed_ (note 574): 1,010 records given
+       for each edit at 1,000 topics, recorded as 11.
+
+     What would remove them, in this order: the rows of every per-topic
+     collection as documents (note 575); a read through a handle that depends on
+     the fields the handle's schema declares and not on the member's whole
+     document, or `crossrefTable` over a `map` that copies the two fields; no
+     record for a row whose value and label inputs stayed.
