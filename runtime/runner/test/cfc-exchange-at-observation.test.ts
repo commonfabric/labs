@@ -548,7 +548,6 @@ describe("exchange at observation", () => {
 
     it("narrows the clauses where the rules converge", async () => {
       await withRuntime(async (runtime) => {
-        await seedStamped(runtime, "narrowed", "2-1", [transformedBy(TALLY)]);
         await seed(runtime, "two", "2-1", [{
           path: [],
           origin: "derived",
@@ -602,9 +601,20 @@ describe("exchange at observation", () => {
     } as const;
     const POLICY = { ...policyRef, subject: space } as CfcAtom;
 
-    /** Derives from `rows` stamped rows; returns the manifest reads made. */
-    const manifestReadsFor = async (rows: number): Promise<number> => {
+    /** An integrity atom a flow join carries through its meet. */
+    const CERTIFIED = {
+      type: "https://commonfabric.org/cfc/atom/PolicyCertified",
+    } as CfcAtom;
+
+    /**
+     * Derives from `rows` stamped rows; returns the reads of the manifest
+     * the transaction made and the integrity two flow joins of it carry.
+     */
+    const deriveRows = async (
+      rows: number,
+    ): Promise<{ reads: number; integrity: unknown[][] }> => {
       let reads = 0;
+      let integrity: unknown[][] = [];
       await withRuntime(async (runtime) => {
         // A write a schema labels with the policy installs its manifest in
         // the space.
@@ -635,7 +645,7 @@ describe("exchange at observation", () => {
             observes: "value" as const,
             label: {
               confidentiality: [POLICY],
-              integrity: [transformedBy(TALLY)],
+              integrity: [transformedBy(TALLY), CERTIFIED],
             },
           })),
         );
@@ -648,24 +658,35 @@ describe("exchange at observation", () => {
           id: idOf(runtime, "derived", tx),
           path: ["value"],
         }, JSON.stringify(value));
+        // Prepare joins more than once, so a lookup the first join made
+        // must not count as an input of the next.
+        integrity = [
+          deriveFlowJoin(tx).integrity,
+          deriveFlowJoin(tx).integrity,
+        ];
         tx.prepareCfc();
         const manifestId = `of:${
           cfcPolicyManifestDocId(artifact.policyDigest)
         }`;
-        reads = tx.getReactivityLog().reads.filter((read) =>
+        reads = [...(tx.getReadActivities?.() ?? [])].filter((read) =>
           read.id === manifestId ||
           read.id === cfcPolicyManifestDocId(artifact.policyDigest)
         ).length;
         expect((await tx.commit().settled).error).toBeUndefined();
         expect(clausesOf(runtime, "derived")).toEqual([]);
       }, { rules: [] });
-      return reads;
+      return { reads, integrity };
     };
 
     it("reads the manifest as often for many locations as for one", async () => {
-      const one = await manifestReadsFor(1);
+      const { reads: one } = await deriveRows(1);
       expect(one).toBeGreaterThan(0);
-      expect(await manifestReadsFor(20)).toBe(one);
+      expect((await deriveRows(20)).reads).toBe(one);
+    });
+
+    it("carries the inputs' shared integrity through every join", async () => {
+      const { integrity } = await deriveRows(2);
+      for (const joined of integrity) expect(joined).toContainEqual(CERTIFIED);
     });
   });
 

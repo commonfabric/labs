@@ -5420,11 +5420,12 @@ const deriveFlowJoinImpl = (
    * clauses as read is not the strict side there, since a `dropClause` rule
    * on a clause of several alternatives removes one, which tightens it, and
    * §5.3.2 makes exhaustion "a hard boundary failure (fail closed), not
-   * permission to continue with a partially rewritten label". Exchange never
-   * creates a clause: it adds alternatives to one, removes them, or removes
-   * the clause. So no outcome of it is stricter than every alternative
-   * required on its own, and a gate that later reads what the computation
-   * wrote refuses what the exhausted rules might have refused. The flow join
+   * permission to continue with a partially rewritten label". The split is
+   * never looser than the clauses as read, and is stricter than any outcome
+   * that keeps one of a clause's original alternatives. It is not a bound on
+   * every outcome: a rule that adds an alternative can enable another that
+   * then drops an original one, leaving a clause the split does not imply.
+   * Exhaustion needs more than 64 firings at one location. The flow join
    * has callers outside prepare (a query builtin's request label, the
    * serving loop's processed claim), so it refuses through the label it
    * returns rather than by throwing.
@@ -12092,17 +12093,28 @@ const passManifestLookup = (
   tx: IExtendedStorageTransaction,
 ): ManifestLookup => {
   const resolved = new Map<string, unknown>();
+  // A lookup is not an observation of the manifest: the commit is bound to
+  // the manifest it found by a precondition, and like every other policy
+  // lookup it reads under `internalVerifierRead`. Read plainly, a flow join
+  // that made it would walk the manifest document as an unlabeled input,
+  // whose empty integrity ends the hereditary meet.
+  const resolve = (
+    reference: CfcModulePolicyRefAtom,
+    space: MemorySpace | undefined,
+  ): unknown =>
+    tx.runWithAmbientReadMeta(
+      internalVerifierRead,
+      () => tx.resolveCfcPolicyManifest(reference, space),
+    );
   return (reference, space) => {
-    if (space === undefined) return tx.resolveCfcPolicyManifest(reference);
+    if (space === undefined) return resolve(reference, undefined);
     const key = stringTupleKey([
       space,
       reference.policyDigest,
       reference.moduleIdentity,
       reference.symbol,
     ]);
-    if (!resolved.has(key)) {
-      resolved.set(key, tx.resolveCfcPolicyManifest(reference, space));
-    }
+    if (!resolved.has(key)) resolved.set(key, resolve(reference, space));
     return resolved.get(key);
   };
 };

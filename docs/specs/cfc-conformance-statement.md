@@ -336,10 +336,11 @@ statement.
   writes carries the exchanged confidentiality (§5.3). The other rules are
   not evaluated there, since their result is never carried. Where an
   evaluation runs out of fuel, each clause that location consumed is held
-  split into its alternatives, a label no outcome of exchange is stricter
-  than, so the gate that reads the derived value refuses through it (§5.3.2;
-  the flow join has callers outside prepare, so it refuses through the label
-  rather than by failing the transaction). A policy that cannot be resolved
+  split into its alternatives, never looser than as read and stricter than
+  any outcome that keeps an original alternative (§5.3.2; the flow join has
+  callers outside prepare, so it refuses through the label rather than by
+  failing the transaction). It is not a bound on an outcome where an added
+  alternative enables a rule that drops an original one. A policy that cannot be resolved
   fires none of its rules at that location, so its clause stays as read for
   the next gate to decide, which is looser than intended where the policy
   holds a rule that would tighten it. A read's container length is one of
