@@ -207,6 +207,12 @@ describe("fabrichat-room-list-derived", () => {
       rooms = made.rooms;
       reader = await fabric.bootClient({ person: made.person });
       try {
+        // The people list names no one, and reads no roster, until the
+        // session asks for it.
+        await sendVerbEvent(
+          reader.home.key("chatManager").key("askForPeople"),
+          {},
+        );
         const people = reader.home.key("chatManager").key("people").asSchema({
           type: "object",
           additionalProperties: { type: "array", items: HANDLE },

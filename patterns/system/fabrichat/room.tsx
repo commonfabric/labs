@@ -346,9 +346,11 @@ export interface RoomManager extends JoiningManager {
 
   /**
    * The people the viewer's rooms list, other than the viewer: by principal,
-   * the profiles attesting it. Reading it reads every listed room's roster.
+   * the profiles attesting it. A manager with `askedPeople` lists them only
+   * for a session that has asked for them; one from before lists them
+   * without being asked, and reading them reads every listed room's roster.
    */
-  people: PerUser<Record<string, ProfileCell[]>>;
+  people: PerSession<Record<string, ProfileCell[]>>;
 
   /**
    * `people`, for a session that has asked for them, and no one before; what
