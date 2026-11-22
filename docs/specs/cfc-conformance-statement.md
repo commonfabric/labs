@@ -329,6 +329,21 @@ statement.
   display, which `cellLabelRefusal` fits on its root's integrity, is not
   resolved location by location: a root stamp's evidence can release a clause
   a child entry carries, an under-taint.
+- The flow join (`deriveFlowJoin` in `cfc/prepare.ts`) evaluates the
+  value-intrinsic rules where a value is observed into a computation, at each
+  location the observation consumed and on the evidence there about the value
+  currently at it, and joins what they leave, so that what the computation
+  writes carries the exchanged confidentiality (§5.3). The other rules are
+  not evaluated there, since their result is never carried. It departs from
+  §5.3 in the over-taint direction in four places. It evaluates only while
+  `cfcPolicyEvaluation` is `enforce`, and an evaluation that runs out of fuel
+  or cannot resolve a policy leaves the label as read. A label-metadata
+  observation and the flow of external content join as read. The integrity
+  that satisfied a rule is recorded on the derived value's `TransformedBy`
+  only where the input-witness summary retains it
+  ([`cfc-transformed-by-input-witnesses.md`](cfc-transformed-by-input-witnesses.md)),
+  an under-claim of integrity. And a refusal names no read for a clause a
+  rule rewrote, since the sources are matched on the clause as stored.
 - Within one location, `labelForEntriesAtPath` in `cfc/consumed-label.ts` unions
   integrity across the label components resolving there, where §8.12.8 asks
   for the class-aware join of §3.1.6.2. Where two components carry integrity
