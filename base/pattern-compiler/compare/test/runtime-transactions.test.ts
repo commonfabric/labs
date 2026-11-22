@@ -1825,3 +1825,114 @@ describe("the `identity` slots of a handler's binding state", () => {
     }
   });
 });
+
+describe("a document a `lift` writes for a row of its result", () => {
+  it("takes the label of what the `lift` read, and of nothing else the transaction read", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const artifact = await artifactOf("created-rows");
+    const id = identifierOf({ test: "created-rows" });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    try {
+      const audience = await scenarioAudience();
+      const tx = runtime.edit();
+      const documents: { id: string; kind: string; value: unknown }[] = [];
+      const held = (name: string, value: unknown) => {
+        const schema = {
+          ifc: { confidentiality: [inputClause(name, audience)] },
+        } as JSONSchema;
+        const cell = runtime.getCell(space, { createdInput: name }, schema, tx);
+        const link = cell.getAsNormalizedFullLink();
+        recordRelevantSchemaWritePolicyInput(tx, link, schema);
+        cell.set(value);
+        hooks.external(link.id);
+        documents.push({ id: link.id, kind: "input", value });
+        return { $link: { doc: link.id, path: [] } };
+      };
+      const items = [0, 1].map((index) =>
+        held(`item-${index}`, { title: `t${index}` })
+      );
+      const given = {
+        items: held("items", items),
+        other: held("other", "o"),
+      };
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+      });
+      expect(await hooks.settled()).toEqual([]);
+      const labelsOfRows = () => {
+        const read = runtime.edit();
+        try {
+          const rows = instance.store.peek(instance.id, ["rows"]) as unknown[];
+          return rows.map((row) => {
+            expect(isLink(row)).toBe(true);
+            const { doc } = (row as { $link: { doc: string } }).$link;
+            expect(instance.store.peek(doc, ["title"])).toMatch(/^(T|CHANGED)/);
+            const metadata = readStoredCfcMetadata(read, {
+              space,
+              id: hooks.entityOf(doc),
+              scope: "space",
+            });
+            const path = ["title"];
+            return JSON.stringify(
+              (metadata === undefined ? undefined : labelForConsumedEntries(
+                consumedEntriesForRead(metadata, path, {
+                  nonRecursive: false,
+                  consumes: "value",
+                }),
+                path,
+                false,
+              ))?.confidentiality ?? [],
+            );
+          });
+        } finally {
+          read.abort();
+        }
+      };
+
+      const first = labelsOfRows();
+
+      expect(first.length).toBe(2);
+      for (const label of first) {
+        expect(label).toContain('"input:items"');
+        expect(label).toContain('"input:item-0"');
+        expect(label).toContain('"input:item-1"');
+        expect(label).not.toContain('"input:other"');
+      }
+
+      // A writer changes one item: its row is written again, and the row
+      // of the other item is left as it was.
+      instance.store.write(new Ref(items[1].$link.doc, ["title"]), "changed");
+      instance.settle();
+      expect(await hooks.settled()).toEqual([]);
+
+      const second = labelsOfRows();
+
+      expect(second.length).toBe(2);
+      for (const label of second) {
+        expect(label).toContain('"input:item-0"');
+        expect(label).toContain('"input:item-1"');
+        expect(label).not.toContain('"input:other"');
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+});
