@@ -1197,7 +1197,7 @@ export interface ChatRoomView {
    * it is read from the roster alone. Like `participants`, it is a claim, not
    * proof of access.
    */
-  roster: ProfileCell[];
+  roster?: ProfileCell[];
 
   /**
    * The members of the room's space (`memberSet()`): one for each principal
@@ -2056,7 +2056,7 @@ export const FabriChatRoomCore = pattern<
     about: aboutView,
     replyShape: CHAT_REPLY_SHAPE,
     participants,
-    roster: joined,
+    roster: roster.key("items"),
     members: membersForUser,
     participantEntries: participantEntriesForUser,
     participantPrincipals: participantPrincipalsForUser,
