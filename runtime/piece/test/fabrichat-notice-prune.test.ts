@@ -8,7 +8,7 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
+import { afterAll, afterEach, beforeAll, describe, it } from "@std/testing/bdd";
 import { type Stub, stub } from "@std/testing/mock";
 
 import { createSession, Identity } from "@commonfabric/identity";
@@ -200,9 +200,15 @@ describe("fabrichat-notice-prune", () => {
     return outcome!.entry!.room!;
   };
 
-  /** The recipients of the notices the sender's manager stores for `room`. */
-  const storedNoticesOf = async (room: Cell<unknown>): Promise<string[]> => {
-    const stored = senders.home.key("chatManager").resolveAsCell()
+  /**
+   * The recipients of the notices the sender's manager stores for `room`, as
+   * the runtime `home` is in reads them.
+   */
+  const storedNoticesOf = async (
+    room: Cell<unknown>,
+    home: Cell<unknown> = senders.home,
+  ): Promise<string[]> => {
+    const stored = home.key("chatManager").resolveAsCell()
       .getArgumentCell<unknown>()!.key("outgoingNotices");
     const notices = await stored.asSchema(noticesSchema).pull() as {
       recipient?: string;
@@ -419,6 +425,136 @@ describe("fabrichat-notice-prune", () => {
       await senders.storage.synced();
 
       expect(await joinReadsRoster(room)).toBe(false);
+    });
+  });
+
+  describe("on a client of the sender's that has run nothing of the room since its recipient joined", () => {
+    // The recipient's join adds them to the room's roster, and no runtime
+    // derives anything of the room after it, so the client reads the roster
+    // as the room stores it.
+
+    let client: Awaited<ReturnType<typeof homeOf>> | undefined;
+
+    afterEach(async () => {
+      await client?.runtime.dispose();
+      await client?.storage.close();
+      client = undefined;
+    });
+
+    /** Has the recipient's manager join `room`, as accepting its offer does. */
+    const recipientJoins = async (
+      requestId: string,
+      room: Cell<unknown>,
+    ): Promise<void> => {
+      await send(
+        recipients.runtime,
+        recipients.home,
+        ["chatManager", "joinRoom"],
+        {
+          requestId,
+          room: recipients.runtime.getCellFromLink(
+            room.getAsNormalizedFullLink(),
+          ),
+        },
+      );
+      await recipients.storage.synced();
+      await senders.runtime.idle();
+      await senders.storage.synced();
+    };
+
+    /** A new client of the sender's, which has loaded none of the room. */
+    const newClient = async () => {
+      client = await homeOf(server, apiUrl, sender, { serverExecution: false });
+      return client;
+    };
+
+    /** The ids of the profiles `room` lists on its roster, as `runtime` reads it. */
+    const rosterOf = async (
+      runtime: Runtime,
+      room: Cell<unknown>,
+    ): Promise<string[]> => {
+      const roster = await runtime.getCellFromLink(
+        room.getAsNormalizedFullLink(),
+      ).key("roster").asSchema(rosterSchema).pull() as Cell<unknown>[];
+      return (roster ?? []).map((profile) =>
+        profile.getAsNormalizedFullLink().id
+      );
+    };
+
+    /** The id of the first profile `home` lists. */
+    const profileIdOf = (home: Cell<unknown>): string =>
+      home.key("profiles").key(0).resolveAsCell().getAsNormalizedFullLink().id;
+
+    it("reads the recipient on the room's roster", async () => {
+      const room = await createGroup("read-after-join", [recipient.did()]);
+      await recipientJoins("read-after-join-accept", room);
+      const { runtime } = await newClient();
+
+      expect(await rosterOf(runtime, room)).toEqual([
+        profileIdOf(senders.home),
+        profileIdOf(recipients.home),
+      ]);
+    });
+
+    it("drops the notice when the sender joins the room", async () => {
+      const room = await createGroup("joined-unread", [recipient.did()]);
+      await recipientJoins("joined-unread-accept", room);
+      const { runtime, home } = await newClient();
+      expect(await storedNoticesOf(room, home)).toEqual([recipient.did()]);
+
+      await senderJoins(runtime, home, room);
+
+      expect(await storedNoticesOf(room, home)).toEqual([]);
+    });
+
+    it("drops the notice of a direct room, and offers it nothing, when the sender starts the chat again", async () => {
+      // A start naming the recipient by principal alone creates the room and
+      // queues a notice for them; a start naming their profile finds the
+      // room again, and re-offers it.
+
+      const first = "direct-unread";
+      await send(
+        senders.runtime,
+        senders.home,
+        ["chatManager", "openDirect"],
+        trusted(
+          { requestId: first, counterpart: recipient.did() },
+          "ChatStartSurface",
+          "ChatStart",
+        ),
+      );
+      const outcome = await senders.home.key("chatManager").key("requests")
+        .key(first).asSchema(outcomeSchema).pull() as {
+          status?: string;
+          entry?: { room?: Cell<unknown> };
+        };
+      expect(outcome?.status).toBe("done");
+      const room = outcome!.entry!.room!;
+      await senders.runtime.idle();
+      expect(await storedNoticesOf(room)).toEqual([recipient.did()]);
+      await recipientJoins("direct-unread-accept", room);
+      const { runtime, home } = await newClient();
+      expect(await storedNoticesOf(room, home)).toEqual([recipient.did()]);
+
+      await send(
+        runtime,
+        home,
+        ["chatManager", "openDirect"],
+        trusted(
+          {
+            requestId: "direct-unread-again",
+            counterpart: recipient.did(),
+            profile: runtime.getCellFromLink(
+              recipients.home.key("profiles").key(0).resolveAsCell()
+                .getAsNormalizedFullLink(),
+            ),
+          },
+          "ChatStartSurface",
+          "ChatStart",
+        ),
+      );
+
+      expect(await storedNoticesOf(room, home)).toEqual([]);
     });
   });
 });

@@ -2582,11 +2582,7 @@ export const FabriChatManagerCore = pattern<
     // binding's name is its cause, as `roomsForUser`'s is. Reading it reads
     // every listed room's roster, so what the manager's views show is
     // `peopleForSession`; `offerRoom` reads it as its state, for a member
-    // named by principal alone, and so does a host reading `people`. A
-    // room's roster is a derivation of the room's, which a handler reading
-    // the room finds as it was last stored rather than deriving it, so the
-    // act takes the people derived here rather than reading the rosters
-    // itself.
+    // named by principal alone, and so does a host reading `people`.
     const peopleForUser = computed(
       (): PerUser<Record<string, ManagerProfileCell[]>> =>
         peopleIn(rostersForUser, profileOwnerOf(myProfile)),
