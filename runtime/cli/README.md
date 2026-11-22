@@ -515,39 +515,39 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-Swift, Kotlin, Rust, TOML, HCL, shell, makefile, Java properties, INI, ProGuard,
-XML, and Org mode files use their own highlighting. HCL covers OpenTofu and
-Terraform configuration named `.tf` or `.tofu`, variable definitions files named
-`.tfvars`, backend configuration files named `.tfbackend`, and other `.hcl`
-files, such as dependency lock files. A string's interpolations and template
-directives are colored as code inside the string. Shell covers Bash and POSIX
-shell scripts named `.sh`, `.bash`, or `.command`, and Bash's startup files,
-such as `.bashrc` and `.profile`. A heredoc's body is colored as a string, with
-the expansions its delimiter allows. The makefile language reads GNU make's
-syntax in files named `Makefile`, `makefile`, `GNUmakefile`, or `.mk`. Make
-passes recipe lines to the shell, so they are colored as shell. The same is true
-of the command in a `!=` assignment and the argument of the `shell` function.
-Make's own variable references and function calls are colored inside that shell
-text. A Swift package manifest is Swift source under its `.swift` extension, and
-a module's `.swiftinterface` is Swift as well. Gradle build and settings scripts
-are Kotlin scripts under the `.kts` extension. Gradle version catalogs and Cargo
-manifests are TOML, as are Cargo lock files. The ProGuard language covers the
-keep rules that ProGuard and R8 read: `proguard-rules.pro` and
-`consumer-rules.pro` select it by name, and another `.pro` file uses it when one
-of its lines starts with one of ProGuard's option names, because Qt project
-files and Prolog use that suffix as well. XML covers Android manifests,
-resources, and layouts, SVG images, and Apple property lists, entitlements, and
-privacy manifests. Web manifests, TLDraw documents, Deno lock files, editor
-workspace files, and Swift package resolutions use the JSON highlighting their
-suffixes do not announce. A `.cfg` file uses JSON highlighting when the source
-in view opens a JSON object; that suffix is shared with unrelated syntaxes, so
-its name alone leaves it as plain text. Transformed compiler output piped
-without a filename keeps TypeScript highlighting when its module header
-identifies it. Python interpreter shebangs select Python for otherwise
-unrecognized names, `swift` and `xcrun swift` shebangs select Swift, and
-`kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs select
-shell, which covers Git hooks and other extensionless programs. `make` and
-`gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
+Swift, Kotlin, Rust, TOML, HCL, Lean, shell, makefile, Java properties, INI,
+ProGuard, XML, and Org mode files use their own highlighting. HCL covers
+OpenTofu and Terraform configuration named `.tf` or `.tofu`, variable
+definitions files named `.tfvars`, backend configuration files named
+`.tfbackend`, and other `.hcl` files, such as dependency lock files. A string's
+interpolations and template directives are colored as code inside the string.
+Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or `.command`,
+and Bash's startup files, such as `.bashrc` and `.profile`. A heredoc's body is
+colored as a string, with the expansions its delimiter allows. The makefile
+language reads GNU make's syntax in files named `Makefile`, `makefile`,
+`GNUmakefile`, or `.mk`. Make passes recipe lines to the shell, so they are
+colored as shell. The same is true of the command in a `!=` assignment and the
+argument of the `shell` function. Make's own variable references and function
+calls are colored inside that shell text. A Swift package manifest is Swift
+source under its `.swift` extension, and a module's `.swiftinterface` is Swift
+as well. Gradle build and settings scripts are Kotlin scripts under the `.kts`
+extension. Gradle version catalogs and Cargo manifests are TOML, as are Cargo
+lock files. The ProGuard language covers the keep rules that ProGuard and R8
+read: `proguard-rules.pro` and `consumer-rules.pro` select it by name, and
+another `.pro` file uses it when one of its lines starts with one of ProGuard's
+option names, because Qt project files and Prolog use that suffix as well. XML
+covers Android manifests, resources, and layouts, SVG images, and Apple property
+lists, entitlements, and privacy manifests. Web manifests, TLDraw documents,
+Deno lock files, editor workspace files, and Swift package resolutions use the
+JSON highlighting their suffixes do not announce. A `.cfg` file uses JSON
+highlighting when the source in view opens a JSON object; that suffix is shared
+with unrelated syntaxes, so its name alone leaves it as plain text. Transformed
+compiler output piped without a filename keeps TypeScript highlighting when its
+module header identifies it. Python interpreter shebangs select Python for
+otherwise unrecognized names, `swift` and `xcrun swift` shebangs select Swift,
+and `kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs
+select shell, which covers Git hooks and other extensionless programs. `make`
+and `gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
 select the TypeScript and JavaScript language family. For an otherwise
 unrecognized name, source that starts with an XML declaration (`<?xml`), after
 any byte order mark, selects XML, which covers Interface Builder documents,
@@ -561,6 +561,15 @@ language by its stable identifier or alias. Both options keep the pipe read-only
 and suppress unified-diff auto-detection. An explicit language takes priority
 when both options are present. Use `--diff` instead when the pipe is a unified
 diff.
+
+Lean covers Lean 4 source named `.lean`. Lean lets a file add its own notation,
+so the highlighting reads the lexical syntax every Lean file shares: comments,
+strings and the code interpolated into them, other literals, identifiers,
+keywords, and attributes. The structure tree lists namespaces, sections, and
+`mutual` blocks, and the definitions, theorems, instances, structures, classes,
+and inductive types inside them. A project's `lean-toolchain` file, which names
+the Lean release the project builds with, colors the repository that publishes
+the release and the release's name.
 
 INI covers `.ini` files, which include Ansible inventories with that suffix,
 Ansible's `ansible.cfg` and `.ansible.cfg`, and the configuration files of

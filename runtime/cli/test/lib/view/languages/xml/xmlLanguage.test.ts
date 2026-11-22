@@ -203,6 +203,14 @@ describe("xmlLanguage", () => {
     }
   });
 
+  it("lists elements nested deeper than the call stack", () => {
+    const depth = 20_000;
+    const document = xmlLanguage.parseDocument("<a>".repeat(depth));
+
+    expect(document.flatStructure.length).toBe(depth);
+    expect(document.flatStructure.at(-1)?.depth).toBe(depth - 1);
+  });
+
   it("recolors each edit", () => {
     const highlighter = xmlLanguage.createHighlighter("<a/>");
     expect(highlighter.update("<a/>")).toBe(highlighter.lines);

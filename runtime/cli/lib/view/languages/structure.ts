@@ -51,6 +51,34 @@ export interface LocatedEntry {
 }
 
 /**
+ * Builds the structure tree of the entries `entryOf` gives for `roots` and,
+ * through `childrenOf`, their descendants, indexing each declared name ahead of
+ * the names inside it. It keeps its own stack, so any depth of nesting builds.
+ */
+export function structureTree<T>(
+  source: StructureSource,
+  roots: readonly T[],
+  entryOf: (item: T) => LocatedEntry,
+  childrenOf: (item: T) => readonly T[],
+): StructureNode[] {
+  const trees: StructureNode[] = [];
+  const pending: [item: T, depth: number, into: StructureNode[]][] = [];
+  const queue = (items: readonly T[], depth: number, into: StructureNode[]) => {
+    for (let at = items.length - 1; at >= 0; at--) {
+      pending.push([items[at], depth, into]);
+    }
+  };
+  queue(roots, 0, trees);
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const [item, depth, into] = next;
+    const children: StructureNode[] = [];
+    into.push(structureNode(source, entryOf(item), depth, () => children));
+    queue(childrenOf(item), depth + 1, children);
+  }
+  return trees;
+}
+
+/**
  * Places `entry` in its source and indexes its declared name, then builds its
  * children, one level deeper, so that an entry's name is indexed ahead of the
  * names inside it.

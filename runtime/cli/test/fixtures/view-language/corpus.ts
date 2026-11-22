@@ -182,6 +182,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "python",
+    // A Python `def` line is also a Lean definition, and Lean colors the name
+    // it declares as Python does.
+    highlightingPeers: ["lean"],
     surveyRepository: "loom",
     surveyCommit: "43a4afe18fbfc37ab8a11da8fe5011f0be81f6e7",
     surveyPath: "src/bin/loom-size-report.py",
@@ -212,6 +215,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "python",
+    // A Python `def` line is also a Lean definition, and Lean colors the name
+    // it declares as Python does.
+    highlightingPeers: ["lean"],
     surveyRepository: "specs",
     surveyCommit: "34fb8680caa9f68005a438854fa5dc2ef15ff953",
     surveyPath: "cfc/formal/scripts/check-architecture.py",
@@ -224,6 +230,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "python",
+    // A Python `def` line is also a Lean definition, and Lean colors the name
+    // it declares as Python does.
+    highlightingPeers: ["lean"],
     surveyRepository: "legibility",
     surveyCommit: "ff46a8e811e0f75246b2fe1cafa8e18954dede3f",
     surveyPath: "src/probe/artifact_refs.py",
@@ -236,6 +245,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "python",
+    // A Python `def` line is also a Lean definition, and Lean colors the name
+    // it declares as Python does.
+    highlightingPeers: ["lean"],
     surveyRepository: "raia",
     surveyCommit: "a9998da33e2a04df830d684cd6eef1a3ec2a4f59",
     surveyPath: "bench/analyze.py",
@@ -248,6 +260,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "python",
+    // A Python `def` line is also a Lean definition, and Lean colors the name
+    // it declares as Python does.
+    highlightingPeers: ["lean"],
     surveyRepository: "gvisor",
     surveyCommit: "0da391ef9ab8d513fba6412f4b14680917a00556",
     surveyPath: "vdso/check_vdso.py",
@@ -480,7 +495,49 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     },
   },
   {
+    languageId: "lean",
+    surveyRepository: "specs",
+    surveyCommit: "57d00d343109b34e279a11efcb8517ff0e25e9c4",
+    surveyPath: "cfc/formal/Cfc/LabelTransitions/OutputDispatch.lean",
+    before: new URL("./lean-specs/before.lean", import.meta.url),
+    after: new URL("./lean-specs/after.lean", import.meta.url),
+    incomplete: new URL("./lean-specs/incomplete.lean", import.meta.url),
+    selection: {
+      filenames: [
+        "cfc/formal/Cfc/LabelTransitions/OutputDispatch.lean",
+        "cfc/formal/Main.lean",
+        "economical-model/theory/lean/DualEconomy.lean",
+      ],
+      aliases: ["lean", "lean4"],
+    },
+    beforeEvidence: { text: "inductive", className: "storageKeyword" },
+    afterEvidence: { text: "theorem", className: "storageKeyword" },
+    incompleteEvidence: { text: "structure", className: "storageKeyword" },
+  },
+  {
+    languageId: "lean-toolchain",
+    surveyRepository: "specs",
+    surveyCommit: "57d00d343109b34e279a11efcb8517ff0e25e9c4",
+    surveyPath: "cfc/formal/lean-toolchain",
+    before: new URL("./lean-toolchain-specs/before", import.meta.url),
+    after: new URL("./lean-toolchain-specs/after", import.meta.url),
+    incomplete: new URL("./lean-toolchain-specs/incomplete", import.meta.url),
+    selection: {
+      filenames: [
+        "cfc/formal/lean-toolchain",
+        "economical-model/theory/lean/lean-toolchain",
+      ],
+      aliases: ["lean-toolchain"],
+    },
+    beforeEvidence: { text: "leanprover/lean4", className: "typeName" },
+    afterEvidence: { text: "leanprover/lean4", className: "typeName" },
+    incompleteEvidence: { text: "leanprover/lean4", className: "typeName" },
+  },
+  {
     languageId: "shell",
+    // `local` is also a Lean declaration modifier, which Lean colors as shell
+    // colors the declaration.
+    highlightingPeers: ["lean"],
     surveyRepository: "infra",
     surveyCommit: "e86055db01424713770930acc24b5a20d2e96448",
     surveyPath: "k8s/scripts/force-sync-externalsecrets.sh",

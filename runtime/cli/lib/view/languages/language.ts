@@ -38,6 +38,8 @@ import { pythonLanguage } from "./python/language.ts";
 import { swiftLanguage } from "./swift/language.ts";
 import { kotlinLanguage } from "./kotlin/language.ts";
 import { rustLanguage } from "./rust/language.ts";
+import { leanLanguage } from "./lean/language.ts";
+import { leanToolchainLanguage } from "./lean-toolchain/language.ts";
 import { propertiesLanguage } from "./properties/language.ts";
 import { iniLanguage } from "./ini/language.ts";
 import { tomlLanguage } from "./toml/language.ts";
@@ -494,6 +496,8 @@ function allLanguages(): readonly Language[] {
     rustLanguage,
     tomlLanguage,
     hclLanguage,
+    leanLanguage,
+    leanToolchainLanguage,
     shellLanguage,
     makeLanguage,
     propertiesLanguage,
