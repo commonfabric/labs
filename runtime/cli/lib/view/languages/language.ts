@@ -56,6 +56,8 @@ import {
   cppLanguage,
   cudaLanguage,
 } from "./c-family/language.ts";
+import { starlarkLanguage } from "./starlark/language.ts";
+import { bazelrcLanguage } from "./bazelrc/language.ts";
 import { shellLanguage } from "./shell/language.ts";
 import { makeLanguage } from "./make/language.ts";
 import { proguardLanguage } from "./proguard/language.ts";
@@ -526,6 +528,8 @@ function allLanguages(): readonly Language[] {
     cppLanguage,
     cudaLanguage,
     cFamilyHeaderLanguage,
+    starlarkLanguage,
+    bazelrcLanguage,
     shellLanguage,
     makeLanguage,
     propertiesLanguage,

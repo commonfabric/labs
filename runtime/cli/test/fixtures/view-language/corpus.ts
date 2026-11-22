@@ -272,8 +272,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   {
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
-    // it declares as Python does.
-    highlightingPeers: ["lean", ...C_FAMILY],
+    // it declares as Python does. Starlark runs on the Python grammar and
+    // query, and colors Python's syntax as Python does.
+    highlightingPeers: ["lean", ...C_FAMILY, "starlark"],
     surveyRepository: "loom",
     surveyCommit: "43a4afe18fbfc37ab8a11da8fe5011f0be81f6e7",
     surveyPath: "src/bin/loom-size-report.py",
@@ -306,7 +307,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
-    highlightingPeers: ["lean", ...C_FAMILY],
+    highlightingPeers: ["lean", ...C_FAMILY, "starlark"],
     surveyRepository: "specs",
     surveyCommit: "34fb8680caa9f68005a438854fa5dc2ef15ff953",
     surveyPath: "cfc/formal/scripts/check-architecture.py",
@@ -321,7 +322,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
-    highlightingPeers: ["lean", ...CPP_GRAMMAR],
+    highlightingPeers: ["lean", ...CPP_GRAMMAR, "starlark"],
     surveyRepository: "legibility",
     surveyCommit: "ff46a8e811e0f75246b2fe1cafa8e18954dede3f",
     surveyPath: "src/probe/artifact_refs.py",
@@ -336,7 +337,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
-    highlightingPeers: ["lean"],
+    highlightingPeers: ["lean", "starlark"],
     surveyRepository: "raia",
     surveyCommit: "a9998da33e2a04df830d684cd6eef1a3ec2a4f59",
     surveyPath: "bench/analyze.py",
@@ -351,7 +352,7 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     languageId: "python",
     // A Python `def` line is also a Lean definition, and Lean colors the name
     // it declares as Python does.
-    highlightingPeers: ["lean", "c"],
+    highlightingPeers: ["lean", "c", "starlark"],
     surveyRepository: "gvisor",
     surveyCommit: "0da391ef9ab8d513fba6412f4b14680917a00556",
     surveyPath: "vdso/check_vdso.py",
@@ -839,6 +840,53 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "gvisor", className: "interfaceName" },
     afterEvidence: { text: "RENAME_EXCHANGE", className: "binding" },
     incompleteEvidence: { text: "gvisor", className: "interfaceName" },
+  },
+  {
+    languageId: "starlark",
+    // GNU make's `load` directive starts a line as Starlark's `load` statement
+    // does, and make colors it as a keyword too. Directive configuration colors
+    // the word that opens a line as a keyword.
+    highlightingPeers: ["make", "directive"],
+    surveyRepository: "gvisor",
+    surveyCommit: "e5b1277ac5f1e431780b2aacb2c4ac0d335c27d3",
+    surveyPath: "runsc/container/BUILD",
+    before: new URL("./starlark-gvisor/before.BUILD", import.meta.url),
+    after: new URL("./starlark-gvisor/after.BUILD", import.meta.url),
+    incomplete: new URL("./starlark-gvisor/incomplete.BUILD", import.meta.url),
+    selection: {
+      filenames: [
+        "runsc/container/BUILD",
+        "tools/defs.bzl",
+        "MODULE.bazel",
+        "external/tools/plugin-stack/plugin-stack.BUILD",
+        "pkg/BUILD.bazel",
+        "REPO.bazel",
+        "WORKSPACE",
+        "WORKSPACE.bazel",
+        "WORKSPACE.bzlmod",
+        ".drone.star",
+      ],
+      aliases: ["starlark", "bazel", "bzl", "star"],
+    },
+    beforeEvidence: { text: "load", className: "keyword" },
+    afterEvidence: { text: "load", className: "keyword" },
+    incompleteEvidence: { text: "load", className: "keyword" },
+  },
+  {
+    languageId: "bazelrc",
+    surveyRepository: "gvisor",
+    surveyCommit: "eae8b050925fb1ce0b3cfc324daa166ae6b72000",
+    surveyPath: ".bazelrc",
+    before: new URL("./bazelrc-gvisor/before.bazelrc", import.meta.url),
+    after: new URL("./bazelrc-gvisor/after.bazelrc", import.meta.url),
+    incomplete: new URL("./bazelrc-gvisor/incomplete.bazelrc", import.meta.url),
+    selection: {
+      filenames: [".bazelrc", "tools/user.bazelrc"],
+      aliases: ["bazelrc"],
+    },
+    beforeEvidence: { text: "race", className: "interfaceName" },
+    afterEvidence: { text: "race", className: "interfaceName" },
+    incompleteEvidence: { text: "race", className: "interfaceName" },
   },
   {
     languageId: "shell",

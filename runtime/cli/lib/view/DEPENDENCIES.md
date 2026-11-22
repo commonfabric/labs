@@ -24,6 +24,12 @@ source run resolves that through the Deno cache, and
 Neither path is exercised by type checking, so a change to either is checked by
 running `cf view` against a `.py` file.
 
+Starlark, whose syntax is a subset of Python's, runs on the same compiled
+grammar through `runtime/cli/lib/view/languages/starlark/starlark.ts`, with
+Python's highlight query and one pattern of its own. Rolling
+`tree-sitter-python` therefore also needs the `cf view` Starlark tests, and
+`cf view` against a Bazel `BUILD` file.
+
 Swift reaches its grammar the same way, through
 `runtime/cli/lib/view/languages/swift/swift.ts`, and the CLI pins
 `@binclusive/tree-sitter-swift-wasm` exactly as well. The Swift grammar is

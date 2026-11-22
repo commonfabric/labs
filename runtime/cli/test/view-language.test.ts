@@ -57,6 +57,8 @@ import {
   cppLanguage,
   cudaLanguage,
 } from "../lib/view/languages/c-family/language.ts";
+import { starlarkLanguage } from "../lib/view/languages/starlark/language.ts";
+import { bazelrcLanguage } from "../lib/view/languages/bazelrc/language.ts";
 import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { makeLanguage } from "../lib/view/languages/make/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
@@ -93,6 +95,11 @@ Deno.test("languageForFile: named files resolve and missing names use plain text
   expect(languageForFile("payload.bin").id).toBe("binary");
   assertEquals(languageForFile("notes.xyz").id, "plain-text");
   assertEquals(languageForFile("LICENSE").id, "plain-text");
+  // A version file is plain text by name, whatever its content looks like.
+  assertEquals(
+    languageForSource(".bazelversion", "<?xml 8.3.1").id,
+    "plain-text",
+  );
   assertEquals(languageForFile(undefined).id, "plain-text");
   assertEquals(languageForTransformedOutput().id, "typescript");
 });
@@ -190,6 +197,10 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("c++"), cppLanguage);
   assertEquals(languageForName("cuda"), cudaLanguage);
   assertEquals(languageForName("h"), cFamilyHeaderLanguage);
+  assertEquals(languageForName("starlark"), starlarkLanguage);
+  assertEquals(languageForName("bazel"), starlarkLanguage);
+  assertEquals(languageForName("bzl"), starlarkLanguage);
+  assertEquals(languageForName("bazelrc"), bazelrcLanguage);
   assertEquals(languageForName("shell"), shellLanguage);
   assertEquals(languageForName("sh"), shellLanguage);
   assertEquals(languageForName("bash"), shellLanguage);
@@ -240,6 +251,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "cpp",
     "cuda",
     "c-family-header",
+    "starlark",
+    "bazelrc",
     "shell",
     "make",
     "properties",
@@ -299,6 +312,11 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "cuda",
     "c-family-header",
     "h",
+    "starlark",
+    "bazel",
+    "bzl",
+    "star",
+    "bazelrc",
     "shell",
     "sh",
     "bash",

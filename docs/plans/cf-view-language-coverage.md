@@ -39,10 +39,14 @@ interpolations and template directives are code inside the string. C, C++, and
 CUDA have syntax highlighting and a structure tree of functions, declarations,
 named types, type aliases, and macros, and of C++'s namespaces and classes. A
 `.h` header, which C and C++ both write, uses a mode that claims neither dialect
-and parses with the C++ grammar until an explicit language names one. Java
-properties files, ProGuard and R8 keep rules, and XML, which covers Android
-manifests and resources, SVG, and Apple property lists, have syntax
-highlighting; properties files list their keys, and XML lists its elements.
+and parses with the C++ grammar until an explicit language names one. Starlark,
+which covers Bazel's build, module, workspace, and extension files, has syntax
+highlighting and a structure tree of functions, assigned names, and build
+targets, and Bazel rc files have syntax highlighting and a structure tree of
+imports and configurations. Java properties files, ProGuard and R8 keep rules,
+and XML, which covers Android manifests and resources, SVG, and Apple property
+lists, have syntax highlighting; properties files list their keys, and XML lists
+its elements.
 INI, which covers Ansible configuration and inventories and the configuration
 files of Python tools, has syntax highlighting and a structure tree of sections
 and the keys and hosts in each. Org mode has syntax highlighting, with each
@@ -75,20 +79,20 @@ output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, and C++ run on
+Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, C++, and Starlark run on
 Tree-sitter through a shared, language-neutral adapter, which HTML will use as
 well. Java properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org
-mode, Lean, ignore files, and Go's module and checksum files use focused
-scanners.
+mode, Lean, ignore files, Go's module and checksum files, and Bazel rc files use
+focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
-Swift, Kotlin, Rust, TOML, HCL, Lean, shell, C, C++, CUDA, makefile, Java
-properties, INI, ProGuard, Git attributes, XML, Org mode, directive
-configuration, ignore-file, and diff support to honest handling of every
-textual syntax in the active `commonfabric` repositories.
+Swift, Kotlin, Rust, TOML, HCL, Starlark, Bazel rc, Lean, shell, C, C++, CUDA,
+makefile, Java properties, INI, ProGuard, Git attributes, XML, Org mode,
+directive configuration, ignore-file, and diff support to honest handling of
+every textual syntax in the active `commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -194,16 +198,16 @@ and a warm dependency cache. Initialization starts at the first statement in a
 fresh Deno process and includes dynamic imports, runtime initialization, the
 selected grammar and query, and one empty highlight.
 
-| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Shipped C++ / C | Shipped Go | Accepted maximum |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 41.4 ms, estimated | 75 ms |
-| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 30.4 ms, estimated | 50 ms |
-| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 31.9 ms, estimated | 50 ms |
-| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 21.5 ms, estimated | 25 ms |
-| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 0.38 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 3.66 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 197 lines | 650 shipped lines; 200 for a later grammar |
-| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Shipped C++ / C | Shipped Go | Shipped Starlark | Accepted maximum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 41.4 ms, estimated | 50.8 ms, estimated | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 30.4 ms, estimated | 29.5 ms, estimated | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 31.9 ms, estimated | 31.1 ms, estimated | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 21.5 ms, estimated | 16.8 ms, estimated | 25 ms |
+| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 0.38 MiB | 0.13 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 3.66 MiB | 0 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 197 lines | 91 lines | 650 shipped lines; 200 for a later grammar |
+| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 The Python column is the
 [September 2026 Python measurement](../history/packages/cli/cf-view-python-treesitter-2026-09.md),
@@ -298,6 +302,15 @@ one holding its WebAssembly grammar, such as generated C source and native
 builds, which the pager never reads. Shell's compiled figure is measured with
 that in place. The Python and TOML figures above were measured before it, and
 it removes 7.37 MiB of their packages from the binary.
+
+The Starlark column is the
+[November 2026 Starlark measurement](../history/packages/cli/cf-view-starlark-2026-11.md).
+Starlark runs on the Python grammar and adds no package. The machine was so
+loaded that elapsed times could not be scaled, so its timings are estimates
+from processor time: TOML's recorded 95th percentiles multiplied by the largest
+ratio of Starlark's processor time to that of a TOML control run beside each of
+three rounds. The report gives reasons to think the initialization estimate is
+high.
 
 Each later host grammar may add at most 10 MiB to both byte measures and 200
 owned source lines. The common runtime and the Python, Go, Bash, and HTML host
@@ -879,14 +892,58 @@ contract. The gate passes.
 
 ## Stage 7: Starlark and Bazel
 
-- [ ] Use one Starlark implementation for `BUILD`, `BUILD.bazel`,
+A November 13, 2026 read of the local checkouts of the organization's
+repositories found Starlark and Bazel files in gVisor alone. At its `5e59860`
+commit, 537 files are Starlark: 502 `BUILD` files, 33 `.bzl` files,
+`MODULE.bazel`, and one `.BUILD` file that a repository rule adds to an
+external repository. These are the 537 files the July survey counted. gVisor
+also holds `.bazelrc`, `.bazelversion`, and `.bazelignore`. The six months
+before the read hold 11 path-change events on these files, all on `BUILD`
+files, against the survey's 259.
+
+- [x] Use one Starlark implementation for `BUILD`, `BUILD.bazel`,
   `MODULE.bazel`, workspace files, and `.bzl`.
-- [ ] Add small selectors for `.bazelrc`, `.bazelignore`, and
-  `.bazelversion`.
-- [ ] Add representative gVisor build fixtures.
+- [x] Add small selectors for `.bazelrc` and `.bazelversion`.
+- [x] Add representative gVisor build fixtures.
+
+`.bazelignore` is an ignore file, and Stage 9 covers it with the others.
+
+Starlark's syntax is a subset of Python's, so Starlark runs on the Tree-sitter
+adapter with the Python grammar the pager already ships, using Python's
+highlight query and one pattern of its own that colors `load` as the statement
+it is. The separately maintained
+[`tree-sitter-grammars/tree-sitter-starlark`](https://github.com/tree-sitter-grammars/tree-sitter-starlark)
+grammar is built by extending the Python grammar, and its npm package declares
+an older `tree-sitter-python` as a runtime dependency. Depending on it would
+add 12.39 MiB of unpacked packages, over the 10 MiB maximum for a later
+grammar, while the Python grammar adds nothing. The adapter compiles a grammar
+file once however many languages use it.
+
+`BUILD`, `WORKSPACE`, and `WORKSPACE.bzlmod` select Starlark by name, a
+`.BUILD` suffix selects it in that case only, so that Meson's `meson.build` is
+not claimed, and `.bzl`, `.bazel`, and `.star` select it in any case. `.bazel`
+covers `BUILD.bazel`, `MODULE.bazel`, `REPO.bazel`, and `WORKSPACE.bazel`.
+Structure lists functions, each single name assigned outside functions, and
+each target that a call outside functions declares through a string `name`
+argument.
+
+`.bazelrc` files use a focused scanner that reads them as Bazel does: a
+backslash at a line's end joins it to the next, quotes and backslashes group
+characters into words, and `#` outside quotes starts a comment. The scanner colors the
+command, the configuration a line defines, such as `race` in `build:race`, and
+each option and value. It leaves plain a line for a command Bazel does not
+have, which Bazel ignores, and an import with the wrong number of words, which
+Bazel refuses. Structure lists imports and configurations.
+`.bazelversion` is plain text by name.
+
+A coverage check over the 537 Starlark files found every file parsed without an
+error and reconstructed exactly, with no character other than white space left
+without a token class. The same holds for gVisor's `.bazelrc`. The
+[November 2026 Starlark measurement](../history/packages/cli/cf-view-starlark-2026-11.md)
+records the coverage checks and the costs.
 
 Completion gate: all 537 surveyed Starlark and Bazel files have an honest
-selection path.
+selection path. The gate passes.
 
 ## Stage 8: OpenTofu, HCL, and infrastructure templates
 

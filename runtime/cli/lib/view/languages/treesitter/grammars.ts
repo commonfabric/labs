@@ -6,6 +6,7 @@ import { kotlinGrammar } from "../kotlin/kotlin.ts";
 import { pythonGrammar } from "../python/python.ts";
 import { rustGrammar } from "../rust/rust.ts";
 import { shellGrammar } from "../shell/shell.ts";
+import { starlarkGrammar } from "../starlark/starlark.ts";
 import { swiftGrammar } from "../swift/swift.ts";
 import { tomlGrammar } from "../toml/toml.ts";
 
@@ -24,6 +25,7 @@ export const treeSitterGrammars: readonly TreeSitterGrammar[] = [
   pythonGrammar,
   rustGrammar,
   shellGrammar,
+  starlarkGrammar,
   swiftGrammar,
   tomlGrammar,
 ];
