@@ -34,10 +34,14 @@ option suppresses unified-diff auto-detection; use '--diff' instead for a diff.
 The Markdown language also has a rendered view that formats headings, lists,
 quotes, tables, links, emphasis and code while retaining source line positions.
 Source views remain verbatim and add color only.
+Directive configuration covers nginx, Apache httpd, nftables, Netdata health
+alerts and sysusers.d. Logs, checksums, version files, PID files and keys are
+plain text by name.
 
 Raw unified diffs are detected automatically when their structural header is the
 first nonblank line. Standard Git commit output is detected from its complete
-header. Binary detection examines bytes; beyond shebangs and XML declarations,
+header. Binary detection examines bytes; beyond shebangs, XML declarations and
+the opening of a file whose extension several syntaxes share, such as '.conf',
 source content is not used to guess a language. Piping 'git diff' in gives added
 and removed lines their tints, full syntax color, a structure tree of the code
 each hunk touches, and the semantic features (inferred types, go-to-definition)

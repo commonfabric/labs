@@ -45,6 +45,7 @@ import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { makeLanguage } from "../lib/view/languages/make/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
 import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
+import { directiveLanguage } from "../lib/view/languages/directive/language.ts";
 import { iniLanguage } from "../lib/view/languages/ini/language.ts";
 import { orgLanguage } from "../lib/view/languages/org/language.ts";
 import { gitAttributesLanguage } from "../lib/view/languages/gitattributes/language.ts";
@@ -178,6 +179,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("plist"), xmlLanguage);
   assertEquals(languageForName("org"), orgLanguage);
   assertEquals(languageForName("orgmode"), orgLanguage);
+  assertEquals(languageForName("nginx"), directiveLanguage);
+  assertEquals(languageForName("netdata"), directiveLanguage);
   expect(languageForName("binary")).toBe(binaryLanguage);
   expect(languageForName("bytes")).toBe(binaryLanguage);
   assertEquals(languageForName("plain-text"), plainTextLanguage);
@@ -206,6 +209,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "gitattributes",
     "xml",
     "org",
+    "directive",
     "binary",
     "plain-text",
   ]);
@@ -258,6 +262,14 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "plist",
     "org",
     "orgmode",
+    "directive",
+    "nginx",
+    "apache",
+    "apacheconf",
+    "nftables",
+    "nft",
+    "netdata",
+    "sysusers",
     "binary",
     "bytes",
     "plain-text",

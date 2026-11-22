@@ -50,6 +50,7 @@ import { proguardLanguage } from "./proguard/language.ts";
 import { gitAttributesLanguage } from "./gitattributes/language.ts";
 import { xmlLanguage } from "./xml/language.ts";
 import { orgLanguage } from "./org/language.ts";
+import { directiveLanguage } from "./directive/language.ts";
 import { binaryLanguage } from "./binary/language.ts";
 import { plainTextLanguage } from "./plain-text/language.ts";
 import type { LineEndingProvenance } from "../editbuffer.ts";
@@ -265,7 +266,7 @@ export interface Language {
   /**
    * Stable identifier, such as `"typescript"`, `"markdown"`, `"json"`,
    * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"kotlin"`, `"shell"`,
-   * `"make"`, `"org"`, `"binary"`, or `"plain-text"`.
+   * `"make"`, `"org"`, `"directive"`, `"binary"`, or `"plain-text"`.
    */
   readonly id: string;
 
@@ -506,6 +507,7 @@ function allLanguages(): readonly Language[] {
     gitAttributesLanguage,
     xmlLanguage,
     orgLanguage,
+    directiveLanguage,
     binaryLanguage,
     plainTextLanguage,
   ];

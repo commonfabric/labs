@@ -593,6 +593,54 @@ value with `=`. The structure tree lists the patterns and the macros that
 patterns written `[attr]name` define. A line that Git ignores, such as one
 holding a name Git does not accept, is left uncolored.
 
+The directive configuration language covers the syntax that nginx, Apache httpd,
+nftables, Netdata health alerts, and sysusers.d share: each statement starts
+with a directive and ends at the end of its line, unless the line ends with `\`
+or a list is still open. A `{` that ends a line opens a block and a `}` that
+starts a line closes it, and only a whole line that starts with `#` is a
+comment, unless the line before ends with `\`. In a file in which at least half
+of the statement lines end with `;`, as nginx's and some nftables rulesets' do,
+a `;` ends a statement, any `{` or `}` opens or closes a block, a `#` after
+white space, `;`, `{`, or `}` starts a comment, a statement continues onto a
+line that is indented further, unless that line sets a key or opens a section,
+as an nginx argument list that runs over several lines does, and a quoted string
+runs to its closing quote over as many lines as it takes. It colors directives,
+quoted strings, `$name`, `${name}`, and `%{name}` variable references, numbers
+with units such as `10s`, and the booleans `on`, `off`, `yes`, `no`, `true`, and
+`false`. Netdata's `key: value` lines and Apache's section tags such as
+`<Directory /srv>` are colored as directives and sections. A `{` that follows
+`=` opens a list rather than a block, such as an nftables set, as does a block's
+`{` that a comma follows on its line before any `;`, `{`, or `#`, or that a `}`
+closes later on its line around content without a `;`, `{`, or `#`, counting
+nothing inside quotes. The structure tree lists blocks, sections, and Netdata
+`alarm` and `template` entries. `nginx.conf`, `httpd.conf`, `apache2.conf`, and
+other `.conf` names that begin with one of those words select it, as do
+`.htaccess`, `.nft`, `nftables.conf`, and `nft` shebangs. Another `.conf` file
+uses it when it does not open with a shebang and its first line other than blank
+lines and `#` or `;` comments starts a Netdata entry, opens an Apache section,
+starts with a sysusers.d `u`, `g`, or `m` line, or starts with a word that
+neither ends with `:` nor holds or precedes `=` and then holds a `;` or a `{`
+that does not follow `$` or `%`. A `.conf` file that opens, after blank lines
+and `#` comments, with a `---` document marker or an unindented key with no
+value followed by an indented line or a sequence entry, as a Netdata collector's
+configuration is, is YAML; one whose first line other than blank lines and
+comments heads a section other than one of a systemd unit's is INI; and one that
+opens with `{` is JSON.
+
+Per-platform copies of a Swift package resolution, such as
+`Package.resolved.android`, Xcode string catalogs (`.xcstrings`), CPU profiles
+(`.cpuprofile`), and Firebase's `.firebaserc` are JSON as well. So are `.config`
+and `.lock` files whose source opens a JSON object, as for `.cfg`.
+
+Prose such as `AUTHORS` and `CNAME`, captured output (`.stdout`, `.out`), logs
+and error output (`.log`, `.stderr`) that do not open with a JSON object,
+checksum lists such as `SHA256SUMS` and `.sha256` files, version files such as
+`VERSION`, `GO_VERSION`, `.python-version`, and `.nvmrc`, PID and port records
+(`.pid`, `.port`), SSH `known_hosts` files (`known_hosts`, `ssh_known_hosts`,
+and `github-known-hosts`), and keys and certificates (`.pem`, `.crt`, `.key`)
+are plain text by name, so a shebang or an XML declaration at the start of their
+content does not select another language.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each
