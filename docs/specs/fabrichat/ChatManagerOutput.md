@@ -52,10 +52,13 @@ interface ChatManagerOutput {
     recipient: string;
   }[]>;
 
-  /** The people this user's rooms list, by principal. */
-  people: PerUser<Record<string, Cell<ChatProfile>[]>>;
+  /**
+   * The people this user's rooms list, by principal, for a session that has
+   * asked for them; no one before.
+   */
+  people: PerSession<Record<string, Cell<ChatProfile>[]>>;
 
-  /** `people`, for a session that has asked for them; no one before. */
+  /** The same as `people`. */
   askedPeople: PerSession<Record<string, Cell<ChatProfile>[]>>;
 
   /** Asks for `askedPeople`, for the session; records no outcome. */
@@ -131,8 +134,9 @@ request names their profile and the profile points at one (see
 [offers](#offers)), and otherwise produces a **notice**, saying which room they
 have been admitted to and by whom (see
 [delivering notices](#delivering-notices)). A client finds the profiles of the
-people this user already shares a room with in `people`, so a new room can name
-each of them by profile. Someone this user adds to a room later, from the
+people this user already shares a room with in `people`, once it has asked for
+them, so a new room can name each of them by profile. Someone this user adds to
+a room later, from the
 room's [`addMember`](ChatRoomOutput.md#addmemberrequestid-string-target--value-string--profile-cellchatprofile),
 is told the same way, through
 [`offerRoom`](#offerroomrequestid-string-room-cellchatroomoutput-member-string-profile-cellchatprofile),
@@ -153,22 +157,22 @@ Everything a manager stores is `PerSpace` in the user's home space (see
 user, so `PerSpace` there means one instance for that user, which is why nothing
 it stores needs to be `PerUser` or `PerSession`.
 
-`people`, which is drawn from the listed rooms' rosters, and `outgoingNotices`,
-which leaves out a notice whose room's roster attests its recipient, are
-`PerUser` all the same, though each room's `roster` is shared by everyone the
-room's space admits: a profile lives in its owner's own space, and attests no
-principal to a reader that space refuses, so two readers can key the same
-roster differently. Stored once for every reader, a value readers derive
+`outgoingNotices`, which leaves out a notice whose room's roster attests its
+recipient, is `PerUser` all the same, though each room's `roster` is shared by
+everyone the room's space admits: a profile lives in its owner's own space, and
+attests no principal to a reader that space refuses, so two readers can key the
+same roster differently. Stored once for every reader, a value readers derive
 differently is one their runtimes overwrite without end. Read access is a
 property of the principal, so every session of one user derives the same
 values, and one instance per user serves them all. `rooms` and `deletedRooms`,
 which the manager doesn't store and which read no room, are `PerUser` as the
-people drawn from them are. A stream reads none of them, except
-`offerRoom`, which reads `people` for the user that sends it: every other
-request names a room's members by principal or by profile itself.
-`askedPeople` is `PerSession`, since whether it lists anyone is the session's
-own: each session that asks reads the rosters for itself, and one that hasn't
-asked lists no one, whatever another session of the same user has asked.
+notices are. A stream reads none of them: every request names a room's members
+by principal or by profile itself, and `offerRoom` reads the profiles of a
+member named by principal alone from rooms' rosters as it acts.
+`people` and `askedPeople`, which are drawn from the listed rooms' rosters, are
+`PerSession`, since whether they list anyone is the session's own: each session
+that asks reads the rosters for itself, and one that hasn't asked lists no one,
+whatever another session of the same user has asked.
 
 What a manager says about its reader, rather than about the user's rooms, is
 `PerSession`: whether the reader can start a chat, and the chat address it shows
@@ -289,29 +293,25 @@ session that has none is refused.
   is dropped by the manager's next request naming a room, any room, which
   reads the catalog already. Until then a runtime deriving the list asks the
   memory server about that room's space, which opens it.
-- **`people`** holds the people this user shares a room with: for each
-  principal, the profiles attesting it, read from the roster of each room in
-  `rooms` (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)) and keyed by whose
-  own each profile is (`profileOwnerOf()`), never by what a roster claims
-  about it. Each profile is listed once, in the order the rooms list them:
-  newest room first, and within a room in its roster's order. So a person's
-  first profile is a fixed choice for a given list of rooms. A profile that
-  attests no principal, or a DID no principal can have, or one whose label the
-  reader can't read, names no one and is left out, and so are this user's own
-  profiles. Like a roster, it is a claim, not an access list: a client uses
-  it to offer the people to name a new room's members by, through
-  `createGroup`'s `profiles`, and a room's add control the people to add, and
-  `offerRoom` offers a room through it to a member named by principal alone.
-  Reading it reads every listed room's roster, in each room's space; it is the
-  form `offerRoom` and hosts that already read it keep.
-- **`askedPeople`** holds `people` for a session that has sent `askForPeople`,
-  an event with no keys that records no outcome, and no one for a session that
-  hasn't. It is drawn from the listed rooms as `people` is, and reads no room's
-  roster until the session asks. A view SHOULD read `askedPeople`, and send
-  `askForPeople` when it opens a picker of the people, as the manager's group
-  control and a room's add control do, so that showing the manager, or a room,
-  reads no other room. Moving `people` itself behind the ask is a later step,
-  and a breaking one for whoever reads `people` now.
+- **`people`** holds the people this user shares a room with, for a session
+  that has sent `askForPeople`, an event with no keys that records no outcome,
+  and no one for a session that hasn't: for each principal, the profiles
+  attesting it, read from the roster of each room in `rooms` (see
+  [`ChatRoomOutput`](ChatRoomOutput.md#facts)) and keyed by whose own each
+  profile is (`profileOwnerOf()`), never by what a roster claims about it. Each
+  profile is listed once, in the order the rooms list them: newest room first,
+  and within a room in its roster's order. So a person's first profile is a
+  fixed choice for a given list of rooms. A profile that attests no principal,
+  or a DID no principal can have, or one whose label the reader can't read,
+  names no one and is left out, and so are this user's own profiles. Like a
+  roster, it is a claim, not an access list: a client uses it to offer the
+  people to name a new room's members by, through `createGroup`'s `profiles`,
+  and a room's add control the people to add. Until the session asks, nothing
+  reading it reads any room's roster, so showing the manager, or a room, reads
+  no other room. A client sends `askForPeople` when it opens a picker of the
+  people, as the manager's group control and a room's add control do; a host
+  that reads `people` without asking finds no one.
+- **`askedPeople`** is `people` under the name a view reads it by.
 
 ## Reading the list
 

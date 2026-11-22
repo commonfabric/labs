@@ -48,10 +48,10 @@ a room to anyone its space doesn't admit.
   (see [social spaces](README.md#social-spaces)). When starting a group from the
   person's chats, they are the manager's `people`, the profiles of those the
   person shares a room with, by the principal each attests. A client reads them
-  from `askedPeople`, and sends `askForPeople` as it opens its picker: reading
-  `people` reads every listed room's roster. A client names each person picked
-  there by profile, in `createGroup`'s `profiles`, so the manager offers them
-  the room.
+  from `askedPeople`, and sends `askForPeople` as it opens its picker: until the
+  session asks, `people` and `askedPeople` list no one, and reading them reads
+  no room's roster. A client names each person picked there by profile, in
+  `createGroup`'s `profiles`, so the manager offers them the room.
 - **A notice** says the person has been admitted to a room. Its claim of who
   sent it is unauthenticated. Before sending `accept` for a direct room, a
   client MUST read the principal the room's `about.record` is labeled
