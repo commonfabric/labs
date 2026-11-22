@@ -56,6 +56,10 @@ Deno.test("yaml: a .conf file selects YAML when it opens with a block key or a d
   assertEquals(languageForSource("a.conf", "# jobs\n\n---\na: 1\n").id, "yaml");
   assertEquals(languageForSource("a.conf", "jobs: # all\n\t- x\n").id, "yaml");
   assertEquals(languageForSource("a.conf", "jobs:\n- x\n").id, "yaml");
+  assertEquals(
+    languageForSource("a.conf", "--- # generated\na: 1\n").id,
+    "yaml",
+  );
   assertEquals(languageForSource("a.conf", "jobs:\n-x\n").id, "plain-text");
   assertEquals(languageForSource("a.conf", "jobs:").id, "plain-text");
   assertEquals(

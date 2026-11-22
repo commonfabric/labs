@@ -22,7 +22,7 @@ import {
  * configuration open in neither way.
  */
 const YAML_FIRST =
-  /^(?!#!)(?:[^\S\n]*(?:#[^\n]*)?\n)*(?:---[^\S\n]*(?:\n|$)|[A-Za-z_][\w.-]*:[^\S\n]*(?:#[^\n]*)?\n(?:[^\S\n]+\S|-[^\S\n]))/;
+  /^(?!#!)(?:[^\S\n]*(?:#[^\n]*)?\n)*(?:---[^\S\n]*(?:#[^\n]*)?(?:\n|$)|[A-Za-z_][\w.-]*:[^\S\n]*(?:#[^\n]*)?\n(?:[^\S\n]+\S|-[^\S\n]))/;
 
 export const yamlLanguage: Language = {
   id: "yaml",

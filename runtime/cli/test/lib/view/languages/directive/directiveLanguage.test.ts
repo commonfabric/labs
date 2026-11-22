@@ -505,6 +505,19 @@ describe("directiveLanguage", () => {
     expect(classesOf(lines, "next")).toEqual(["keyword"]);
   });
 
+  it("reads only the code before a comment when deciding whether `;` ends statements", () => {
+    const commented = directiveLanguage.highlightLines(
+      "a b # see c;\nRewriteRule ^/x{2}$ /y\n",
+    );
+    expect(classesOf(commented, "2")).toEqual(["number"]);
+
+    const terse = directiveLanguage.highlightLines(
+      "a 1;#first\nb 2;# second\nc\n  3;",
+    );
+    expect(classesOf(terse, "#first")).toEqual(["comment"]);
+    expect(classesOf(terse, "3")).toEqual(["number"]);
+  });
+
   it("decides whether `;` ends statements from most statement lines", () => {
     const apache = directiveLanguage.highlightLines(
       "php_admin_value open_basedir /var/www:/tmp;\nRewriteRule ^/x{2}$ /y\n" +

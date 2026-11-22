@@ -862,22 +862,23 @@ and a Clang module map in the `commonfabric-weaver` repository.
 nginx, Apache httpd, nftables, Netdata health alerts, and sysusers.d share one
 syntax, which one focused scanner reads as a directive configuration language. A
 statement starts with a directive and ends at the end of its line unless the
-line ends with `\`. A `{` that ends a line opens a block, a `}` that starts a
-line closes one, and only a whole line that starts with `#` is a comment, so a
-regular expression's `{4}` or a `#` in a Netdata description is ordinary text.
-In a file in which at least half of the statement lines end with `;`, as nginx's
-and some nftables rulesets' do, a `;` ends a statement, any `{` or `}` opens or
-closes a block, a `#` after white space, `;`, `{`, or `}` starts a comment, a
-statement continues onto a line that is indented further than its first, as an
-nginx argument list that runs over several lines does, and a quoted string runs
-to its closing quote over as many lines as it takes. A Netdata `key: value` line
-and an Apache section tag start a statement unless the line before ends with
-`\`. A `{` that follows `=` opens a list rather than a block, such as an
-nftables set, as does a block's `{` that a comma follows on its line before any
-`;`, or that a `}` closes later on its line around content without a `;`,
-counting neither quotes nor what follows a `#`. A `{` after `$` or `%` is part
-of a variable reference. The structure tree lists blocks, sections, and the
-entries that top-level Netdata `alarm` and `template` keys start. `nginx.conf`,
+line ends with `\` or a list is still open. A `{` that ends a line opens a
+block, a `}` that starts a line closes one, and only a whole line that starts
+with `#` is a comment, unless the line before ends with `\`, so a regular
+expression's `{4}` or a `#` in a Netdata description is ordinary text. In a file
+in which at least half of the statement lines end with `;`, as nginx's and some
+nftables rulesets' do, a `;` ends a statement, any `{` or `}` opens or closes a
+block, a `#` after white space, `;`, `{`, or `}` starts a comment, a statement
+continues onto a line that is indented further than its first, as an nginx
+argument list that runs over several lines does, and a quoted string runs to its
+closing quote over as many lines as it takes. A Netdata `key: value` line and an
+Apache section tag start a statement unless the line before ends with `\`. A `{`
+that follows `=` opens a list rather than a block, such as an nftables set, as
+does a block's `{` that a comma follows on its line before any `;`, `{`, or `#`,
+or that a `}` closes later on its line around content without a `;`, `{`, or
+`#`, counting nothing inside quotes. A `{` after `$` or `%` is part of a
+variable reference. The structure tree lists blocks, sections, and the entries
+that top-level Netdata `alarm` and `template` keys start. `nginx.conf`,
 `httpd.conf`, `apache2.conf`, and other `.conf` names that begin with one of
 those words select it, as do `.htaccess`, `.nft`, `nftables.conf`, and `nft`
 shebangs. `.conf` is shared, so another `.conf` file is directive configuration
