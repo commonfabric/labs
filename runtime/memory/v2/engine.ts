@@ -281,7 +281,8 @@ CREATE TABLE IF NOT EXISTS "commit" (
   -- actually held the lease at admission time.
   holder             TEXT,
   -- Per-write identity annotations WITHIN a derived commit's body
-  -- (protocol.md §1: the addressing/attribution pair, per action run) and
+  -- (protocol.md §1: the addressing/attribution pair, per action run, and
+  -- the action whose run made each write) and
   -- the eventIds the commit consequences (protocol.md §7: consequenceOf,
   -- derived only — bounded by the wave's input, never graph-scaled). JSON
   -- arrays; NULL on every non-derived class. Attribution is recorded, not

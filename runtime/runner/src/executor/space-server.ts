@@ -3760,9 +3760,13 @@ export class SpaceServer implements TransactionSealDestination {
       }
       const scopeKey = resolveScopeKey(operation.scope, identity);
       written.push({ id: operation.id, scopeKey });
-      if (operation.scope !== undefined && operation.scope !== "space") {
-        annotations.push({ op: opIndex, scopeKey });
-      }
+      const scoped = operation.scope !== undefined &&
+        operation.scope !== "space";
+      annotations.push({
+        op: opIndex,
+        ...(scoped ? { scopeKey } : {}),
+        action: direct.actionId,
+      });
     }
     if (reads.pending.length > 0) {
       return refuse(
