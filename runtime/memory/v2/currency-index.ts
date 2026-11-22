@@ -481,6 +481,16 @@ SELECT piece, seq FROM currency_vouch INDEXED BY idx_currency_vouch_id
 WHERE branch = :branch AND slice = :scope_key AND id = :id AND seq < :seq
   AND held = 1
 `),
+  // The slices that read one instance, each with its mark.
+  selectMarkedReadersOfInstance: engine.prepare(`
+SELECT r.slice AS slice, r.piece AS piece, s.mark AS mark
+FROM currency_read r INDEXED BY idx_currency_read_entity
+CROSS JOIN currency_slice s
+  ON s.branch = r.branch AND s.slice = r.slice AND s.piece = r.piece
+WHERE r.branch = :branch AND r.entity_space = :space AND r.entity = :id
+  AND (r.entity_scope_key = :scope_key
+    OR r.entity_scope_key = '${ANY_INSTANCE}')
+`),
   selectReadersOfInstance: engine.prepare(`
 SELECT slice, piece FROM currency_read
 WHERE branch = :branch AND entity_space = :space AND entity = :id
@@ -741,12 +751,12 @@ const readersOf = (
   for (const { id, instance_key, seq } of decided) {
     if (seq < headOfInstance(context, id, instance_key)) continue;
     for (
-      const reader of statements.selectReadersOfInstance.all({
+      const reader of statements.selectMarkedReadersOfInstance.all({
         branch,
         space,
         id,
         scope_key: instance_key,
-      }) as SliceRef[]
+      }) as Array<SliceRef & { mark: CurrencyMark }>
     ) {
       if (reader.piece === ref.piece && reader.slice === ref.slice) continue;
       if (
@@ -755,10 +765,8 @@ const readersOf = (
       ) continue;
       const key = refKey(reader);
       if (seen.has(key)) continue;
-      const mark = markOf(context, reader);
-      if (mark === undefined) continue;
       seen.add(key);
-      readers.push({ piece: reader.piece, slice: reader.slice, mark });
+      readers.push(reader);
     }
   }
   return readers;
@@ -2619,9 +2627,9 @@ export const judgeCurrencyRoots = (
       decider.piece === piece
     );
     if (deciders.length === 0) return own ? undefined : "unvouched-instance";
-    const viewers = [
-      ...(demanding.get(`${scopeKey}\0${id}`)?.values() ?? []),
-    ].filter((chain) => chain.includes(scopeKey));
+    // Every row the judgment reads is among the demanded ones.
+    const viewers = [...demanding.get(`${scopeKey}\0${id}`)!.values()]
+      .filter((chain) => chain.includes(scopeKey));
     if (viewers.length === 0) return own ? undefined : "unvouched-instance";
     for (const chain of viewers) {
       const mine = deciders.filter(({ slice }) => chain.includes(slice));
