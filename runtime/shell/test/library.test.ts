@@ -38,6 +38,8 @@ describe("library", () => {
     attachOptionsFrom: runtimeClient,
     isCellHandle: runtimeClient,
     observeAuthorship: runtimeClient,
+    observeRepresentedPrincipal: runtimeClient,
+    observeWrittenPrincipal: runtimeClient,
     RuntimeClient: runtimeClient,
     WebWorkerRuntimeTransport: webWorker,
     MessagePortRuntimeTransport: messagePort,

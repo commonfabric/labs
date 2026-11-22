@@ -13,6 +13,8 @@ export {
   attachOptionsFrom,
   isCellHandle,
   observeAuthorship,
+  observeRepresentedPrincipal,
+  observeWrittenPrincipal,
   RuntimeClient,
 } from "@commonfabric/runtime-client";
 export { WebWorkerRuntimeTransport } from "@commonfabric/runtime-client/transports/web-worker";
