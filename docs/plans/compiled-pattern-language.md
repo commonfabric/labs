@@ -18,7 +18,9 @@ next.
   milestone 4 through code round m, and the catch-up merge with `main`;
   the branch `claude/compiled-pattern-m4`, on which milestone 4 was built, is
   retired. #10016 holds Topics on the executor, on
-  `claude/compiled-pattern-topics`, and does not hold milestone 4. A change to a
+  `claude/compiled-pattern-topics`, and does not hold milestone 4. Milestone 3
+  is built on `claude/compiled-pattern-runner-m3`, cut from that branch, with
+  no pull request yet. A change to a
   pattern goes to `main` in a pull request of its own and not into the stack:
   #10036 and #10050 are open, and #10054 is closed without a merge.
 - **Documents**, all under `docs/specs/compiled-pattern-language/`:
@@ -6492,6 +6494,16 @@ is relitigated.
   derived write included. The second and the third settle what the ruling Z67
   did not determine (question 315). What it leaves open is the cost of those
   labels (question 324).
+- The work goes on to milestone 3 on the evidence of milestone 2 as measured
+  (2026-11-21, Z86): an edit at 1,000 topics is below today's runtime and
+  still grows with the board, and the causes of the growth are named. The
+  rows of a per-element result as documents of their own are built with the
+  document layout of milestone 3 and not in the adapter of milestone 1. The
+  growth of labels where each member has a clause of its own is not
+  introduced by the compiler and is taken up after the main track (question
+  352); the benches that decide give every topic one shared clause
+  (`compiled-pattern-language-integration.md`, "Milestone 2: Topics at
+  scale").
 
 ## Provisional decisions awaiting the owner's ratification
 
@@ -7847,6 +7859,58 @@ today.
   `record-of-unread-handles.tsx` with
   `base/pattern-compiler/exec/test/transaction-hooks.test.ts`. *If decided
   otherwise:* the two fixes on the Topics branch.
+- **P47. A handler's reference to a kept output is to the output's stored
+  position.** The coordinator's decision of 2026-11-21; it is no owner ruling.
+  *The case:* a handler whose binding state names an output and observes it as
+  a reference alone is given a handle to a copy of the output's value in a
+  document of its own, with the slot bound as `{ output }`, so a push takes
+  the output's whole label and the membership of a `map` over the array of
+  references pushed to carries it to every row. Binding the slot without the
+  output's label alone is unsound: the copy holds what the output holds and
+  would store the join of the handler's transaction without the output's
+  clauses. *Decision:* for a kept output at a path with no element position,
+  named by a binding in no element, the handler is given a handle to the
+  position of the result document that holds the output, which refuses a
+  write (`plan-and-label-templates.md` §3.11), and the slot is bound as a
+  constant of the plan (§2.2). What the handler stores is a link to that
+  position, and a read through it takes the label stored there. An output
+  with no stored position of its own, and a binding within an element, keep
+  the copy and the output's label. *Alternative:* a write record for the copy
+  with the output's template. *Tests:* the fixture `identity-state.tsx` with
+  `base/pattern-compiler/compare/test/runtime-transactions.test.ts`. *If
+  decided otherwise:* `#bindingOf` of `exec/executor.ts`.
+- **P48. A document that a `lift` writes for a row has the record of that
+  `lift`.** The coordinator's decision of 2026-11-21; it is no owner ruling.
+  *The case:* a row document written in the body of a `lift` with
+  `Writable.for(...).set(...)` has no write record and takes the join of the
+  transaction. *Decision:* each position of a cell of its own that the body of
+  a cone writes gets one record under the plan's write edge for the cells made
+  at that call site (`target.kind: "created"`), given when the body has
+  returned, with the label of everything the `lift` read and not of what it
+  had read when it wrote the row. The records then differ in their target
+  alone and the runtime takes them as one. *Alternative:* a record per row
+  with the reads so far, which is one entry of the table of inputs per row,
+  each as long as the list. *Not covered:* a body whose write edges name
+  several call sites, and a handler's cells; both keep the join of the
+  transaction. *Open:* questions 357 and 358. *Tests:* the fixture
+  `created-rows.tsx` with the same test file. *If decided otherwise:*
+  `#noteCreatedWrite` and `#recordCreated` of `exec/executor.ts`.
+- **P49. A write record lists one position for the positions read through a
+  handle that hold one label.** The coordinator's decision of 2026-11-21; it
+  is no owner ruling. *The case:* the record of an output of a `lift` over a
+  whole list lists 6 to 9 addresses a member in `PlanInputs.dynamic`.
+  *Decision:* the adapter lists one address for each group of positions whose
+  stored labels have one identifier, for a read of the value and for the
+  reference observed there, and states the number of positions and of groups
+  in `PlanInputs.dynamicGroups`; a position with no identifier is listed
+  itself. The executor's table keeps every position, so that a change of the
+  label of one finds the record. The runtime resolves the addresses listed, as
+  it does for the members of a container under the ruling Z75 (c), and does
+  not check the count. *Alternative:* grouping in the executor, which then
+  needs a table of groups for these positions as it has one for the members of
+  a container. *Tests:*
+  `base/pattern-compiler/compare/test/runtime-transactions.test.ts`. *If
+  decided otherwise:* one address per position, as before.
 
 **The scope of the storage decisions** (the coordinator's recommendation to
 the owner, 2026-11-18; not an owner ruling). Read in source after round 5:
@@ -13113,19 +13177,44 @@ are theirs.
      shared sorted list filtered on read. *Assumed* until then: the benches
      that decide milestone 2 give every topic one shared clause.
 353. **The label of a position joined into reads of a row held in place** (not
-     for the owner). A `map` over the result of a `lift` that is an array of
-     references stores rows whose entries lack what decided their position.
-     *Assumed:* one entry at `*` of the per-element result that the runtime's
-     resolution joins and does not replace; it changes what CFC stores and
-     carries the `SPEC-PENDING` marker.
+     for the owner). Built: the executor marks every output that holds the
+     result of a per-element construct, and the runtime joins the templates
+     stored once at `*` into a read of a position. It changes what CFC stores
+     and carries the `SPEC-PENDING` marker. *Open:* the wording for specs pull
+     request 91.
 354. **The `identity` slots of a handler's binding state, and the rows a `lift`
-     writes with `Writable.for(...).set(...)`** (not for the owner). Both store
-     the label of more than was read. *Assumed:* an `identity` slot is bound
-     without the target's label, and each such row gets a write record of the
-     `lift` that wrote it.
+     writes with `Writable.for(...).set(...)`** (not for the owner). Settled
+     provisionally by P47 and P48.
 355. **A `lift` parameter member typed `unknown` that is handed the content of
      a linked document** (not for the owner). Seen in one probe. *Assumed:*
      a defect of the read bound until examined.
+356. **The rows of a per-element result as documents of their own** (not for
+     the owner). For a `map` over an array of references, or over the result
+     of a construct that yields references, whose rows are records or view
+     nodes. *Assumed:* the boundary is static per collection (the construct is
+     `map`, the collection is in no element, its source declares references at
+     `*`, and the plan has an output below `*`); the templates stored at `*`
+     stay at the array, so the link at a position carries the label of the
+     order and the row document its own; a row document whose content has one
+     label holds one entry at its root for each class a read consumes. Built
+     with milestone 3. *Open:* whether a commit should instead carry the label
+     entries it changes and not those of the whole document, which would
+     serve rows held in place as well.
+357. **A change of a label alone at a position a `lift` read, and the rows
+     that `lift` wrote** (not for the owner). The rows keep their labels until
+     the `lift` runs again, an under-label for the time between. *Assumed:* the
+     rows' records are formed again on such a change, as the record of an
+     output is. Not built.
+358. **The cost of labeling every row again in one commit** (not for the
+     owner). The first create after a load on Topics' `main` takes 15.5 s at
+     1,000 topics, since a new clause enters what the whole-list `lift`s read.
+     *Assumed:* the preparation indexes the cleared existence entries by path,
+     and no record is given for a row whose value and whose inputs' label
+     identifiers are those of the run before.
+359. **What a read through a handle depends on** (not for the owner). It
+     records the root of the member's document, so a `lift` that reads two
+     fields of each member runs again on a change of any field. *Assumed:* the
+     positions read. Built with milestone 3.
 
 ## Open, and not needing the owner
 

@@ -2460,32 +2460,88 @@ in the prepared digest and a derived write dropped alone, are not built.
 ## Milestone 2: Topics at scale
 
 Measured on the Topics branch (`claude/compiled-pattern-topics`) with the
-harness `base/pattern-compiler/compare/topics/scale.ts`, three runs per arm.
-Counts are exact; times were taken on a loaded machine.
+harness `base/pattern-compiler/compare/topics/scale.ts`: one process per arm,
+board and size, an edit is the median of three, on an 18-core machine at load
+averages of 6 to 12. Counts are exact. Every topic has the clause of the
+input `topics`; a clause of its own on each topic
+(`SCALE_TOPIC_LABELS=distinct`) is the separate case of the next section,
+whose cost today's runtime has as well and the compiler does not introduce.
 
-| One edit | 100 topics | 1,000 topics | 2,000 topics |
+Three boards are measured. `main` is `patterns/apps/topics/main.tsx`, whose
+cards are the output of one `lift` over the whole array of topic references.
+`filing-order` (`board-filing-order.tsx`) derives the cards by a `map` over
+the array of topic references, with no sort. `sorted-references`
+(`board-sorted-references.tsx`) has a `lift` that reads the sort key of each
+topic and returns the references in order, and a `map` over that result. On
+the last two, `mentionable` is a `map` over the array of topic references
+whose rows are plain values in place.
+
+| One edit, ms | 100 topics | 1,000 topics | 2,000 topics |
 | --- | ---: | ---: | ---: |
-| Executor in memory | 18 to 33 ms | 151 to 279 ms | 346 to 484 ms |
-| Executor on runtime storage, template labels (median) | 249 ms | 2,557 ms | 6,984 ms |
-| Today's runtime, inputs unlabeled | 338 to 407 ms | 3,660 to 5,075 ms | 8,169 to 10,972 ms |
-| Today's runtime, the same labeled inputs | 870 to 1,620 ms | 11,987 to 16,850 ms | 30,843 to 37,314 ms |
+| `main`, executor on runtime storage | 260 | 2,680 | 7,295 |
+| `filing-order`, executor on runtime storage | 232 | 2,369 | 5,888 |
+| `sorted-references`, executor on runtime storage | 251 | 2,555 | 6,965 |
+| `main`, executor in memory | 20 | 171 | 398 |
+| `filing-order`, executor in memory | 10 | 79 | 183 |
+| `main`, today's runtime | 392 | 4,116 | 8,138 |
+| `filing-order`, today's runtime | 335 | 3,155 | 7,665 |
 
-An edit at 1,000 topics is below today's runtime in every sample and grows
-with the board. The instantiation of templates is flat: 17 templates, 45
-nodes and 9 records per edit at every size. What grows:
+An edit at 1,000 topics is below today's runtime and grows with the board, so
+the rule of "Two tracks, one target" is met in its first half and not in its
+second. The instantiation of templates is flat: 17 templates, 45 nodes and 9
+records per edit at every size. A write record lists one position for each
+group of positions read through a handle that hold one label (provisional
+decision P49): 20 KB, 118 KB and 226 KB of records per edit of `main`.
 
-- The board's whole-list `lift`s (`cardRowsByActivity`, `mentionableIndex`,
-  `namesTable`, `crossrefTable`, `crossrefIndexOf`) run again on each edit.
-- A write record lists, one by one, each position a read reached in each
-  topic's own document, 0.68 KB to 1.45 KB a topic for each edit.
-- The result document holds 21 to 22 label entries a topic, and every edit
-  writes that document. More than half of an edit at 1,000 topics is the
-  memory server's handling of that commit.
+One edit of `filing-order` at 1,000 topics takes 2,826 ms in the profiled
+run: the executor's own work 95 ms, the records of writes that left their
+value 106 ms, the end of the transaction 736 ms of which the preparation is
+589 ms, and 1,861 ms from the executor's return until every commit has
+settled. Each part is ten times what it is at 100 topics. Three causes:
 
-The benches that decide the milestone give every topic the clause of the
-input `topics`. A clause of its own on each topic
-(`SCALE_TOPIC_LABELS=distinct`) is a separate case, described next, whose
-cost today's runtime has as well and the compiler does not introduce.
+- **The result document is written by every edit and holds every row.** It
+  holds 21 label entries a topic for the cards and 8 more for the rows of
+  `mentionable`: 29,052 entries and 10 MB at 1,000 topics. The preparation
+  and the memory server's handling of the commit follow the size of that
+  document. The remedy is that the rows of each per-topic collection in the
+  result are documents of their own (the placement rule of the next section).
+  The executor keeps an account of part documents only, and the adapter of
+  milestone 1 writes the result as one document, so this is built with the
+  document layout of milestone 3 and not in the adapter
+  (`base/pattern-compiler/SPEC-NOTES.md`, note 575, has the plan).
+- **A `lift` that reads two fields of each topic runs again on an edit of
+  any field.** A read through a handle records the root of the member's
+  document as read. `crossrefTable` and the sort of `sorted-references` run
+  on every edit of a title for that reason. The remedy is a read through a
+  handle that depends on the positions read.
+- **The records of rows a `lift` writes are given for every row on each
+  run** (provisional decision P48): 1,010 given for an edit at 1,000 topics,
+  of which 11 are recorded. The remedy is no record for a row whose value and
+  whose inputs' label identifiers are those of the run before.
+
+The language has no construct for three of the board's whole-list `lift`s:
+`namesTable` is a row for each entry of a record of references, and there is
+no per-element construct over a record; `crossrefTable` is a join; and
+`crossrefIndexOf` groups by name into a record.
+
+**The decision.** The owner decided on 2026-11-21 to go to milestone 3 on
+this evidence, and to build the rows as documents there. The edit at 100,
+1,000 and 2,000 topics, from send to settled, is measured again on the runner
+path.
+
+**Two defects that stay.**
+
+- The first create after a load on `main` brings a new clause into what the
+  whole-list `lift`s read, so every row is labeled again in one commit: 15.5 s
+  at 1,000 topics and 53.6 s at 2,000, of which the preparation is 7.2 s and
+  27.0 s. The preparation finds written and covered paths by prefix
+  (`runtime/runner/src/cfc/prepare.ts`) and is still more than linear in the
+  paths of one document; two passes compare each cleared existence entry with
+  each written path.
+- A change of a label alone, at a position a `lift` read, does not form the
+  labels of the rows that `lift` wrote again until the `lift` runs again. The
+  record of an output is formed again on such a change; the rows have nothing
+  like it. This is an under-label for the time between.
 
 ## Labels of large derived collections
 
@@ -2527,9 +2583,11 @@ its content depends on one member.
   For rows held in place, the label of the position is joined into every
   read below it (one entry at `*` of the per-element result). The stored
   labels of a `map` over the result of a `lift` that is an array of
-  references lack it today: the rows' own entries replace the entry of the
-  array in the runtime's resolution. This is an under-label and is fixed
-  before any other item of this section.
+  references need it stated, since a row's own entries replace the entry of
+  the array in the runtime's resolution. The executor marks every output that
+  holds the result of a per-element construct, and the runtime joins the
+  templates stored once at `*` into a read of a position, also for a
+  container held within a member of another.
 - For rows that are records or view nodes of a `map` over an array of
   references, or over the result of a construct that yields references, each
   row is a document of its own, keyed by the element, and the output array
@@ -2574,13 +2632,14 @@ readable topics, each with a result per user.
   position of what a link leads to (provisional decision P46), and an
   `enumeration` slot of one container is bound to the container alone. Both
   are fixed on the Topics branch.
-- The `identity` slots of a handler's binding state are bound to the whole
-  output, so a push takes the label of that output and the membership of the
-  `map` carries it to every row; after one `addTopic` every row holds every
-  clause. An `identity` slot does not reach the target
-  (`plan-and-label-templates.md` §2.2). Not fixed.
+- A handler's reference to a kept output at a path with no element position
+  is a handle to the output's stored position in the result document, which
+  refuses a write, and the slot is bound as a constant (provisional decision
+  P47). A push then stores a link, and a read through it takes the label
+  stored at that position.
 - A row document that a `lift` writes with `Writable.for(...).set(...)` has
-  no write record and takes the join of the transaction. Not fixed.
+  the record of that `lift` under the plan's `created` write edge
+  (provisional decision P48).
 - A `lift` parameter member typed `unknown` was handed the content of the
   linked document in one probe. Not examined.
 
