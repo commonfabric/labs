@@ -729,6 +729,53 @@ type KeyState = {
 /** The longest chain of links a read follows before it gives up. */
 const MAX_LINKS = 64;
 
+/**
+ * The documents of a store by identifier. A document it does not hold is
+ * asked of `load` once, where the store was given one, and held from then
+ * on: a later change of it outside the store is the store's to be told of.
+ */
+class Documents extends Map<string, { kind: string; value: unknown }> {
+  /** The identifiers `load` gave no document for. */
+  readonly #absent = new Set<string>();
+  readonly #load:
+    | ((id: string) => { kind: string; value: unknown } | undefined)
+    | undefined;
+
+  constructor(
+    load?: (id: string) => { kind: string; value: unknown } | undefined,
+  ) {
+    super();
+    this.#load = load;
+  }
+
+  override get(id: string): { kind: string; value: unknown } | undefined {
+    const held = super.get(id);
+    if (held !== undefined || this.#load === undefined) return held;
+    if (this.#absent.has(id)) return undefined;
+    const loaded = this.#load(id);
+    if (loaded === undefined) {
+      this.#absent.add(id);
+      return undefined;
+    }
+    super.set(id, loaded);
+    return loaded;
+  }
+
+  override has(id: string): boolean {
+    return super.has(id) || this.get(id) !== undefined;
+  }
+
+  override set(id: string, document: { kind: string; value: unknown }): this {
+    this.#absent.delete(id);
+    return super.set(id, document);
+  }
+
+  /** Asks `load` again for an identifier it gave no document for. */
+  forget(id: string): void {
+    this.#absent.delete(id);
+  }
+}
+
 export class Store {
   /**
    * The secret of the space, which the hash of the element part of a
@@ -760,8 +807,14 @@ export class Store {
       keys?: "kept" | "formed";
       /** How the documents are laid out in parts; `false` for no parts. */
       parts?: PartsOptions | false;
+      /**
+       * Gives a document the store does not hold, by its identifier: one
+       * that a store outside holds. It is asked once for each identifier.
+       */
+      load?: (id: string) => { kind: string; value: unknown } | undefined;
     } = {},
   ) {
+    this.docs = new Documents(options.load);
     this.#secret = options.secret ?? crypto.randomUUID();
     this.#space = options.space;
     this.#kept = (options.keys ?? "kept") === "kept";
@@ -816,7 +869,7 @@ export class Store {
    */
   readonly #kept: boolean;
 
-  readonly docs = new Map<string, { kind: string; value: unknown }>();
+  readonly docs: Map<string, { kind: string; value: unknown }>;
   /**
    * The places that hold nothing until a write: a state cell has no
    * document when it is created, and a read of it reads the default of

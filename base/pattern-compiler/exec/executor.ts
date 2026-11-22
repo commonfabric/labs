@@ -55,6 +55,7 @@ import {
   Store,
   StreamMarker,
   streamOf,
+  type StreamPosition,
   StreamRef,
   textOf,
   type Undo,
@@ -2185,7 +2186,11 @@ export type TransactionHooks = {
    * of them, and of no other element.
    */
   watchLabels?(
-    changed: (changes: readonly LabelChange[], alone?: boolean) => void,
+    changed: (
+      changes: readonly LabelChange[],
+      alone?: boolean,
+      stored?: boolean,
+    ) => void,
   ): void;
 
   /**
@@ -3020,6 +3025,22 @@ export class Instance {
        */
       transactions?: TransactionHooks;
       /**
+       * Where an event that a handler sends to a stream of the executor
+       * is kept. `documents`, the default: it is appended to the document
+       * of its stream and handled behind the events before it.
+       * `queue`: it is kept for whoever runs the executor to take
+       * (`takeQueued`) and to hand back one by one (`handleEvent`), and
+       * no stream document is written.
+       */
+      events?: "documents" | "queue";
+      /**
+       * Gives a document that the store does not hold, by its identifier,
+       * where a store outside the executor holds it: one that exists
+       * outside the instance, which a reference leads to. The store asks
+       * once for each identifier.
+       */
+      load?: (id: string) => { kind: string; value: unknown } | undefined;
+      /**
        * Documents that exist before the instance is created, each with
        * its identifier, its kind and its value: the documents of the
        * inputs that the argument links to. They are made outside any
@@ -3041,6 +3062,7 @@ export class Instance {
         space: options.space,
         keys: options.keys,
         parts: options.parts,
+        load: options.load,
       });
     this.id = options.id ?? "result";
     this.argument = argumentOf(this.id);
@@ -3067,8 +3089,8 @@ export class Instance {
         this.store.onRead = (doc, path, by) => {
           if (this.#tx !== undefined) hooks.read(doc, path, by);
         };
-        hooks.watchLabels?.((changes, alone) =>
-          this.labelsChanged(changes, alone)
+        hooks.watchLabels?.((changes, alone, stored) =>
+          this.labelsChanged(changes, alone, stored)
         );
         // A write of a body that leaves the value as it was is reported
         // with the records of the write being made: what the body read
@@ -7639,8 +7661,68 @@ export class Instance {
   }
 
   queue(stream: StreamRef, event: unknown): void {
-    this.root.#append(stream, event);
+    if (this.root.options.events !== "queue") {
+      this.root.#append(stream, event);
+    }
     this.root.#queue.push({ stream, event });
+  }
+
+  /**
+   * Takes the events that handlers sent to streams of the executor and
+   * that are not handled yet, each with what the stored form of its
+   * stream holds (`options.events: "queue"`).
+   */
+  takeQueued(): { stream: StreamPosition["stream"]; event: unknown }[] {
+    return this.root.#queue.splice(0).map(({ stream, event }) => ({
+      stream: {
+        binding: stream.binding,
+        keys: [...stream.keys],
+        ...(stream.instance === "" ? {} : { instance: stream.instance }),
+      },
+      event,
+    }));
+  }
+
+  /**
+   * Handles one event for a stream, named by what the stored form of the
+   * stream holds, in a transaction of its own, and evaluates nothing
+   * behind it: whoever runs the executor calls `settle()` (SS §5.1).
+   * The event is appended to no stream document and no watermark moves.
+   */
+  handleEvent(stream: StreamPosition["stream"], event: unknown): Outcome {
+    const { root } = this;
+    const ref = new StreamRef(
+      stream.binding,
+      [...stream.keys],
+      stream.instance ?? "",
+    );
+    const target = ref.instance === ""
+      ? root
+      : root.#instances.get(ref.instance);
+    if (target === undefined) {
+      return {
+        binding: ref.binding,
+        committed: false,
+        error: "the stream of an instance that does not exist",
+      };
+    }
+    return target.#handle(ref, event, target.#contextOf(ref));
+  }
+
+  /**
+   * Forms again the labels of the outputs that read a label that changed
+   * while no value did, as `batch()` does behind its derivation. Returns
+   * whether there was one to form.
+   */
+  relabel(): boolean {
+    const pending = this.root.#relabels.size > 0;
+    this.root.#relabel();
+    return pending;
+  }
+
+  /** Whether `relabel()` has a label to form. */
+  get relabelPending(): boolean {
+    return this.root.#relabels.size > 0;
   }
 
   /**
@@ -8431,9 +8513,15 @@ export class Instance {
    * the group of each element of a `fold`, in this instance and in every
    * instance it made, that read a position at, above or below a label
    * entry that changed. The work is the number of those elements and the
-   * length of the paths, and not the number of elements.
+   * length of the paths, and not the number of elements. `stored` says
+   * that the changes are what the last transaction stored, where the
+   * store reports them after that transaction ended.
    */
-  labelsChanged(changes: readonly LabelChange[], alone = false): void {
+  labelsChanged(
+    changes: readonly LabelChange[],
+    alone = false,
+    stored = false,
+  ): void {
     const regrouped = new Set<string>();
     for (const instance of new Set([this, ...this.#instances.values()])) {
       for (const key of instance.#regroupReaders(changes)) regrouped.add(key);
@@ -8448,7 +8536,9 @@ export class Instance {
     if (!alone) return;
     for (const key of [...regrouped, ...this.#recordsReading(changes)]) {
       // A record given in the transaction that stored the label holds it.
-      if (!(this.#ending && this.#givenNow.has(key))) this.#relabels.add(key);
+      if (!((this.#ending || stored) && this.#givenNow.has(key))) {
+        this.#relabels.add(key);
+      }
     }
   }
 
