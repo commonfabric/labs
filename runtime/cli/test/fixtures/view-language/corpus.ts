@@ -293,6 +293,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "swift",
+    // A Swift `let` declaration of one name is also a Rust one, and Rust
+    // colors the name it binds as Swift does.
+    highlightingPeers: ["rust"],
     surveyRepository: "gvisor",
     surveyCommit: "bb309e286c61e1a5a5f9893666443a9ea31c4f17",
     surveyPath: "tools/cfc-sandbox/Package.swift",
@@ -370,6 +373,59 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "uploadKeystore", className: "binding" },
     afterEvidence: { text: "uploadKeystore", className: "binding" },
     incompleteEvidence: { text: "uploadKeystore", className: "binding" },
+  },
+  {
+    languageId: "rust",
+    surveyRepository: "infra",
+    surveyCommit: "808299e59e8e07d4a283dc129e73079ec4977ac8",
+    surveyPath: "memory-router/src/state.rs",
+    before: new URL("./rust-infra/before.rs", import.meta.url),
+    after: new URL("./rust-infra/after.rs", import.meta.url),
+    incomplete: new URL("./rust-infra/incomplete.rs", import.meta.url),
+    selection: {
+      filenames: [
+        "memory-router/src/state.rs",
+        "memory-router/fuzz/fuzz_targets/parsers.rs",
+        "memory-router/src/worker/tests.rs",
+        "projects/fabrival/src/fabrival-rust/fvi/src/main.rs",
+        "images/basic/rust/helloworld.rs",
+      ],
+      aliases: ["rust", "rs"],
+    },
+    beforeEvidence: { text: "track_holdings", className: "functionName" },
+    afterEvidence: { text: "track_watch_usage", className: "functionName" },
+    incompleteEvidence: {
+      text: "track_watch_usage",
+      className: "functionName",
+    },
+  },
+  {
+    languageId: "rust",
+    surveyRepository: "danfuzz-land",
+    surveyCommit: "1b1dd23ebf2e774ed52dd95cb317c5cc7f4f124f",
+    surveyPath:
+      "projects/fabrival/src/fabrival-rust/fabrival/src/identifier.rs",
+    before: new URL("./rust-danfuzz-land/before.rs", import.meta.url),
+    after: new URL("./rust-danfuzz-land/after.rs", import.meta.url),
+    incomplete: new URL("./rust-danfuzz-land/incomplete.rs", import.meta.url),
+    beforeEvidence: { text: "is_identifier", className: "functionName" },
+    afterEvidence: { text: "has_a_limit_of_100", className: "functionName" },
+    incompleteEvidence: {
+      text: "rejects_non_identifiers",
+      className: "functionName",
+    },
+  },
+  {
+    languageId: "rust",
+    surveyRepository: "gvisor",
+    surveyCommit: "a5f0778c3895302c448f4db3b977aeae2b4dfc59",
+    surveyPath: "images/basic/rust/helloworld.rs",
+    before: new URL("./rust-gvisor/before.rs", import.meta.url),
+    after: new URL("./rust-gvisor/after.rs", import.meta.url),
+    incomplete: new URL("./rust-gvisor/incomplete.rs", import.meta.url),
+    beforeEvidence: { text: "main", className: "functionName" },
+    afterEvidence: { text: "main", className: "functionName" },
+    incompleteEvidence: { text: "main", className: "functionName" },
   },
   {
     languageId: "toml",
@@ -530,7 +586,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     // An INI `name=value` line is a valid make assignment, and make colors
     // the name as INI colors its keys. An Ansible inventory host line is also
     // a Git attributes line, whose attributes color as the host's variables.
-    highlightingPeers: ["make", "gitattributes"],
+    // Rust reads the host line as an expression ending in a field access, and
+    // colors the field, which is the host's variable, as INI colors it.
+    highlightingPeers: ["make", "gitattributes", "rust"],
     surveyRepository: "infra",
     surveyCommit: "cfe4ac630b0b1e223d57bed12ae02fa6c53b9eb2",
     surveyPath: "ansible/rapids-inventory.ini",

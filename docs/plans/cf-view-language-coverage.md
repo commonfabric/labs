@@ -18,6 +18,7 @@ tree of its types, functions, initializers, and type-level properties, and its
 package manifests select it through their `.swift` extension. Kotlin, which
 covers Gradle's Kotlin build scripts, has syntax highlighting and a structure
 tree of its types, objects, functions, constructors, and type-level properties.
+Rust has syntax highlighting and a structure tree of its items and members.
 Shell, which covers Bash and POSIX shell, has syntax highlighting and a
 structure tree of its functions; `sh`, `bash`, `dash`, and `ash` shebangs select
 it for Git hooks and other extensionless programs viewed directly, and a
@@ -58,15 +59,15 @@ output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Python, Swift, Kotlin, TOML, HCL, and shell run on Tree-sitter through a shared,
-language-neutral adapter, which Go and HTML will use as well. Java
+Python, Swift, Kotlin, Rust, TOML, HCL, and shell run on Tree-sitter through a
+shared, language-neutral adapter, which Go and HTML will use as well. Java
 properties, INI, ProGuard rules, Git attributes, XML, makefiles, and Org mode
 use focused scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
-JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, TOML, HCL, shell,
+JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, Rust, TOML, HCL, shell,
 makefile, Java properties, INI, ProGuard, Git attributes, XML, Org mode, and
 diff support to honest handling of every textual syntax in the active
 `commonfabric` repositories.
@@ -175,16 +176,16 @@ and a warm dependency cache. Initialization starts at the first statement in a
 fresh Deno process and includes dynamic imports, runtime initialization, the
 selected grammar and query, and one empty highlight.
 
-| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Accepted maximum |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 75 ms |
-| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 50 ms |
-| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 50 ms |
-| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 25 ms |
-| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 650 shipped lines; 200 for a later grammar |
-| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Accepted maximum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 25 ms |
+| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 650 shipped lines; 200 for a later grammar |
+| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 The Python column is the
 [September 2026 Python measurement](../history/packages/cli/cf-view-python-treesitter-2026-09.md),
@@ -230,6 +231,19 @@ medians. The report gives the figures measured directly, which exceed the
 complete-highlight and document-parse maximums in some rounds. The HCL grammar names the node types a
 structure entry can be found inside, which keeps the structure walk out of
 expressions; without that, its document parse was over the maximum.
+
+The Rust column is the [November 2026 Rust
+measurement](../history/packages/cli/cf-view-rust-2026-11.md). It was made in
+three runs on a machine more loaded than for the shell and HCL measurements.
+Each run took each Rust sample beside a TOML and an HCL sample, and recorded
+processor time beside wall-clock time. Its timings are a control's recorded
+figures multiplied by the largest ratio of Rust to that control seen in any run.
+Initialization, the complete highlight, and the document parse are inside their
+maximums scaled against either control, and for them the column gives the
+HCL-scaled figures; for the re-color it gives the range of every estimate. The
+re-color is probably over its maximum, for the reason under "Rust over its
+re-color maximum". Rust is over the unpacked-dependency maximum, for the reason
+under "Rust over its unpacked-dependency maximum".
 
 The binary build leaves out every directory of a grammar package except the
 one holding its WebAssembly grammar, such as generated C source and native
@@ -398,6 +412,45 @@ maximum.
 Python and shell take 31.29 MiB of the 40 MiB that the runtime and the four
 host grammars may occupy unpacked, and 675 of their 1,000 owned source lines.
 The official Go and HTML packages unpack to 3.66 and 0.70 MiB.
+
+#### Rust over its unpacked-dependency maximum
+
+The official Rust grammar's package is 14.35 MiB unpacked, against a 10 MiB
+maximum for a later grammar. 1.05 MiB of it is the WebAssembly grammar the pager
+loads; nearly all the rest is generated C source and native builds, which the
+binary build leaves out, so Rust adds 1.07 MiB to the binary.
+
+The overrun starts the comparison under "Reconsidering the dependency". No
+focused Rust implementation exists, and a scanner would need a second
+implementation for structure, as one for shell would. The comparison therefore
+keeps the dependency. A package holding only the WebAssembly build, as Swift
+and Kotlin use, would bring Rust inside the maximum. The npm packages that
+hold one, which the report names, are not published by the grammar's
+maintainers.
+
+#### Rust over its re-color maximum
+
+Rust re-colors the measured source in about the time HCL does: in the same runs,
+the ratio of Rust's median to HCL's was 0.82 to 1.09. Scaled from HCL's recorded
+estimate, that is 23.4 ms against the 25 ms maximum. Scaled from TOML's recorded
+figure, it is 29.2 ms. Under that load HCL's own re-color was 2.35 to 2.55 times
+TOML's in processor time, against 1.68 to 1.79 when HCL was measured, so the
+report argues that the TOML scaling overstates both languages. HCL's recorded
+figure is itself scaled from TOML, though. Scaled instead from the 95th
+percentiles HCL's own report measured directly, up to 23.79 ms on a quiet
+machine and 26.94 ms in rounds whose controls stayed close to their recorded
+figures, Rust's re-color is 26.0 to 29.5 ms. Three of the four estimates are
+over the maximum, by up to about a fifth.
+
+The overrun starts the comparison under "Reconsidering the dependency". The
+highlight query over the whole document is most of the cost. On the measured
+source it makes 36,784 captures, and in one-off measurements whose samples are
+not retained, removing groups of patterns from it gave no improvement that held
+across runs. No focused Rust implementation exists, and a scanner would need a
+second implementation for structure. The comparison therefore keeps the
+dependency, and the maximums stay where they are. A change that lowers the
+adapter's cost for each capture is the way to bring Rust inside, as it is for
+Kotlin.
 
 #### Reconsidering the dependency
 
@@ -737,7 +790,7 @@ survey's history sample recorded for any family except Python. Rust, TOML, and
 Cargo keep their place.
 
 - [x] Add Swift source.
-- [ ] Add Rust source.
+- [x] Add Rust source.
 - [x] Add TOML.
 - [x] Recognize Cargo manifests and lock files.
 - [x] Recognize Swift package manifests and package-resolution JSON.
@@ -779,6 +832,35 @@ of Rust for the Gradle version catalogs under Stage 14, and it covers Cargo
 manifests through their `.toml` extension and Cargo lock files by name. It
 colored every character other than white space in the 14 TOML files in the
 local checkouts of the organization's repositories.
+
+Rust runs on the Tree-sitter adapter with the official
+[`tree-sitter/tree-sitter-rust`](https://github.com/tree-sitter/tree-sitter-rust)
+grammar, whose npm package ships its WebAssembly build. A November 13, 2026
+read of the local checkouts of the organization's repositories found 33 Rust
+files: 28 in Infra's memory router, 4 in danfuzz-land, and 1 in gVisor. The six
+months before the read hold 51 path-change events on the Infra paths, 8 on
+danfuzz-land's, and none on gVisor's. Fabric Mobile, where the July survey
+found most of its 11 Rust files, removed its Rust on July 30, 2026, after 22
+path-change events in those six months. `.rs` selects Rust. None of the 33
+files is a script, so no shebang selects it.
+
+A coverage check over the 33 files found every file parsed without an error and
+reconstructed exactly, with every character other than white space given a token
+class. The arguments of a macro invocation are tokens without a syntax tree, so
+they are colored token by token. Structure covers structures and unions and
+their named fields, enumerations and their variants, traits, implementations,
+type aliases and associated types, modules, `macro_rules!` macros, functions,
+methods, constants, and statics, including those declared directly in a function
+body. An implementation is indexed under the first type name in the implementing
+type that is not one of its type parameters. The structure walk descends only
+into item lists, structure, union, and enumeration bodies, function bodies'
+blocks and statements, and error nodes. Over the 33 files, it lists the same
+entries as a walk into every node. After 2 of 13,628 single-character insertions
+into two fixtures, it lists one method fewer, because error recovery holds the
+method inside an expression, which the walk does not enter. Fixtures come from
+Infra, danfuzz-land, and gVisor. The [November 2026 Rust
+measurement](../history/packages/cli/cf-view-rust-2026-11.md) records the costs
+and the coverage check.
 
 Completion gate: Fabric Mobile and surveyed gVisor native-language files have
 complete source and manifest selection.
