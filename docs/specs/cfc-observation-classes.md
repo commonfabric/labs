@@ -181,7 +181,8 @@ the container node resolves confidentiality with no derivation evidence at all,
 and an exchange rule guarded on `TransformedBy` cannot release an object a
 single function computed. The atom is present only when the flow stage minted
 it, which it does only when every non-privileged write of the transaction was
-authored under one identity. Membership stamps survive a slot write that adds or
+authored under one identity (a served event's processed claim, the runtime's
+write, is not one of them). Membership stamps survive a slot write that adds or
 replaces a child, so attribution on any carried `derived` or `structure` entry
 meets across the writers of its path: a transaction writing at, above, or below
 the entry's path (for a `*` template, its container's) leaves on it only the
