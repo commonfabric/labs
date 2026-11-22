@@ -605,6 +605,22 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     },
   },
   {
+    languageId: "org",
+    surveyRepository: "gvisor",
+    surveyCommit: "bb309e286c61e1a5a5f9893666443a9ea31c4f17",
+    surveyPath: "scenarios.org",
+    before: new URL("./org-gvisor/before.org", import.meta.url),
+    after: new URL("./org-gvisor/after.org", import.meta.url),
+    incomplete: new URL("./org-gvisor/incomplete.org", import.meta.url),
+    selection: {
+      filenames: ["scenarios.org", "cfc-gvisor.org", "notes/PLAN.ORG"],
+      aliases: ["org", "orgmode"],
+    },
+    beforeEvidence: { text: "Scenarios", className: "sectionHeader" },
+    afterEvidence: { text: "TODO", className: "keyword" },
+    incompleteEvidence: { text: "#+begin_src", className: "keyword" },
+  },
+  {
     languageId: "plain-text",
     surveyRepository: "raia",
     surveyCommit: "6b9cc95befe5f7cf0929eb569d9a1157e62d2374",

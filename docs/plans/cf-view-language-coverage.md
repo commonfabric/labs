@@ -36,7 +36,9 @@ manifests and resources, SVG, and Apple property lists, have syntax
 highlighting; properties files list their keys, and XML lists its elements.
 INI, which covers Ansible configuration and inventories and the configuration
 files of Python tools, has syntax highlighting and a structure tree of sections
-and the keys and hosts in each.
+and the keys and hosts in each. Org mode has syntax highlighting, with each
+source block colored as the language it names, and a structure tree of
+headlines.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -57,15 +59,16 @@ remain outside diff editing and semantic source loading.
 
 Python, Swift, Kotlin, TOML, HCL, and shell run on Tree-sitter through a shared,
 language-neutral adapter, which Go and HTML will use as well. Java
-properties, INI, ProGuard rules, XML, and makefiles use focused scanners.
+properties, INI, ProGuard rules, XML, makefiles, and Org mode use focused
+scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
 JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, TOML, HCL, shell,
-makefile, Java properties, INI, ProGuard, XML, and diff support to honest
-handling of every textual syntax in the active
-`commonfabric` repositories.
+makefile, Java properties, INI, ProGuard, XML, Org mode, and diff support to
+honest handling of every textual syntax in the active `commonfabric`
+repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -761,7 +764,7 @@ passes direct-file and diff fixtures.
 
 - [ ] Add Ruby, Rack, ERB, Gemfiles, and Bundler lock files.
 - [ ] Add TeX and BibTeX.
-- [ ] Add Org mode.
+- [x] Add Org mode.
 - [ ] Add SQL.
 - [ ] Add CSV, TSV, numeric `.dat` tables, and structured JSON log records.
 - [ ] Add Graphviz DOT.
@@ -769,6 +772,50 @@ passes direct-file and diff fixtures.
 - [ ] Classify application-specific configuration when it has stable syntax.
 - [ ] Keep prose, logs, checksums, versions, PID files, and opaque task records
   as plain text.
+
+A November 13, 2026 read of the local checkouts of the organization's
+repositories found Org mode only in gVisor: `cfc-gvisor.org` and
+`scenarios.org`, 968 lines in all, on the `cfc_v2` branch and four other
+branches. The six months before the read hold 3 path-change events on them.
+`.org` selects the language.
+
+Org mode uses a focused scanner. npm carries a Tree-sitter Org grammar,
+`@krisfremen/tree-sitter-org`, which republishes the Neovim Org mode project's
+fork, but it ships no highlight query, has no node for to-do keywords or for
+`~code~` and `=verbatim=` text, and depends on `node-gyp` and other native build
+tools. Org's syntax is line-oriented: a line's first characters say
+whether it is a headline, a keyword, a block delimiter, a comment, a drawer, a
+table row, a list item, or text. The scanner colors each of those, and links,
+code and verbatim text, and timestamps inside text. A source block's body is
+colored as the language that its first parameter names, through that
+language's own highlighting, after the indentation its lines share is removed.
+A block of Org inside Org stays literal, because coloring it as Org would scan
+each level of nesting again for every level outside it.
+A view whose parse starts loading such a language's parser waits for the load
+and is built again, so the first view shown has the block colored, and fails,
+as for a language it selected, when the parser cannot load. A block whose end
+line is missing, or comes after the next headline, is not a block, as in Org,
+so an unclosed block leaves the rest of the file colored as Org. The structure
+tree lists headlines, each inside the one above it.
+
+Both files reconstruct exactly, and the structure tree lists all 38 of their
+headlines. Their 17 `bash` blocks are colored as shell. Their one `go` block is
+colored as a string until Go is supported. Paragraph text stays plain, as it
+does in Markdown. Under a load average above 200, timed in processor time
+beside an INI control run, the scanner colored 100 kilobytes of those files in
+5.0 milliseconds at the 95th percentile, parsed it with structure in 4.7, and
+re-colored it after one edit in 7.0. Those figures come from the one round of
+three whose control, at 2.9 milliseconds, stayed near INI's recorded figure of
+under 2; in the other two the control took 12 to 17 milliseconds and Org 20
+to 29.
+
+Each 100-kilobyte input built to slow the scanner that was measured, under the
+same load, took under 50 milliseconds of processor time, except those made of
+source blocks. Such inputs include one line of unclosed links or code markers,
+a headline of white space, block openings before their end lines, and Org
+blocks nested 300 deep. Each source block is colored by a parse of its own, so
+about 3,000 one-line `bash` blocks took 118 to 146 milliseconds and as many
+`python` blocks 36 to 72; the surveyed files hold 18 blocks. The fixture comes from gVisor.
 
 Completion gate: every textual syntax in the survey's 24 active repositories
 has a tested selector and highlighter or an explicit plain-text classification.
