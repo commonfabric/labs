@@ -21,10 +21,12 @@ import type {
   ImplementationIdentity,
   LabelMapEntry,
 } from "../src/cfc/types.ts";
+import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { declaredOnwardRead } from "../src/storage/reactivity-log.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-exchange-observation");
 const space = signer.did();
@@ -435,10 +437,65 @@ describe("exchange at observation", () => {
     });
   });
 
+  describe("a whole read of a list declared onward", () => {
+    // What reaches the declared target is what the read consumed at the list
+    // itself, its membership included, so the length's stamp counts there
+    // too.
+
+    /** The confidentiality the read declares onto its target. */
+    const declaredOnto = async (
+      lengthWriter: ImplementationIdentity,
+    ): Promise<unknown[]> => {
+      let declared: unknown[] = [];
+      await withRuntime(async (runtime) => {
+        await seed(runtime, "list", ["2-1", "1-2"], [{
+          path: [],
+          origin: "derived",
+          observes: "value",
+          label: {
+            confidentiality: [SEALED],
+            integrity: [transformedBy(TALLY)],
+          },
+        }, {
+          path: ["length"],
+          origin: "derived",
+          observes: "value",
+          label: {
+            confidentiality: [SEALED],
+            integrity: [transformedBy(lengthWriter)],
+          },
+        }]);
+        const tx = runtime.edit();
+        tx.runWithAmbientReadMeta(
+          declaredOnwardRead({
+            space,
+            scope: "space",
+            id: idOf(runtime, "onto", tx),
+            path: [],
+          }),
+          () => runtime.getCell(space, "list", undefined, tx).getRaw(),
+        );
+        declared = [...deriveFlowJoin(tx).declaredOnwardAt.values()]
+          .flatMap((onward) => onward.confidentiality);
+        tx.abort?.();
+      });
+      return declared;
+    };
+
+    it("declares no clause where the rule's code wrote the length too", async () => {
+      expect(await declaredOnto(TALLY)).toEqual([]);
+    });
+
+    it("declares the sealed clause where other code wrote the length", async () => {
+      expect(await declaredOnto(OTHER)).toEqual([SEALED]);
+    });
+  });
+
   describe("an evaluation that runs out of fuel", () => {
     // Dropping one alternative of a clause tightens it, so keeping the
-    // clauses as read would be the looser label: the attempt fails instead
-    // (§5.3.2).
+    // clauses as read would be the looser label. Each alternative is held on
+    // its own instead, which no outcome of the rules is stricter than, and
+    // the store, which admits each clause as read, refuses that (§5.3.2).
 
     const viewers = Array.from({ length: 65 }, (_, i) => `did:key:viewer-${i}`);
     const NARROWING_RULES: CfcPolicyRecordInput[] = [{
@@ -460,7 +517,7 @@ describe("exchange at observation", () => {
       })),
     }];
 
-    it("fails the derivation rather than join the clauses as read", async () => {
+    it("refuses the derivation rather than join the clauses as read", async () => {
       await withRuntime(async (runtime) => {
         await seed(runtime, "wide", "2-1", [{
           path: [],
@@ -482,7 +539,10 @@ describe("exchange at observation", () => {
         }, JSON.stringify(value));
         tx.prepareCfc();
         const settled = await tx.commit().settled;
-        expect(String(settled.error?.message)).toContain("exhausted fuel");
+        expect(String(settled.error?.message)).toContain("misfit");
+        expect(String(settled.error?.message)).toContain(
+          JSON.stringify(cfcAtom.user(viewers[0])),
+        );
       }, { rules: NARROWING_RULES });
     });
 

@@ -5,6 +5,7 @@ import {
   CFC_SYSTEM_STRING_ATOMS,
   type CfcAtom,
   cfcAtom,
+  type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
 import {
   emptySchemaObject,
@@ -5394,11 +5395,8 @@ const deriveFlowJoinImpl = (
     tx.getCfcState().policySnapshot?.records.some((record) =>
       record.rules.some(isValueIntrinsicExchangeRule)
     ) ?? false;
-  // The module policies this pass resolved, so that each is read once rather
-  // than once per location: a read binds the manifest into the commit and
-  // adds its document's reads to the journal, and nothing this pass does
-  // writes a manifest.
-  const manifests = new Map<string, unknown>();
+  // Nothing the flow join does installs a manifest.
+  const manifestFor = passManifestLookup(tx);
   /**
    * Returns `clauses`, the confidentiality one observation of the document
    * `document` in `space` consumed, as the value-intrinsic rules leave it:
@@ -5417,12 +5415,19 @@ const deriveFlowJoinImpl = (
    * read on the derived value and the gate that later reads it decides on
    * it again (§5.3.2: "leaves the original label unchanged").
    *
-   * Throws where an evaluation runs out of fuel, failing the transaction.
-   * Keeping the label as read is not the strict side there: a `dropClause`
-   * rule on a clause of several alternatives removes one, which tightens it,
-   * and §5.3.2 makes exhaustion "a hard boundary failure (fail closed), not
-   * permission to continue with a partially rewritten label", as the gates
-   * treat it.
+   * Where an evaluation runs out of fuel, each clause that location consumed
+   * comes back split into its alternatives, one clause each. Keeping the
+   * clauses as read is not the strict side there, since a `dropClause` rule
+   * on a clause of several alternatives removes one, which tightens it, and
+   * §5.3.2 makes exhaustion "a hard boundary failure (fail closed), not
+   * permission to continue with a partially rewritten label". Exchange never
+   * creates a clause: it adds alternatives to one, removes them, or removes
+   * the clause. So no outcome of it is stricter than every alternative
+   * required on its own, and a gate that later reads what the computation
+   * wrote refuses what the exhausted rules might have refused. The flow join
+   * has callers outside prepare (a query builtin's request label, the
+   * serving loop's processed claim), so it refuses through the label it
+   * returns rather than by throwing.
    */
   const exchangedAtObservation = (
     document: string,
@@ -5449,6 +5454,7 @@ const deriveFlowJoinImpl = (
         nonRecursive,
         evidence(),
       ),
+      // A recursive observation's own locations already include the length.
       ...(nonRecursive === true ? membership() : []),
     ];
     if (locations.every((location) => location.evidence.length === 0)) {
@@ -5466,14 +5472,11 @@ const deriveFlowJoinImpl = (
           "observing",
           space,
           admitsRulesOfKind("value-intrinsic"),
-          manifests,
+          manifestFor,
         );
-        if (outcome.exhausted) {
-          throw new Error(
-            `cfc policy evaluation exhausted fuel observing ${document}`,
-          );
-        }
-        return outcome.confidentiality;
+        return outcome.exhausted
+          ? consumed.flatMap((clause) => clauseAlternatives(clause))
+          : outcome.confidentiality;
       },
     ).confidentiality;
   };
@@ -5851,19 +5854,28 @@ const deriveFlowJoinImpl = (
         // withhold. Resolved on first use.
         let lengthEntriesMemo: readonly LabelMapEntry[] | undefined;
         const lengthPath = [...logicalPath, "length"];
-        const lengthEntries = (): readonly LabelMapEntry[] =>
-          lengthEntriesMemo ??= document.metadata === undefined ||
-              observation.nonRecursive !== true ||
+        const lengthEntries = (): readonly LabelMapEntry[] => {
+          if (lengthEntriesMemo !== undefined) return lengthEntriesMemo;
+          // A recursive read consumed the length's entries already; what
+          // reaches its declared target is its node alone, so they are a
+          // location of that node too.
+          lengthEntriesMemo = (document.metadata === undefined ||
               observation.shape === "followRef"
             ? []
-            : consumedEntriesForRead(
+            : observation.nonRecursive === true
+            ? consumedEntriesForRead(
               document.metadata,
               lengthPath,
               { nonRecursive: true, consumes: "value", ...exclusion },
               indexFor("value"),
-            ).filter((entry) => pathKey(entry.path) === pathKey(lengthPath));
+            )
+            : entries ?? []).filter((entry) =>
+              pathKey(entry.path) === pathKey(lengthPath)
+            );
+          return lengthEntriesMemo;
+        };
         const membership = (): readonly ConsumedLocation[] =>
-          observation.shape === "followRef" || lengthEntries().length === 0
+          lengthEntries().length === 0
             ? []
             : consumedLocations(key, lengthEntries(), lengthPath, true);
         // What joins of this observation, exchanged where it was observed.
@@ -5937,11 +5949,11 @@ const deriveFlowJoinImpl = (
         });
         // The membership a read that stops at a container observes is a
         // location of its input witnesses (see `lengthEntries`).
-        const lengthWitnesses =
-          identity === undefined || inputWitnesses?.length === 0 ||
+        const lengthWitnesses = observation.nonRecursive !== true ||
+            identity === undefined || inputWitnesses?.length === 0 ||
             lengthEntries().length === 0
-            ? undefined
-            : observationInputWitnesses(lengthEntries(), lengthPath, true);
+          ? undefined
+          : observationInputWitnesses(lengthEntries(), lengthPath, true);
         document.witnesses.set(`${labelKey}#length`, () =>
           lengthWitnesses);
       }
@@ -12060,6 +12072,41 @@ export const describeSinkReleaseRefusal = (
   );
 };
 
+/** Looks up the manifest of a module policy, in `space` where one is named. */
+type ManifestLookup = (
+  reference: CfcModulePolicyRefAtom,
+  space: MemorySpace | undefined,
+) => unknown;
+
+/**
+ * A manifest lookup for one pass of exchange evaluations, which resolves each
+ * module policy once per space rather than once per evaluation. A resolution
+ * reads the manifest document, adds its reads to the journal and binds it into
+ * the commit, so a pass that evaluates at every location of a long list
+ * otherwise pays that per location. Absences are kept too. Sound only while the
+ * pass installs no manifest: a pass that does must take a new lookup after it.
+ * A lookup with no space named resolves over the spaces the journal has
+ * touched so far, which the pass can widen, so it is not kept.
+ */
+const passManifestLookup = (
+  tx: IExtendedStorageTransaction,
+): ManifestLookup => {
+  const resolved = new Map<string, unknown>();
+  return (reference, space) => {
+    if (space === undefined) return tx.resolveCfcPolicyManifest(reference);
+    const key = stringTupleKey([
+      space,
+      reference.policyDigest,
+      reference.moduleIdentity,
+      reference.symbol,
+    ]);
+    if (!resolved.has(key)) {
+      resolved.set(key, tx.resolveCfcPolicyManifest(reference, space));
+    }
+    return resolved.get(key);
+  };
+};
+
 /**
  * Runs the exchange-rule evaluator over one gated confidentiality set under
  * the transaction's policy snapshot + trust config (Epic B5). Pure wiring:
@@ -12084,10 +12131,8 @@ export const describeSinkReleaseRefusal = (
  * consumption commits atomically with the release.
  *
  * `admitsRule`, when given, restricts the evaluation to the rules it admits.
- * `manifests`, when given, holds the module policies already resolved, by
- * space and reference, and takes those this evaluation resolves: a caller
- * that evaluates many times within one pass, and writes no manifest in
- * between, resolves each once.
+ * `manifestFor` looks up a module policy's manifest; a caller that evaluates
+ * many times within one pass passes one `passManifestLookup()` to them all.
  */
 const evaluateGatedConfidentiality = (
   tx: IExtendedStorageTransaction,
@@ -12099,7 +12144,7 @@ const evaluateGatedConfidentiality = (
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
   admitsRule?: (rule: ExchangeRule) => boolean,
-  manifests?: Map<string, unknown>,
+  manifestFor: ManifestLookup = passManifestLookup(tx),
 ): {
   confidentiality: readonly CfcConfClause[];
   exhausted: boolean;
@@ -12142,14 +12187,7 @@ const evaluateGatedConfidentiality = (
           if (typeof destinationSpace === "function" && space === undefined) {
             return undefined;
           }
-          if (manifests === undefined) {
-            return tx.resolveCfcPolicyManifest(reference, space);
-          }
-          const key = stringTupleKey([space ?? "", JSON.stringify(reference)]);
-          if (manifests.has(key)) return manifests.get(key);
-          const resolved = tx.resolveCfcPolicyManifest(reference, space);
-          manifests.set(key, resolved);
-          return resolved;
+          return manifestFor(reference, space);
         },
       ),
     },
@@ -12209,6 +12247,7 @@ const evaluateAccessExchange = (
   const failures: ReturnType<
     typeof evaluateGatedConfidentiality
   >["resolutionFailures"][number][] = [];
+  const manifestFor = passManifestLookup(tx);
   const access = exchangeEachObservation(
     confidentiality,
     locations(),
@@ -12221,6 +12260,7 @@ const evaluateAccessExchange = (
         "observing",
         destinationSpace,
         admitsRulesOfKind("value-intrinsic"),
+        manifestFor,
       );
       exhausted ||= outcome.exhausted;
       firings += outcome.firings;
@@ -12238,6 +12278,7 @@ const evaluateAccessExchange = (
     consumption,
     destinationSpace,
     admitsRulesOfKind("not-value-intrinsic"),
+    manifestFor,
   );
   exhausted ||= joined.exhausted;
   for (const failure of joined.resolutionFailures) failures.push(failure);
