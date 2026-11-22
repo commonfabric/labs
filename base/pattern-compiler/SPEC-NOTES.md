@@ -10532,11 +10532,12 @@ note says `map`, it names the case. `PL` is `plan-and-label-templates.md`.
      change of the label of one finds the record (`#noteRecord`). The runtime
      resolves the addresses listed, as it does for the members of a container
      under ruling Z75 (c), and does not check the count. _Alternative:_ grouping
-     in the executor, which then needs the table of groups of note 548 for these
-     positions. The record bytes of one edit of `main`: 20,451, 117,655 and
-     225,657 at 100, 1,000 and 2,000 topics, where they were 150,328, 1,446,333
-     and 2,896,335 with fewer records. What still grows is the list of documents
-     of the row records of note 574, about 108 bytes a topic for each edit.
+     in the executor, which then needs a table of groups for these positions as
+     it has one for the members of a container. The record bytes of one edit of
+     `main`: 20,451, 117,655 and 225,657 at 100, 1,000 and 2,000 topics, where
+     they were 150,328, 1,446,333 and 2,896,335 with fewer records. What still
+     grows is the list of documents of the row records of note 574, about 108
+     bytes a topic for each edit.
 577. **The pattern (step 6).** In `board-filing-order.tsx` and
      `board-sorted-references.tsx`, `mentionable` is a `map` over the board's
      array of topic references whose rows are plain values in place. It gives a
