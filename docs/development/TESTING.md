@@ -135,6 +135,33 @@ test navigated to a view, a cell another test set to a value, and a piece
 another test created are all things a test has to arrange for itself.
 [Test selection](test-selection.md) describes the machinery that picks them.
 
+So setup that only some of a file's tests need belongs to those tests, not to a
+`beforeAll`. Each test that reads such a scenario calls one function that sets
+it up on its first call and hands every later call the same result. The
+pattern integration tests take that function, `once`, from
+`patterns/integration/multi-runtime-harness.ts`, and the
+`patterns/integration/fabrichat-room-list-*.test.ts` files arrange their
+scenarios this way. A lane running one test then sets up only that test's
+scenario and the scenarios it builds on, and a run of the whole file still sets
+up each scenario once. Setup that every test in a file needs stays in the
+file's `beforeAll`, where it is charged to every test as it should be.
+
+Teardown stays in an `afterAll`, which runs in a lane that ignored every test
+in its `describe()` as well. So it disposes of only what a scenario actually
+set up, and never calls the scenario's function, which would set the scenario
+up in that lane. In the room-list files, `RoomListServer` keeps track of each
+client it starts for that teardown. A scenario's function keeps handing back
+its result after the teardown has disposed of the clients in it. So a scenario
+that builds on one torn down in an earlier `describe()` uses that one's
+clients only to dispose of them.
+
+A scenario's time is counted in whichever test runs it first. A run of the
+whole file measures the tests after that one as costing next to nothing, so
+the packer undercharges a lane holding one of them without the first, which
+then sets the scenario up, and any scenario it builds on. A lane is
+undercharged by at most the setup of those scenarios, where a `beforeAll` makes
+every lane pay for the whole file's setup.
+
 Such a test fails by waiting. The waits an integration test uses resolve on an
 event, and the event never comes, so the wait runs to its stuck-condition safety
 net and the test fails when the net runs out, which for `waitForCondition` is

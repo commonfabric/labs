@@ -320,6 +320,21 @@ export function systemPatternsRoute(): PatternsRoute {
 }
 
 /**
+ * A function that runs `build` on its first call and returns the promise that
+ * call made, on that call and every later one.
+ *
+ * A test file whose tests share a scenario's setup makes the setup one of
+ * these, called by the tests that read it. A lane that runs one test of a file
+ * registers the others as ignored, and runs every `beforeAll` in the file
+ * whatever it chose, so a scenario set up in a `beforeAll` costs every such
+ * lane the whole file's setup.
+ */
+export function once<T>(build: () => Promise<T>): () => Promise<T> {
+  let built: Promise<T> | undefined;
+  return () => built ??= build();
+}
+
+/**
  * Whether a harness runs the server-execution ON posture, given what its first
  * session's `cfc.experimental.serverExecution` asks for: that, else the
  * canonical environment mapping, else the first-party default, as the
