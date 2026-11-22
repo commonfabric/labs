@@ -285,7 +285,7 @@ export const readValueTool: HarnessToolDefinition<
         await startWithInputSources(
           runtime,
           piece,
-          () => runtime.startWithCommit(piece),
+          { awaitSetupCommit: true },
         );
         await runtime.idle();
       }
