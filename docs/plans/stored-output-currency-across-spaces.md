@@ -245,8 +245,10 @@ so finding the readers to tell is one read of the rows that moved. A row
 takes a position when it changes, and none when its instance is first
 registered, since the space registering it is handed the row. An index
 that starts over with its records dropped keeps these rows, and the first
-call that changes it brings every one of them up to date, so a reader
-that kept its records hears that what it read is no longer vouched for.
+call that changes it brings every one of them up to date. A reader that
+kept its records then hears that an instance a piece here computes is no
+longer vouched for. An instance nothing computes is plain data, and its
+row stays as it was.
 
 ### A circle of triggers
 

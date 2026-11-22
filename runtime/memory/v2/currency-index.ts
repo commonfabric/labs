@@ -873,6 +873,30 @@ const staleInstance = (
 };
 
 /**
+ * Whether `ref` read an instance of another space that its source reported
+ * stale upstream, or has reported nothing of.
+ */
+const readsStaleImport = (context: Context, ref: SliceRef): boolean => {
+  const { branch, space, statements } = context;
+  const foreign = statements.selectForeignReads.all({
+    branch,
+    space,
+    slice: ref.slice,
+    piece: ref.piece,
+  }) as Array<
+    { entity_space: string; entity: string; entity_scope_key: string }
+  >;
+  return foreign.some(({ entity_space, entity, entity_scope_key }) =>
+    (statements.selectImport.get({
+      branch,
+      source: entity_space,
+      id: entity,
+      scope_key: entity_scope_key,
+    }) as { stale: number } | undefined)?.stale !== 0
+  );
+};
+
+/**
  * What keeps an input of `ref` from being called current: whether it read a
  * derived document no recorded piece writes, whether it read an instance
  * that a recorded piece computes and none vouches for, whether it read an
@@ -914,26 +938,10 @@ const staleInputsOf = (
       producers.set(refKey(producer), producer);
     }
   }
-  const foreign = statements.selectForeignReads.all({
-    branch,
-    space,
-    slice: ref.slice,
-    piece: ref.piece,
-  }) as Array<
-    { entity_space: string; entity: string; entity_scope_key: string }
-  >;
-  const upstream = foreign.some(({ entity_space, entity, entity_scope_key }) =>
-    (statements.selectImport.get({
-      branch,
-      source: entity_space,
-      id: entity,
-      scope_key: entity_scope_key,
-    }) as { stale: number } | undefined)?.stale !== 0
-  );
   return {
     unrecorded,
     unvouched,
-    upstream,
+    upstream: readsStaleImport(context, ref),
     producers: [...producers.values()],
   };
 };
@@ -1031,13 +1039,42 @@ const upstreamReadsOf = (
   return found.size === 0 ? undefined : [...found.values()];
 };
 
-/** Whether an input of `ref` is one the index cannot call current. */
-const hasStaleInput = (context: Context, ref: SliceRef): boolean => {
-  const { unrecorded, unvouched, upstream, producers } = staleInputsOf(
-    context,
-    ref,
-  );
-  return unrecorded || unvouched || upstream || producers.length > 0;
+/**
+ * Whether an input of `ref` is one the index cannot call current, with each
+ * slice in `assumed` taken as clean. It answers from what `staleInputsOf()`
+ * gathers, and stops at the first input that decides it: a slice is asked on
+ * every record stored and on every walk downstream, and one that waits on
+ * something it read goes on waiting whatever its other reads say.
+ */
+const hasStaleInput = (
+  context: Context,
+  ref: SliceRef,
+  assumed?: ReadonlyMap<string, SliceRef>,
+): boolean => {
+  if (readsStaleImport(context, ref)) return true;
+  const { branch, space, statements } = context;
+  const reads = statements.selectLocalReads.all({
+    branch,
+    space,
+    slice: ref.slice,
+    piece: ref.piece,
+  }) as Array<{ entity: string; entity_scope_key: string; derived: number }>;
+  for (const { entity, entity_scope_key, derived } of reads) {
+    // The piece's own result document is its pattern pointer, which no
+    // computation decides.
+    if (entity === ref.piece) continue;
+    const found = staleInstance(context, {
+      id: entity,
+      scopeKey: entity_scope_key,
+      derived: derived === 1,
+    }, ref);
+    if (found.unrecorded || found.unvouched) return true;
+    const waits = found.producers.some((producer) =>
+      assumed?.has(refKey(producer)) !== true
+    );
+    if (waits) return true;
+  }
+  return false;
 };
 
 /** The pieces that enclose `piece`. */
@@ -1718,13 +1755,7 @@ export const storeCurrencyRecords = (
     for (let changed = true; changed;) {
       changed = false;
       for (const [key, ref] of assumed) {
-        const { unrecorded, unvouched, upstream, producers } = staleInputsOf(
-          context,
-          ref,
-        );
-        const stale = unrecorded || unvouched || upstream ||
-          producers.some((producer) => !assumed.has(refKey(producer)));
-        if (!stale) continue;
+        if (!hasStaleInput(context, ref, assumed)) continue;
         assumed.delete(key);
         // A dropped slice is a marked producer from here on.
         if (!settling.has(key)) setMark(context, ref, 1);
