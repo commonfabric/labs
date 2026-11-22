@@ -115,11 +115,11 @@ the revision embedded in the rendered control's event, so a newer peer choice
 causes a conflict notice instead of being replaced. Opening uses ordinary shell
 space navigation and its configured routing; listing does not fetch target
 roots, add routing hints, grant access, or change the navigation list. The
-browser's `shown` input says whether its list is on screen, and is `true` unless
-a host passes `false`. While it is `false` the browser derives no row, so no
-runtime runs anything for each entry. Home passes whether its Social spaces tab
-is the one selected, since a client that draws Home's view demands every panel
-of it, hidden ones included.
+browser's `selectedTab` input is the tab its host has selected, for a host that
+shows it in the tab `SOCIAL_SPACES_TAB` names. While another tab is selected the
+browser derives no row, so no runtime runs anything for each entry; without the
+input the list is shown. Home passes its result's `activeTab`, since a client
+that draws Home's view demands every panel of it, hidden ones included.
 
 ## Identity and routing
 
