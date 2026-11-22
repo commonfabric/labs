@@ -13215,6 +13215,29 @@ are theirs.
      records the root of the member's document, so a `lift` that reads two
      fields of each member runs again on a change of any field. *Assumed:* the
      positions read. Built with milestone 3.
+360. **Whether every read of a position joins the `*` entry of the ruling
+     Z71** (for the owner, to revisit after the main track, beside question
+     352). The owner's remark of 2026-11-22 on reading the ruling again: "any
+     read is joined with * - seems quite strong now that i read this. i can
+     see where it comes from and it probably means we want to treat these as
+     unordered sets (as that's the usual use-case) where the position doesn't
+     mean much." It is a remark and no ruling; Z71 stands. The coordinator's
+     analysis, not the owner's: a removal through a handle from an array of
+     plain values in place decides which member stands at an index, the count
+     and whether the removed member exists; it does not decide the content of
+     a kept member found by its identity, nor the relative order of two kept
+     members. A narrower rule would be that a read by key does not join the
+     entry, and a read by index, the count and an enumeration do (the
+     enumeration entry of P39 carries it already). For an array of references
+     this nearly holds, since the label is on the link at the position and
+     the content is in the member's document. For an array of plain values in
+     place the executor keys elements and binds a row of a `map` by key, but
+     today's runtime reads by index, so its label resolution cannot tell the
+     two reads apart; that is the missing piece. For the result of another
+     per-element construct there is no handle to remove through. A narrower
+     rule changes the sentence proposed for section 4.6.3 of the
+     specification's chapter on label representation (question 326).
+     *Assumed* until then: Z71 as ruled.
 
 ## Open, and not needing the owner
 
