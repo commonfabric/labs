@@ -44,6 +44,7 @@ import { hclLanguage } from "./hcl/language.ts";
 import { shellLanguage } from "./shell/language.ts";
 import { makeLanguage } from "./make/language.ts";
 import { proguardLanguage } from "./proguard/language.ts";
+import { gitAttributesLanguage } from "./gitattributes/language.ts";
 import { xmlLanguage } from "./xml/language.ts";
 import { orgLanguage } from "./org/language.ts";
 import { binaryLanguage } from "./binary/language.ts";
@@ -492,6 +493,7 @@ function allLanguages(): readonly Language[] {
     propertiesLanguage,
     iniLanguage,
     proguardLanguage,
+    gitAttributesLanguage,
     xmlLanguage,
     orgLanguage,
     binaryLanguage,

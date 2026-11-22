@@ -577,6 +577,13 @@ lists headlines, each inside the one above it. A source block is colored as the
 language its first parameter names, such as `bash`, when `cf view` supports that
 language and it is not Org, and as a string otherwise.
 
+`.gitattributes` files in any directory use the Git attributes language's syntax
+highlighting. It colors each line's pattern and the wildcards in it, and each
+attribute, whether set, unset with `-`, left unspecified with `!`, or given a
+value with `=`. The structure tree lists the patterns and the macros that
+patterns written `[attr]name` define. A line that Git ignores, such as one
+holding a name Git does not accept, is left uncolored.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each

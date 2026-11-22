@@ -528,8 +528,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   {
     languageId: "ini",
     // An INI `name=value` line is a valid make assignment, and make colors
-    // the name as INI colors its keys.
-    highlightingPeers: ["make"],
+    // the name as INI colors its keys. An Ansible inventory host line is also
+    // a Git attributes line, whose attributes color as the host's variables.
+    highlightingPeers: ["make", "gitattributes"],
     surveyRepository: "infra",
     surveyCommit: "cfe4ac630b0b1e223d57bed12ae02fa6c53b9eb2",
     surveyPath: "ansible/rapids-inventory.ini",
@@ -568,6 +569,80 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "-keep", className: "keyword" },
     afterEvidence: { text: "-keep", className: "keyword" },
     incompleteEvidence: { text: "-keep", className: "keyword" },
+  },
+  {
+    languageId: "gitattributes",
+    surveyRepository: "labs",
+    surveyCommit: "f94ac6bb1b1206bebe19228f4305edb7201fd97e",
+    surveyPath: ".gitattributes",
+    before: new URL("./gitattributes-labs/before.gitattributes", import.meta.url),
+    after: new URL("./gitattributes-labs/after.gitattributes", import.meta.url),
+    incomplete: new URL(
+      "./gitattributes-labs/incomplete.gitattributes",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [".gitattributes", "src/.gitattributes"],
+      aliases: ["gitattributes"],
+    },
+    beforeEvidence: { text: "**", className: "regex" },
+    afterEvidence: { text: "**", className: "regex" },
+    incompleteEvidence: { text: "**", className: "regex" },
+  },
+  {
+    languageId: "gitattributes",
+    surveyRepository: "commonfabric-weaver",
+    surveyCommit: "470efd7ecc4a90702d60c761eb5780c04f6546cd",
+    surveyPath: ".gitattributes",
+    before: new URL(
+      "./gitattributes-weaver/before.gitattributes",
+      import.meta.url,
+    ),
+    after: new URL("./gitattributes-weaver/after.gitattributes", import.meta.url),
+    incomplete: new URL(
+      "./gitattributes-weaver/incomplete.gitattributes",
+      import.meta.url,
+    ),
+    beforeEvidence: { text: "**", className: "regex" },
+    afterEvidence: { text: "**", className: "regex" },
+    incompleteEvidence: { text: "**", className: "regex" },
+  },
+  {
+    languageId: "gitattributes",
+    // A pattern followed by one `name=value` attribute is also an Ansible
+    // inventory host line, whose variable INI colors as Git attributes color
+    // the attribute.
+    highlightingPeers: ["ini"],
+    surveyRepository: "loom",
+    surveyCommit: "f788015adc43cc8d7b3b3bb7f50f2066428a6dbc",
+    surveyPath: "src/.gitattributes",
+    before: new URL("./gitattributes-loom/before.gitattributes", import.meta.url),
+    after: new URL("./gitattributes-loom/after.gitattributes", import.meta.url),
+    incomplete: new URL(
+      "./gitattributes-loom/incomplete.gitattributes",
+      import.meta.url,
+    ),
+    beforeEvidence: { text: "ours", className: "string" },
+    afterEvidence: { text: "ours", className: "string" },
+    incompleteEvidence: { text: "ours", className: "string" },
+  },
+  {
+    languageId: "gitattributes",
+    surveyRepository: "infra",
+    surveyCommit: "cc5cd853a3c76ae8de1104525d4b2a64c0653aca",
+    surveyPath: ".gitattributes",
+    before: new URL(
+      "./gitattributes-infra/before.gitattributes",
+      import.meta.url,
+    ),
+    after: new URL("./gitattributes-infra/after.gitattributes", import.meta.url),
+    incomplete: new URL(
+      "./gitattributes-infra/incomplete.gitattributes",
+      import.meta.url,
+    ),
+    beforeEvidence: { text: "*", className: "regex" },
+    afterEvidence: { text: "*", className: "regex" },
+    incompleteEvidence: { text: "*", className: "regex" },
   },
   {
     languageId: "xml",
