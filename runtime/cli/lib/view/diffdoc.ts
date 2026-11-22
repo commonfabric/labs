@@ -9,7 +9,8 @@
  * whose content matches the workspace file reuse that complete file. Removed
  * lines use the complete old file, loaded from Git or reconstructed from the
  * complete new file. Lines without either complete file use a per-hunk
- * fragment.
+ * fragment. A complete file whose parse is left to finish in the background
+ * colors its lines as plain text until a later build has the parse.
  *
  * The structure tree is: file (a `section` node) → hunk → the workspace file's
  * own structure nodes, clamped and remapped into diff coordinates. So WASD and
@@ -24,6 +25,7 @@ import { spawnSync } from "@node/child_process";
 import { spliceAll } from "@commonfabric/collections/splice";
 
 import { cpLen } from "./ansi.ts";
+import type { PendingParses } from "./backgroundparse.ts";
 import type { DiffFile, DiffHunk, DiffModel } from "./diff.ts";
 import type { DeclaredTests } from "./fold.ts";
 import type { Language } from "./languages/language.ts";
@@ -451,7 +453,9 @@ export interface DiffEdit {
   readonly fileText: ReadonlyMap<string, string>;
 
   /** Complete highlighted old files, aligned with the parsed diff's files.
-   * The live highlighter uses these spans when an edit creates a removed line. */
+   * The live highlighter uses these spans when an edit creates a removed line.
+   * Each read gives the lines as they stand, so a file whose parse a build
+   * left pending has none here until the parse ends. */
   readonly oldFileLines: readonly (readonly Line[] | null)[];
 
   /**
@@ -538,6 +542,10 @@ interface LoadedFile {
   /** Syntax-only lines used by complete old files. */
   highlightedLines?: readonly Line[] | null;
 
+  /** The syntax-only lines of a complete old file whose parse is pending, as
+   * they stand when called: null until the parse ends. */
+  currentLines?: () => readonly Line[] | null;
+
   /** Alternate rendered lines, computed once when that view is opened. */
   renderedLines?: readonly Line[] | null;
 }
@@ -547,6 +555,7 @@ function loadFile(
   language: Language,
   ws: DiffWorkspace,
   cache?: WorkspaceCache,
+  pending?: PendingParses,
 ): LoadedFile {
   // Two sections of `git log -p` output can read one workspace file in two
   // languages when each shows a different first line, so a cached parse
@@ -554,18 +563,26 @@ function loadFile(
   const hit = cache?.get(absPath);
   if (hit?.language === language) return hit;
   const fileText = ws.read(absPath);
-  const fileDoc = fileText !== null
-    ? language.parseDocument(fileText, absPath)
-    : null;
-  const fileLineStarts = fileText !== null ? computeLineStarts(fileText) : [];
+  const fileDoc = fileText === null ? null : pending
+    ? pending.document(
+      `${absPath}\0${language.id}`,
+      language,
+      fileText,
+      absPath,
+    )
+    : language.parseDocument(fileText, absPath);
   const entry: LoadedFile = {
     fileText,
-    fileDoc,
-    fileLineStarts,
+    fileDoc: fileText !== null && fileDoc === null
+      ? plainTextLanguage.parseDocument(fileText, absPath)
+      : fileDoc,
+    fileLineStarts: fileText !== null ? computeLineStarts(fileText) : [],
     language,
     hasUtf8Bom: fileText === null ? undefined : ws.hasUtf8Bom?.(absPath),
   };
-  cache?.set(absPath, entry);
+  // A file whose parse is pending is shown as plain text, and stays out of
+  // the cache so that the build after the parse finishes uses its result.
+  if (fileText === null || fileDoc !== null) cache?.set(absPath, entry);
   return entry;
 }
 
@@ -849,21 +866,45 @@ function reconstructedOldFileCacheKey(
   }`;
 }
 
+/**
+ * Highlights the complete old file `fileText` and stores it in `cache` under
+ * `key`, unless its parse is pending in `pending`. A pending file is
+ * highlighted as plain text and stays out of the cache.
+ */
 function highlightedFile(
+  key: string,
   fileText: string | null,
   fileName: string | undefined,
   language: Language,
-  hasUtf8Bom?: boolean,
+  hasUtf8Bom: boolean | undefined,
+  cache: WorkspaceCache | undefined,
+  pending: PendingParses | undefined,
 ): LoadedFile {
-  return {
+  const parsed = (text: string) =>
+    pending
+      ? pending.lines(`${key}\0${language.id}`, language, text, fileName)
+      : language.highlightLines(text, fileName);
+  const highlightedLines = fileText === null ? null : parsed(fileText);
+  if (fileText !== null && highlightedLines === null) {
+    const plain = plainTextLanguage.highlightLines(fileText, fileName);
+    return {
+      fileText,
+      fileDoc: null,
+      fileLineStarts: [],
+      hasUtf8Bom,
+      highlightedLines: plain,
+      currentLines: () => parsed(fileText),
+    };
+  }
+  const entry: LoadedFile = {
     fileText,
     fileDoc: null,
     fileLineStarts: [],
     hasUtf8Bom,
-    highlightedLines: fileText === null
-      ? null
-      : language.highlightLines(fileText, fileName),
+    highlightedLines,
   };
+  cache?.set(key, entry);
+  return entry;
 }
 
 /** The complete file lines to show for one view mode. */
@@ -898,7 +939,8 @@ function loadOldFile(
   ws: DiffWorkspace,
   rawLines: string[],
   modelLines: DiffModel["lines"],
-  cache?: WorkspaceCache,
+  cache: WorkspaceCache | undefined,
+  pending: PendingParses | undefined,
 ): LoadedFile {
   if (file.hunks.length === 0 || readOnlyReasonFor(language) !== undefined) {
     return {
@@ -924,14 +966,16 @@ function loadOldFile(
     if (!blob) {
       const blobText = oldBlobText(object, oldBlobs, ws);
       blob = highlightedFile(
+        blobKey,
         blobText,
         fileName,
         language,
         blobText === null
           ? undefined
           : ws.blobHasUtf8Bom?.(object) ?? inferredOldHasUtf8Bom,
+        cache,
+        pending,
       );
-      cache?.set(blobKey, blob);
     }
     if (
       blob.fileText !== null &&
@@ -959,14 +1003,15 @@ function loadOldFile(
     modelLines,
     newFile?.hasUtf8Bom,
   );
-  const entry = highlightedFile(
+  return highlightedFile(
+    key,
     fileText,
     fileName,
     language,
     inferredOldHasUtf8Bom,
+    cache,
+    pending,
   );
-  cache?.set(key, entry);
-  return entry;
 }
 
 /**
@@ -1071,7 +1116,8 @@ function oldObjects(
 
 /**
  * Builds the document, semantic maps, and edit targets for a diff, reading
- * each file side in the language `languages` gives it.
+ * each file side in the language `languages` gives it. A complete file whose
+ * parse `pending` leaves pending is shown as plain text.
  *
  * @throws {Error} When `languages` does not hold one entry for each of the
  * diff's files.
@@ -1083,6 +1129,7 @@ export function buildDiffDocument(
   cache?: WorkspaceCache,
   viewMode: ViewMode = "source",
   languages: readonly DiffFileLanguages[] = diffLanguages(text, model, ws),
+  pending?: PendingParses,
 ): { doc: Document; maps: DiffMaps; edit: DiffEdit } {
   if (languages.length !== model.files.length) {
     throw new Error(
@@ -1097,7 +1144,7 @@ export function buildDiffDocument(
   const definitions = new Map<string, Definition[]>();
   const mappings = new Map<string, FileMapping>(); // by abs path
   const hunks: DiffHunkInfo[] = [];
-  const oldFileLines: (readonly Line[] | null)[] = [];
+  const oldFileLines: (() => readonly Line[] | null)[] = [];
   const oldBlobs = ws.readBlobs?.(
     oldObjects(
       model,
@@ -1123,7 +1170,7 @@ export function buildDiffDocument(
     // pure rename, say) reads nothing.
     const loaded = absPath && file.hunks.length > 0 &&
         readOnlyReasonFor(newLanguage) === undefined
-      ? loadFile(absPath, newLanguage, ws, cache)
+      ? loadFile(absPath, newLanguage, ws, cache, pending)
       : null;
     const fileText = loaded?.fileText ?? null;
     const fileDoc = loaded?.fileDoc ?? null;
@@ -1138,8 +1185,11 @@ export function buildDiffDocument(
       rawLines,
       model.lines,
       cache,
+      pending,
     );
-    oldFileLines.push(oldFile.highlightedLines ?? null);
+    oldFileLines.push(
+      oldFile.currentLines ?? (() => oldFile.highlightedLines ?? null),
+    );
     const newFileLines = displayedFileLines(
       loaded,
       newLanguage,
@@ -1262,7 +1312,7 @@ function buildEdit(
   rawLines: string[],
   mappings: Map<string, FileMapping>,
   hunks: DiffHunkInfo[],
-  oldFileLines: readonly (readonly Line[] | null)[],
+  oldFileLines: readonly (() => readonly Line[] | null)[],
   languages: readonly DiffFileLanguages[],
 ): DiffEdit {
   const lines = new Map<
@@ -1277,7 +1327,16 @@ function buildEdit(
       lines.set(diffLine, { absPath: m.absPath, newLine, markerLen });
     }
   }
-  return { sourceText, lines, fileText, oldFileLines, languages, hunks };
+  return {
+    sourceText,
+    lines,
+    fileText,
+    get oldFileLines() {
+      return oldFileLines.map((current) => current());
+    },
+    languages,
+    hunks,
+  };
 }
 
 //

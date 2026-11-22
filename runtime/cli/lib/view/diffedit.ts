@@ -17,6 +17,7 @@ import { spliceAll } from "@commonfabric/collections/splice";
 import { maxOf } from "@commonfabric/collections/math";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
+import type { PendingParses } from "./backgroundparse.ts";
 import type { BlameRequest, BlameTarget } from "./blame.ts";
 import type { Document, Line, Span, ViewMode } from "./model.ts";
 import { cpLen } from "./ansi.ts";
@@ -62,11 +63,17 @@ import type {
 } from "./editsource.ts";
 import { shortName } from "./editsource.ts";
 
+/**
+ * The editable source behind a diff view, whose edits write to the files of
+ * `ws` that `edit` maps, and whose re-parses share `cache` and leave the
+ * parses that `pending` holds as plain text until they finish.
+ */
 export function diffSource(
   ws: DiffWorkspace,
   edit: DiffEdit,
   cache?: WorkspaceCache,
   git?: GitRunner,
+  pending?: PendingParses,
 ): EditableSource {
   const files = [...edit.fileText.keys()];
   const expectedFiles = new Map(edit.fileText);
@@ -82,7 +89,15 @@ export function diffSource(
       )
       ? {
         render: (source: Document) =>
-          reparse(ws, edit, source.text, cache, completeFiles, "rendered"),
+          reparse(
+            ws,
+            edit,
+            source.text,
+            cache,
+            pending,
+            completeFiles,
+            "rendered",
+          ),
       }
       : {};
   const resolvedCommits = new Map<string, string | null>();
@@ -135,11 +150,15 @@ export function diffSource(
       return blameRoot;
     });
   };
+  // The counts read the old files' colored lines, which change as parses
+  // finish in the background, so they are computed again when one does.
   let countContextText: string | undefined;
+  let countContextParses: number | undefined;
   let countContexts: readonly DiffCountFileContext[] = [];
   const diffCountContexts = (text: string) => {
-    if (text !== countContextText) {
+    if (text !== countContextText || pending?.finished !== countContextParses) {
       countContextText = text;
+      countContextParses = pending?.finished;
       countContexts = buildDiffCountContexts(ws, edit, text);
     }
     return countContexts;
@@ -161,7 +180,7 @@ export function diffSource(
       editable: false,
       reason:
         "This diff doesn't match any file on disk, so there is nothing to edit.",
-      parse: (text) => reparse(ws, edit, text, cache),
+      parse: (text) => reparse(ws, edit, text, cache, pending),
       ...renderedView,
       save: () => "Nothing to save — this diff matches no file on disk.",
     };
@@ -282,7 +301,16 @@ export function diffSource(
     logicalEnd: (lines, row) =>
       diffLogicalEnd(classify(lines).model, lines, row),
     parse: (text, lineEndings) =>
-      reparse(ws, edit, text, cache, completeFiles, "source", lineEndings),
+      reparse(
+        ws,
+        edit,
+        text,
+        cache,
+        pending,
+        completeFiles,
+        "source",
+        lineEndings,
+      ),
     ...renderedView,
     // Live highlighting recolors the lines an edit changes and reuses the seed
     // (buildDiffDocument's colors, including the file/hunk headers and the
@@ -524,9 +552,10 @@ function buildDiffCountContexts(
   if (!model) return [];
   const raw = text.split("\n");
   const decided = editedLanguages(edit.languages, text, model, ws);
+  const oldFileLines = edit.oldFileLines;
   return model.files.map((file, fileIndex) => {
     const languages = decided[fileIndex];
-    const oldLines = edit.oldFileLines[fileIndex] ?? undefined;
+    const oldLines = oldFileLines[fileIndex] ?? undefined;
     const newText = oldLines
       ? reconstructNewSide(file, oldLines, raw, model.lines)
       : undefined;
@@ -1991,7 +2020,8 @@ function reparse(
   ws: DiffWorkspace,
   edit: DiffEdit,
   text: string,
-  cache?: WorkspaceCache,
+  cache: WorkspaceCache | undefined,
+  pending: PendingParses | undefined,
   completeFiles?: DiffHighlightFiles,
   viewMode: ViewMode = "source",
   lineEndings?: readonly (LineEndingProvenance | undefined)[],
@@ -2010,6 +2040,7 @@ function reparse(
       buildCache,
       viewMode,
       languages,
+      pending,
     ).doc;
   if (!completeFiles) return build(ws, cache);
   const editedFiles = collectFileOutputs(
