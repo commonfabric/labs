@@ -21,6 +21,7 @@
  * `filter` over plain values in place, which is the result of another
  * per-element construct.
  */
+import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 
 import {
@@ -250,7 +251,7 @@ export const running = async (
 // The fixtures of growth
 //
 
-const repository = new URL("../../../", import.meta.url).pathname;
+const repository = fromFileUrl(new URL("../../../", import.meta.url));
 
 const item = (index: number) => ({
   id: `i${index}`,
