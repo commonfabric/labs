@@ -4355,6 +4355,7 @@ export class Instance {
   /** A cell a function body made. */
   createCell(value: unknown): Handle {
     const id = this.#fresh("cell");
+    this.#createdCells.add(id);
     this.store.create(id, "created cell", this.stored(value));
     return new Handle(this, new Ref(id, []), undefined, undefined, []);
   }
@@ -8006,11 +8007,115 @@ export class Instance {
    */
   runBody<T>(body: number, host: Host, run: () => T): T {
     this.#invoking.push({ body, host });
+    let returned = false;
     try {
-      return run();
+      const value = run();
+      returned = true;
+      return value;
     } finally {
       this.#invoking.pop();
+      const written = this.#createdWrites.get(host);
+      this.#createdWrites.delete(host);
+      if (returned && written !== undefined) {
+        this.#recordCreated(body, host, written);
+      }
     }
+  }
+
+  /** The documents that the bodies of this instance made as cells. */
+  readonly #createdCells = new Set<string>();
+
+  /**
+   * The positions of cells it made that the body being run with a host
+   * wrote, each once, in the order of the first write, with the write
+   * edge of the body that covers them (`#noteCreatedWrite`).
+   */
+  readonly #createdWrites = new Map<
+    Host,
+    { write: number; targets: Map<string, Address> }
+  >();
+
+  /**
+   * Notes a write through `handle` by the body of a cone being run, where
+   * the handle is to a cell that a body of this instance made and the
+   * body has write edges for the cells of one call site: the record of
+   * the write is given when the body has returned (`#recordCreated`). A
+   * body whose edges name several call sites gives no record, since the
+   * executor does not know which site made a cell, and the runtime gives
+   * the path the label of a write it has no record of.
+   */
+  #noteCreatedWrite(handle: Handle): void {
+    const invoking = this.#invoking.at(-1);
+    if (
+      this.#handling !== undefined || invoking === undefined ||
+      !(handle.target instanceof Ref) ||
+      !this.#createdCells.has(handle.target.doc)
+    ) return;
+    const { writes } = this.plan.bodies[invoking.body];
+    const calls = new Set<number>();
+    let found = -1;
+    writes.forEach(({ target }, index) => {
+      if (target.kind !== "created") return;
+      calls.add((target as { call?: number }).call ?? -1);
+      if (found < 0) found = index;
+    });
+    if (found < 0 || calls.size !== 1) return;
+    const { doc, path } = handle.target;
+    const held = this.#createdWrites.get(invoking.host) ??
+      { write: found, targets: new Map<string, Address>() };
+    this.#createdWrites.set(invoking.host, held);
+    held.targets.set(canonical([doc, path]), { doc, path: [...path] });
+  }
+
+  /**
+   * Gives the records of the cells that `body` made and wrote while it
+   * ran with `host`: each written position has the record of the body's
+   * write edge for a cell it makes, whose template is instantiated with
+   * what the body was bound to and read, once for all of them. So a
+   * document a `lift` writes for a row of its result takes the label of
+   * what that `lift` read, and not the join of what the transaction read.
+   * The records are given as those of a write that left the value as it
+   * was (`TransactionHooks.unchanged`): the write itself was reported when
+   * it was made, and the record gives the path its label either way.
+   */
+  #recordCreated(
+    body: number,
+    host: Host,
+    written: { write: number; targets: Map<string, Address> },
+  ): void {
+    const { root } = this;
+    const hooks = root.options.transactions;
+    if (root.#tx === undefined || hooks?.unchanged === undefined) return;
+    const { template } = this.plan.bodies[body].writes[written.write];
+    if (template === undefined) return;
+    root.#namedIndex.clear();
+    const inputs = this.#inputsFor(
+      template,
+      this.contextKeys(host.context),
+      [{
+        slots: host.bound,
+        selections: host.selections,
+        picks: host.picks,
+        dynamic: host.dynamic,
+      }],
+    );
+    const writes: PlanWrite[] = [...written.targets.values()].flatMap((
+      target,
+    ) =>
+      this.store.docs.has(target.doc)
+        ? [{ target, record: { body, write: written.write }, ...inputs }]
+        : []
+    );
+    if (writes.length === 0) return;
+    const [{ target }] = writes;
+    hooks.unchanged(
+      target.doc,
+      target.path,
+      this.store,
+      undefined,
+      writes,
+      root.#inputsTable,
+    );
   }
 
   /**
@@ -11074,6 +11179,7 @@ export class Instance {
       ? invoking?.host
       : this.#handlerHost;
     if (index === undefined) return () => {};
+    if (counted) this.#noteCreatedWrite(handle);
     const body = this.plan.bodies[index];
     const covers = (target: { slot?: number; path?: string[] }) =>
       target.slot === handle.slot &&
