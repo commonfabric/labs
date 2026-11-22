@@ -254,7 +254,10 @@ function sideCode(
       continue;
     }
     const comments = new Set(
-      line.spans.filter((span) => isCommentSpan(span.cls, span.text)),
+      line.spans.filter((span) =>
+        isCommentSpan(span.cls, span.text) &&
+        !(language.docCommentsAreCode && span.cls === "docComment")
+      ),
     );
     if (
       language.commentLinesAreInert && comments.size > 0 &&

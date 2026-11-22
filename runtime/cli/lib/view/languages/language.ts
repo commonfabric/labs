@@ -295,6 +295,10 @@ export interface Language {
    */
   readonly commentLinesAreInert?: boolean;
 
+  /** Whether a doc comment is part of what the source means, as Rust's are
+   * attributes that macros and documentation tests read. */
+  readonly docCommentsAreCode?: boolean;
+
   /** Color `text` into rendered lines only — the per-keystroke-safe subset of
    * {@link parseDocument}, with no structure tree or definitions. Used by the
    * non-interactive fast path and the diff fragment renderer. `fileName` is

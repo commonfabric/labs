@@ -1121,11 +1121,33 @@ describe("diffcounts", () => {
           },
           {
             path: "lib.rs",
-            before: ["/// a", "fn run() {} // b", "/* c /* d */ e */"],
-            after: ["/// f", "fn run() {} // g", "/* h /* d */ i */"],
+            before: ["// a", "fn run() {} // b", "/* c /* d */ e */"],
+            after: ["// f", "fn run() {} // g", "/* h /* d */ i */"],
           },
         ),
       ).toEqual([true, true, true, true, true, true, true, true]);
+    });
+
+    it("returns false for Rust doc comments, which are attributes, and true for a TypeScript doc comment", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "edited.rs",
+            before: ["/// Old.", "fn run() {}"],
+            after: ["/// New.", "fn run() {}"],
+          },
+          {
+            path: "added.rs",
+            before: ["fn run() {}"],
+            after: ["//! Crate.", "fn run() {}"],
+          },
+          {
+            path: "documented.ts",
+            before: ["/** Old. */", "run();"],
+            after: ["/** New. */", "run();"],
+          },
+        ),
+      ).toEqual([false, false, true]);
     });
 
     it("returns false for a Rust change inside a raw string that holds comment markers", async () => {

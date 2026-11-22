@@ -22,6 +22,8 @@ export const rustLanguage: Language = {
 
   commentLinesAreInert: true,
 
+  docCommentsAreCode: true,
+
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {

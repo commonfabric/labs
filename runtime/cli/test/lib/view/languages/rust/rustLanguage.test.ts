@@ -391,6 +391,8 @@ describe("rustLanguage", () => {
         .toEqual([5, 20, 29]);
       expect(document.definitions.has("u8")).toBe(false);
       expect(document.definitions.has("T")).toBe(false);
+      expect(document.definitions.get("Bits")!.map((d) => d.startLine))
+        .toEqual([10, 32]);
       expect(document.definitions.has("_")).toBe(false);
       expect(document.definitions.has("LOCAL")).toBe(true);
       expect(document.definitions.has("inner_field")).toBe(true);

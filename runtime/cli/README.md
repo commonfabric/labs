@@ -695,15 +695,16 @@ a diff whose `index` line names both versions of the file (as `git diff` does),
 and only when the versions the viewer rebuilds from the repository or the
 working tree are the ones named. Editing a comment's text, or adding or removing
 a line that holds only comments and whitespace, leaves the code as it was. Where
-such a line can be content or an error, as in XML text, a YAML scalar, or JSON,
-adding or removing it changes the file too. A line that follows code ending with
-a backslash continues that code, and a first line that starts with `#!` names
-the program that runs the file, so both are read exactly as written. Adding or
-removing a comment on a line that holds anything else changes the code, and so
-does a change to blank lines or other whitespace. Each side is read on its own,
-so a comment marker that turns unchanged lines into a comment changes the code.
-`C` never selects a renamed or new file, a file whose mode changes, or a file
-whose byte order mark is added or removed.
+such a line can be content, an error, or an attribute, as in XML text, a YAML
+scalar, JSON, or a Rust doc comment, adding, removing, or editing it changes the
+file too. A line that follows code ending with a backslash continues that code,
+and a first line that starts with `#!` names the program that runs the file, so
+both are read exactly as written. Adding or removing a comment on a line that
+holds anything else changes the code, and so does a change to blank lines or
+other whitespace. Each side is read on its own, so a comment marker that turns
+unchanged lines into a comment changes the code. `C` never selects a renamed or
+new file, a file whose mode changes, or a file whose byte order mark is added or
+removed.
 
 Markdown files can switch between the source and a rendered terminal view with
 `V`. The rendered view formats headings, emphasis, links, quotes, lists, task
