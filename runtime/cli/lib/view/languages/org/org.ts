@@ -100,6 +100,21 @@ function skipSpace(line: string, from: number): number {
   return SPACE.lastIndex;
 }
 
+/**
+ * Returns a search for the first of the ascending `values` at or after a bound,
+ * for a caller whose bound never decreases, so that all its searches together
+ * read each value once.
+ */
+function forwardSearch(
+  values: readonly number[],
+): (from: number) => number | undefined {
+  let next = 0;
+  return (from) => {
+    while (next < values.length && values[next] < from) next++;
+    return values[next];
+  };
+}
+
 /** Returns the first of the ascending `values` at or after `from`. */
 function firstAtOrAfter(
   values: readonly number[],
@@ -466,19 +481,26 @@ class Scanner {
         closers[char].push(i);
       }
     }
+    const nextBracket = forwardSearch(brackets);
+    const nextOpening = forwardSearch(openings);
+    const nextLinkEnd = forwardSearch(linkEnds);
+    const nextCloser: Record<string, (from: number) => number | undefined> = {
+      "~": forwardSearch(closers["~"]),
+      "=": forwardSearch(closers["="]),
+    };
     for (let i = from; i < to;) {
       const char = line[i];
       if (char === "[" && i + 1 < to && line[i + 1] === "[") {
         // A target holds no bracket; a description holds no `]]`.
-        const target = firstAtOrAfter(brackets, i + 2);
-        const opening = firstAtOrAfter(openings, i + 2);
+        const target = nextBracket(i + 2);
+        const opening = nextOpening(i + 2);
         const close = target === undefined ||
             (opening !== undefined && opening < target)
           ? undefined
           : target + 1 < to && line[target + 1] === "]"
           ? target
           : target + 1 < to && line[target + 1] === "["
-          ? firstAtOrAfter(linkEnds, target + 2)
+          ? nextLinkEnd(target + 2)
           : undefined;
         if (target !== undefined && close !== undefined) {
           this.#mark("punctuation", at, i, i + 2);
@@ -502,7 +524,7 @@ class Scanner {
         (char === "~" || char === "=") && i + 1 < to &&
         /\S/.test(line[i + 1]) && (i === from || BEFORE_CODE.test(line[i - 1]))
       ) {
-        const close = firstAtOrAfter(closers[char], i + 2);
+        const close = nextCloser[char](i + 2);
         if (close !== undefined) {
           this.#mark("string", at, i, close + 1);
           i = close + 1;

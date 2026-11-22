@@ -779,8 +779,11 @@ repositories found Org mode only in gVisor: `cfc-gvisor.org` and
 branches. The six months before the read hold 3 path-change events on them.
 `.org` selects the language.
 
-Org mode uses a focused scanner. No npm package carries a Tree-sitter Org
-grammar, and Org's syntax is line-oriented: a line's first characters say
+Org mode uses a focused scanner. npm carries a Tree-sitter Org grammar,
+`@krisfremen/tree-sitter-org`, which republishes the Neovim Org mode project's
+fork, but it ships no highlight query, has no node for to-do keywords or for
+`~code~` and `=verbatim=` text, and depends on `node-gyp` and other native build
+tools. Org's syntax is line-oriented: a line's first characters say
 whether it is a headline, a keyword, a block delimiter, a comment, a drawer, a
 table row, a list item, or text. The scanner colors each of those, and links,
 code and verbatim text, and timestamps inside text. A source block's body is
