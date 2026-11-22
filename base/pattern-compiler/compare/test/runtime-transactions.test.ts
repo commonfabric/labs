@@ -1936,3 +1936,147 @@ describe("a document a `lift` writes for a row of its result", () => {
     }
   });
 });
+
+describe("the reads through a handle that a write record lists", () => {
+  /**
+   * Runs `created-rows.tsx` over `size` items, each a document of its own,
+   * all under one clause or each under a clause of its own, and returns
+   * what the record of the output `rows` lists for the reads the `lift`
+   * made through the handles of the items, with the label of the output.
+   */
+  const reads = async (size: number, clauses: "shared" | "distinct") => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const artifact = await artifactOf("created-rows");
+    const id = identifierOf({ test: "listed-reads", size, clauses });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    try {
+      const audience = await scenarioAudience();
+      const tx = runtime.edit();
+      const documents: { id: string; kind: string; value: unknown }[] = [];
+      const held = (cause: string, clause: string, value: unknown) => {
+        const schema = {
+          ifc: { confidentiality: [inputClause(clause, audience)] },
+        } as JSONSchema;
+        const cell = runtime.getCell(
+          space,
+          { listedInput: cause, size, clauses },
+          schema,
+          tx,
+        );
+        const link = cell.getAsNormalizedFullLink();
+        recordRelevantSchemaWritePolicyInput(tx, link, schema);
+        cell.set(value);
+        hooks.external(link.id);
+        documents.push({ id: link.id, kind: "input", value });
+        return { $link: { doc: link.id, path: [] } };
+      };
+      const items = Array.from(
+        { length: size },
+        (_, index) =>
+          held(
+            `item-${index}`,
+            clauses === "shared" ? "item" : `item-${index}`,
+            { title: `t${index}` },
+          ),
+      );
+      const given = {
+        items: held("items", "items", items),
+        other: held("other", "other", "o"),
+      };
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const listed: { addresses: number; groups: unknown }[] = [];
+      hooks.onCommitted((writes) => {
+        for (const write of writes) {
+          if (
+            !("output" in write.record) ||
+            write.target.path.join("/") !== "rows"
+          ) continue;
+          for (const [read, addresses] of Object.entries(write.dynamic ?? {})) {
+            listed.push({
+              addresses: addresses.length,
+              groups: write.dynamicGroups?.[Number(read)],
+            });
+          }
+        }
+      });
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+      });
+      expect(await hooks.settled()).toEqual([]);
+      const read = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(read, {
+          space,
+          id: hooks.entityOf(instance.id),
+          scope: "space",
+        });
+        const path = ["rows"];
+        const label = JSON.stringify(
+          (metadata === undefined ? undefined : labelForConsumedEntries(
+            consumedEntriesForRead(metadata, path, {
+              nonRecursive: false,
+              consumes: "value",
+            }),
+            path,
+            false,
+          ))?.confidentiality ?? [],
+        );
+        return { listed, label };
+      } finally {
+        read.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  it("lists one position for the positions that hold one label, with the number of positions it stands for", async () => {
+    const few = await reads(3, "shared");
+    const many = await reads(12, "shared");
+
+    expect(few.listed.length).toBeGreaterThan(0);
+    expect(many.listed.map(({ addresses }) => addresses)).toEqual(
+      few.listed.map(({ addresses }) => addresses),
+    );
+    const [{ groups: fewer }] = few.listed as {
+      groups: { positions: number; groups: number };
+    }[];
+    const [{ groups: more }] = many.listed as {
+      groups: { positions: number; groups: number };
+    }[];
+    // The positions grow with the items, and the groups do not.
+    expect(fewer.groups).toBe(few.listed[0].addresses);
+    expect(more.groups).toBe(many.listed[0].addresses);
+    expect(fewer.positions).toBeGreaterThanOrEqual(3);
+    expect(more.positions).toBe(4 * fewer.positions);
+    expect(many.label).toContain('"input:item"');
+    expect(many.label).toContain('"input:items"');
+  });
+
+  it("lists a position for each label where each item has a clause of its own", async () => {
+    const { listed, label } = await reads(4, "distinct");
+
+    // Each item's own positions hold a label of their own.
+    expect(listed[0].addresses).toBeGreaterThanOrEqual(4);
+    for (const index of [0, 1, 2, 3]) {
+      expect(label).toContain(`"input:item-${index}"`);
+    }
+  });
+});
