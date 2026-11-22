@@ -35,6 +35,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
@@ -189,8 +190,39 @@ const trustedPayload = (
 type LabelMapEntry = {
   path?: unknown[];
   label?: {
-    integrity?: Array<{ kind?: string; subject?: string } | string>;
+    integrity?: Array<
+      | {
+        kind?: string;
+        subject?: string;
+        type?: string;
+        identity?: { symbol?: string };
+      }
+      | string
+    >;
   };
+};
+
+/**
+ * The export names of the implementations a stored doc RECORD's labels say
+ * wrote it: the `symbol` of each `TransformedBy` atom, once each.
+ */
+const transformedBySymbols = (record: unknown): string[] => {
+  const entries =
+    (record as { cfc?: { labelMap?: { entries?: LabelMapEntry[] } } })
+      ?.cfc?.labelMap?.entries ?? [];
+  const symbols = new Set<string>();
+  for (const entry of entries) {
+    for (const atom of entry.label?.integrity ?? []) {
+      if (
+        typeof atom !== "string" &&
+        atom.type === CFC_ATOM_TYPE.TransformedBy &&
+        typeof atom.identity?.symbol === "string"
+      ) {
+        symbols.add(atom.identity.symbol);
+      }
+    }
+  }
+  return [...symbols];
 };
 
 /** The DURABLE current-principal subjects of one kind on a stored doc
@@ -598,6 +630,69 @@ describe("executor-trust-attribution", () => {
             "authored-by",
           ),
         ).toEqual([aliceSigner.did()]);
+      } finally {
+        cancelProbe();
+        cancelDemand();
+      }
+    });
+  });
+
+  describe("a served handler's `TransformedBy` stamp", () => {
+    it("names the handler on what a served run writes after reading something labeled", async () => {
+      // The serving loop writes the event's processed claim in the handler's
+      // own transaction, under no identity. Counted as one of the
+      // transaction's writes, it left the run attributed to nobody, so an
+      // exchange rule pinning a handler as an input witness never matched a
+      // served run (`witnessed-chain.test.tsx` with server execution on).
+
+      const { engine, cancelDemand, sidecarId, streamLink, result } =
+        await warmServedStream({
+          arg: "stamp-arg",
+          result: "stamp-result",
+        });
+      const serving = servingRuntime!;
+      const stampedSchema = {
+        type: "string",
+        ifc: { confidentiality: [cfcAtom.space(space)] },
+      } as JSONSchema;
+      const cancelProbe = serving.scheduler.addEventHandler(
+        (tx) => {
+          setCfcImplementationIdentity(tx, {
+            kind: "verified",
+            moduleIdentity: "module:served-stamp",
+            symbol: "advance",
+            bindingPath: ["advance"],
+          });
+          const doc = serving.getCell<string>(
+            space,
+            "stamped-doc",
+            stampedSchema,
+            tx,
+          );
+          doc.set(`${doc.get() ?? ""}x`);
+        },
+        streamLink,
+      );
+      try {
+        // The second run reads what the first wrote, which is labeled.
+        for (const kind of ["stamp-first", "stamp-second"]) {
+          result.key("bump").send({ kind });
+          await clientRuntime!.idle();
+          await clientRuntime!.storageManager.synced();
+          await awaitAdmitted(
+            server,
+            () => entryByKind(engine, sidecarId, kind)?.consequenced === true,
+          );
+          expect(entryByKind(engine, sidecarId, kind)!.error).toBeUndefined();
+        }
+        const docId = clientRuntime!.getCell(space, "stamped-doc", undefined)
+          .getAsNormalizedFullLink().id;
+        await awaitAdmitted(
+          server,
+          () => Engine.read(engine, { id: docId })?.value === "xx",
+        );
+        expect(transformedBySymbols(Engine.read(engine, { id: docId })))
+          .toEqual(["advance"]);
       } finally {
         cancelProbe();
         cancelDemand();
