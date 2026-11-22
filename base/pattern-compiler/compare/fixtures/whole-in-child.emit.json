@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/whole-in-child.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst clear = handler(\n  (_, { items }) => {\n    items.set([]);\n  },\n);\nconst Child = pattern(\"sha256:f1565eaacb259c5c4574c17b5edb101217d8a7a93c5dcfd815d169c802e8eca0\");\nconst $default = (pattern(\"sha256:3016cc32e75b97bc6d13298655c10d25ec5649643975a05d1925adad499c886b\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(2, ($h) => ($rt.h(\"pre\", {  }, [((JSON).stringify($h.v($h.slot(0))))])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0), clear: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { items }) => {\n    items.set([]);\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst clear = handler(\n  (_, { items }) => {\n    items.set([]);\n  },\n);\nconst Child = pattern(\"sha256:96fcfccec05c7c5e15fd22671e70c936efd3e7b587bd880fd55b27c19b38b106\");\nconst $default = (pattern(\"sha256:9ef224a6fdac0826e38fff5aa09522d31d4e30d44d57f9d87e164c9a8b1ba89e\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(2, ($h) => ($rt.h(\"pre\", {  }, [((JSON).stringify($h.v($h.slot(0))))])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0), clear: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { items }) => {\n    items.set([]);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -84,6 +84,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],
@@ -120,7 +121,7 @@
             {
               "at": {
                 "file": "compare/fixtures/whole-in-child.tsx",
-                "start": 750
+                "start": 747
               },
               "bodies": [],
               "entry": "$UI",
@@ -176,7 +177,7 @@
             }
           ],
           "patterns": [
-            "sha256:f1565eaacb259c5c4574c17b5edb101217d8a7a93c5dcfd815d169c802e8eca0"
+            "sha256:96fcfccec05c7c5e15fd22671e70c936efd3e7b587bd880fd55b27c19b38b106"
           ],
           "picks": [],
           "selectors": [],
@@ -308,7 +309,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/whole-in-child.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst clear = handler(\n  (_, { items }) => {\n    items.set([]);\n  },\n);\nconst Child = pattern(\"sha256:f1565eaacb259c5c4574c17b5edb101217d8a7a93c5dcfd815d169c802e8eca0\");\nconst $default = (pattern(\"sha256:3016cc32e75b97bc6d13298655c10d25ec5649643975a05d1925adad499c886b\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(2, ($h) => ($rt.h(\"pre\", {  }, [((JSON).stringify($h.v($h.slot(0))))])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0), clear: $h.stream(0) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({  }, $h);\nconst child = $rt.thunk(($h) => ($rt.force($s1, $h)));\n$rt.value(3, ($h) => ($rt.h(\"div\", {  }, [$h.at($rt.force(child, $h), [\"$UI\"])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(2), items: $h.slot(2) })));\n});\n$rt.body(0, ($e, $s) => ((_, { items }) => {\n    items.set([]);\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst clear = handler(\n  (_, { items }) => {\n    items.set([]);\n  },\n);\nconst Child = pattern(\"sha256:96fcfccec05c7c5e15fd22671e70c936efd3e7b587bd880fd55b27c19b38b106\");\nconst $default = (pattern(\"sha256:9ef224a6fdac0826e38fff5aa09522d31d4e30d44d57f9d87e164c9a8b1ba89e\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(2, ($h) => ($rt.h(\"pre\", {  }, [((JSON).stringify($h.v($h.slot(0))))])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0), clear: $h.stream(0) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({  }, $h);\nconst child = $rt.thunk(($h) => ($rt.force($s1, $h)));\n$rt.value(3, ($h) => ($rt.h(\"div\", {  }, [$h.at($rt.force(child, $h), [\"$UI\"])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(2), items: $h.slot(2) })));\n});\n$rt.body(0, ($e, $s) => ((_, { items }) => {\n    items.set([]);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -384,6 +385,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],
@@ -420,7 +422,7 @@
             {
               "at": {
                 "file": "compare/fixtures/whole-in-child.tsx",
-                "start": 750
+                "start": 747
               },
               "bodies": [],
               "entry": "$UI",
@@ -439,7 +441,7 @@
             {
               "at": {
                 "file": "compare/fixtures/whole-in-child.tsx",
-                "start": 939
+                "start": 936
               },
               "bodies": [],
               "entry": "$UI",
@@ -544,8 +546,8 @@
             }
           ],
           "patterns": [
-            "sha256:3016cc32e75b97bc6d13298655c10d25ec5649643975a05d1925adad499c886b",
-            "sha256:f1565eaacb259c5c4574c17b5edb101217d8a7a93c5dcfd815d169c802e8eca0"
+            "sha256:9ef224a6fdac0826e38fff5aa09522d31d4e30d44d57f9d87e164c9a8b1ba89e",
+            "sha256:96fcfccec05c7c5e15fd22671e70c936efd3e7b587bd880fd55b27c19b38b106"
           ],
           "picks": [],
           "selectors": [],

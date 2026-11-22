@@ -964,6 +964,111 @@ describe("write records the runtime instantiates with the option on", () => {
     expect(new Set(minted(within.label)).size).toBe(2);
   });
 
+  it("records the writes of an instance a handler body makes under that instance's pattern, and commits", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const id = identifierOf({ test: "instantiate-labeled" });
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL("../fixtures/instantiate-labeled.emit.json", import.meta.url),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const artifact = patterns.find(({ name }) => name === "default")!;
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    // The compiled pattern each instance's write records were recorded
+    // under.
+    const recordedUnder = new Map<string, Set<string>>();
+    hooks.onCommitted((writes) => {
+      for (const { instance, compiledPattern } of writes) {
+        const patterns = recordedUnder.get(instance) ?? new Set();
+        recordedUnder.set(instance, patterns.add(compiledPattern));
+      }
+    });
+    try {
+      const { given, documents } = await labeledInputs(
+        runtime,
+        space,
+        generateInputs(
+          artifact.plan as Parameters<typeof generateInputs>[0],
+          artifact.schemas as Parameters<typeof generateInputs>[1],
+          await scenarioAudience(),
+        ),
+        { note: "n" },
+        hooks,
+      );
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+        artifacts: (pattern) =>
+          patterns.find(({ plan }) =>
+            (plan as { patterns?: string[] }).patterns?.[0] === pattern
+          ),
+      });
+      expect(await hooks.settled()).toEqual([]);
+      // `add` instantiates `Row`, whose plan is another one than the
+      // plan of the instance the executor was started with.
+      const outcome = instance.send(bindingOf(instance, "add"), {
+        title: "first",
+      });
+      expect(outcome.committed).toBe(true);
+      expect(await hooks.settled()).toEqual([]);
+      expect(
+        (instance.result() as { rows: { shout: string }[] }).rows.map((
+          { shout },
+        ) => shout),
+      ).toEqual(["firstn"]);
+      // The output `shout` of the instance stores the label of its own
+      // template: the clause of `note`, which it reads.
+      const [made] = [...instance.store.docs].filter(([, { value }]) =>
+        (value as { shout?: unknown } | undefined)?.shout === "firstn"
+      ).map(([doc]) => doc);
+      const [ofBoard] = recordedUnder.get(instance.id) ?? [];
+      expect([...recordedUnder.get(instance.id) ?? []]).toHaveLength(1);
+      expect([...recordedUnder.get(made) ?? []]).toHaveLength(1);
+      expect([...recordedUnder.get(made) ?? []]).not.toContain(ofBoard);
+      const read = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(read, {
+          space,
+          id: hooks.entityOf(made),
+          scope: "space",
+        });
+        const label = metadata === undefined
+          ? undefined
+          : labelForConsumedEntries(
+            consumedEntriesForRead(metadata, ["shout"], {
+              nonRecursive: false,
+              consumes: "value",
+            }),
+            ["shout"],
+            false,
+          );
+        expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+          '"input:note"',
+        );
+      } finally {
+        read.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("binds the slot of a literal a handler binding gives its state as a constant, and commits", async () => {
     const { refused } = await commitWithOptionOn(
       "constant-state",
@@ -1404,6 +1509,574 @@ describe("the cost of labels from templates for a `filter`", () => {
       }
       const work = ({ prepareMs: _ms, size: _size, ...rest }: Figures) => rest;
       expect(work(large)).toEqual(work(small));
+    }
+  });
+});
+
+describe("the label of a position of the result of a `map`", () => {
+  /**
+   * Runs `ordered-rows.tsx` over `size` items, each a document of its own
+   * under a clause of its own, with the inputs `items` and `notes` each a
+   * document under a clause of its own, applies `change`, and returns, for
+   * each row's `text` of `sorted`, `filed` and `plain`, and each `text` of
+   * the rows of `nested`, the clauses of the label a value read there
+   * consumes, as text.
+   */
+  const rows = async (
+    size: number,
+    change?: (
+      instance: Instance,
+      ids: readonly string[],
+      write: (doc: string, path: string[], value: unknown) => Promise<void>,
+      items: string,
+    ) => Promise<void> | void,
+    initial: (ids: readonly string[]) => readonly string[] = (ids) => ids,
+  ) => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const artifact = await artifactOf("ordered-rows");
+    const id = identifierOf({ test: "ordered-rows", size });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    try {
+      const audience = await scenarioAudience();
+      const schemaOf = (name: string) =>
+        ({
+          ifc: { confidentiality: [inputClause(name, audience)] },
+        }) as JSONSchema;
+      const tx = runtime.edit();
+      const documents: { id: string; kind: string; value: unknown }[] = [];
+      const held = (name: unknown, schema: JSONSchema, value: unknown) => {
+        const cell = runtime.getCell(space, name, schema, tx);
+        const link = cell.getAsNormalizedFullLink();
+        recordRelevantSchemaWritePolicyInput(tx, link, schema);
+        cell.set(value);
+        hooks.external(link.id);
+        documents.push({ id: link.id, kind: "input", value });
+        return link.id;
+      };
+      // Item `index` is ranked last for the lowest index, so `sorted` holds
+      // the items in the reverse of their order in `items`.
+      const ids = Array.from(
+        { length: size },
+        (_, index) =>
+          held({ orderedItem: index }, schemaOf(`item-${index}`), {
+            title: `t${index}`,
+            rank: size - index,
+            tags: [`a${index}`, `b${index}`],
+          }),
+      );
+      const link = (doc: string) => ({ $link: { doc, path: [] } });
+      const items = initial(ids).map(link);
+      const notes = Array.from(
+        { length: size },
+        (_, index) => ({ text: `n${index}` }),
+      );
+      const given = {
+        items: link(held({ orderedInput: "items" }, schemaOf("items"), items)),
+        notes: link(held({ orderedInput: "notes" }, schemaOf("notes"), notes)),
+      };
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+      });
+      expect(await hooks.settled()).toEqual([]);
+      await change?.(instance, ids, async (doc, path, value) => {
+        instance.store.write(new Ref(doc, path), value);
+        instance.settle();
+        expect(await hooks.settled()).toEqual([]);
+      }, given.items.$link.doc);
+      expect(await hooks.settled()).toEqual([]);
+      const read = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(read, {
+          space,
+          id: hooks.entityOf(instance.id),
+          scope: "space",
+        });
+        const at = (path: readonly string[]) =>
+          JSON.stringify(
+            (metadata === undefined ? undefined : labelForConsumedEntries(
+              consumedEntriesForRead(metadata, path, {
+                nonRecursive: false,
+                consumes: "value",
+              }),
+              path,
+              false,
+            ))?.confidentiality ?? [],
+          );
+        const result = instance.result() as Record<string, unknown[]>;
+        const texts = (name: string) =>
+          result[name].map((_, index) => at([name, `${index}`, "text"]));
+        return {
+          sorted: texts("sorted"),
+          filed: texts("filed"),
+          plain: texts("plain"),
+          nested: result.nested.flatMap((row, index) =>
+            (row as { tags: unknown[] }).tags.map((_, tag) =>
+              at(["nested", `${index}`, "tags", `${tag}`, "text"])
+            )
+          ),
+        };
+      } finally {
+        read.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  const holdsAll = (labels: string[], names: string[]) => {
+    for (const label of labels) {
+      for (const name of names) expect(label).toContain(`"input:${name}"`);
+    }
+  };
+
+  it("joins into a read of a row of a `map` over the result of a `lift` that is an array of references the label of what decided the order", async () => {
+    const { sorted } = await rows(3);
+
+    expect(sorted.length).toBe(3);
+    holdsAll(sorted, ["item-0", "item-1", "item-2"]);
+  });
+
+  it("joins the label of the order into every row after a writer changes the rank of one item", async () => {
+    const { sorted, nested } = await rows(3, async (_, ids, write) => {
+      await write(ids[2], ["rank"], 10);
+    });
+
+    holdsAll(sorted, ["item-0", "item-1", "item-2"]);
+    holdsAll(nested, ["item-0", "item-1", "item-2"]);
+  });
+
+  it("joins the label of an item a writer adds into every row, where the item is ranked last", async () => {
+    // Item 0 has the highest rank, so its row is added at the end of
+    // `sorted`: that it stands there, and that no row before it moved, was
+    // decided by its rank.
+    const { sorted, nested } = await rows(
+      3,
+      async (_, ids, write, items) => {
+        await write(
+          items,
+          [],
+          [ids[1], ids[2], ids[0]].map((doc) => ({ $link: { doc, path: [] } })),
+        );
+      },
+      (ids) => [ids[1], ids[2]],
+    );
+
+    expect(sorted.length).toBe(3);
+    holdsAll(sorted, ["item-0", "item-1", "item-2"]);
+    expect(nested.length).toBe(6);
+    holdsAll(nested, ["item-0", "item-1", "item-2"]);
+  });
+
+  it("joins the label of an item a writer adds into every row, where the item is ranked first", async () => {
+    const { sorted, nested } = await rows(
+      3,
+      async (_, ids, write, items) => {
+        await write(
+          items,
+          [],
+          ids.map((doc) => ({ $link: { doc, path: [] } })),
+        );
+      },
+      (ids) => [ids[0], ids[1]],
+    );
+
+    expect(sorted.length).toBe(3);
+    holdsAll(sorted, ["item-0", "item-1", "item-2"]);
+    expect(nested.length).toBe(6);
+    holdsAll(nested, ["item-0", "item-1", "item-2"]);
+  });
+
+  it("joins into a read of a row of a `map` over an array of references the label of the array, after a handler changes its order", async () => {
+    const before = await rows(3);
+    const after = await rows(3, (instance) => {
+      instance.send(bindingOf(instance, "rotate"), {});
+      instance.settle();
+    });
+
+    holdsAll(before.filed, ["items"]);
+    holdsAll(after.filed, ["items"]);
+  });
+
+  it("joins into a read of a row of a `map` over an array of plain values in place, within a row of a `map` over sorted references, the label of both orders", async () => {
+    const { nested } = await rows(3);
+
+    expect(nested.length).toBe(6);
+    holdsAll(nested, ["item-0", "item-1", "item-2"]);
+  });
+
+  it("joins into a read of a row of a `map` over an array of plain values in place the label of the array", async () => {
+    const { plain } = await rows(3);
+
+    holdsAll(plain, ["notes"]);
+  });
+});
+
+describe("the `identity` slots of a handler's binding state", () => {
+  it("bind an output the handler reads as a handle without the label of what the output holds", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const artifact = await artifactOf("identity-state");
+    const id = identifierOf({ test: "identity-state" });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    try {
+      const audience = await scenarioAudience();
+      const tx = runtime.edit();
+      const documents: { id: string; kind: string; value: unknown }[] = [];
+      const held = (name: string, value: unknown) => {
+        const schema = {
+          ifc: { confidentiality: [inputClause(name, audience)] },
+        } as JSONSchema;
+        const cell = runtime.getCell(
+          space,
+          { identityInput: name },
+          schema,
+          tx,
+        );
+        const link = cell.getAsNormalizedFullLink();
+        recordRelevantSchemaWritePolicyInput(tx, link, schema);
+        cell.set(value);
+        hooks.external(link.id);
+        documents.push({ id: link.id, kind: "input", value });
+        return { $link: { doc: link.id, path: [] } };
+      };
+      const given = { items: held("items", []), secret: held("secret", "s") };
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+      });
+      expect(await hooks.settled()).toEqual([]);
+
+      instance.send(bindingOf(instance, "add"), {});
+      instance.settle();
+
+      expect(await hooks.settled()).toEqual([]);
+      const read = runtime.edit();
+      try {
+        const labelAt = (doc: string, path: readonly string[]) => {
+          const metadata = readStoredCfcMetadata(read, {
+            space,
+            id: hooks.entityOf(doc),
+            scope: "space",
+          });
+          return JSON.stringify(
+            (metadata === undefined ? undefined : labelForConsumedEntries(
+              consumedEntriesForRead(metadata, path, {
+                nonRecursive: false,
+                consumes: "value",
+              }),
+              path,
+              false,
+            ))?.confidentiality ?? [],
+          );
+        };
+        const items = given.items.$link.doc;
+        const [entry] = instance.store.peek(items, []) as unknown[];
+        expect(isLink(entry)).toBe(true);
+        const record = (entry as { $link: { doc: string } }).$link.doc;
+        // What the push wrote: the position in `items` and the record.
+        expect(labelAt(items, ["0"])).not.toContain('"input:secret"');
+        expect(labelAt(record, ["title"])).not.toContain('"input:secret"');
+        // The record holds a link to the position of the result document
+        // that holds `summary`, and a read there holds the clause.
+        expect(instance.store.peek(record, ["source"])).toEqual({
+          $link: { doc: instance.id, path: ["summary"] },
+        });
+        expect(labelAt(record, ["source"])).not.toContain('"input:secret"');
+        expect(labelAt(instance.id, ["summary"])).toContain('"input:secret"');
+      } finally {
+        read.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+});
+
+describe("a document a `lift` writes for a row of its result", () => {
+  it("takes the label of what the `lift` read, and of nothing else the transaction read", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const artifact = await artifactOf("created-rows");
+    const id = identifierOf({ test: "created-rows" });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    try {
+      const audience = await scenarioAudience();
+      const tx = runtime.edit();
+      const documents: { id: string; kind: string; value: unknown }[] = [];
+      const held = (name: string, value: unknown) => {
+        const schema = {
+          ifc: { confidentiality: [inputClause(name, audience)] },
+        } as JSONSchema;
+        const cell = runtime.getCell(space, { createdInput: name }, schema, tx);
+        const link = cell.getAsNormalizedFullLink();
+        recordRelevantSchemaWritePolicyInput(tx, link, schema);
+        cell.set(value);
+        hooks.external(link.id);
+        documents.push({ id: link.id, kind: "input", value });
+        return { $link: { doc: link.id, path: [] } };
+      };
+      const items = [0, 1].map((index) =>
+        held(`item-${index}`, { title: `t${index}` })
+      );
+      const given = {
+        items: held("items", items),
+        other: held("other", "o"),
+      };
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+      });
+      expect(await hooks.settled()).toEqual([]);
+      const labelsOfRows = () => {
+        const read = runtime.edit();
+        try {
+          const rows = instance.store.peek(instance.id, ["rows"]) as unknown[];
+          return rows.map((row) => {
+            expect(isLink(row)).toBe(true);
+            const { doc } = (row as { $link: { doc: string } }).$link;
+            expect(instance.store.peek(doc, ["title"])).toMatch(/^(T|CHANGED)/);
+            const metadata = readStoredCfcMetadata(read, {
+              space,
+              id: hooks.entityOf(doc),
+              scope: "space",
+            });
+            const path = ["title"];
+            return JSON.stringify(
+              (metadata === undefined ? undefined : labelForConsumedEntries(
+                consumedEntriesForRead(metadata, path, {
+                  nonRecursive: false,
+                  consumes: "value",
+                }),
+                path,
+                false,
+              ))?.confidentiality ?? [],
+            );
+          });
+        } finally {
+          read.abort();
+        }
+      };
+
+      const first = labelsOfRows();
+
+      expect(first.length).toBe(2);
+      for (const label of first) {
+        expect(label).toContain('"input:items"');
+        expect(label).toContain('"input:item-0"');
+        expect(label).toContain('"input:item-1"');
+        expect(label).not.toContain('"input:other"');
+      }
+
+      // A writer changes one item: its row is written again, and the row
+      // of the other item is left as it was.
+      instance.store.write(new Ref(items[1].$link.doc, ["title"]), "changed");
+      instance.settle();
+      expect(await hooks.settled()).toEqual([]);
+
+      const second = labelsOfRows();
+
+      expect(second.length).toBe(2);
+      for (const label of second) {
+        expect(label).toContain('"input:item-0"');
+        expect(label).toContain('"input:item-1"');
+        expect(label).not.toContain('"input:other"');
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+});
+
+describe("the reads through a handle that a write record lists", () => {
+  /**
+   * Runs `created-rows.tsx` over `size` items, each a document of its own,
+   * all under one clause or each under a clause of its own, and returns
+   * what the record of the output `rows` lists for the reads the `lift`
+   * made through the handles of the items, with the label of the output.
+   */
+  const reads = async (size: number, clauses: "shared" | "distinct") => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const artifact = await artifactOf("created-rows");
+    const id = identifierOf({ test: "listed-reads", size, clauses });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    try {
+      const audience = await scenarioAudience();
+      const tx = runtime.edit();
+      const documents: { id: string; kind: string; value: unknown }[] = [];
+      const held = (cause: string, clause: string, value: unknown) => {
+        const schema = {
+          ifc: { confidentiality: [inputClause(clause, audience)] },
+        } as JSONSchema;
+        const cell = runtime.getCell(
+          space,
+          { listedInput: cause, size, clauses },
+          schema,
+          tx,
+        );
+        const link = cell.getAsNormalizedFullLink();
+        recordRelevantSchemaWritePolicyInput(tx, link, schema);
+        cell.set(value);
+        hooks.external(link.id);
+        documents.push({ id: link.id, kind: "input", value });
+        return { $link: { doc: link.id, path: [] } };
+      };
+      const items = Array.from(
+        { length: size },
+        (_, index) =>
+          held(
+            `item-${index}`,
+            clauses === "shared" ? "item" : `item-${index}`,
+            { title: `t${index}` },
+          ),
+      );
+      const given = {
+        items: held("items", "items", items),
+        other: held("other", "other", "o"),
+      };
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const listed: { addresses: number; groups: unknown }[] = [];
+      hooks.onCommitted((writes) => {
+        for (const write of writes) {
+          if (
+            !("output" in write.record) ||
+            write.target.path.join("/") !== "rows"
+          ) continue;
+          for (const [read, addresses] of Object.entries(write.dynamic ?? {})) {
+            listed.push({
+              addresses: addresses.length,
+              groups: write.dynamicGroups?.[Number(read)],
+            });
+          }
+        }
+      });
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+      });
+      expect(await hooks.settled()).toEqual([]);
+      const read = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(read, {
+          space,
+          id: hooks.entityOf(instance.id),
+          scope: "space",
+        });
+        const path = ["rows"];
+        const label = JSON.stringify(
+          (metadata === undefined ? undefined : labelForConsumedEntries(
+            consumedEntriesForRead(metadata, path, {
+              nonRecursive: false,
+              consumes: "value",
+            }),
+            path,
+            false,
+          ))?.confidentiality ?? [],
+        );
+        return { listed, label };
+      } finally {
+        read.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  it("lists one position for the positions that hold one label, with the number of positions it stands for", async () => {
+    const few = await reads(3, "shared");
+    const many = await reads(12, "shared");
+
+    expect(few.listed.length).toBeGreaterThan(0);
+    expect(many.listed.map(({ addresses }) => addresses)).toEqual(
+      few.listed.map(({ addresses }) => addresses),
+    );
+    const [{ groups: fewer }] = few.listed as {
+      groups: { positions: number; groups: number };
+    }[];
+    const [{ groups: more }] = many.listed as {
+      groups: { positions: number; groups: number };
+    }[];
+    // The positions grow with the items, and the groups do not.
+    expect(fewer.groups).toBe(few.listed[0].addresses);
+    expect(more.groups).toBe(many.listed[0].addresses);
+    expect(fewer.positions).toBeGreaterThanOrEqual(3);
+    expect(more.positions).toBe(4 * fewer.positions);
+    expect(many.label).toContain('"input:item"');
+    expect(many.label).toContain('"input:items"');
+  });
+
+  it("lists a position for each label where each item has a clause of its own", async () => {
+    const { listed, label } = await reads(4, "distinct");
+
+    // Each item's own positions hold a label of their own.
+    expect(listed[0].addresses).toBeGreaterThanOrEqual(4);
+    for (const index of [0, 1, 2, 3]) {
+      expect(label).toContain(`"input:item-${index}"`);
     }
   });
 });

@@ -1,0 +1,290 @@
+[
+  {
+    "module": "compare/fixtures/handle-of-computed.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/handle-of-computed.tsx",
+              "source": "const { \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst named = lift(({ names }) =>\n  names.map((name) => ({ name }))\n);\nconst counted = lift(({ rows }) => {\n  const count = rows.get()?.length ?? 0;\n  return count === 0 ? \"\" : `${count}:${rows.key(0).key(\"name\").get()}`;\n});\nconst $default = (pattern(\"sha256:5e1dff59bd3f6ca7d08ad690487ac5b87c84bd4fa9a601bd5d5f715a9242bf54\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => (({ names }) =>\n  names.map((name) => ({ name })))($a));\n$rt.body(1, ($a) => (({ rows }) => {\n  const count = rows.get()?.length ?? 0;\n  return count === 0 ? \"\" : `${count}:${rows.key(0).key(\"name\").get()}`;\n})($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ names: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ rows: $h.output(0) }))));\nreturn $rt.thunk(($h) => (({ rows: $h.output(0), summary: $h.output(1) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 20,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "named",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "names"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "names",
+                    "*"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [
+                {
+                  "at": [
+                    "rows"
+                  ],
+                  "observes": "identity",
+                  "template": {
+                    "op": "output",
+                    "output": 0
+                  }
+                },
+                {
+                  "at": [
+                    "rows"
+                  ],
+                  "observes": "enumeration",
+                  "template": {
+                    "op": "output",
+                    "output": 0
+                  }
+                }
+              ],
+              "envelopes": [],
+              "handles": [
+                {
+                  "handle": {
+                    "computed": 0
+                  }
+                }
+              ],
+              "kind": "lift",
+              "name": "counted",
+              "outputs": [],
+              "reads": [],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/handle-of-computed.tsx",
+                "start": 702
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "rows",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/handle-of-computed.tsx",
+                "start": 746
+              },
+              "bodies": [
+                1
+              ],
+              "entry": "summary",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [
+            {
+              "why": {
+                "body": 1,
+                "handle": 0,
+                "kind": "handle"
+              }
+            }
+          ],
+          "edges": [
+            {
+              "from": 0,
+              "to": 1,
+              "via": {
+                "kind": "output",
+                "output": 0
+              }
+            }
+          ],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows"
+              ],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "summary"
+              ],
+              "template": {
+                "by": {
+                  "body": 1
+                },
+                "inputs": [
+                  {
+                    "op": "output",
+                    "output": 0
+                  },
+                  {
+                    "op": "dynamic",
+                    "reads": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:5e1dff59bd3f6ca7d08ad690487ac5b87c84bd4fa9a601bd5d5f715a9242bf54"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "names"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "names",
+                "*"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "names": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "names"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

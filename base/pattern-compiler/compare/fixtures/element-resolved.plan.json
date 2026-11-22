@@ -64,6 +64,7 @@
                     "binding",
                     "item"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {
@@ -71,6 +72,7 @@
                     "binding",
                     "where"
                   ],
+                  "handle": true,
                   "slot": 2
                 }
               ],

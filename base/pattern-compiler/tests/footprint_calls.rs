@@ -6,7 +6,7 @@
 use pattern_compiler::footprint::{footprints, Record};
 use pattern_compiler::program::SourceFile;
 
-const PRELUDE: &str = "import { Cell, Stream, Writable, currentPrincipal, eventKey, equals, handler, lift, linksOf, navigateTo, pattern, principalOf, resultOwnerOf, spaceAccess, spaceOf } from \"commonfabric\";\n\
+const PRELUDE: &str = "import { Cell, Stream, Writable, currentPrincipal, eventKey, equals, equalsKey, handler, lift, linksOf, navigateTo, pattern, principalOf, resultOwnerOf, spaceAccess, spaceOf } from \"commonfabric\";\n\
 interface Donut { name: string; price: number; glaze?: string }\n\
 interface Message { body: string; editedAt: number }\n\
 interface Box { label: string; children: Box[] }\n\
@@ -209,6 +209,26 @@ fn equals_decides_the_resolution_of_each_operand_on_its_own() {
         record.reads
     );
     assert_eq!(record.other_dynamic, ["link: event.a, event.b"]);
+}
+
+#[test]
+fn equals_key_resolves_its_operand_as_equals_does() {
+    // Provisional decision P41: `equalsKey(a)` is what `equals` compares
+    // of `a`, so it has the footprint of one operand of `equals`.
+    let record = analyze(
+        "const f = handler<{ a?: Cell<Message> }, { message: Cell<Message>; out: Cell<boolean> }>((event, state) => { state.out.set(equalsKey(state.message) === equalsKey(event.a)); });\n",
+    );
+    assert!(
+        has(&record.reads, "state.message : identity (resolved)"),
+        "{:?}",
+        record.reads
+    );
+    assert!(
+        has(&record.reads, "event.a : identity (resolved)"),
+        "{:?}",
+        record.reads
+    );
+    assert!(record.widenings.is_empty(), "{:?}", record.widenings);
 }
 
 #[test]
@@ -650,6 +670,174 @@ fn a_write_through_what_a_site_returned_is_an_edge_or_an_envelope_that_names_the
         ["argument n0", "created n1", "created n2", "request n3"]
     );
     assert_eq!(record.envelopes, ["created n0", "created n3"]);
+}
+
+// ----- §3.6: one summary per function -----
+
+#[test]
+fn a_function_called_again_with_the_same_arguments_is_evaluated_once() {
+    // "Summaries are computed over the program's call graph from the
+    // leaves", and "At a call, the summary is applied with the arguments'
+    // abstract values in place of the parameters."
+    let record = analyze(
+        "const leaf = (donut: Donut) => donut.name;\n\
+         const middle = (donut: Donut) => leaf(donut) + leaf(donut) + leaf(donut);\n\
+         const top = (donut: Donut) => middle(donut) + middle(donut) + middle(donut);\n\
+         const f = lift((donut: Donut) => top(donut) + top(donut) + top(donut));\n",
+    );
+    assert_eq!(record.reads, ["donut.name : value"]);
+    assert_eq!(record.widenings, Vec::<String>::new());
+    assert_eq!(record.evaluations, 4);
+}
+
+#[test]
+fn the_evaluations_of_a_chain_of_calls_follow_its_length() {
+    // Six levels, each calling the level below it five times: the
+    // analysis evaluates each function once, and not five to the sixth
+    // times.
+    let mut snippet = String::from("const level0 = (donut: Donut) => donut.price;\n");
+    for level in 1..=6 {
+        let below = level - 1;
+        snippet.push_str(&format!(
+            "const level{level} = (donut: Donut) => level{below}(donut) + level{below}(donut) + level{below}(donut) + level{below}(donut) + level{below}(donut);\n"
+        ));
+    }
+    snippet.push_str("const f = lift((donut: Donut) => level6(donut));\n");
+    let record = analyze(&snippet);
+    assert_eq!(record.reads, ["donut.price : value"]);
+    assert_eq!(record.evaluations, 8);
+}
+
+#[test]
+fn a_function_cut_off_by_the_recursion_guard_is_evaluated_again_where_it_is_not() {
+    // `even` evaluated from inside `odd` is cut off where it calls `odd`
+    // (W7). Called from the body, where `odd` is not being evaluated, it
+    // is evaluated in full and reads the name.
+    let record = analyze(
+        "const odd = (donut: Donut, n: number): string => n > 0 ? even(donut, n - 1) : donut.glaze ?? \"\";\n\
+         const even = (donut: Donut, n: number): string => n > 0 ? odd(donut, n - 1) : donut.name;\n\
+         const f = lift((donut: Donut) => odd(donut, 3) + even(donut, 3));\n",
+    );
+    assert!(
+        record
+            .reads
+            .iter()
+            .any(|line| line == "donut.name : value" || line == "donut : value"),
+        "{:?}",
+        record.reads
+    );
+    assert_eq!(record.evaluations, 5);
+}
+
+#[test]
+fn a_function_called_again_with_a_list_the_body_built_is_evaluated_once() {
+    // As above, with an argument the body built: an array literal.
+    let record = analyze(
+        "const leaf = (list: string[]) => list[0];\n\
+         const middle = (list: string[]) => leaf(list) + leaf(list) + leaf(list);\n\
+         const top = (list: string[]) => middle(list) + middle(list) + middle(list);\n\
+         const f = lift((donut: Donut) => top([donut.name]));\n",
+    );
+    assert_eq!(record.reads, ["donut.name : value"]);
+    assert_eq!(record.evaluations, 4);
+}
+
+#[test]
+fn a_member_of_a_list_the_caller_built_is_returned_as_that_member() {
+    // `first` returns a member of the list it is given. Called again with
+    // another list that has the same members, its result is the member of
+    // that list: the record `pick` returns is the one `f` writes into.
+    let record = analyze(
+        "const first = (list: { name: string }[]) => list[0];\n\
+         const f = lift((donut: Donut) => {\n\
+           const one = [{ name: donut.name }];\n\
+           const two = [{ name: donut.name }];\n\
+           first(one).name = donut.glaze ?? \"\";\n\
+           const picked = first(two);\n\
+           picked.name = \"x\";\n\
+           return one[0].name + two[0].name;\n\
+         });\n",
+    );
+    assert_eq!(record.evaluations, 2);
+    assert!(
+        record
+            .reads
+            .iter()
+            .any(|line| line.starts_with("donut.glaze")),
+        "{:?}",
+        record.reads
+    );
+}
+
+// ----- §3.7: a value of more alternatives than the bound -----
+
+#[test]
+fn a_function_that_returns_a_value_over_the_bound_widens_and_reads_its_projections_in_full() {
+    // "Where a value would exceed a fixed number of alternatives ... the
+    // analysis widens (W7)." Each `down` returns one of two members of
+    // each alternative it is given, so the tenth returns 1,024
+    // projections. The members have another name at each level: a path
+    // that repeats a key widens before the bound, as W6 (`square_end`).
+    let mut snippet = String::new();
+    for level in 0..10 {
+        let next = level + 1;
+        snippet.push_str(&format!(
+            "interface T{level} {{ n: number; a{level}: T{next}; b{level}: T{next} }}\n\
+             const down{level} = (t: T{level}): T{next} => t.n > 0 ? t.a{level} : t.b{level};\n"
+        ));
+    }
+    snippet.push_str("interface T10 { name: string }\n");
+    let mut nested = String::from("tree");
+    for level in 0..10 {
+        nested = format!("down{level}({nested})");
+    }
+    snippet.push_str(&format!("const f = lift((tree: T0) => {nested}.name);\n"));
+    let record = analyze(&snippet);
+    assert_eq!(record.widenings, ["W7"]);
+    assert!(
+        record
+            .reads
+            .iter()
+            .any(|line| line.ends_with(" : value") && line.contains("tree.")),
+        "{:?}",
+        record.reads
+    );
+}
+
+// ----- §3.6: a closure called by a function of another module -----
+
+#[test]
+fn a_name_a_closure_captures_from_the_body_is_an_input_where_another_module_calls_it() {
+    // "A function expression inside a body is analyzed in the environment
+    // it is created in", and "A captured value is tracked inside the
+    // closure like any local". The closure is called by `withName` of
+    // another module, between the body's frame and the closure's.
+    let found = footprints(&[
+        SourceFile {
+            path: "helper.ts".to_string(),
+            text: "export function withName<M>(make: (name: string) => M): M {\n\
+                     return make(\"1\");\n\
+                   }\n"
+                .to_string(),
+        },
+        SourceFile {
+            path: "case.tsx".to_string(),
+            text: format!(
+                "{PRELUDE}import {{ action }} from \"commonfabric\";\n\
+                 import {{ withName }} from \"./helper.ts\";\n\
+                 const Outer = pattern<{{ donut: Donut; list: Cell<unknown[]> }}>(({{ donut, list }}) => {{\n\
+                   const f = action(() => {{ list.push(withName((name) => Child({{ donut, n: name.length }}))); }});\n\
+                   return {{ f }};\n\
+                 }});\n"
+            ),
+        },
+    ]);
+    let record = found
+        .into_iter()
+        .find(|body| body.name.as_deref() == Some("f"))
+        .expect("the body of `f`")
+        .record;
+    assert!(has(&record.reads, "donut : identity"), "{:?}", record.reads);
 }
 
 // ----- §5.2: W6 on a value whose type declares no structure -----

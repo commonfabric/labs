@@ -61,7 +61,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P0"
+            "sha256:5e23bdc389b11c4f396ac5c716ad18052989e9764155ae3ba64798feacb392fb"
           ],
           "picks": [],
           "selectors": [],
@@ -331,8 +331,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P1",
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P0"
+            "sha256:cebfbcd6e5b0c8770d461a892661711884e25024614009b53cb6c4ad6c166308",
+            "sha256:5e23bdc389b11c4f396ac5c716ad18052989e9764155ae3ba64798feacb392fb"
           ],
           "picks": [],
           "selectors": [],
@@ -942,9 +942,9 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P2",
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P1",
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P0"
+            "sha256:d1df0e413241d72f9c78f947a825b8162f7b8fbdc14e96909c94bd5fd8a88986",
+            "sha256:cebfbcd6e5b0c8770d461a892661711884e25024614009b53cb6c4ad6c166308",
+            "sha256:5e23bdc389b11c4f396ac5c716ad18052989e9764155ae3ba64798feacb392fb"
           ],
           "picks": [],
           "selectors": [],
@@ -2280,10 +2280,10 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P3",
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P2",
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P1",
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P0"
+            "sha256:b1c9428f5bdcb45ad80a2cc821d9b12350f6066dbd1146f98bf6b15386eb5832",
+            "sha256:d1df0e413241d72f9c78f947a825b8162f7b8fbdc14e96909c94bd5fd8a88986",
+            "sha256:cebfbcd6e5b0c8770d461a892661711884e25024614009b53cb6c4ad6c166308",
+            "sha256:5e23bdc389b11c4f396ac5c716ad18052989e9764155ae3ba64798feacb392fb"
           ],
           "picks": [],
           "selectors": [],
@@ -3797,11 +3797,11 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#Top",
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P3",
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P2",
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P1",
-            "unhashed:pattern/compare/fixtures/nested-sites.tsx#P0"
+            "sha256:78b5b85bd2466651b08741e0341e9af5de7c2910c6912f326daeea40cef8eeba",
+            "sha256:b1c9428f5bdcb45ad80a2cc821d9b12350f6066dbd1146f98bf6b15386eb5832",
+            "sha256:d1df0e413241d72f9c78f947a825b8162f7b8fbdc14e96909c94bd5fd8a88986",
+            "sha256:cebfbcd6e5b0c8770d461a892661711884e25024614009b53cb6c4ad6c166308",
+            "sha256:5e23bdc389b11c4f396ac5c716ad18052989e9764155ae3ba64798feacb392fb"
           ],
           "picks": [],
           "selectors": [],

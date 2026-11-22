@@ -47,6 +47,7 @@
                     "binding",
                     "count"
                   ],
+                  "handle": true,
                   "slot": 3
                 },
                 {
@@ -179,7 +180,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/sites-in-elements.tsx#Leaf"
+            "sha256:d26eecc31a97c962759a141e4386a64e26d642b41f6f95041ee81bf3d95e72c4"
           ],
           "picks": [],
           "selectors": [],
@@ -456,7 +457,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/sites-in-elements.tsx#Spelled"
+            "sha256:b5f2561495d4181d0816366737197336e0b1529e6a6082a44017c997569e41d6"
           ],
           "picks": [],
           "selectors": [],
@@ -585,6 +586,7 @@
                     "binding",
                     "count"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -1059,9 +1061,9 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/sites-in-elements.tsx#Pair",
-            "unhashed:pattern/compare/fixtures/sites-in-elements.tsx#Leaf",
-            "unhashed:pattern/compare/fixtures/sites-in-elements.tsx#Spelled"
+            "sha256:31dd18d611db9c0f746a74bba27d30ffeee7cf51b7667434355efdfb6d385f27",
+            "sha256:d26eecc31a97c962759a141e4386a64e26d642b41f6f95041ee81bf3d95e72c4",
+            "sha256:b5f2561495d4181d0816366737197336e0b1529e6a6082a44017c997569e41d6"
           ],
           "picks": [],
           "selectors": [],
@@ -1502,6 +1504,7 @@
                     "binding",
                     "count"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -3244,10 +3247,10 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/sites-in-elements.tsx#default",
-            "unhashed:pattern/compare/fixtures/sites-in-elements.tsx#Pair",
-            "unhashed:pattern/compare/fixtures/sites-in-elements.tsx#Leaf",
-            "unhashed:pattern/compare/fixtures/sites-in-elements.tsx#Spelled"
+            "sha256:68535a9870f6518f46a2eccc1bd918ebbb52e36045206412e26e73d6bfaba1b9",
+            "sha256:31dd18d611db9c0f746a74bba27d30ffeee7cf51b7667434355efdfb6d385f27",
+            "sha256:d26eecc31a97c962759a141e4386a64e26d642b41f6f95041ee81bf3d95e72c4",
+            "sha256:b5f2561495d4181d0816366737197336e0b1529e6a6082a44017c997569e41d6"
           ],
           "picks": [],
           "selectors": [],

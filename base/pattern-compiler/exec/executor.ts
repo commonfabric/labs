@@ -183,7 +183,9 @@ export type Plan = {
      * body of a pattern compiled in the default the callee declares for
      * the path the call bound to the slot (PL §1.1, `ReadInput`).
      */
-    reads: { slot: number; at: string[]; default?: unknown }[];
+    /** `handle`: the body declares a handle at `at` (provisional
+     * decision P31). */
+    reads: { slot: number; at: string[]; default?: unknown; handle?: true }[];
     computed: { at: string[]; observes: string }[];
     writes: {
       target: { kind: string; slot?: number; cell?: number; path?: string[] };
@@ -334,6 +336,20 @@ export class Unsupported extends Error {
  * result is not evaluated again for it, and the runtime stores each row
  * where the result stands (`Instance.#storeUnit`).
  */
+/**
+ * An output a change of the result document is recorded for
+ * (`Instance.#recordedOutputs`): the output, the path of the result
+ * document it is stored at, whether its records are `bound`, and whether
+ * it holds the result of a per-element construct (`members`), whose
+ * position takes the label of the collection's membership.
+ */
+type RecordedOutput = {
+  output: number;
+  path: readonly string[];
+  bound?: true;
+  members?: true;
+};
+
 export class Assembled {
   constructor(
     readonly collection: number,
@@ -776,6 +792,12 @@ type Cover = {
 };
 
 /**
+ * The addresses of the positions that hold a link at which every read that
+ * went there stopped (`Position.stopped`), among those `#addressesOf` gave.
+ */
+const stoppedAt = new WeakSet<Address>();
+
+/**
  * The cover found for what an evaluation bound a slot to, with what it is
  * current against: the number of positions bound, the clock of the store,
  * and for each table the number of changes of its set of members.
@@ -999,7 +1021,9 @@ export class Handle {
   ): unknown {
     const { store } = this.instance;
     // A plain value in place that the body reads is a copy (ruling Z25).
-    if (!declaresHandle(schema, depth)) return store.read(ref, reads, true);
+    if (!declaresHandle(schema, depth)) {
+      return store.read(ref, reads, true, schema);
+    }
     const located = store.locate(ref, true, reads);
     const member = (segment: string, at: Ref) => {
       const below = schemaBelow(schema, segment);
@@ -1429,7 +1453,7 @@ export class Host {
       instance.bindSlot(this, index, from, found);
       return found instanceof Ref ? found.withSchema(schema) : found;
     }
-    const value = withDefaults(this.v(found), schema);
+    const value = withDefaults(this.v(found, schema), schema);
     instance.bindSlot(this, index, from, found);
     return value;
   }
@@ -1663,11 +1687,17 @@ export class Host {
     return seen;
   }
 
-  /** A value with every reference in it replaced by what it refers to. */
-  v(value: unknown): unknown {
+  /**
+   * A value with every reference in it replaced by what it refers to.
+   * With `bound`, a stored value is read under that schema
+   * (`Store.read`).
+   */
+  v(value: unknown, bound?: Schema): unknown {
     if (value instanceof Assembled) return this.v(this.settled(value));
     if (value instanceof Ref) {
-      return this.#reading(this.instance.store.read(value, this.reads));
+      return this.#reading(
+        this.instance.store.read(value, this.reads, false, bound),
+      );
     }
     this.#reading(value);
     if (value instanceof StreamRef) return { $stream: true };
@@ -1730,7 +1760,20 @@ export class Host {
     if (run === undefined) {
       throw new Unsupported("a body that has no function");
     }
-    let argument = this.pass(computed);
+    // What the body reads as a value, of the computed part and of the
+    // slot part: a reference the cone computed that leads to a place a
+    // `value` entry of `Body.reads` is at or below is read as a value too,
+    // since an `enumeration` or a `shape` entry of the slot part gives way
+    // to what the argument holds at its path (`Instance.gives`).
+    let argument = this.pass(computed, {
+      entries: [
+        ...instance.plan.bodies[body].computed,
+        ...instance.plan.bodies[body].reads.map(({ slot, at }) => ({
+          at,
+          observes: instance.plan.slots[slot].observes,
+        })),
+      ],
+    });
     // An `identity` entry of `Body.computed` is a handle to the reference
     // the cone computed there (ES §2.4, "A handle or a reference from a
     // computed input").
@@ -1748,6 +1791,24 @@ export class Host {
           at,
           instance.handleOf(reference, this),
         );
+        continue;
+      }
+      // An array that a body returned whole is a handle to its place: the
+      // path of the result where the output is kept, or the document of
+      // the output (FA §6.2, "A handle bound to a value the instance
+      // computed"; ruling Z53).
+      const held = reference instanceof Assembled
+        ? this.settled(reference)
+        : reference;
+      const output = Array.isArray(held)
+        ? instance.placeOfOutput(held)
+        : undefined;
+      if (output !== undefined) {
+        argument = instance.placed(
+          argument,
+          at,
+          instance.handleOf(output, this),
+        );
       }
     }
     // The slot part of the argument: each entry of `Body.reads` at its
@@ -1755,12 +1816,26 @@ export class Host {
     const layout = [...instance.plan.bodies[body].reads].sort((a, b) =>
       a.at.length - b.at.length
     );
-    for (const { slot, at, default: declared } of layout) {
+    // The places where the body reads the value. Where the body declares
+    // no handle at such a place, the `value` entry holds the value with
+    // its address (ES §2.4, "What the argument holds at a path"), and an
+    // `identity` entry there is the slot of the place that another body
+    // declares a handle at.
+    const valued = new Set(
+      layout.filter(({ slot }) =>
+        instance.plan.slots[slot].observes === "value"
+      ).map(({ at }) => JSON.stringify(at)),
+    );
+    for (const { slot, at, default: declared, handle } of layout) {
       const star = at.indexOf("*");
       // A slot at `*` stands for each element: the container is given
       // whole by the slot at its own path, where the body lists one.
       if (star >= 0) continue;
       const { observes } = instance.plan.slots[slot];
+      if (
+        observes === "identity" && handle === undefined &&
+        valued.has(JSON.stringify(at))
+      ) continue;
       // The slot reads the default of its own place first.
       const read = declared === undefined
         ? this.slot(slot)
@@ -1784,6 +1859,36 @@ export class Host {
         continue;
       }
       argument = instance.placed(argument, at, given);
+    }
+    // An entry at `*` where the body declares a handle is placed at each
+    // child the path reaches (ES §2.4): each element of a stored array,
+    // and each member of a stored record, is a handle to its position,
+    // over references and over plain values in place alike.
+    for (const { slot, at, handle } of layout) {
+      const { root, path } = instance.plan.slots[slot];
+      if (
+        handle === undefined || at.indexOf("*") !== at.length - 1 ||
+        path.indexOf("*") !== path.length - 1
+      ) continue;
+      const above = path.slice(0, -1);
+      const container = this.at(instance.rootOf(root, this, above), above);
+      const held = this.at(argument, at.slice(0, -1));
+      if (!(container instanceof Ref)) continue;
+      const child = (key: string) =>
+        instance.handleOf(container.key(key), this, slot);
+      if (Array.isArray(held)) {
+        argument = instance.placed(
+          argument,
+          at.slice(0, -1),
+          held.map((_, index) => child(`${index}`)),
+        );
+      } else if (isRecord(held) && !(held instanceof Handle)) {
+        argument = instance.placed(
+          argument,
+          at.slice(0, -1),
+          Object.fromEntries(Object.keys(held).map((key) => [key, child(key)])),
+        );
+      }
     }
     const keyed = { body, keys: instance.contextKeys(this.context) };
     return instance.returned(
@@ -1846,10 +1951,30 @@ export class Host {
    * it returns holds the reference to the stream, which is stored as a
    * link (ruling Z20).
    */
-  pass(value: unknown): unknown {
-    if (value instanceof Assembled) return this.pass(this.settled(value));
+  pass(
+    value: unknown,
+    /**
+     * The entries of `Body.computed` that the value is narrowed to, and
+     * the path of `value` in the computed value. A stored value at a path
+     * with no `value` entry at or below it is read with the references in
+     * it as stand-ins and not followed (ES §2.4: the computed part is
+     * "narrowed to the entries of `Body.computed`").
+     */
+    narrowed?: { entries: readonly { at: string[]; observes: string }[] },
+    path: readonly string[] = [],
+  ): unknown {
+    if (value instanceof Assembled) {
+      return this.pass(this.settled(value), narrowed, path);
+    }
     if (value instanceof Ref || value instanceof StreamRef) {
-      return this.v(value);
+      const valued = narrowed === undefined ||
+        narrowed.entries.some(({ at, observes }) =>
+          observes === "value" &&
+          at.slice(0, path.length).every((segment, index) =>
+            segment === "*" || segment === path[index]
+          )
+        );
+      return this.v(value, valued ? undefined : SHALLOW);
     }
     // A body that would be handed a value in an error state is not run.
     this.#reading(value);
@@ -1858,17 +1983,28 @@ export class Host {
     }
     // A handle that value code made for a constant stays the handle.
     if (value instanceof Handle) return value;
-    if (Array.isArray(value)) return value.map((member) => this.pass(member));
+    if (Array.isArray(value)) {
+      return value.map((member, index) =>
+        this.pass(member, narrowed, [...path, `${index}`])
+      );
+    }
     if (isRecord(value)) {
       return Object.fromEntries(
         Object.entries(value).map((
           [name, member],
-        ) => [name, this.pass(member)]),
+        ) => [name, this.pass(member, narrowed, [...path, name])]),
       );
     }
     return value;
   }
 }
+
+/**
+ * The schema a stored value is read under where a body observes nothing
+ * of it but its shape or its members' presence: a container whose
+ * references stay references.
+ */
+const SHALLOW: Schema = { type: ["array", "object"], items: {} };
 
 /** A host that holds nothing: for a constant read where no cone runs. */
 class NoHost extends Host {
@@ -2007,6 +2143,15 @@ export type TransactionHooks = {
   begin(cause: Transaction["cause"] | "send" | "watermark"): void;
 
   /**
+   * The executor made an instance of another artifact than the one it was
+   * started with: one a function body instantiates, or one of a pattern
+   * compiled alone. The write records of the instance (`plan-write.ts`,
+   * `NamedOutputInputs.instance`) name the records of that artifact's
+   * plan. Called before the instance writes.
+   */
+  instantiated?(instance: string, artifact: Artifact): void;
+
+  /**
    * The transaction in progress read a position of a document: one a
    * link the read followed was at, or the one the read ended at. `by` is
    * the body and the entry of its `Body.handles` that a read through a
@@ -2031,14 +2176,6 @@ export type TransactionHooks = {
     path: readonly string[],
     observes?: string,
   ): string | undefined;
-
-  /**
-   * The executor made an instance, with the identifier given, that runs the
-   * plan of another artifact than the instance it was started with: the
-   * write records of that instance name records of the other plan.
-   * `pattern` is the identity that plan begins with (`Plan.patterns`).
-   */
-  instantiated?(instance: string, pattern: string | undefined): void;
 
   /**
    * Registers what the store calls when the labels of documents changed
@@ -2908,6 +3045,9 @@ export class Instance {
     this.id = options.id ?? "result";
     this.argument = argumentOf(this.id);
     this.root = options.parent?.root ?? this;
+    if (this.root !== this) {
+      this.root.options.transactions?.instantiated?.(this.id, artifact);
+    }
     this.plan = artifact.plan;
     this.code = artifact.code;
     for (const { id, schema } of artifact.schemas) {
@@ -2919,12 +3059,6 @@ export class Instance {
       }
     });
     this.#documents.add(this.argument).add(this.id);
-    if (this.root !== this && artifact !== this.root.artifact) {
-      this.root.options.transactions?.instantiated?.(
-        this.id,
-        artifact.plan.patterns?.[0],
-      );
-    }
     if (this.root === this) {
       this.store.onWrite = (doc, path) => this.#wrote(doc, path);
       this.store.onChange = (change) => this.#changed(change);
@@ -3764,7 +3898,7 @@ export class Instance {
               return named.path.some(isKeySegment) ? host.v(value) : value;
             }
             if (Array.isArray(value)) {
-              return this.#linkToOutput(value) ?? value.map(given);
+              return this.linkToOutput(value) ?? value.map(given);
             }
             if (isRecord(value)) {
               return Object.fromEntries(
@@ -3867,7 +4001,26 @@ export class Instance {
    * resolves the link learns them (ruling Z52). Nothing for another
    * array.
    */
-  #linkToOutput(array: readonly unknown[]): Ref | undefined {
+  /**
+   * The place of the output that an array is the whole value of: the
+   * path of the result document where an output outside every element
+   * body is kept, and otherwise the document of the output
+   * (`linkToOutput()`). Nothing for another array.
+   */
+  placeOfOutput(array: readonly unknown[]): Ref | undefined {
+    const from = this.returnedWhole.get(array);
+    if (from === undefined) return undefined;
+    const record = this.plan.outputs[from.output];
+    if (
+      record.kept && record.path.length > 0 &&
+      this.plan.cones[record.cone].within.length === 0
+    ) {
+      return new Ref(this.id, record.path);
+    }
+    return this.linkToOutput(array);
+  }
+
+  linkToOutput(array: readonly unknown[]): Ref | undefined {
     const from = this.returnedWhole.get(array);
     if (from === undefined) return undefined;
     const place = this.#generated(from.output, array, from.context);
@@ -4202,6 +4355,7 @@ export class Instance {
   /** A cell a function body made. */
   createCell(value: unknown): Handle {
     const id = this.#fresh("cell");
+    this.#createdCells.add(id);
     this.store.create(id, "created cell", this.stored(value));
     return new Handle(this, new Ref(id, []), undefined, undefined, []);
   }
@@ -4398,6 +4552,32 @@ export class Instance {
   }
 
   /**
+   * What `equals` compares of `value`: the text of the address it resolves
+   * to, or `undefined` for a value with no place in the graph (provisional
+   * decision P41, `equalsKey`).
+   */
+  equalsKey(value: unknown): string | undefined {
+    if (value instanceof Handle && value.target instanceof StreamRef) {
+      const { instance, binding, keys } = value.target;
+      return textOf({
+        stream: { instance, binding, keys: [...keys] },
+      });
+    }
+    const ref = value instanceof Handle
+      ? value.target as Ref
+      : value instanceof Ref
+      ? value
+      : typeof value === "object" && value !== null
+      ? this.store.addresses.get(value)
+      : undefined;
+    // A key that no position holds resolves to no position: the
+    // reference is compared as the key it holds.
+    return ref === undefined
+      ? undefined
+      : this.store.addressText(this.store.locate(ref, true).ref);
+  }
+
+  /**
    * Whether two values a body holds are one: two handles or two values
    * read from one stored address, and otherwise two equal values. Each
    * reference is resolved to the position it names now and the two are
@@ -4407,27 +4587,7 @@ export class Instance {
    * the cell of the element where the position holds a link.
    */
   same(a: unknown, b: unknown): boolean {
-    const address = (value: unknown): string | undefined => {
-      if (value instanceof Handle && value.target instanceof StreamRef) {
-        const { instance, binding, keys } = value.target;
-        return textOf({
-          stream: { instance, binding, keys: [...keys] },
-        });
-      }
-      const ref = value instanceof Handle
-        ? value.target as Ref
-        : value instanceof Ref
-        ? value
-        : typeof value === "object" && value !== null
-        ? this.store.addresses.get(value)
-        : undefined;
-      // A key that no position holds resolves to no position: the
-      // reference is compared as the key it holds.
-      return ref === undefined
-        ? undefined
-        : this.store.addressText(this.store.locate(ref, true).ref);
-    };
-    const [left, right] = [address(a), address(b)];
+    const [left, right] = [this.equalsKey(a), this.equalsKey(b)];
     if (left !== undefined && right !== undefined) return left === right;
     // A value read from a stored address and one that was not are two.
     if (left !== undefined || right !== undefined) return false;
@@ -7614,6 +7774,11 @@ export class Instance {
    * `keyed` is the body and the element keys of the run of a `lift` or
    * a `computed`.
    */
+  /** The cause of the run of a body under way (`during()`). */
+  get runningCause(): FabricValue | undefined {
+    return this.#running?.cause;
+  }
+
   during<T>(cause: FabricValue, run: () => T, keyed?: KeyedRun): T {
     const outer = this.#running;
     this.#running = {
@@ -7842,11 +8007,115 @@ export class Instance {
    */
   runBody<T>(body: number, host: Host, run: () => T): T {
     this.#invoking.push({ body, host });
+    let returned = false;
     try {
-      return run();
+      const value = run();
+      returned = true;
+      return value;
     } finally {
       this.#invoking.pop();
+      const written = this.#createdWrites.get(host);
+      this.#createdWrites.delete(host);
+      if (returned && written !== undefined) {
+        this.#recordCreated(body, host, written);
+      }
     }
+  }
+
+  /** The documents that the bodies of this instance made as cells. */
+  readonly #createdCells = new Set<string>();
+
+  /**
+   * The positions of cells it made that the body being run with a host
+   * wrote, each once, in the order of the first write, with the write
+   * edge of the body that covers them (`#noteCreatedWrite`).
+   */
+  readonly #createdWrites = new Map<
+    Host,
+    { write: number; targets: Map<string, Address> }
+  >();
+
+  /**
+   * Notes a write through `handle` by the body of a cone being run, where
+   * the handle is to a cell that a body of this instance made and the
+   * body has write edges for the cells of one call site: the record of
+   * the write is given when the body has returned (`#recordCreated`). A
+   * body whose edges name several call sites gives no record, since the
+   * executor does not know which site made a cell, and the runtime gives
+   * the path the label of a write it has no record of.
+   */
+  #noteCreatedWrite(handle: Handle): void {
+    const invoking = this.#invoking.at(-1);
+    if (
+      this.#handling !== undefined || invoking === undefined ||
+      !(handle.target instanceof Ref) ||
+      !this.#createdCells.has(handle.target.doc)
+    ) return;
+    const { writes } = this.plan.bodies[invoking.body];
+    const calls = new Set<number>();
+    let found = -1;
+    writes.forEach(({ target }, index) => {
+      if (target.kind !== "created") return;
+      calls.add((target as { call?: number }).call ?? -1);
+      if (found < 0) found = index;
+    });
+    if (found < 0 || calls.size !== 1) return;
+    const { doc, path } = handle.target;
+    const held = this.#createdWrites.get(invoking.host) ??
+      { write: found, targets: new Map<string, Address>() };
+    this.#createdWrites.set(invoking.host, held);
+    held.targets.set(canonical([doc, path]), { doc, path: [...path] });
+  }
+
+  /**
+   * Gives the records of the cells that `body` made and wrote while it
+   * ran with `host`: each written position has the record of the body's
+   * write edge for a cell it makes, whose template is instantiated with
+   * what the body was bound to and read, once for all of them. So a
+   * document a `lift` writes for a row of its result takes the label of
+   * what that `lift` read, and not the join of what the transaction read.
+   * The records are given as those of a write that left the value as it
+   * was (`TransactionHooks.unchanged`): the write itself was reported when
+   * it was made, and the record gives the path its label either way.
+   */
+  #recordCreated(
+    body: number,
+    host: Host,
+    written: { write: number; targets: Map<string, Address> },
+  ): void {
+    const { root } = this;
+    const hooks = root.options.transactions;
+    if (root.#tx === undefined || hooks?.unchanged === undefined) return;
+    const { template } = this.plan.bodies[body].writes[written.write];
+    if (template === undefined) return;
+    root.#namedIndex.clear();
+    const inputs = this.#inputsFor(
+      template,
+      this.contextKeys(host.context),
+      [{
+        slots: host.bound,
+        selections: host.selections,
+        picks: host.picks,
+        dynamic: host.dynamic,
+      }],
+    );
+    const writes: PlanWrite[] = [...written.targets.values()].flatMap((
+      target,
+    ) =>
+      this.store.docs.has(target.doc)
+        ? [{ target, record: { body, write: written.write }, ...inputs }]
+        : []
+    );
+    if (writes.length === 0) return;
+    const [{ target }] = writes;
+    hooks.unchanged(
+      target.doc,
+      target.path,
+      this.store,
+      undefined,
+      writes,
+      root.#inputsTable,
+    );
   }
 
   /**
@@ -8468,12 +8737,22 @@ export class Instance {
       if (canonical([root, path]) !== above) continue;
       const bound = boundOf(other);
       if (bound === undefined || !("at" in bound)) continue;
-      const last = bound.at[bound.at.length - 1];
+      // An `enumeration` slot of one container observes the container,
+      // whatever the value code read below it (`#enumerated`).
+      const container = this.#enumerated(other, bound)?.chain;
+      // Otherwise the collection is at the last position the read
+      // observed. A link of a member at which the read stopped is below
+      // it, and `*` covers it.
+      const reached = container ??
+        bound.at.filter((position) =>
+          position instanceof Ref || position.stopped !== true
+        );
+      const last = reached[reached.length - 1];
       if (last === undefined || last instanceof Ref) continue;
       return this.#derivedBound(bound, `elements ${slot}`, () => ({
         observes: record.observes,
         at: [
-          ...bound.at.slice(0, -1),
+          ...reached.slice(0, -1),
           { doc: last.doc, path: [...last.path, ...record.path.slice(star)] },
         ],
       }));
@@ -8600,7 +8879,19 @@ export class Instance {
     }
     const chains: Address[][] = [];
     let current: Address[] = [];
+    // The links at which the read stopped (`Position.stopped`), as where
+    // the schema declares a handle at each member of a record: the read
+    // observed each as a reference, and no chain goes on to where one
+    // leads (provisional decision P46).
+    const references: Address[] = [];
     for (const address of addresses) {
+      if (
+        stoppedAt.has(address) &&
+        isLink(this.store.peek(address.doc, address.path))
+      ) {
+        references.push(address);
+        continue;
+      }
       current.push(address);
       if (!isLink(this.store.peek(address.doc, address.path))) {
         chains.push(current);
@@ -8649,7 +8940,20 @@ export class Instance {
         chains.push(current);
       }
     }
-    const [chain = [], ...rest] = chains;
+    const [first = [], ...rest] = chains;
+    // The runtime observes every position of a chain but its last as a
+    // reference, so the links the read stopped at stand before the
+    // position the first chain ends at, one for each label they hold as
+    // references. A read that observed nothing but such links observed
+    // references alone.
+    const distinct = this.#distinctByLabel(
+      references.map((address) => [address]),
+      "identity",
+    ).map(([address]) => address);
+    if (first.length === 0 && distinct.length > 0) {
+      return { chain: distinct, observes: "identity", ...stated };
+    }
+    const chain = [...distinct, ...first];
     for (const { members } of reported) {
       for (const { links, ends } of members) {
         ends.forEach((end, index) =>
@@ -9257,12 +9561,19 @@ export class Instance {
     through = false,
   ): Address[] {
     const found: Address[] = [];
-    const seen = new Set<string>();
-    const add = (doc: string, path: readonly string[]) => {
+    const seen = new Map<string, Address>();
+    const add = (doc: string, path: readonly string[], stopped = false) => {
       const id = JSON.stringify([doc, path]);
-      if (seen.has(id)) return;
-      seen.add(id);
-      found.push({ doc, path: [...path] });
+      const held = seen.get(id);
+      if (held !== undefined) {
+        // A position one read stopped at and another crossed is crossed.
+        if (!stopped) stoppedAt.delete(held);
+        return;
+      }
+      const address = { doc, path: [...path] };
+      seen.set(id, address);
+      if (stopped) stoppedAt.add(address);
+      found.push(address);
     };
     this.#quietly(() => {
       for (const position of at) {
@@ -9283,7 +9594,7 @@ export class Instance {
           }
           add(located.ref.doc, located.ref.path);
         } else {
-          add(position.doc, position.path);
+          add(position.doc, position.path, position.stopped === true);
         }
       }
     });
@@ -9368,6 +9679,10 @@ export class Instance {
     const { root } = this.plan.slots[slot];
     const wish = root.kind === "operation" &&
       this.plan.operations[root.operation ?? -1]?.kind === "wish";
+    if (!wish) {
+      const container = this.#enumerated(slot, bound);
+      if (container !== undefined) return container;
+    }
     // What the read covered is found once for the bound positions, while
     // the documents of the positions outside the covered containers and
     // the sets of members of those containers stay as they are.
@@ -9410,6 +9725,34 @@ export class Instance {
       });
     }
     return this.#chainsOver(cover, bound.observes);
+  }
+
+  /**
+   * The binding of an `enumeration` slot of one container, one whose path
+   * holds no `*`: the links the read crossed on the way to the container
+   * and the container, the first position it observed. The value code
+   * reads the container as a value, through the references it holds, which
+   * is a wider read than the slot's: a slot of this class consumes nothing
+   * below its bound address and has no further binding (PL §2.5). Nothing
+   * where the positions do not begin so.
+   */
+  #enumerated(
+    slot: number,
+    bound: Extract<Bound, { at: unknown }>,
+  ): { chain: Address[]; observes: string } | undefined {
+    if (
+      bound.observes !== "enumeration" ||
+      this.plan.slots[slot].path.includes("*")
+    ) return undefined;
+    const chain: Address[] = [];
+    for (const position of bound.at) {
+      if (position instanceof Ref || position.keyed !== undefined) break;
+      chain.push({ doc: position.doc, path: [...position.path] });
+      if (!isLink(this.store.peek(position.doc, position.path))) {
+        return { chain, observes: bound.observes };
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -10226,7 +10569,7 @@ export class Instance {
     splice: { start: number; removed: number; inserted: number } | undefined,
   ): PlanWrite[] {
     const outputs = this.#recordedOutputs();
-    const found: { output: number; at: string[] }[] = [];
+    const found: { output: number; at: string[]; members?: true }[] = [];
     let nearest: number | undefined;
     outputs.forEach((output, index) => {
       if (
@@ -10237,7 +10580,12 @@ export class Instance {
       ) nearest = index;
     });
     if (nearest !== undefined) {
-      found.push({ output: outputs[nearest].output, at: [...path] });
+      const { output, path: at, members } = outputs[nearest];
+      found.push({
+        output,
+        at: [...path],
+        ...(members && at.length === path.length ? { members } : {}),
+      });
     }
     const held = this.store.peek(doc, path);
     outputs.forEach((output) => {
@@ -10253,7 +10601,13 @@ export class Instance {
         first: boolean,
       ): void => {
         if (rest.length === 0) {
-          if (value !== undefined) found.push({ output: index, at });
+          if (value !== undefined) {
+            found.push({
+              output: index,
+              at,
+              ...(output.members ? { members: output.members } : {}),
+            });
+          }
           return;
         }
         const [segment, ...more] = rest;
@@ -10281,21 +10635,20 @@ export class Instance {
     // An output the plan has no template for has a record with no inputs:
     // the runtime gives its path the label of a write it has no record of,
     // where it would otherwise take the label of a kept output above it.
-    // A change of the array a kept output with a collection holds, other
-    // than an addition at its end, decides anew which member stands at
-    // each position, and an addition at its end leaves each member before
-    // it where it stood.
+    // A change that wrote the array of a kept output that holds the result
+    // of a per-element construct, at the array or above it, other than by
+    // an addition at its end, decides anew which member stands at each
+    // position, and an addition at its end leaves each member before it
+    // where it stood. A write above the array writes it whole.
     const appends = splice !== undefined && Array.isArray(held) &&
       splice.removed === 0 && splice.start + splice.inserted === held.length;
-    return found.map(({ output, at }) => {
+    return found.map(({ output, at, members }) => {
       const write = this.#outputRecord(doc, output, at);
       this.root.#noteRecord(this.#recordKey(output, at), this.id, write);
-      if (
-        this.plan.outputs[output].collection === undefined ||
-        !this.plan.outputs[output].kept || at.length !== path.length ||
-        !Array.isArray(held)
-      ) return write;
-      return appends
+      if (members !== true || !Array.isArray(this.store.peek(doc, at))) {
+        return write;
+      }
+      return appends && at.length === path.length
         ? { ...write, membersAppended: true as const }
         : { ...write, membersChanged: true as const };
     });
@@ -10313,16 +10666,11 @@ export class Instance {
    * an element: its records are `bound`, and the runtime gives their
    * paths the label of a write it has no record of.
    */
-  #recordedOutputs(): {
-    output: number;
-    path: readonly string[];
-    bound?: true;
-  }[] {
+  #recordedOutputs(): RecordedOutput[] {
     if (this.#recorded !== undefined) return this.#recorded;
     const { outputs } = this.plan;
     const templates = this.plan.templates ?? [];
-    const found: { output: number; path: readonly string[]; bound?: true }[] =
-      [];
+    const found: RecordedOutput[] = [];
     const hasElementEntry = (path: readonly string[]) =>
       outputs.some((output) =>
         output.kept && output.path.length > path.length &&
@@ -10359,8 +10707,9 @@ export class Instance {
     };
     const add = (output: number, path: readonly string[], depth: number) => {
       const record = outputs[output];
-      const entry: (typeof found)[number] = { output, path };
+      const entry: RecordedOutput = { output, path };
       found.push(entry);
+      if (record.collection !== undefined && record.kept) entry.members = true;
       if (record.collection !== undefined || depth > 64) return;
       if (record.kept && hasElementEntry(record.path)) return;
       const held = collectionOf(record.template, true, 0);
@@ -10369,6 +10718,7 @@ export class Instance {
         entry.bound = true;
         return;
       }
+      entry.members = true;
       const source = outputs[held.output];
       outputs.forEach((element, index) => {
         if (
@@ -10394,9 +10744,7 @@ export class Instance {
   }
 
   /** The result of `#recordedOutputs()`, made once. */
-  #recorded:
-    | { output: number; path: readonly string[]; bound?: true }[]
-    | undefined;
+  #recorded: RecordedOutput[] | undefined;
 
   /**
    * What names the inputs of the cone instance of an output for the element
@@ -10831,6 +11179,7 @@ export class Instance {
       ? invoking?.host
       : this.#handlerHost;
     if (index === undefined) return () => {};
+    if (counted) this.#noteCreatedWrite(handle);
     const body = this.plan.bodies[index];
     const covers = (target: { slot?: number; path?: string[] }) =>
       target.slot === handle.slot &&
@@ -11067,6 +11416,8 @@ export class Instance {
       const { place } = entry;
       const from = host.reads.length;
       let found: unknown;
+      // The state entry is a reference to a kept output's stored position.
+      let reference = false;
       if (place.slot !== undefined) {
         const bound = this.plan.slots[place.slot];
         // A cell that a cone writes statically: the writing cone
@@ -11105,7 +11456,19 @@ export class Instance {
           }
         }
       } else if (place.output !== undefined) {
-        found = host.whole(host.at(host.output(place.output), rest));
+        // A kept output of the pattern that the handler observes as a
+        // reference alone: the reference is to the position of the result
+        // document that holds the output, which the plan and the instance
+        // decide and nothing the output holds does (PL §2.2). A read
+        // through the handle is a read of that position, under the label
+        // stored there.
+        const held = read.observes === "identity"
+          ? this.#keptPlace(place.output, record.within.length)
+          : undefined;
+        if (held !== undefined) reference = true;
+        found = held !== undefined
+          ? new Ref(this.id, [...held, ...rest])
+          : host.whole(host.at(host.output(place.output), rest));
       } else if (place.stream !== undefined) {
         found = this.streamFor(place.stream, context);
       } else if (place.result === true) {
@@ -11124,9 +11487,22 @@ export class Instance {
           error: `the handler reads a failed value: ${found.$error.message}`,
         };
       }
-      const given = read.observes === "identity"
+      let given = read.observes === "identity"
         ? this.handleOf(found, undefined, slot)
         : host.v(found);
+      // A write through a handle to a value the instance computes fails
+      // (PL §3.11).
+      if (reference && given instanceof Handle) {
+        given = new Handle(
+          this,
+          given.target,
+          given.host,
+          given.slot,
+          given.below,
+          given.declared,
+          true,
+        );
+      }
       this.bindSlot(host, slot, from, found);
       // A literal the binding gives its state is a constant of the plan:
       // the slot contributes no label, where it read nothing else. A value
@@ -11138,7 +11514,15 @@ export class Instance {
         if (place.constant !== undefined) {
           host.bound.set(slot, { constant: true });
         } else if (place.output !== undefined) {
-          host.bound.set(slot, { output: place.output });
+          // A reference to the stored position of a kept output is a
+          // constant of the plan: an `identity` slot does not reach the
+          // target (PL §2.2). A copy of what the output holds, which the
+          // handler is given where the output has no stored position of
+          // its own, carries the output's label.
+          host.bound.set(
+            slot,
+            reference ? { constant: true } : { output: place.output },
+          );
         } else if (place.slot !== undefined) {
           host.bound.set(slot, { place: { slot: place.slot, rest } });
         }
@@ -11152,6 +11536,19 @@ export class Instance {
     }
     this.#bindEvent(host, body, stream);
     return this.#run(binding, body, run, event, state, host);
+  }
+
+  /**
+   * The path of the result document that holds the output `index`, where
+   * a binding written within `depth` elements can name it by a reference
+   * that the plan decides: the output is kept, at a path with no element
+   * position, and the binding is in no element. Otherwise nothing.
+   */
+  #keptPlace(index: number, depth: number): readonly string[] | undefined {
+    const output = this.plan.outputs[index];
+    return output.kept && depth === 0 && !output.path.includes("*")
+      ? output.path
+      : undefined;
   }
 
   /**
@@ -11499,9 +11896,12 @@ const commonfabric = (instance: Instance): unknown => {
     equals: (a: unknown, b: unknown) => instance.same(a, b),
     of: (value: unknown) => instance.createCell(value),
     // A cell a body makes under a cause is the same cell for the same
-    // cause (PL §1.3).
+    // cause in the same run (PL §1.3). A cause that is a reference is its
+    // identity.
     for: (cause: unknown) => {
-      const key = JSON.stringify(cause) ?? "undefined";
+      const key = `${JSON.stringify(instance.runningCause ?? null)}\n${
+        instance.equalsKey(cause) ?? JSON.stringify(cause) ?? "undefined"
+      }`;
       const made = caused.get(key) ?? instance.createCell(undefined);
       caused.set(key, made);
       return made;
@@ -11577,6 +11977,7 @@ const commonfabric = (instance: Instance): unknown => {
     toCompactDebugString,
     toIndentedDebugString,
     equals: (a: unknown, b: unknown) => instance.same(a, b),
+    equalsKey: (value: unknown) => instance.equalsKey(value),
     // Every cell of an executed instance is in the instance's space.
     spaceOf: () => {
       if (instance.options.space === undefined) {

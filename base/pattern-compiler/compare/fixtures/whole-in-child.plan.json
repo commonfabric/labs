@@ -47,6 +47,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],
@@ -83,7 +84,7 @@
             {
               "at": {
                 "file": "compare/fixtures/whole-in-child.tsx",
-                "start": 750
+                "start": 747
               },
               "bodies": [],
               "entry": "$UI",
@@ -139,7 +140,7 @@
             }
           ],
           "patterns": [
-            "sha256:f1565eaacb259c5c4574c17b5edb101217d8a7a93c5dcfd815d169c802e8eca0"
+            "sha256:96fcfccec05c7c5e15fd22671e70c936efd3e7b587bd880fd55b27c19b38b106"
           ],
           "picks": [],
           "selectors": [],
@@ -305,6 +306,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],
@@ -341,7 +343,7 @@
             {
               "at": {
                 "file": "compare/fixtures/whole-in-child.tsx",
-                "start": 750
+                "start": 747
               },
               "bodies": [],
               "entry": "$UI",
@@ -360,7 +362,7 @@
             {
               "at": {
                 "file": "compare/fixtures/whole-in-child.tsx",
-                "start": 939
+                "start": 936
               },
               "bodies": [],
               "entry": "$UI",
@@ -465,8 +467,8 @@
             }
           ],
           "patterns": [
-            "sha256:3016cc32e75b97bc6d13298655c10d25ec5649643975a05d1925adad499c886b",
-            "sha256:f1565eaacb259c5c4574c17b5edb101217d8a7a93c5dcfd815d169c802e8eca0"
+            "sha256:9ef224a6fdac0826e38fff5aa09522d31d4e30d44d57f9d87e164c9a8b1ba89e",
+            "sha256:96fcfccec05c7c5e15fd22671e70c936efd3e7b587bd880fd55b27c19b38b106"
           ],
           "picks": [],
           "selectors": [],

@@ -421,6 +421,99 @@ describe("an instance", () => {
       nick: "anon",
     });
   });
+
+  it("hands a body the value where it reads one at a place that another body takes as a handle", async () => {
+    // The place has a slot of class `identity`, which `touch` is handed as
+    // a handle, and one of class `value`, which `named` reads members of
+    // (ES §2.4, "What the argument holds at a path").
+    const instance = new Instance(await artifactOf("value-beside-handle"), {
+      author: { kind: "person", name: "Ann" },
+    });
+
+    expect(instance.result()).toEqual({
+      present: 1,
+      shown: { kind: "person", name: "Ann" },
+    });
+  });
+
+  it("gives two references to one cell one `equalsKey`, and a reference to another cell another", async () => {
+    // Provisional decision P41: `equalsKey` returns what `equals`
+    // compares.
+    const link = (index: number) => ({
+      $link: { doc: ARGUMENT, path: ["pool", `${index}`] },
+    });
+    const instance = new Instance(await artifactOf("equals-key"), {
+      pool: { 0: { name: "a" }, 1: { name: "b" } },
+      items: [link(0), link(1), link(0)],
+    });
+
+    expect((instance.result() as { count: unknown }).count).toBe(2);
+  });
+
+  it("hands a body the members it reads of each element of an array that holds references", async () => {
+    // ES §2.4: the body reads members of each element (`value` entries of
+    // `Body.reads` at `*`), beside an `enumeration` entry at the array.
+    // The handler wrote the board through a handle, so the array holds a
+    // reference to each row.
+    const instance = new Instance(await artifactOf("members-below-set"), {
+      board: { title: "t", rows: [] },
+    });
+    const outcome = instance.send(
+      instance.plan.bindings.findIndex(({ name }) => name === "publish"),
+      {
+        board: {
+          title: "u",
+          rows: [{ id: "a", tags: ["x"] }, { id: "b", tags: [] }],
+        },
+      },
+    );
+
+    expect(outcome.committed).toBe(true);
+    expect(instance.failed).toEqual([]);
+    expect((instance.result() as { summary: unknown }).summary).toEqual([
+      "a:1",
+      "b:0",
+    ]);
+  });
+
+  it("hands a body a handle where it declares one at an array that another body computed whole", async () => {
+    // FA §6.2, "A handle bound to a value the instance computed": the
+    // handle names the document of the output (ruling Z53).
+    const instance = new Instance(await artifactOf("handle-of-computed"), {
+      names: ["a", "b"],
+    });
+
+    expect((instance.result() as { summary: unknown }).summary).toBe("2:a");
+  });
+
+  it("gives two bodies that make a cell under one cause a cell each", async () => {
+    // PL §1.3: the cell is named by the cause and by the run that makes it.
+    const instance = new Instance(await artifactOf("cause-per-body"), {
+      name: "n",
+    });
+    // Both cells are read again after both bodies ran.
+    instance.writeArgument(["name"], "m");
+
+    expect(instance.result()).toEqual({ a: "first m", b: "second m" });
+  });
+
+  it("hands a body a handle at each member of a record where it declares one at `*`", async () => {
+    // ES §2.4: "An entry whose `at` holds `*` is placed at each child the
+    // path reaches". Two members link to one cell.
+    const link = (index: number) => ({
+      $link: { doc: ARGUMENT, path: ["pool", `${index}`] },
+    });
+    const instance = new Instance(await artifactOf("record-of-handles"), {
+      pool: { 0: { name: "x" }, 1: { name: "y" } },
+      byName: { a: link(0), b: link(1), c: link(0) },
+    });
+
+    expect((instance.result() as { listed: unknown }).listed).toEqual([
+      "a:x:true",
+      "b:y:false",
+      "c:x:true",
+    ]);
+  });
 });
 
 describe("an event", () => {
@@ -5375,6 +5468,34 @@ describe("an instance a function body makes", () => {
   /** A handle to the stream the result stores at a path. */
   const streamAt = (instance: Instance, path: string[]) =>
     new Handle(instance, new Ref("result", path), undefined, undefined, []);
+
+  it("writes none of the documents the executor was started with when it is made", async () => {
+    // `options.documents` are the root instance's: the instance a body
+    // makes shares the store and makes none of them again.
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL(
+          "../../compare/fixtures/instantiate.emit.json",
+          import.meta.url,
+        ),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const instance = new Instance(
+      patterns.find((pattern) => pattern.name === "default")!,
+      { note: "n" },
+      {
+        artifacts: (id) =>
+          patterns.find((pattern) => pattern.plan.patterns?.[0] === id),
+        documents: [{ id: "given", kind: "input", value: { kept: true } }],
+      },
+    );
+    const before = instance.transactions.length;
+
+    expect(instance.send(ADD, { title: "a" }).committed).toBe(true);
+    expect(
+      instance.transactions.slice(before).flatMap(({ written }) => written),
+    ).not.toContain("given");
+  });
 
   it("is an instance of the callee's plan, with documents of its own in the same store", async () => {
     const instance = await start();

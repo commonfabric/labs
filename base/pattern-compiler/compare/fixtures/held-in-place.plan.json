@@ -127,6 +127,7 @@
                     "binding",
                     "center"
                   ],
+                  "handle": true,
                   "slot": 8
                 },
                 {
@@ -242,6 +243,7 @@
                     "binding",
                     "center"
                   ],
+                  "handle": true,
                   "slot": 15
                 }
               ],

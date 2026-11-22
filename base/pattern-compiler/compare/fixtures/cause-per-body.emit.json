@@ -1,0 +1,290 @@
+[
+  {
+    "module": "compare/fixtures/cause-per-body.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/cause-per-body.tsx",
+              "source": "const { \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst first = lift(({ name }) => {\n  const cell = Writable.for(\"row\");\n  cell.set(`first ${name}`);\n  return cell;\n});\nconst second = lift(({ name }) => {\n  const cell = Writable.for(\"row\");\n  cell.set(`second ${name}`);\n  return cell;\n});\nconst $default = (pattern(\"sha256:ee870eaa3772695dfead43e0a5ff90add1cc7b5e8b3a7a26a80de93c683484ee\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => (({ name }) => {\n  const cell = Writable.for(\"row\");\n  cell.set(`first ${name}`);\n  return cell;\n})($a));\n$rt.body(1, ($a) => (({ name }) => {\n  const cell = Writable.for(\"row\");\n  cell.set(`second ${name}`);\n  return cell;\n})($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ name: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ name: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ a: $h.output(0), b: $h.output(1) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 20,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [
+                {
+                  "identifiedBy": "cause",
+                  "kind": "createCell",
+                  "scope": "space",
+                  "stateCell": 0
+                }
+              ],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "first",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "name"
+                  ],
+                  "slot": 0
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "call": 0,
+                    "kind": "created",
+                    "path": []
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [
+                {
+                  "identifiedBy": "cause",
+                  "kind": "createCell",
+                  "scope": "space",
+                  "stateCell": 1
+                }
+              ],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "second",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "name"
+                  ],
+                  "slot": 0
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "call": 0,
+                    "kind": "created",
+                    "path": []
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 1
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/cause-per-body.tsx",
+                "start": 684
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "a",
+              "picks": [],
+              "selectors": [],
+              "sideWrites": "static",
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/cause-per-body.tsx",
+                "start": 706
+              },
+              "bodies": [
+                1
+              ],
+              "entry": "b",
+              "picks": [],
+              "selectors": [],
+              "sideWrites": "static",
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "a"
+              ],
+              "template": {
+                "op": "shared",
+                "template": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "b"
+              ],
+              "template": {
+                "op": "shared",
+                "template": 1
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:ee870eaa3772695dfead43e0a5ff90add1cc7b5e8b3a7a26a80de93c683484ee"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "name"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            }
+          ],
+          "stateCells": [
+            {
+              "name": {
+                "body": "first",
+                "site": 0
+              },
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": []
+            },
+            {
+              "name": {
+                "body": "second",
+                "site": 0
+              },
+              "schema": "unhashed:schema/2",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [
+            {
+              "by": {
+                "body": 0
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 0
+                }
+              ],
+              "op": "derive"
+            },
+            {
+              "by": {
+                "body": 1
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 0
+                }
+              ],
+              "op": "derive"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {}
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

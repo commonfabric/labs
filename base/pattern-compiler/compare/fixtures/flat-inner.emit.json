@@ -225,6 +225,7 @@
                     "binding",
                     "chosen"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -311,6 +312,7 @@
                     "binding",
                     "groups"
                   ],
+                  "handle": true,
                   "slot": 15
                 }
               ],

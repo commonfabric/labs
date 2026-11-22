@@ -1,0 +1,358 @@
+[
+  {
+    "module": "compare/fixtures/created-rows.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/created-rows.tsx",
+              "source": "const { \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\n\nconst rowsOf = lift(\n  ({ rows }) => {\n    const made = [];\n    for (const row of Array.from(rows)) {\n      const value = row.get();\n      if (value) {\n        made.push(\n          Writable.for(row).set({ title: value.title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  },\n);\nconst shout = lift(({ text }) => text.toUpperCase());\nconst $default = (pattern(\"sha256:ee4f23c1dbd47a5499cb7558a8b2bc43be6bd58b8262bf3143ab8986cc50e5a3\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => (({ rows }) => {\n    const made = [];\n    for (const row of Array.from(rows)) {\n      const value = row.get();\n      if (value) {\n        made.push(\n          Writable.for(row).set({ title: value.title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  })($a));\n$rt.body(1, ($a) => (({ text }) => text.toUpperCase())($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ rows: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ text: $h.slot(2) }))));\nreturn $rt.thunk(($h) => (({ rows: $h.output(0), noted: $h.output(1) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "cone": 1,
+              "function": true,
+              "output": 1
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 47,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [
+                {
+                  "identifiedBy": "cause",
+                  "kind": "createCell",
+                  "scope": "space"
+                }
+              ],
+              "computed": [],
+              "envelopes": [],
+              "handles": [
+                {
+                  "handle": {
+                    "slot": 1
+                  }
+                }
+              ],
+              "kind": "lift",
+              "name": "rowsOf",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "rows"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "rows",
+                    "*"
+                  ],
+                  "handle": true,
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "call": 0,
+                    "kind": "created",
+                    "path": []
+                  },
+                  "template": {
+                    "op": "shared",
+                    "template": 0
+                  }
+                }
+              ]
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "shout",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "text"
+                  ],
+                  "slot": 2
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/created-rows.tsx",
+                "start": 1135
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "rows",
+              "picks": [],
+              "selectors": [],
+              "sideWrites": "materializer",
+              "slots": [
+                0,
+                1
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/created-rows.tsx",
+                "start": 1171
+              },
+              "bodies": [
+                1
+              ],
+              "entry": "noted",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [
+            {
+              "why": {
+                "body": 0,
+                "handle": 0,
+                "kind": "handle"
+              }
+            }
+          ],
+          "edges": [],
+          "operations": [
+            {
+              "implementation": {
+                "body": 0
+              },
+              "input": {
+                "op": "shared",
+                "template": 0
+              },
+              "kind": "materializer",
+              "name": "rowsOf",
+              "within": []
+            }
+          ],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "rows"
+              ],
+              "template": {
+                "op": "shared",
+                "template": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "noted"
+              ],
+              "template": {
+                "by": {
+                  "body": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:ee4f23c1dbd47a5499cb7558a8b2bc43be6bd58b8262bf3143ab8986cc50e5a3"
+          ],
+          "picks": [],
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "items",
+                "*"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "other"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            }
+          ],
+          "stateCells": [],
+          "templates": [
+            {
+              "by": {
+                "body": 0
+              },
+              "inputs": [
+                {
+                  "op": "slot",
+                  "slot": 0
+                },
+                {
+                  "op": "slot",
+                  "slot": 1
+                },
+                {
+                  "op": "dynamic",
+                  "reads": 0
+                }
+              ],
+              "op": "derive"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "items": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "properties": {
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "other": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "items",
+                "other"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "properties": {
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

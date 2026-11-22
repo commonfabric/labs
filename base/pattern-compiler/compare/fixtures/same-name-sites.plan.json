@@ -47,6 +47,7 @@
                     "binding",
                     "count"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -372,7 +373,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/same-name-sites.tsx#Counter"
+            "sha256:07a52ecef16cb7bd014e2c7655fda95bc32eb10e59b0891e909c94cfec93823a"
           ],
           "picks": [],
           "selectors": [],
@@ -634,6 +635,7 @@
                     "binding",
                     "count"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -1670,8 +1672,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/same-name-sites.tsx#default",
-            "unhashed:pattern/compare/fixtures/same-name-sites.tsx#Counter"
+            "sha256:659a5164218a21ff4756776a1f549581a0ca73b259f90828744308f71144142c",
+            "sha256:07a52ecef16cb7bd014e2c7655fda95bc32eb10e59b0891e909c94cfec93823a"
           ],
           "picks": [],
           "selectors": [],

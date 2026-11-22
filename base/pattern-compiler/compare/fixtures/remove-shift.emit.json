@@ -146,6 +146,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],
@@ -201,6 +202,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 5
                 }
               ],
@@ -256,6 +258,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 7
                 }
               ],

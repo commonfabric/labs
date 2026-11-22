@@ -67,6 +67,7 @@
                     "binding",
                     "selected"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],

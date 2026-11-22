@@ -149,6 +149,29 @@ type Recorded = {
   interner: PlanInputsInterner;
 };
 
+/**
+ * What the transaction in progress recorded for the instances of one
+ * compiled pattern: the write records, the table of inputs they name, and
+ * what of the executor's table was converted into it.
+ */
+type Context = {
+  /** The identity the runtime registered the compiled pattern under. */
+  pattern: string;
+  recorded: Recorded;
+  /**
+   * The executor's table of inputs that the records name, and for each of
+   * its entries the index it was given in the runtime's table, with what
+   * that index was formed under: for a binding whether its position takes
+   * the label the transaction staged, and for a set of inputs the state of
+   * the transaction's reads and writes (`#stagedState`).
+   */
+  converted: {
+    table: InputsTable;
+    bindings: Map<number, { staged: boolean; index: number }>;
+    inputs: Map<number, { state: number; index: number }>;
+  } | undefined;
+};
+
 /** Keeps the documents of one executor in one space of a runtime. */
 export class RuntimeTransactions implements TransactionHooks {
   readonly #runtime: Runtime;
@@ -170,27 +193,28 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #readAfterWrite = new Set<string>();
   readonly #receipts: {
     receipt: TransactionCommitReceipt;
-    recorded: Recorded;
+    recorded: Recorded[];
     created: string[];
   }[] = [];
   /**
-   * The write records recorded in the transaction in progress, with the
-   * table of inputs they name.
+   * What the transaction in progress recorded, by compiled pattern: the
+   * write records of an instance name the records of its own plan, and
+   * their inputs in a table of that compiled pattern.
    */
-  #recorded: Recorded = { writes: [], interner: new PlanInputsInterner() };
+  readonly #contexts = new Map<string, Context>();
+  /** The entry of `#contexts` the record being converted belongs to. */
+  #context: Context = {
+    pattern: "",
+    recorded: { writes: [], interner: new PlanInputsInterner() },
+    converted: undefined,
+  };
   /**
-   * The executor's table of inputs that the records of the transaction in
-   * progress name, and for each of its entries the index it was given in
-   * the runtime's table, with what that index was formed under: for a
-   * binding whether its position takes the label the transaction staged,
-   * and for a set of inputs the state of the transaction's reads and
-   * writes (`#stagedState`).
+   * The identity of the compiled pattern of each instance the executor
+   * made of another artifact than the one it was started with.
    */
-  #converted: {
-    table: InputsTable;
-    bindings: Map<number, { staged: boolean; index: number }>;
-    inputs: Map<number, { state: number; index: number }>;
-  } | undefined;
+  readonly #patternOf = new Map<string, string>();
+  /** The identity each artifact was registered under. */
+  readonly #registered = new Map<Artifact, string>();
   /**
    * The number of changes of what decides whether a binding takes a staged
    * label, in the transaction in progress: its writes, and its reads of a
@@ -293,13 +317,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#compiledPattern = options.artifact === undefined ||
         !runtime.experimental.compiledPatterns || !runtime.servingPosture
       ? undefined
-      : runtime.compiledPlans.register(
-        // The plan as the crate emits it carries every member the
-        // runtime reads.
-        options.artifact.plan as unknown as CompiledPlan,
-        JSON.stringify(options.artifact.code),
-        runtimeWritePolicyAuthorization,
-      );
+      : this.#register(options.artifact);
     if (this.#compiledPattern !== undefined) {
       // A commit of the space, the executor's own or another's, can change
       // the labels of a document whose positions the executor grouped
@@ -337,6 +355,65 @@ export class RuntimeTransactions implements TransactionHooks {
     });
   }
 
+  /** Registers a compiled pattern with the runtime, once. */
+  #register(artifact: Artifact): string {
+    let identity = this.#registered.get(artifact);
+    if (identity === undefined) {
+      identity = this.#runtime.compiledPlans.register(
+        // The plan as the crate emits it carries every member the
+        // runtime reads.
+        artifact.plan as unknown as CompiledPlan,
+        JSON.stringify(artifact.code),
+        runtimeWritePolicyAuthorization,
+      );
+      this.#registered.set(artifact, identity);
+    }
+    return identity;
+  }
+
+  /** The write records recorded for the compiled pattern being converted. */
+  get #recorded(): Recorded {
+    return this.#context.recorded;
+  }
+
+  /** What was converted of the table the records of `#recorded` name. */
+  get #converted(): Context["converted"] {
+    return this.#context.converted;
+  }
+
+  set #converted(converted: Context["converted"]) {
+    this.#context.converted = converted;
+  }
+
+  /**
+   * Begins the records of a transaction, and makes those of the compiled
+   * pattern the executor was started with the ones being converted.
+   */
+  #resetRecorded(): void {
+    this.#contexts.clear();
+    this.#use(this.#compiledPattern ?? "");
+  }
+
+  /** Makes the records of `pattern` the ones being converted. */
+  #use(pattern: string): void {
+    let context = this.#contexts.get(pattern);
+    if (context === undefined) {
+      context = {
+        pattern,
+        recorded: { writes: [], interner: new PlanInputsInterner() },
+        converted: undefined,
+      };
+      this.#contexts.set(pattern, context);
+    }
+    this.#context = context;
+  }
+
+  /** @inheritDoc */
+  instantiated(instance: string, artifact: Artifact): void {
+    if (this.#compiledPattern === undefined) return;
+    this.#patternOf.set(instance, this.#register(artifact));
+  }
+
   /** What the transactions were given so far. */
   get counts(): Readonly<RuntimeCounts> {
     return { ...this.#counts, byCause: { ...this.#counts.byCause } };
@@ -366,17 +443,6 @@ export class RuntimeTransactions implements TransactionHooks {
     if (this.#subscription !== undefined) {
       this.#runtime.storageManager.unsubscribe?.(this.#subscription);
     }
-  }
-
-  /**
-   * The instances the executor made that run the plan of another artifact
-   * than the one this adapter registered with the runtime.
-   */
-  readonly #otherPlans = new Set<string>();
-
-  /** @inheritDoc */
-  instantiated(instance: string): void {
-    this.#otherPlans.add(instance);
   }
 
   /** @inheritDoc */
@@ -438,8 +504,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#readAfterWrite.clear();
     this.#written.clear();
     this.#metadata.clear();
-    this.#recorded = { writes: [], interner: new PlanInputsInterner() };
-    this.#converted = undefined;
+    this.#resetRecorded();
     this.#stagedState = 0;
     this.#created = [];
   }
@@ -765,15 +830,12 @@ export class RuntimeTransactions implements TransactionHooks {
         ...(alone ? { alone: true as const } : {}),
       }));
     const decidedOf = new Map<readonly Observed[], RuntimeObserved[]>();
-    const recorded: RuntimePlanWrite[] = [];
     for (const write of writes) {
-      // TODO(seefeld): Register the plan of each pattern the executor
-      // instantiates and record each write under the plan its instance
-      // runs. Until then a record of an instance that runs another plan
-      // than the registered one is not given: under the registered plan it
-      // would name another record, and its path takes the label of a write
-      // with no record, the join of what the transaction read.
-      if (this.#otherPlans.has(write.instance)) continue;
+      // The record names a record of the plan of the instance that made
+      // the write, and its inputs in the table of that compiled pattern.
+      const pattern = this.#patternOf.get(write.instance) ??
+        this.#compiledPattern;
+      this.#use(pattern);
       let decided = write.decided === undefined
         ? undefined
         : decidedOf.get(write.decided);
@@ -781,10 +843,13 @@ export class RuntimeTransactions implements TransactionHooks {
         decided = observed(write.decided);
         decidedOf.set(write.decided, decided);
       }
-      recorded.push({
+      // The records are recorded with the runtime when the transaction
+      // ends (`#recordWrites`), those that differ in their target alone as
+      // one.
+      this.#recorded.writes.push({
         inputs: this.#inputs(table, write.inputs),
         target: this.#cfcAddress(write.target),
-        compiledPattern: this.#compiledPattern,
+        compiledPattern: pattern,
         record: write.record,
         instance: write.instance,
         keys: write.keys,
@@ -807,9 +872,6 @@ export class RuntimeTransactions implements TransactionHooks {
         this.#noteUnchanged(write.target.doc);
       }
     }
-    // The records are recorded with the runtime when the transaction ends
-    // (`#recordWrites`), those that differ in their target alone as one.
-    for (const write of recorded) this.#recorded.writes.push(write);
   }
 
   /**
@@ -821,8 +883,6 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   #recordWrites(tx: IExtendedStorageTransaction): void {
     if (this.#compiledPattern === undefined) return;
-    const { writes, interner } = this.#recorded;
-    if (writes.length === 0) return;
     // The runtime's mark: this adapter stands in for the runner, which
     // records what its own code computed.
     const record = (
@@ -835,18 +895,53 @@ export class RuntimeTransactions implements TransactionHooks {
       }
       tx.recordCfcWritePolicyInput(input, runtimeWritePolicyAuthorization);
     };
-    const part = interner.take();
-    if (part !== undefined) {
-      record({
-        kind: "plan-inputs",
-        compiledPattern: this.#compiledPattern,
-        ...part,
-      });
+    for (const { pattern, recorded } of this.#contexts.values()) {
+      const { writes, interner } = recorded;
+      if (writes.length === 0) continue;
+      const part = interner.take();
+      if (part !== undefined) {
+        record({ kind: "plan-inputs", compiledPattern: pattern, ...part });
+      }
+      const merged = mergedPlanWrites(writes);
+      this.#counts.recordsGiven += writes.length;
+      this.#counts.recordsRecorded += merged.length;
+      for (const write of merged) record({ kind: "plan-write", ...write });
     }
-    const merged = mergedPlanWrites(writes);
-    this.#counts.recordsGiven += writes.length;
-    this.#counts.recordsRecorded += merged.length;
-    for (const write of merged) record({ kind: "plan-write", ...write });
+  }
+
+  /**
+   * The positions a body read through a handle as a write record lists
+   * them: one address for each group of positions whose stored labels have
+   * one identifier, for a read of the value and for the reference observed
+   * there, and the number of positions and of groups where that leaves a
+   * position out. The label of the reads is the join of the labels of the
+   * positions, so the positions of a group add to it what the listed one
+   * adds. A position with no identifier, such as one the transaction in
+   * progress wrote, is listed itself. The grouping follows ruling Z75 (c),
+   * which names the members of one container by one member of each group.
+   */
+  #groupedReads(addresses: readonly Address[]): {
+    listed: CfcAddress[];
+    groups?: { positions: number; groups: number };
+  } {
+    const seen = new Set<string>();
+    const listed: CfcAddress[] = [];
+    for (const address of addresses) {
+      const value = this.labelOf(address.doc, address.path, "value");
+      const reference = value === undefined
+        ? undefined
+        : this.labelOf(address.doc, address.path, "identity");
+      if (value !== undefined && reference !== undefined) {
+        const key = `${value}|${reference}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
+      listed.push(this.#cfcAddress(address));
+    }
+    return listed.length === addresses.length ? { listed } : {
+      listed,
+      groups: { positions: addresses.length, groups: listed.length },
+    };
   }
 
   /**
@@ -878,6 +973,14 @@ export class RuntimeTransactions implements TransactionHooks {
           count,
         })),
       };
+    // The reads through a handle, with one address for each group of
+    // positions that hold one label (`#groupedReads`).
+    const dynamic = place.dynamic === undefined
+      ? undefined
+      : entries(place.dynamic, (addresses) => this.#groupedReads(addresses));
+    const grouped = Object.entries(dynamic ?? {}).filter(([, { groups }]) =>
+      groups !== undefined
+    );
     const formed = interner.inputs({
       slots: this.#slots(table, place.slots),
       ...(place.selections === undefined
@@ -895,10 +998,12 @@ export class RuntimeTransactions implements TransactionHooks {
       ...(place.elements === undefined
         ? {}
         : { elements: entries(place.elements, elements) }),
-      ...(place.dynamic === undefined ? {} : {
-        dynamic: entries(
-          place.dynamic,
-          (addresses) => addresses.map((address) => this.#cfcAddress(address)),
+      ...(dynamic === undefined ? {} : {
+        dynamic: entries(dynamic, ({ listed }) => listed),
+      }),
+      ...(grouped.length === 0 ? {} : {
+        dynamicGroups: Object.fromEntries(
+          grouped.map(([read, { groups }]) => [read, groups!]),
         ),
       }),
       ...(place.outputs === undefined ? {} : {
@@ -1043,13 +1148,12 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     this.#receipts.push({
       receipt: tx.commit(),
-      recorded: this.#recorded,
+      recorded: [...this.#contexts.values()].map(({ recorded }) => recorded),
       // A document forgotten here may be written again by a later
       // transaction before this one settles.
       created: refused ? [] : this.#created,
     });
-    this.#recorded = { writes: [], interner: new PlanInputsInterner() };
-    this.#converted = undefined;
+    this.#resetRecorded();
     this.#created = [];
     this.#reportLabels();
     if (refused) this.#unchanged.clear();
@@ -1069,13 +1173,12 @@ export class RuntimeTransactions implements TransactionHooks {
       const { error } = await receipt.settled;
       if (error === undefined) {
         if (this.#onCommitted !== undefined) {
-          const expanded = new Map<number, NestedPlanInputs>();
-          const { table } = recorded.interner;
-          this.#onCommitted(
-            recorded.writes.map((write) =>
-              nestedPlanWrite(write, table, expanded)
-            ),
-          );
+          this.#onCommitted(recorded.flatMap(({ writes, interner }) => {
+            const expanded = new Map<number, NestedPlanInputs>();
+            return writes.map((write) =>
+              nestedPlanWrite(write, interner.table, expanded)
+            );
+          }));
         }
         continue;
       }

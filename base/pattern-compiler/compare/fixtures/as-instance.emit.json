@@ -79,6 +79,7 @@
                     "binding",
                     "noted"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],
@@ -374,6 +375,7 @@
                     "binding",
                     "noted"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],
@@ -702,6 +704,7 @@
                     "binding",
                     "noted"
                   ],
+                  "handle": true,
                   "slot": 11
                 }
               ],

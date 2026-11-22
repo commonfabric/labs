@@ -849,9 +849,9 @@ describe("stored-labels", () => {
 
   // `fixtures/instantiate.tsx`: a handler instantiates the pattern `Row`,
   // whose plan is another than that of the pattern the executor starts
-  // with. The adapter registers one plan with the runtime.
+  // with. The adapter registers the plan of each with the runtime.
   describe("inStorage() over a pattern whose handler instantiates another pattern", () => {
-    it("gives the runtime no write record of an instance that runs the other pattern's plan", async () => {
+    it("gives the runtime the write records of each instance under the compiled pattern whose plan the instance runs", async () => {
       const [scenario] = await fixtureScenarios("instantiate");
       const space = (await Identity.fromPassphrase("pattern-compiler-compare"))
         .did();
@@ -860,7 +860,8 @@ describe("stored-labels", () => {
         space,
         scenario.artifacts,
       );
-      const instances = new Set<string>();
+      // The compiled patterns the records of each instance name.
+      const patterns = new Map<string, Set<string>>();
       const refused: string[] = [];
       await inStorage(
         scenario.artifact,
@@ -877,7 +878,12 @@ describe("stored-labels", () => {
         true,
         {
           committed: (_runtime, _hooks, writes) => {
-            for (const { instance } of writes) instances.add(instance);
+            for (const { instance, compiledPattern } of writes) {
+              patterns.set(
+                instance,
+                (patterns.get(instance) ?? new Set()).add(compiledPattern),
+              );
+            }
           },
           refused: (reasons) => {
             for (const reason of reasons) refused.push(reason);
@@ -886,7 +892,12 @@ describe("stored-labels", () => {
       );
 
       expect(refused).toEqual([]);
-      expect(instances.size).toBe(1);
+      // The starting instance and the rows the handler made: each names one
+      // compiled pattern, and the rows name another than the starting one.
+      expect(patterns.size).toBeGreaterThan(1);
+      const [starting, ...rows] = [...patterns.values()];
+      for (const named of patterns.values()) expect(named.size).toBe(1);
+      for (const row of rows) expect([...row]).not.toEqual([...starting]);
     });
   });
 

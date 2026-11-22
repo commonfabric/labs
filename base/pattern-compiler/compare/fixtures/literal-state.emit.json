@@ -126,6 +126,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -133,6 +134,7 @@
                     "binding",
                     "logs"
                   ],
+                  "handle": true,
                   "slot": 3
                 }
               ],

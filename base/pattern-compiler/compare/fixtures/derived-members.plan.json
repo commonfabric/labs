@@ -214,6 +214,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 20
                 },
                 {
@@ -221,6 +222,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 21
                 }
               ],
@@ -271,6 +273,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 24
                 },
                 {
@@ -285,6 +288,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 26
                 }
               ],
@@ -335,6 +339,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 28
                 },
                 {
@@ -349,6 +354,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 30
                 }
               ],
@@ -410,6 +416,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 32
                 },
                 {
@@ -424,6 +431,7 @@
                     "binding",
                     "words"
                   ],
+                  "handle": true,
                   "slot": 34
                 }
               ],

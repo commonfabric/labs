@@ -70,6 +70,7 @@
                     "binding",
                     "mine"
                   ],
+                  "handle": true,
                   "slot": 0
                 }
               ],
@@ -112,6 +113,7 @@
                     "binding",
                     "sealed"
                   ],
+                  "handle": true,
                   "slot": 2
                 }
               ],

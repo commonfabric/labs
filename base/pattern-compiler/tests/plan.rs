@@ -4875,6 +4875,35 @@ fn the_plan_of_a_pattern_called_at_two_sites_per_level_is_linear_in_the_depth() 
     }
 }
 
+/// What a body returns is read in the module the body is written in. The
+/// body of `capped` returns a name of its own module, whose reference
+/// stands after every reference of the module that calls it.
+#[test]
+fn what_an_expression_body_of_another_module_returns_is_resolved_in_that_module() {
+    let mut helper =
+        String::from("import { lift } from \"commonfabric\";\nexport const LIMIT = 3;\n");
+    for index in 0..60 {
+        helper.push_str(&format!("export const copy{index} = LIMIT + LIMIT;\n"));
+    }
+    helper.push_str("export const capped = lift((n: number) => n > 0 ? LIMIT : 0);\n");
+    let analysis = analyze(&[
+        SourceFile {
+            path: "helper.ts".to_string(),
+            text: helper,
+        },
+        SourceFile {
+            path: "outer.tsx".to_string(),
+            text: r#"import { pattern } from "commonfabric";
+import { capped } from "./helper.ts";
+export const Outer = pattern<{ n: number }>(({ n }) => ({ m: capped(n) }));
+"#
+            .to_string(),
+        },
+    ]);
+    let plan = plan_of(&analysis, "Outer");
+    assert_eq!(plan["bodies"][0]["kind"], "lift");
+}
+
 #[test]
 fn what_a_statement_body_returns_is_its_value() {
     // The value code of a `computed` with a statement body reads what it

@@ -3933,12 +3933,21 @@ const valueWriteTargets = (
     ? planWritesByTarget(tx)
     : undefined;
   for (const [key, inputs] of planWrites ?? []) {
+    // The paths the document's target holds, for the question whether one
+    // of them is at or above a record's path: one record of a document
+    // with many such records would otherwise be compared with every path.
+    let written: PathPrefixIndex | undefined;
     for (const input of inputs) {
       // The record of a container's membership labels no value at its path.
       if (input.unchanged !== true || input.enumeration === true) continue;
       const path = canonicalizeLogicalPath(input.target.path);
       const existing = result.get(key);
-      if (existing?.paths.some((written) => isPrefix(written, path))) continue;
+      if (existing !== undefined && written === undefined) {
+        written = new PathPrefixIndex();
+        for (const held of existing.paths) written.add(held);
+      }
+      if (written?.hasPrefixOf(path)) continue;
+      (written ??= new PathPrefixIndex()).add(path);
       const target = {
         space: input.target.space,
         scope: normalizeCellScope(input.target.scope),
@@ -14294,8 +14303,33 @@ export function* prepareBoundaryCommitSteps(
       return path.length > 0 || current !== undefined;
     };
     const recreatedExistencePaths: (readonly string[])[] = [];
+    // The written paths at or above an entry's path. A document with many
+    // written paths, as one whose labels a compiled pattern forms again at
+    // every row, would otherwise compare each entry with each of them: the
+    // written paths with no wildcard are then found by the prefixes of the
+    // entry's path, where that has none either.
+    const manyWritten = flowWrittenPaths.length > 16;
+    const writtenByKey = new Map<string, readonly string[]>();
+    const writtenWithWildcard: (readonly string[])[] = [];
+    if (manyWritten) {
+      for (const written of flowWrittenPaths) {
+        if (written.includes("*")) writtenWithWildcard.push(written);
+        else writtenByKey.set(pathKey(written), written);
+      }
+    }
+    const writtenAtOrAbove = (
+      entryPath: readonly string[],
+    ): readonly (readonly string[])[] => {
+      if (!manyWritten || entryPath.includes("*")) return flowWrittenPaths;
+      const found = [...writtenWithWildcard];
+      for (let length = 0; length <= entryPath.length; length++) {
+        const written = writtenByKey.get(pathKey(entryPath.slice(0, length)));
+        if (written !== undefined) found.push(written);
+      }
+      return found;
+    };
     const recreatedAt = (entryPath: readonly string[]): boolean =>
-      flowWrittenPaths.some((written) => {
+      writtenAtOrAbove(entryPath).some((written) => {
         if (!isPrefix(written, entryPath)) {
           return false;
         }
@@ -14714,6 +14748,41 @@ export function* prepareBoundaryCommitSteps(
       const derivedStampPaths: (readonly string[])[] = [];
       const structureStampPaths: (readonly string[])[] = [];
       const seenStructurePaths = new Set<string>();
+      // The paths a compiled pattern's writes cover at or below a written
+      // path, in the order the plan labels hold them. A document with many
+      // covered paths, as one whose labels are formed again at every row,
+      // would otherwise compare each written path with each of them: the
+      // covered paths with no wildcard are then found by their prefixes.
+      const coveredPaths = planLabels.paths.get(key) ?? [];
+      let coveredBelow: Map<string, number[]> | undefined;
+      const coveredWithWildcard: number[] = [];
+      const coveredAtOrBelow = (
+        path: readonly string[],
+      ): readonly (readonly string[])[] => {
+        if (coveredPaths.length <= 16 || path.includes("*")) {
+          return coveredPaths;
+        }
+        if (coveredBelow === undefined) {
+          coveredBelow = new Map();
+          coveredPaths.forEach((covered, index) => {
+            if (covered.includes("*")) {
+              coveredWithWildcard.push(index);
+              return;
+            }
+            for (let length = 0; length <= covered.length; length++) {
+              const prefix = pathKey(covered.slice(0, length));
+              const held = coveredBelow!.get(prefix);
+              if (held === undefined) coveredBelow!.set(prefix, [index]);
+              else held.push(index);
+            }
+          });
+        }
+        const below = coveredBelow.get(pathKey(path)) ?? [];
+        const found = coveredWithWildcard.length === 0
+          ? below
+          : [...below, ...coveredWithWildcard].sort((a, b) => a - b);
+        return found.map((index) => coveredPaths[index]);
+      };
       // The paths a compiled pattern's write covers at which this
       // transaction wrote a link (`linkLabelPaths` below).
       const linkLabelPaths: (readonly string[])[] = [];
@@ -14770,7 +14839,7 @@ export function* prepareBoundaryCommitSteps(
           // The elements of an array of links whose labels are all one
           // store one entry at the array's `*` path
           // (`collapseEqualElements`).
-          const coveredHere = (planLabels.paths.get(key) ?? []).filter((
+          const coveredHere = coveredAtOrBelow(path).filter((
             covered,
           ) =>
             isPrefix(path, covered) &&
@@ -15086,25 +15155,50 @@ export function* prepareBoundaryCommitSteps(
       // position's own entries (§4.6.3, "Wildcard per-class entries"). An
       // addition at the end leaves them as they are. Behind
       // `compiledPatterns`, which defaults off.
-      for (const path of planLabels.membersChanged.get(key) ?? []) {
+      //
+      // A container held within a member of another such container is
+      // reached through a position of the outer one too, so its templates
+      // hold the outer container's templates of the same class as well: a
+      // more specific template replaces a less specific one within the
+      // structure component, and the read of a position of the inner
+      // container depends on both decisions. The outer containers come
+      // first.
+      const changedMembers = [...(planLabels.membersChanged.get(key) ?? [])]
+        .sort((a, b) => a.length - b.length);
+      for (const path of changedMembers) {
         const star = pathKey([...path, "*"]);
         let kept = 0;
+        const outer = new Map<string, CfcConfClause[]>();
         for (const candidateEntry of persistedLabelEntries) {
-          if (
-            candidateEntry.origin === "structure" &&
+          const candidatePath = candidateEntry.path;
+          const template = candidateEntry.origin === "structure" &&
             candidateEntry.observes !== undefined &&
             candidateEntry.observes !== "enumerate" &&
-            pathKey(candidateEntry.path) === star
-          ) continue;
+            candidatePath[candidatePath.length - 1] === "*";
+          if (template && pathKey(candidatePath) === star) continue;
+          if (
+            template && candidatePath.length <= path.length &&
+            isPrefix(candidatePath, path)
+          ) {
+            const held = outer.get(candidateEntry.observes!) ?? [];
+            for (const atom of candidateEntry.label.confidentiality ?? []) {
+              held.push(atom as CfcConfClause);
+            }
+            outer.set(candidateEntry.observes!, held);
+          }
           persistedLabelEntries[kept++] = candidateEntry;
         }
         persistedLabelEntries.length = kept;
         const confidentiality = flowLabelAt(key, path).confidentiality;
-        if (confidentiality.length === 0) continue;
         for (const observes of ["shape", "value", "followRef"] as const) {
+          const joined = uniqueCfcAtoms([
+            ...confidentiality,
+            ...(outer.get(observes) ?? []),
+          ]);
+          if (joined.length === 0) continue;
           persistedLabelEntries.push(markFlowStampEntry({
             path: [...path, "*"],
-            label: { confidentiality: [...confidentiality] },
+            label: { confidentiality: joined },
             origin: "structure",
             observes,
           }));

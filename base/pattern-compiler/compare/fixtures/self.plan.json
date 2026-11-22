@@ -137,6 +137,7 @@
                     "binding",
                     "kept"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {
@@ -144,6 +145,7 @@
                     "binding",
                     "self"
                   ],
+                  "handle": true,
                   "slot": 2
                 }
               ],

@@ -117,6 +117,7 @@ pub fn api_value(name: &str) -> ApiValue {
         | "spaceMembers"
         | "spaceDeleted"
         | "equals"
+        | "equalsKey"
         | "getPatternEnvironment" => ContextRead,
         "Cell" | "Writable" | "OpaqueCell" | "Stream" | "ComparableCell" | "ReadonlyCell"
         | "WriteonlyCell" => CellConstructor,

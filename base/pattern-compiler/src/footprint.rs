@@ -101,6 +101,9 @@ pub struct Record {
     pub envelopes: Vec<String>,
     /// The same record as data, for the plan.
     pub detail: Detail,
+    /// How many times the analysis evaluated the text of a function for
+    /// this body, the body's own text included.
+    pub evaluations: usize,
 }
 
 /// One entry of a footprint: a path of a formal input and a class.
@@ -259,6 +262,10 @@ pub struct Detail {
     /// The positions whose type is a handle type or a reference type: a
     /// `shape` entry there is made in place (PL §1.1, `Slot.inPlace`).
     pub by_reference: Vec<(String, Vec<Seg>)>,
+    /// The positions whose type is a handle type, or that the body reads
+    /// or writes through as a handle (`ReadInput.handle`, provisional
+    /// decision P40).
+    pub handles_at: Vec<(String, Vec<Seg>)>,
     /// The sites of the writes with a static target through a handle.
     pub side_writes: Vec<SideWrite>,
     /// `Body.outputs`: the result path, whether the reference is `passes`,
@@ -708,6 +715,108 @@ impl Val {
     fn has_projection(&self) -> bool {
         !self.projections().is_empty()
     }
+
+    /// The number of nodes of the value, counting a value the body built
+    /// once however often it is shared, and no more than `limit`.
+    fn size(&self, limit: usize) -> usize {
+        fn count(
+            val: &Val,
+            seen: &mut BTreeSet<*const RefCell<Built>>,
+            total: &mut usize,
+            limit: usize,
+        ) {
+            if *total >= limit {
+                return;
+            }
+            *total += 1;
+            match val {
+                Val::Alts(members) => {
+                    for member in members {
+                        count(member, seen, total, limit);
+                    }
+                }
+                Val::Built(built) => {
+                    if !seen.insert(Rc::as_ptr(built)) {
+                        return;
+                    }
+                    for member in built.borrow().members() {
+                        count(&member, seen, total, limit);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut total = 0;
+        count(self, &mut BTreeSet::new(), &mut total, limit);
+        total
+    }
+
+    /// The projections the value holds, as one of its alternatives or as
+    /// a member of a value the body built, each once.
+    fn held_projections(&self) -> Vec<Proj> {
+        fn gather(val: &Val, seen: &mut BTreeSet<*const RefCell<Built>>, found: &mut Vec<Proj>) {
+            match val {
+                Val::Proj(proj) => {
+                    if !found.contains(proj) {
+                        found.push(proj.clone());
+                    }
+                }
+                Val::Alts(members) => {
+                    for member in members {
+                        gather(member, seen, found);
+                    }
+                }
+                Val::Built(built) => {
+                    if seen.insert(Rc::as_ptr(built)) {
+                        for member in built.borrow().members() {
+                            gather(&member, seen, found);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        gather(self, &mut BTreeSet::new(), &mut found);
+        found
+    }
+
+    /// The value with each value the body built replaced by its entry of
+    /// `copies`, or by a copy of its own that is entered there, as a second
+    /// evaluation that builds them again gives it. Two places that share a
+    /// built value share its copy.
+    fn fresh(&self, copies: &mut Copies) -> Val {
+        match self {
+            Val::Built(built) => {
+                if let Some(copy) = copies.get(&Rc::as_ptr(built)) {
+                    return Val::Built(copy.clone());
+                }
+                let copy = Rc::new(RefCell::new(Built::default()));
+                copies.insert(Rc::as_ptr(built), copy.clone());
+                let (fields, bag, spreads) = {
+                    let built = built.borrow();
+                    (
+                        built.fields.clone(),
+                        built.bag.clone(),
+                        built.spreads.clone(),
+                    )
+                };
+                *copy.borrow_mut() = Built {
+                    fields: fields
+                        .into_iter()
+                        .map(|(name, member)| (name, member.fresh(copies)))
+                        .collect(),
+                    bag: bag.iter().map(|member| member.fresh(copies)).collect(),
+                    spreads: spreads.iter().map(|member| member.fresh(copies)).collect(),
+                };
+                Val::Built(copy)
+            }
+            Val::Alts(members) => {
+                Val::Alts(members.iter().map(|member| member.fresh(copies)).collect())
+            }
+            other => other.clone(),
+        }
+    }
 }
 
 /// What the static type of an expression says about a position (FA,
@@ -743,6 +852,8 @@ struct Store {
     tested: BTreeSet<PathKey>,
     /// The positions whose type is a handle type or a reference type.
     by_reference: BTreeSet<PathKey>,
+    /// The positions of handle type.
+    handles_at: BTreeSet<PathKey>,
     static_reads: BTreeSet<(usize, u32)>,
     dynamic_reads: BTreeMap<(usize, u32), String>,
     writes: BTreeSet<String>,
@@ -825,6 +936,155 @@ const WRITERS: [&str; 12] = [
 /// The deepest nesting of calls the analysis follows.
 const MAX_INLINE: usize = 8;
 
+/// The most nodes a value a function returns holds (`Val::size`).
+const MAX_VALUE: usize = 512;
+
+/// What an evaluation of a function depended on besides its arguments: the
+/// functions being evaluated around it, through the recursion guard, and
+/// how deep it was nested, through the bound on nesting.
+#[derive(Default)]
+struct Trace {
+    /// The length of `Analyzer::active` at the call.
+    depth: usize,
+    /// The functions the evaluation entered, its own included.
+    entered: BTreeSet<(usize, u32)>,
+    /// The functions being evaluated around the call at which the
+    /// recursion guard cut the evaluation off.
+    guarded: BTreeSet<(usize, u32)>,
+    /// The greatest length of `Analyzer::active` at a call inside the
+    /// evaluation.
+    deepest: usize,
+    /// Whether the bound on nesting cut the evaluation off.
+    limited: bool,
+}
+
+impl Trace {
+    /// Whether an evaluation with `active` around it would enter, and be
+    /// cut off at, the same functions.
+    fn applies(&self, active: &[(usize, u32)]) -> bool {
+        let depth = active.len();
+        let nested = if self.limited {
+            depth == self.depth
+        } else {
+            self.deepest - self.depth + depth < MAX_INLINE
+        };
+        nested
+            && self
+                .entered
+                .iter()
+                .all(|function| !active.contains(function))
+            && self
+                .guarded
+                .iter()
+                .all(|function| active.contains(function))
+    }
+}
+
+/// The result of a function evaluated once, applied at each later call of
+/// it with the same arguments in the same context (FA §3.6: a summary is
+/// computed once per function and applied at each call). Kept for a
+/// function written at module scope, whose text reads nothing of the frames
+/// around the call.
+struct Summary {
+    /// Copies of the arguments of the evaluation, which the copy of its
+    /// result shares the values the body built with.
+    arguments: Vec<Val>,
+    result: Val,
+    trace: Trace,
+}
+
+/// A call as a summary is looked up by: the function, the arguments as
+/// `fingerprint` writes them, and whether the call is under a condition.
+/// The call in the body's own text that a site is reached from is the
+/// first one (`Analyzer::reached`), so a later call from another one adds
+/// nothing to it.
+type SummaryKey = (usize, u32, String, bool);
+
+/// The copies `Val::fresh` has made, by the value each copies.
+type Copies = HashMap<*const RefCell<Built>, Rc<RefCell<Built>>>;
+
+/// The text of `values` that two lists of values have in common exactly
+/// when one evaluation cannot tell them apart: the same projections,
+/// functions, and sites at the same places, and the values the body built
+/// with the same members and shared at the same places.
+fn fingerprint(values: &[Val]) -> String {
+    fn write(val: &Val, seen: &mut HashMap<*const RefCell<Built>, usize>, out: &mut String) {
+        match val {
+            Val::Built(built) => {
+                if let Some(index) = seen.get(&Rc::as_ptr(built)) {
+                    out.push_str(&format!("#{index}"));
+                    return;
+                }
+                seen.insert(Rc::as_ptr(built), seen.len());
+                let built = built.borrow();
+                out.push('{');
+                for (name, member) in &built.fields {
+                    out.push_str(&format!("{name:?}:"));
+                    write(member, seen, out);
+                    out.push(',');
+                }
+                out.push('[');
+                for member in &built.bag {
+                    write(member, seen, out);
+                    out.push(',');
+                }
+                out.push_str("](");
+                for member in &built.spreads {
+                    write(member, seen, out);
+                    out.push(',');
+                }
+                out.push_str(")}");
+            }
+            Val::Alts(members) => {
+                out.push('<');
+                for member in members {
+                    write(member, seen, out);
+                    out.push(',');
+                }
+                out.push('>');
+            }
+            other => out.push_str(&format!("{other:?}")),
+        }
+    }
+    let mut seen = HashMap::new();
+    let mut out = String::new();
+    for val in values {
+        write(val, &mut seen, &mut out);
+        out.push(';');
+    }
+    out
+}
+
+/// Maps each value the body built in `copy` to the one at the same place
+/// in `current`, which `fingerprint` writes the same.
+fn pair(copy: &Val, current: &Val, copies: &mut Copies) {
+    match (copy, current) {
+        (Val::Built(copy), Val::Built(current)) => {
+            if copies.insert(Rc::as_ptr(copy), current.clone()).is_some() {
+                return;
+            }
+            let (copy, current) = (copy.borrow(), current.borrow());
+            for (name, member) in &copy.fields {
+                if let Some(other) = current.fields.get(name) {
+                    pair(member, other, copies);
+                }
+            }
+            for (member, other) in copy.bag.iter().zip(&current.bag) {
+                pair(member, other, copies);
+            }
+            for (member, other) in copy.spreads.iter().zip(&current.spreads) {
+                pair(member, other, copies);
+            }
+        }
+        (Val::Alts(copy), Val::Alts(current)) => {
+            for (member, other) in copy.iter().zip(current) {
+                pair(member, other, copies);
+            }
+        }
+        _ => {}
+    }
+}
+
 type BoundState = ((usize, u32), bool, Vec<(Vec<Seg>, bool, Val)>);
 
 struct Analyzer<'r, 'm, 'a> {
@@ -862,6 +1122,14 @@ struct Analyzer<'r, 'm, 'a> {
     /// A site outside the body's text, and the call in the body's text
     /// whose evaluation reached it.
     reached: RefCell<BTreeMap<(usize, u32), u32>>,
+    /// How many times the text of a function was evaluated.
+    evaluations: usize,
+    /// The summaries of the functions evaluated so far.
+    summaries: HashMap<SummaryKey, Vec<Summary>>,
+    /// The evaluations under way that can become a summary, innermost last.
+    traces: Vec<Trace>,
+    /// Whether each function is written at module scope.
+    module_scope: HashMap<(usize, u32), bool>,
     /// The start of the expression being evaluated, the site of a widening
     /// that the extension of a path decides (`square_end`).
     site: u32,
@@ -1149,6 +1417,9 @@ impl<'a> Analyzer<'_, '_, 'a> {
             for proj in val.projections() {
                 if !proj.made {
                     self.store.by_reference.insert(proj.key());
+                    if kinds.handle {
+                        self.store.handles_at.insert(proj.key());
+                    }
                 }
             }
         }
@@ -1293,6 +1564,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     _ => Class::Identity,
                 };
                 self.store.by_reference.insert(position.key());
+                self.store.handles_at.insert(position.key());
                 self.observe(&Val::Proj(position), class);
                 crossed = true;
             }
@@ -1307,6 +1579,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 _ => Class::Identity,
             };
             self.store.by_reference.insert(position.key());
+            self.store.handles_at.insert(position.key());
             self.observe(&Val::Proj(position), class);
         }
     }
@@ -1517,9 +1790,12 @@ impl<'a> Analyzer<'_, '_, 'a> {
         let Some(symbol) = symbol_of(scoping, identifier) else {
             return Val::Computed;
         };
+        // A closure that a function of another module calls reads the
+        // frames of its own module below that function's (FA §3.6,
+        // "Closures").
         for frame in self.frames.iter().rev() {
             if frame.module != module {
-                break;
+                continue;
             }
             if let Some(val) = frame.env.get(&symbol) {
                 return val.clone();
@@ -1536,13 +1812,12 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 None => Val::Computed,
             };
         }
-        // A value the body captures is a formal input (FA, "Notation").
+        // A value the body captures is a formal input (FA, "Notation"): a
+        // name written in the body's text that is declared outside it.
         let declared = scoping.symbol_span(symbol);
         let (root_module, (from, to)) = self.root;
-        let in_body = self
-            .frames
-            .iter()
-            .all(|frame| frame.module == root_module && from <= frame.span.0 && frame.span.1 <= to);
+        let in_body =
+            module == root_module && from <= identifier.span.start && identifier.span.end <= to;
         if in_body && !(from <= declared.start && declared.end <= to) {
             if let AstKind::Function(function) = parsed
                 .semantic
@@ -1785,7 +2060,21 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 closure.2 = true;
             }
         }
-        if self.active.contains(&(module, start)) || self.active.len() >= MAX_INLINE {
+        let depth = self.active.len();
+        let guard = self
+            .active
+            .iter()
+            .position(|active| *active == (module, start));
+        for trace in &mut self.traces {
+            trace.deepest = trace.deepest.max(depth);
+        }
+        if guard.is_some() || depth >= MAX_INLINE {
+            for trace in &mut self.traces {
+                trace.limited |= depth >= MAX_INLINE;
+                if guard.is_some_and(|at| at < trace.depth) {
+                    trace.guarded.insert((module, start));
+                }
+            }
             // A function that is being evaluated, or a call nested deeper
             // than the bound: an analysis limit (FA §5.2, W7). Each
             // argument that is a projection is read in full.
@@ -1796,6 +2085,42 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 }
             }
             return Val::Computed;
+        }
+        let key = self.at_module_scope(module, start).then(|| {
+            (
+                module,
+                start,
+                fingerprint(&arguments),
+                conditional || self.cond > 0,
+            )
+        });
+        if let Some(found) = key.as_ref().and_then(|key| self.summary(key, &arguments)) {
+            return found;
+        }
+
+        // The arguments as they are before the evaluation, and the values
+        // themselves, held until the result is copied, so that no value the
+        // evaluation builds takes the place of one of them.
+        let mut copies = Copies::new();
+        let before = key.as_ref().map(|_| {
+            let copied: Vec<Val> = arguments
+                .iter()
+                .map(|argument| argument.fresh(&mut copies))
+                .collect();
+            (copied, arguments.clone())
+        });
+        self.evaluations += 1;
+        for trace in &mut self.traces {
+            trace.entered.insert((module, start));
+        }
+        let effects = self.effect_counts();
+        if key.is_some() {
+            self.traces.push(Trace {
+                depth,
+                entered: BTreeSet::from([(module, start)]),
+                deepest: depth,
+                ..Trace::default()
+            });
         }
         let span = function.span();
         // A function written in the function being evaluated shares its
@@ -1839,7 +2164,99 @@ impl<'a> Analyzer<'_, '_, 'a> {
             self.frames.pop();
         }
         self.active.pop();
-        Val::alts(results)
+        let mut result = Val::alts(results);
+        if result.size(MAX_VALUE + 1) > MAX_VALUE {
+            // A value of more nodes than the bound: an analysis limit (FA
+            // §3.7, W7). Each projection it holds is read in full.
+            for proj in result.held_projections() {
+                self.observe(&Val::Proj(proj), Class::Value);
+            }
+            self.widen("W7", start);
+            result = Val::Computed;
+        }
+        if let (Some(key), Some((copied, held))) = (key, before) {
+            let trace = self.traces.pop().unwrap_or_default();
+            // An evaluation that added to a list of the store, or changed
+            // a value it was given, is evaluated again at each call, so
+            // that what each call does is done.
+            if self.effect_counts() == effects && fingerprint(&held) == key.2 {
+                let summary = Summary {
+                    arguments: copied,
+                    result: result.fresh(&mut copies),
+                    trace,
+                };
+                self.summaries.entry(key).or_default().push(summary);
+            }
+        }
+        result
+    }
+
+    /// The result of the summary for `key` that applies where the analysis
+    /// is, for a call with `arguments`, with what its evaluation depended
+    /// on added to the evaluations under way.
+    fn summary(&mut self, key: &SummaryKey, arguments: &[Val]) -> Option<Val> {
+        let found = self
+            .summaries
+            .get(key)?
+            .iter()
+            .find(|summary| summary.trace.applies(&self.active))?;
+        // What the result shares with the arguments it shares with these.
+        let mut copies = Copies::new();
+        for (copy, current) in found.arguments.iter().zip(arguments) {
+            pair(copy, current, &mut copies);
+        }
+        let result = found.result.fresh(&mut copies);
+        let trace = &found.trace;
+        let deepest = trace.deepest - trace.depth + self.active.len();
+        for open in &mut self.traces {
+            open.entered.extend(trace.entered.iter().copied());
+            for function in &trace.guarded {
+                if self
+                    .active
+                    .iter()
+                    .position(|active| active == function)
+                    .is_some_and(|at| at < open.depth)
+                {
+                    open.guarded.insert(*function);
+                }
+            }
+            open.deepest = open.deepest.max(deepest);
+            open.limited |= trace.limited;
+        }
+        Some(result)
+    }
+
+    /// The lengths of the lists of the store that an evaluation can add
+    /// to, and of the bindings.
+    fn effect_counts(&self) -> [usize; 6] {
+        [
+            self.store.pending.len(),
+            self.store.write_targets.len(),
+            self.store.outputs.len(),
+            self.store.output_refs.len(),
+            self.store.binds.len(),
+            self.bind_out.len(),
+        ]
+    }
+
+    /// Whether the function at `start` of `module` is written at module
+    /// scope, inside no other function.
+    fn at_module_scope(&mut self, module: usize, start: u32) -> bool {
+        if let Some(known) = self.module_scope.get(&(module, start)) {
+            return *known;
+        }
+        let Some(function) = self.function_at(module, start) else {
+            return false;
+        };
+        let span = function.span();
+        let inside = self.functions.get(&module).is_some_and(|functions| {
+            functions.values().any(|other| {
+                let other = other.span();
+                other != span && other.start <= span.start && span.end <= other.end
+            })
+        });
+        self.module_scope.insert((module, start), !inside);
+        !inside
     }
 
     /// Calls what `callee` is with `arguments`. A callee the analysis
@@ -2904,8 +3321,10 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     .insert(Class::Value);
                 Val::Computed
             }
-            // Each operand is resolved, and decided on its own.
-            "equals" => {
+            // Each operand is resolved, and decided on its own. `equalsKey`
+            // is what `equals` compares of its operand (provisional
+            // decision P41).
+            "equals" | "equalsKey" => {
                 for argument in arguments {
                     let val = self.eval(argument);
                     self.resolution(&val, true);
@@ -3940,6 +4359,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 .collect(),
             label_metadata: store.label_metadata,
             by_reference: store.by_reference.iter().cloned().collect(),
+            handles_at: store.handles_at.iter().cloned().collect(),
             side_writes,
             outputs: store.output_refs.clone(),
             binds: store
@@ -4406,6 +4826,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 .map(WriteRec::to_string)
                 .collect(),
             detail,
+            evaluations: self.evaluations,
             calls: store.calls.values().cloned().collect(),
             other_dynamic,
             outputs: store.outputs.clone(),
@@ -4815,6 +5236,10 @@ fn analyze_body<'a>(
         bind_path: Vec::new(),
         bind_out: Vec::new(),
         reached: RefCell::new(BTreeMap::new()),
+        evaluations: 0,
+        summaries: HashMap::new(),
+        traces: Vec::new(),
+        module_scope: HashMap::new(),
         site: start,
     };
     let function = analyzer.function_at(module, start)?;

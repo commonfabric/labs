@@ -100,6 +100,7 @@
                   "at": [
                     "a"
                   ],
+                  "handle": true,
                   "slot": 0
                 },
                 {
@@ -112,6 +113,7 @@
                   "at": [
                     "b"
                   ],
+                  "handle": true,
                   "slot": 2
                 }
               ],
@@ -161,12 +163,14 @@
                   "at": [
                     "a"
                   ],
+                  "handle": true,
                   "slot": 0
                 },
                 {
                   "at": [
                     "b"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -222,12 +226,14 @@
                   "at": [
                     "capped"
                   ],
+                  "handle": true,
                   "slot": 4
                 },
                 {
                   "at": [
                     "raw"
                   ],
+                  "handle": true,
                   "slot": 5
                 },
                 {
@@ -283,6 +289,7 @@
                   "at": [
                     "capped"
                   ],
+                  "handle": true,
                   "slot": 4
                 },
                 {
@@ -295,6 +302,7 @@
                   "at": [
                     "raw"
                   ],
+                  "handle": true,
                   "slot": 5
                 }
               ],
@@ -352,6 +360,7 @@
                     "binding",
                     "cell"
                   ],
+                  "handle": true,
                   "slot": 10
                 }
               ],

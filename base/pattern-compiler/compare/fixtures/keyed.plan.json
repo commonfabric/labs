@@ -121,6 +121,7 @@
                     "binding",
                     "pins"
                   ],
+                  "handle": true,
                   "slot": 2
                 }
               ],
@@ -192,6 +193,7 @@
                     "binding",
                     "pins"
                   ],
+                  "handle": true,
                   "slot": 5
                 }
               ],
@@ -251,6 +253,7 @@
                     "binding",
                     "last"
                   ],
+                  "handle": true,
                   "slot": 7
                 }
               ],

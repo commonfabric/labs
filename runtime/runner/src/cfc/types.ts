@@ -945,8 +945,27 @@ export type PlanInputs = {
   /** The elements of each collection a `fold` names. */
   readonly elements?: { readonly [collection: number]: PlanElements };
 
-  /** The addresses the reads of each `Plan.dynamicReads` entry read. */
+  /**
+   * The addresses the reads of each `Plan.dynamicReads` entry read. Where
+   * `dynamicGroups` has the entry, one address for each group of positions
+   * the reads went through that hold one label.
+   */
   readonly dynamic?: { readonly [reads: number]: readonly CfcAddress[] };
+
+  /**
+   * For an entry of `dynamic` that lists one address for each group of
+   * positions with equal labels: the number of positions the reads went
+   * through, and the number of groups, which is the number of addresses
+   * listed. An address stands for the positions of its group and for no
+   * other: a position whose label differs from every listed one is
+   * listed itself.
+   */
+  readonly dynamicGroups?: {
+    readonly [reads: number]: {
+      readonly positions: number;
+      readonly groups: number;
+    };
+  };
 
   /**
    * The inputs of the cone instance of each output an `output` node or an
@@ -1129,7 +1148,8 @@ export type PlanWrite = {
 
   /**
    * The target holds the result of a per-element construct, and the write
-   * changed its members otherwise than by adding at its end: which member
+   * changed its members otherwise than by adding at its end, or wrote it
+   * whole as part of a write above it: which member
    * stands at each position was decided anew, so the label of the record,
    * that of the collection's membership, is stored once for every
    * position.
