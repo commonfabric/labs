@@ -84,9 +84,15 @@
  * entity, and every label entry it holds, each with its path, its class and
  * its label in place. The file grows with the square of the board where
  * each topic has a clause of its own, so it is for boards of a few topics.
+ *
+ * With `SCALE_CPU_PROFILE` set to the path of a file, the run is sampled
+ * every half millisecond and the profile of the whole process is written
+ * there when the arm has run, in the format of the V8 inspector.
  */
 import { Identity } from "@commonfabric/identity";
 import { fromFileUrl } from "@std/path";
+// deno-lint-ignore no-external-import -- The sampling profiler is reached through this Node builtin alone.
+import inspector from "node:inspector";
 // deno-lint-ignore no-external-import -- Deno writes a heap snapshot through this Node builtin alone.
 import v8 from "node:v8";
 
@@ -1359,8 +1365,36 @@ const runToday = async (
   return steps;
 };
 
+/**
+ * Starts the sampling profiler of the process where `SCALE_CPU_PROFILE`
+ * names a file, and returns what stops it and writes the profile there.
+ */
+const profiled = async (): Promise<() => Promise<void>> => {
+  const file = Deno.env.get("SCALE_CPU_PROFILE");
+  if (file === undefined) return () => Promise.resolve();
+  const session = new inspector.Session();
+  session.connect();
+  const post = (method: string, params?: object) =>
+    new Promise<unknown>((resolve, reject) =>
+      session.post(
+        method,
+        params,
+        (error: Error | null, result?: unknown) =>
+          error === null ? resolve(result) : reject(error),
+      )
+    );
+  await post("Profiler.enable");
+  await post("Profiler.setSamplingInterval", { interval: 500 });
+  await post("Profiler.start");
+  return async () => {
+    const { profile } = await post("Profiler.stop") as { profile: unknown };
+    await Deno.writeTextFile(file, JSON.stringify(profile));
+  };
+};
+
 if (import.meta.main) {
   const [arm, ...given] = Deno.args;
+  const stopProfile = await profiled();
   const boards = given[0] === "--seed" && given[1] !== undefined
     ? [await seeded(given[1])]
     : (given.length > 0 ? given.map(Number) : [100, 1_000, 2_000]).map(
@@ -1381,4 +1415,5 @@ if (import.meta.main) {
       Deno.exit(2);
     }
   }
+  await stopProfile();
 }
