@@ -360,6 +360,61 @@ viewers. The next change upstream of it is found through the index again,
 which takes a cycle or two in which the watermark can pass the change before
 the reader is found stale.
 
+### An instance a narrower run decides
+
+*(RULED 2026-11-22, not built.)* A run writes more than the instance at its
+own key. A run for one session that writes a document declared in the space
+writes its value at the session's key and a redirect at the user's and the
+space's, and a run can as well write a link into a shared document whose
+content depends on what that run resolved, as the result of a conditional
+does. The slot at the broader key is shared, and what it holds was decided by
+the narrower run: by that run's reads, which are in the run's slice. A later
+run for another viewer, or the node's run at the space once no viewer narrows
+it, may write the slot again, broader or narrower than it stood. Either
+direction is allowed.
+
+Filing the row for such a slot under the slice at the slot's own key, as
+"What is recorded" describes, has the `space` slice vouch for a document none
+of its reads decide. The FabriChat room benchmark shows it as a count of
+false clean pieces: six message pieces whose shared link to a conditional's
+result flips between the session's and the space's scope on each visit, with
+no read of the `space` slice changed.
+
+The rule that replaces it:
+
+- **A row is filed under the slice of the run that wrote the instance**, and
+  names the key the instance is at. A slice vouches for what its own runs
+  wrote, at its key or at a broader one, and for nothing another slice's run
+  wrote. The reads that decided a slot and the row that vouches for it are
+  then in one slice.
+- **A slot can have several such rows**, one for each slice whose runs wrote
+  it. Each stands at the sequence number the slot was at when its slice was
+  recorded. A later write of the slot by another slice's run leaves the
+  earlier rows behind, which marks their slices `2` as a row behind a
+  revision does now, so the slice whose run wrote the slot last is the one
+  that holds it.
+- **A demander's view of a slot is decided by the narrowest slice in the
+  demander's own chain that holds a row for it**: the session's, else the
+  user's, else the space's. A root passes for a demander when that slice and
+  each slice above it in the chain are clean and of the epoch. A slot that
+  only another viewer's slice holds a row for is not vouched for this
+  demander, and refuses the root, so its piece starts and writes the slot as
+  this demander's run decides it. The judgment is given the demanding pairs
+  for this, since a demand row at the space names no pair.
+- **A reading slice of another piece** is stale through such a slot where the
+  slice that decides the reader's view of it is marked: for a reader at a
+  viewer's key, the narrowest holder in that viewer's chain, and for a reader
+  at the space, any holder.
+- **The false-clean check compares a slice with itself**: the value a slot
+  held at the slice's own last row against what the slice's run wrote now. A
+  write of the slot by another slice's run in between is a change from
+  outside the slice, as a commit no derivation made is.
+
+What this does not change: a slot that is rewritten each time the set of
+viewers changes costs the returning viewer a start, because a start is what
+writes the slot for them. The index is then right about such a piece and no
+faster for it.
+
 ## Checking it before relying on it
 
 `SERVER_EXECUTION_CURRENCY_INDEX=record` records and judges and still starts
