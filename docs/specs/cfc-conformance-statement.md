@@ -334,10 +334,14 @@ statement.
   location the observation consumed and on the evidence there about the value
   currently at it, and joins what they leave, so that what the computation
   writes carries the exchanged confidentiality (§5.3). The other rules are
-  not evaluated there, since their result is never carried. It departs from
-  §5.3 in the over-taint direction in four places. It evaluates only while
-  `cfcPolicyEvaluation` is `enforce`, and an evaluation that runs out of fuel
-  or cannot resolve a policy leaves the label as read. A label-metadata
+  not evaluated there, since their result is never carried. An evaluation
+  that runs out of fuel fails the transaction (§5.3.2), and a policy that
+  cannot be resolved fires none of its rules at that location, so its clause
+  stays as read for the next gate to decide. A read that stops at a container
+  counts the container's length as one of its locations, as the input
+  witnesses do. It departs from §5.3 in the over-taint direction in four
+  places. It evaluates only while `cfcPolicyEvaluation` is `enforce`. A
+  label-metadata
   observation and the flow of external content join as read. The integrity
   that satisfied a rule is recorded on the derived value's `TransformedBy`
   only where the input-witness summary retains it
