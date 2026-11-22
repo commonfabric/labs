@@ -498,17 +498,17 @@ const report = (
  */
 const leave = async (run: Run, clients: Client[]): Promise<void> => {
   for (const client of clients) await client.dispose();
-  for (const  of of[reader, source]) {
-    for (const { id, principal } of run.sessions.sessionsForSpace(of)) {
+  for (const served of [reader, source]) {
+    for (const { id, principal } of run.sessions.sessionsForSpace(served)) {
       // A serving runtime's own session stays: the host resumes it.
-      if (principal !== serviceSigner.did()) run.sessions.remove(of, id);
+      if (principal !== serviceSigner.did()) run.sessions.remove(served, id);
     }
   }
   await run.host.whenQuiescent();
   await run.server.idle();
   await run.host.whenQuiescent();
-  for (const  of of[reader, source]) {
-    await run.host.spaceServer(of)?.park("probe");
+  for (const served of [reader, source]) {
+    await run.host.spaceServer(served)?.park("probe");
   }
 };
 

@@ -95,6 +95,16 @@ export type PieceCurrencySlice = {
    * computation of the piece wrote.
    */
   vouches: string[];
+
+  /**
+   * The instances at another key that a live, clean computation of the
+   * slice wrote: the redirect a run made for one viewer leaves at the
+   * user's and the space's key, on its way up to the scope the document is
+   * declared at, and the narrower instance a run at a broader key wrote for
+   * the identity it ran under. What such a slot holds was decided by the
+   * run, so it is answered for here and in no other slice.
+   */
+  decides: Array<{ id: string; scopeKey: ScopeKey }>;
 };
 
 /** One piece as the scheduler holds it at an instant. */
@@ -115,10 +125,18 @@ export type PieceCurrencySnapshot = {
   writes: string[];
 
   /**
-   * The slices the piece's computations ran at, and each broader slice one
-   * of them wrote a redirect in. The `space` slice is always among them.
+   * The slices the piece's computations ran at. The `space` slice is always
+   * among them.
    */
   slices: PieceCurrencySlice[];
+
+  /**
+   * Whether a live computation of the piece read, in its own space, a
+   * derived document that no computation registered on the runtime writes:
+   * the output of a piece that is not started there. Nothing on the runtime
+   * recomputes such a document when its inputs change.
+   */
+  readsUnstarted: boolean;
 };
 
 /** The scheduler state a snapshot reads. */
@@ -282,12 +300,20 @@ export function snapshotPieceCurrency(
       Pick<IMemorySpaceAddress, "space" | "id"> & { scopeKey: string }
     >;
     vouches: Set<string>;
+
+    /** The broader slots the slice's runs wrote, by scope key and id. */
+    decides: Map<string, { id: string; scopeKey: ScopeKey }>;
     expiresAt?: number;
   }>();
   const sliceAt = (key: ScopeKey) => {
     let slice = slices.get(key);
     if (slice === undefined) {
-      slice = { unvouched: new Set(), reads: new Map(), vouches: new Set() };
+      slice = {
+        unvouched: new Set(),
+        reads: new Map(),
+        vouches: new Set(),
+        decides: new Map(),
+      };
       slices.set(key, slice);
     }
     return slice;
@@ -331,9 +357,20 @@ export function snapshotPieceCurrency(
           : declared === "space"
           ? ["space"]
           : [];
-        // An instance is vouched for in the slice at its own key, which for
-        // a redirect is broader than the run's.
-        for (const key of keys) sliceAt(key).vouches.add(write.id);
+        // What a run wrote is answered for in the run's own slice: the
+        // instance at its key as one it vouches for, and each instance at
+        // another key, a redirect at a broader one among them, as a slot it
+        // decides.
+        for (const key of keys) {
+          if (key === run.key) {
+            slice.vouches.add(write.id);
+          } else {
+            slice.decides.set(`${key}\0${write.id}`, {
+              id: write.id,
+              scopeKey: key,
+            });
+          }
+        }
       }
     }
   }
@@ -387,11 +424,13 @@ export function snapshotPieceCurrency(
     return [...log.reads, ...log.shallowReads];
   };
 
+  let readsUnstarted = false;
   const taken: PieceCurrencySnapshot = {
     piece,
     under,
     unvouched: [...unvouched],
     writes: [...writes],
+    readsUnstarted,
     slices: [...slices].map(([key, slice]) => {
       const reads: PieceCurrencySlice["reads"] = [];
       // A read taken over from a writer that names no piece joins the map
@@ -426,6 +465,11 @@ export function snapshotPieceCurrency(
           slice.expiresAt = Math.min(slice.expiresAt ?? Infinity, expiresAt);
         }
         const { attributed, unattributed } = writersOf(read.id);
+        if (
+          !attributed && unattributed.length === 0 &&
+          !writes.has(read.id) &&
+          entityKindOfIdString(read.id) === "computed"
+        ) readsUnstarted = true;
         const takenOver = unattributed.map(readsOf);
         if (takenOver.includes(undefined)) {
           slice.unvouched.add("unattributed-writer");
@@ -456,10 +500,12 @@ export function snapshotPieceCurrency(
         unvouched: [...slice.unvouched],
         reads,
         vouches: [...slice.vouches],
+        decides: [...slice.decides.values()],
         ...(slice.expiresAt !== undefined && { expiresAt: slice.expiresAt }),
       };
     }),
   };
+  taken.readsUnstarted = readsUnstarted;
   state.nodes.setAnsweredFor(piece, answeredFor);
   return taken;
 }

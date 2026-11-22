@@ -522,13 +522,20 @@ class PlaneMemoryServer implements HostMemoryServer {
   judgeCurrencyRoots(
     space: string,
     roots: readonly string[],
-    options: { excludePrincipal?: string; epoch: string },
+    options: {
+      excludePrincipal?: string;
+      epoch: string;
+      running?: readonly string[];
+    },
   ): ReturnType<HostMemoryServer["judgeCurrencyRoots"]> {
     return this.#endpoint.request("server.judgeCurrencyRoots", {
       space,
       roots: [...roots],
       excludePrincipal: options.excludePrincipal,
       epoch: options.epoch,
+      running: options.running === undefined ? undefined : [
+        ...options.running,
+      ],
     });
   }
 

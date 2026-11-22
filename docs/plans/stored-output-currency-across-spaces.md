@@ -243,7 +243,12 @@ ends by bringing what the store reports of its registered instances up to
 date, for the documents a commit wrote and the pieces whose slices changed,
 so finding the readers to tell is one read of the rows that moved. A row
 takes a position when it changes, and none when its instance is first
-registered, since the space registering it is handed the row.
+registered, since the space registering it is handed the row. An index
+that starts over with its records dropped keeps these rows, and the first
+call that changes it brings every one of them up to date. A reader that
+kept its records then hears that an instance a piece here computes is no
+longer vouched for. An instance nothing computes is plain data, and its
+row stays as it was.
 
 ### A circle of triggers
 
@@ -566,10 +571,30 @@ computation that wrote outside them is recorded as unbounded.
 An effect is left as it is. It runs while its piece is started, and a mark
 on a demanded piece's slice starts the piece.
 
+### The first step: a materializer runs while its space is served
+
+*(RULED 2026-11-21.)* A materializer runs eagerly, and not on demand,
+because what it will write cannot be predicted: that is why the scheduler
+keeps it live, at low priority. The first step keeps that, and bounds it
+by the space instead of by the destinations. While a serving loop serves a
+space for any demand, a piece of that space that holds a materializer and
+is marked is started, whether or not the demand has anything to do with
+it, and its materializers run at low priority. A space nothing demands
+runs none of them. Such a piece may be marked often, by inputs that change
+often, so starting it may need a throttle or a debounce beyond this.
+
+For this the index needs to know which pieces hold a materializer, which a
+record can say, and the loop needs the marked ones among them after each
+advance. It needs nothing about where a materializer writes. The cases
+above are the finer rule, for a space that is served and should still not
+run every materializer it holds, and for a space another space reads while
+nothing serves it.
+
 ### What the rows for an envelope need
 
 Three facts about the scheduler and the index decide how the first two cases
-above are built, and none of them is settled.
+above are built, once the first step is not enough. The first two are not
+settled.
 
 - **An envelope names where a link is held, not what is written.** For a
   computation handed a writable cell, the envelope is the slot that holds
@@ -590,11 +615,11 @@ above are built, and none of them is settled.
   relation of their own: one that marks the readers of the document when the
   materializer's slice is marked, asks for no vouch, and is not marked by
   another writer's revision.
-- **Within one space nothing starts a stale producer.** A reader marked `1`
-  is started and reads what the store holds. The piece that would write it
-  starts only when a session demands it, or when the demand comes from
-  another space (step 5). Starting it from a reader in its own space is the
-  first plan's stage 5.
+- **A stale producer is started from what its record says it writes.**
+  Within one space as across spaces, a reader's stale read starts the piece
+  the index records as writing the instance (the first plan's stage 5, and
+  step 5 here). A document a materializer wrote within its envelope is in
+  no record's write rows, so a reader of it starts nothing.
 
 ### A write into another space at an undeclared destination
 
@@ -734,14 +759,18 @@ A third is ruled:
    its whole set whenever it changes, and each reading piece is recorded
    again with every viewer's slice at each start; both are costs still to
    take out.
-6. **Computations that run without demand.** Not started. Envelopes among
-   the write rows; a computation recorded as unbounded from what it wrote;
-   the unsettled space, settled before a judgment in it or a pull from it
-   returns; the writer's registration for a declared destination in another
-   space; and the counts the open question needs. Built on step 5, which
-   starts a producer in another space, and on the first plan's stage 5 for
-   one in the same space. "What the rows for an envelope need" lists what
-   is to be settled first.
+6. **Computations that run without demand.** Not started. First, as ruled:
+   a record says whether its piece holds a materializer, and a loop that
+   serves a space for any demand starts the marked pieces that do, at low
+   priority, with a throttle if measurement asks for one. Then the finer
+   rule: envelopes among the write rows; a computation recorded as
+   unbounded from what it wrote; the unsettled space, settled before a
+   judgment in it or a pull from it returns; the writer's registration for
+   a declared destination in another space; and the counts the open
+   question needs. The finer rule is built on step 5, which starts a
+   producer in another space, and on the first plan's stage 5, which starts
+   one in the same space, and "What the rows for an envelope need" lists
+   what is to be settled before it.
 7. **The interval clock's expiry.** Done. A space is armed with one it
    reads only until the earliest slice there expires.
 8. **Measure** a social space whose pieces read each viewer's profile, with
