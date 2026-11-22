@@ -81,7 +81,10 @@ const LIST = new RegExp(
 const ENDS_WITH_SEMICOLON = /;[^\S\n]*(?:\}[^\S\n]*)*$/;
 const OPENS_OR_CLOSES = /^[}<]|[{}]$/;
 const BEFORE_COMMENT = /[\s;{}]/;
-const TRAILING_COMMENT = /(^|[\s;{}])#[^]*$/;
+/** The part of a line before its comment: text other than quotes and `#`,
+ * quoted strings, and a `#` inside a word. */
+const CODE =
+  /^(?:[^"'#]|"(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?|(?<=[^\s;{}])#)*/;
 const LINE_END = /[^\S\n]*(?:\n|$)/y;
 const SPACE = /\s/;
 const ENTRY_KEYS: ReadonlySet<string> = new Set(["alarm", "template"]);
@@ -441,14 +444,15 @@ class Scanner {
  * Whether `text` ends statements with `;`, as nginx and nftables do: at least
  * half of its statement lines end with `;` before any comment, counting
  * neither blank or comment lines nor lines that only open or close a block or
- * section. A comment starts at a `#` that starts the line or follows white
- * space, `;`, `{`, or `}`, as the scanner reads one in such a source.
+ * section. A comment starts at a `#` outside quotes that starts the line or
+ * follows white space, `;`, `{`, or `}`, as the scanner reads one in such a
+ * source.
  */
 function endsStatementsWithSemicolons(text: string): boolean {
   let semicolons = 0;
   let others = 0;
   for (const line of text.split("\n")) {
-    const statement = line.replace(TRAILING_COMMENT, "$1").trim();
+    const statement = CODE.exec(line)?.[0].trim() ?? "";
     if (statement === "") continue;
     if (ENDS_WITH_SEMICOLON.test(statement)) semicolons++;
     else if (!OPENS_OR_CLOSES.test(statement)) others++;

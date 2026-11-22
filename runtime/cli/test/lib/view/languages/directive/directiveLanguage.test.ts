@@ -516,6 +516,12 @@ describe("directiveLanguage", () => {
     );
     expect(classesOf(terse, "#first")).toEqual(["comment"]);
     expect(classesOf(terse, "3")).toEqual(["number"]);
+
+    const quoted = directiveLanguage.highlightLines(
+      'add_header X "bar # baz";\nc\n  3;',
+    );
+    expect(classesOf(quoted, '"bar # baz"')).toEqual(["string"]);
+    expect(classesOf(quoted, "3")).toEqual(["number"]);
   });
 
   it("decides whether `;` ends statements from most statement lines", () => {
