@@ -13394,8 +13394,9 @@ export class Server {
         : { excludePrincipal: options.excludePrincipal },
     );
     // Whose view of a slot is asked about decides which slice answers for
-    // it, and a demand row at the space names no pair, so each row carries
-    // the session key of the pair that demands it.
+    // it, and the scope key of a row at the space names no pair. So each row
+    // carries the session key of the pair whose session demands it, where
+    // that session names a principal.
     const rows = function* (): Generator<
       CurrencyInstance & { demander?: string }
     > {

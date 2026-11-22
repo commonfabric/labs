@@ -444,12 +444,7 @@ SELECT slice, piece, seq FROM currency_decide
   INDEXED BY idx_currency_decide_instance
 WHERE branch = :branch AND instance_key = :scope_key AND id = :id
 `),
-  selectDecidesBehind: engine.prepare(`
-SELECT slice, piece, seq FROM currency_decide
-  INDEXED BY idx_currency_decide_instance
-WHERE branch = :branch AND instance_key = :scope_key AND id = :id
-  AND seq < :seq
-`),
+
   selectCursor: engine.prepare(`
 SELECT seq FROM currency_cursor WHERE branch = :branch
 `),
@@ -849,21 +844,19 @@ const staleInstance = (
       if (mark !== 0) producers.push({ piece, slice });
     }
   }
-  // A slot a narrower slice's run wrote is as current as that slice. A
-  // reader at a viewer's key sees the slot as the slices of that viewer's
-  // chain decided it, and a reader at the slot's own key sees it as whichever
-  // slice wrote it last, the one whose row stands at its head.
+  // A slot a slice's run wrote from another key is as current as that
+  // slice, while its row stands at the slot's head: a row behind it answers
+  // for nothing, since another run wrote the slot since. A reader at a
+  // viewer's key sees the slot as the slices of that viewer's chain decided
+  // it, and a reader at the slot's own key as whichever slice holds it.
   if (scopeKey !== ANY_INSTANCE) {
     const viewer = self !== undefined && self.slice !== scopeKey
       ? sliceChain(self.slice)
       : undefined;
-    const head = viewer === undefined
-      ? headOfInstance(context, id, scopeKey)
-      : 0;
+    const head = headOfInstance(context, id, scopeKey);
     for (const decider of decidersOf(context, id, scopeKey)) {
-      if (viewer !== undefined) {
-        if (!viewer.includes(decider.slice)) continue;
-      } else if (decider.seq < head) continue;
+      if (decider.seq < head) continue;
+      if (viewer !== undefined && !viewer.includes(decider.slice)) continue;
       vouched = true;
       // A slot the reading slice decides itself does not count against it.
       if (decider.piece === self?.piece && decider.slice === self.slice) {
@@ -1188,14 +1181,6 @@ const advance = (context: Context): CurrencyMarked[] => {
         ...row,
         slice: scope_key,
       })),
-      // A slot a narrower slice's run wrote is answered for in that slice,
-      // which another run's write of the slot leaves behind.
-      ...statements.selectDecidesBehind.all({
-        branch,
-        scope_key,
-        id,
-        seq: highest,
-      }) as Array<SliceRef & { seq: number }>,
     ];
     for (const row of behind) {
       const ref = { piece: row.piece, slice: row.slice };
@@ -2608,9 +2593,9 @@ export const judgeCurrencyRoots = (
    * or `undefined` where it does. The slice at the instance's key vouches
    * for what its own runs wrote. A slot a narrower slice's run wrote is
    * decided, for each pair that demands it, by the slices of that pair's
-   * chain that hold a row for it: each of them, and each slice above it, is
-   * to be current. A slot only another viewer's slice holds a row for is not
-   * answered for.
+   * chain that hold a row for it: each row is to stand at the slot's head,
+   * and each of those slices, and each slice above it, is to be current. A
+   * slot only another viewer's slice holds a row for is not answered for.
    */
   const unvouchedFor = (
     piece: string,
@@ -2631,12 +2616,16 @@ export const judgeCurrencyRoots = (
     const viewers = [...demanding.get(`${scopeKey}\0${id}`)!.values()]
       .filter((chain) => chain.includes(scopeKey));
     if (viewers.length === 0) return own ? undefined : "unvouched-instance";
+    const head = headOfInstance(context, id, scopeKey);
     for (const chain of viewers) {
       const mine = deciders.filter(({ slice }) => chain.includes(slice));
       if (mine.length === 0) {
         if (!own) return "unvouched-instance";
         continue;
       }
+      // A row behind the slot's head answers for nothing: another run wrote
+      // the slot since, and a run for this pair would write it as it decides.
+      if (mine.some(({ seq }) => seq < head)) return "unvouched-instance";
       const stale = mine.some((decider) =>
         sliceChain(decider.slice).some((slice) => !isCurrent({ piece, slice }))
       );

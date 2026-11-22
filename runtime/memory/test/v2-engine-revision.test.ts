@@ -9,7 +9,7 @@ const createEngine = async () => {
   return { engine, path };
 };
 
-Deno.test("memory v2 engine adds the not-vouched-for column to a currency index created without it", async () => {
+Deno.test("memory v2 engine drops the records of a currency index laid out before a slice answered for slots at another key", async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const raw = await new Database(path);
   raw.exec(`
@@ -18,18 +18,30 @@ Deno.test("memory v2 engine adds the not-vouched-for column to a currency index 
       mark INTEGER NOT NULL, was_clean INTEGER NOT NULL, epoch TEXT NOT NULL,
       PRIMARY KEY (branch, slice, piece)
     );
-    INSERT INTO currency_slice VALUES ('', 'space', 'of:piece', 2, 0, 'epoch');
+    CREATE TABLE currency_vouch (
+      branch TEXT NOT NULL, slice TEXT NOT NULL, piece TEXT NOT NULL,
+      id TEXT NOT NULL, seq INTEGER NOT NULL, held INTEGER NOT NULL,
+      PRIMARY KEY (branch, slice, piece, id)
+    );
+    INSERT INTO currency_slice VALUES ('', 'space', 'of:piece', 0, 1, 'epoch');
+    INSERT INTO currency_vouch VALUES ('', 'space', 'of:piece', 'of:out', 3, 1);
   `);
   raw.close();
 
   const engine = await open({ url: toFileUrl(path) });
 
   try {
+    const count = (table: string) =>
+      engine.database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get();
+    assertEquals(count("currency_slice"), { n: 0 });
+    assertEquals(count("currency_vouch"), { n: 0 });
+    assertEquals(count("currency_decide"), { n: 0 });
     assertEquals(
-      engine.database.prepare(
-        "SELECT piece, mark, unvouched FROM currency_slice",
-      ).all(),
-      [{ piece: "of:piece", mark: 2, unvouched: 0 }],
+      (engine.database.prepare(`PRAGMA table_info("currency_slice")`)
+        .all() as Array<{ name: string }>).map((row) => row.name).includes(
+          "unvouched",
+        ),
+      true,
     );
   } finally {
     await close(engine);

@@ -392,9 +392,10 @@ is clean and of the epoch, with a vouch row in the slice at that key for a
 written id, and a live document for an owned cell. A written instance that a
 run at another key wrote, as the redirect a viewer's run leaves at the
 space's key is, is answered for by the slice of that run. For each session
-that demands the instance, each slice of the session's own chain that holds
-a row for it is to be clean and of the epoch, with the slices above it, and
-an instance only another viewer's slice holds a row for is not vouched for.
+that demands the instance, each row a slice of the session's own chain holds
+for it is to stand at the instance's head, and each such slice is to be clean
+and of the epoch, with the slices above it. An instance only another viewer's
+slice holds a row for, or that another run wrote since, is not vouched for.
 The rows are those of the
 sessions demanding then, and a slice none of them is resolved under is not
 read: a marked slice of a viewer who is not present refuses nothing, and a
@@ -1394,11 +1395,11 @@ executing:
   instance at the run's own key as one the slice vouches for, and each
   instance at another key as a slot the slice decides, with the key it is
   at. What such a slot holds was decided by the run's reads, which are in
-  that slice, and another run's write of the slot leaves the row behind,
-  which marks the slice `2`. A slice of another piece that read the slot at
-  a viewer's key is stale through the slices of that viewer's chain that
-  hold a row for it, and one that read it at the slot's own key through
-  whichever slice's row stands at its head.
+  that slice. Another run's write of the slot leaves the row behind, and a
+  row behind the slot's head answers for nothing and marks no slice. A slice
+  of another piece that read the slot at a viewer's key is stale through the
+  slices of that viewer's chain that hold it, and one that read it at the
+  slot's own key through whichever slice holds it.
   The records of one quiescent point reach the memory server in requests of
   bounded size, and the last names the pieces the earlier ones stored, so
   pieces that read each other's writes are judged clean together. Each row

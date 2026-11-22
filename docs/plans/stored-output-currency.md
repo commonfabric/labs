@@ -248,8 +248,11 @@ below. The store can serve a root when:
   piece, or by a recorded piece beneath it, passes: each slice of the owner
   the row's instance is resolved under (the slice at the row's scope key and
   each broader one) is clean and of the current epoch, and a written id is
-  vouched for in the slice at the row's scope key, and an owned id is held by
-  the store at the row's scope key.
+  answered for, and an owned id is held by the store at the row's scope key.
+  A written id is answered for by a vouch row in the slice at the row's
+  scope key, or, where a run at another key wrote the instance, by the rows
+  the slices of the demanding session's own chain hold for it ("An instance
+  a run at another key decides", below).
 
 Only the slices a demand row is resolved under are read, and the rows are
 those of the sessions demanding now. So a marked slice of a viewer who is
@@ -390,24 +393,25 @@ slice changed. So:
 - **A slot can have several such rows**, one for each slice whose runs wrote
   it. Each stands at the sequence number the slot was at when its slice was
   recorded. A later write of the slot by another slice's run leaves the
-  earlier rows behind, which marks their slices `2` as a row behind a
-  revision does, so the slice whose run wrote the slot last is the one that
-  holds it.
+  earlier rows behind, and a row behind the slot's head answers for
+  nothing. It marks no slice: what else the slice answers for is as current
+  as it was. Slices recorded together can each hold a row at the head, since
+  a snapshot names every instance a run's declared surface reaches.
 - **A demander's view of a slot is decided by the slices of the demander's
   own chain that hold a row for it**: the session's, the user's, the
   space's. A root passes for a session that demands the slot when each such
-  slice, and each slice above it in the chain, is clean and of the epoch. A
-  slot that only another viewer's slice holds a row for is not vouched for
-  this session, and refuses the root, so its piece starts and writes the
-  slot as this session's run decides it. Each demand row carries the key of
-  the session that demands it for this, since a row at the space names no
-  pair.
+  row stands at the slot's head and each such slice, with each slice above
+  it in the chain, is clean and of the epoch. A slot that only another
+  viewer's slice holds a row for, or that another run wrote since this
+  viewer's row, is not vouched for this session, and refuses the root, so
+  its piece starts and writes the slot as this session's run decides it.
+  Each demand row carries the key of the session that demands it for this,
+  since the scope key of a row at the space names no pair.
 - **A reading slice of another piece** is stale through such a slot where a
-  slice that decides the reader's view of it is marked: for a reader at a
-  viewer's key, a holder in that viewer's chain, and for a reader at the
-  slot's own key, a holder whose row stands at the slot's head. A reader at
-  a viewer's key with no holder in its chain reads a slot nothing answers
-  for, and is stored marked.
+  slice that holds it, with its row at the slot's head, is marked: for a
+  reader at a viewer's key, a holder in that viewer's chain, and for a
+  reader at the slot's own key, any holder. A reader with no such holder
+  reads a slot nothing answers for, and is stored marked.
 
 Two things this leaves as they are. A slot that is rewritten each time the
 set of viewers changes costs the returning viewer a start, because a start

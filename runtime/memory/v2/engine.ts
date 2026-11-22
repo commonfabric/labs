@@ -590,7 +590,9 @@ CREATE INDEX IF NOT EXISTS idx_currency_vouch_id
 -- key. What such a slot holds was decided by the run, so its row is filed
 -- under the run's slice, with the key the slot is at and the seq it stood at
 -- when the slice was recorded. A slot several slices' runs wrote has a row
--- for each.
+-- for each, and a row behind the slot's head answers for nothing. A store
+-- whose index was recorded without this table loses those records when it is
+-- opened (dropCurrencyRecordsBeforeDecides).
 CREATE TABLE IF NOT EXISTS currency_decide (
   branch       TEXT    NOT NULL,
   slice        TEXT    NOT NULL,
@@ -2584,16 +2586,31 @@ const dropUnslicedCurrencyTables = (database: Database): void => {
 };
 
 /**
- * Adds, to a currency index created without it, the column that says a
- * slice's record was stored not vouched for. A row from before reads as one
- * that was vouched for, until its piece is recorded again.
+ * Drops the records of a currency index laid out before a slice answered
+ * for the slots its runs wrote at another key (`currency_decide`), ahead of
+ * the schema that creates the tables as they are now. Such records file a
+ * redirect under the slice at the redirect's own key, and hold no row that
+ * says whether a slice was stored not vouched for. The index holds nothing a
+ * serving loop does not record again, so such a store loses its records once
+ * and every piece of it starts on its next demand.
  */
-const migrateCurrencySliceUnvouched = (database: Database): void => {
-  if (hasColumn(database, "currency_slice", "unvouched")) return;
-  database.exec(`
-ALTER TABLE currency_slice
-ADD COLUMN unvouched INTEGER NOT NULL DEFAULT 0;
-`);
+const dropCurrencyRecordsBeforeDecides = (database: Database): void => {
+  if (
+    !hasTable(database, "currency_slice") ||
+    hasTable(database, "currency_decide")
+  ) return;
+  database.transaction(() => {
+    database.exec(`
+      DROP TABLE IF EXISTS currency_slice;
+      DROP TABLE IF EXISTS currency_under;
+      DROP TABLE IF EXISTS currency_read;
+      DROP TABLE IF EXISTS currency_write;
+      DROP TABLE IF EXISTS currency_vouch;
+      DROP TABLE IF EXISTS currency_expiry;
+      DROP TABLE IF EXISTS currency_slice_source;
+      DROP TABLE IF EXISTS currency_cursor;
+    `);
+  }).immediate();
 };
 
 export const open = async (
@@ -2627,10 +2644,10 @@ export const open = async (
   database.exec(NEW_DB_PRAGMAS);
   database.exec(PRAGMAS);
   dropUnslicedCurrencyTables(database);
+  dropCurrencyRecordsBeforeDecides(database);
   database.exec(INIT);
   migrateScopedEntityTables(database);
   migrateHeadCurrentOp(database);
-  migrateCurrencySliceUnvouched(database);
   migrateCommitClass(database);
   migrateCommitHolder(database);
   migrateCommitWaveCarriage(database);

@@ -1885,17 +1885,19 @@ describe("currency-index", () => {
         });
       });
 
-      it("refuses the root for the slot's viewer once another run wrote the slot", () => {
+      it("refuses the root for the slot's viewer once another run wrote the slot, and leaves the viewer's slice clean", () => {
         // The viewer's row is behind the slot's head, so a start is what
-        // writes the slot as this viewer's run decides it.
+        // writes the slot as this viewer's run decides it. What else the
+        // slice answers for is as current as it was.
 
         storeForAlice();
         write("computed:out");
         advance();
 
         expect(refusals(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual({
-          "of:piece": "owner-not-clean",
+          "of:piece": "unvouched-instance",
         });
+        expect(markOf("of:piece", ALICE_USER)).toBe(0);
       });
 
       /**
