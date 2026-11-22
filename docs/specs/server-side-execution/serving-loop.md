@@ -389,7 +389,13 @@ demand row of every session whose id the piece writes or owns, or a recorded
 piece beneath it does, is vouched for: each slice of the owner the row's
 instance is resolved under, the one at its scope key and each broader one,
 is clean and of the epoch, with a vouch row in the slice at that key for a
-written id, and a live document for an owned cell. The rows are those of the
+written id, and a live document for an owned cell. A written instance that a
+run at another key wrote, as the redirect a viewer's run leaves at the
+space's key is, is answered for by the slice of that run. For each session
+that demands the instance, each slice of the session's own chain that holds
+a row for it is to be clean and of the epoch, with the slices above it, and
+an instance only another viewer's slice holds a row for is not vouched for.
+The rows are those of the
 sessions demanding then, and a slice none of them is resolved under is not
 read: a marked slice of a viewer who is not present refuses nothing, and a
 present viewer whose own slice is marked has the root loaded, for every
@@ -1384,7 +1390,15 @@ executing:
   the instances its runs wrote: for a run at a fan-out instance, the
   narrower of that instance and the write's declared scope as the run's
   identity resolves it, and each broader slot up to the declared scope,
-  which holds the redirect. Each is filed under the slice at its own key.
+  which holds the redirect. Each is filed under the slice of the run: the
+  instance at the run's own key as one the slice vouches for, and each
+  instance at another key as a slot the slice decides, with the key it is
+  at. What such a slot holds was decided by the run's reads, which are in
+  that slice, and another run's write of the slot leaves the row behind,
+  which marks the slice `2`. A slice of another piece that read the slot at
+  a viewer's key is stale through the slices of that viewer's chain that
+  hold a row for it, and one that read it at the slot's own key through
+  whichever slice's row stands at its head.
   The records of one quiescent point reach the memory server in requests of
   bounded size, and the last names the pieces the earlier ones stored, so
   pieces that read each other's writes are judged clean together. Each row
@@ -1410,8 +1424,9 @@ executing:
   writer runs clean again. Nothing is recorded while an effect is outstanding,
   because a start is what re-fires an effect whose result never landed (§6
   step 3). The tables are `currency_slice`, `currency_under`,
-  `currency_read`, `currency_write`, `currency_vouch`, `currency_expiry`
-  and `currency_cursor`, and for reads across spaces `currency_slice_source`,
+  `currency_read`, `currency_write`, `currency_vouch`, `currency_decide`,
+  `currency_expiry` and `currency_cursor`, and for reads across spaces
+  `currency_slice_source`,
   `currency_import` and `currency_source` on the reading side and
   `currency_reader` and `currency_export` on the side read;
   `runtime/memory/v2/currency-index.ts` is their only writer and reader,

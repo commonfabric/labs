@@ -120,6 +120,7 @@ describe("currency-index", () => {
         vouched: boolean;
         reads: CurrencyRead[];
         vouches: string[];
+        decides?: Array<{ id: string; scopeKey: string }>;
         expiresAt?: number;
       }
     >();
@@ -146,6 +147,9 @@ describe("currency-index", () => {
       merged.vouched &&= given.vouched;
       for (const read of given.reads) merged.reads.push(read);
       for (const id of given.vouches) merged.vouches.push(id);
+      if (given.decides !== undefined) {
+        merged.decides = [...(merged.decides ?? []), ...given.decides];
+      }
     }
     return {
       piece,
@@ -1376,7 +1380,7 @@ describe("currency-index", () => {
   describe("judgeCurrencyRoots()", () => {
     const judge = (
       roots: string[],
-      rows: Array<{ id: string; scopeKey: string }>,
+      rows: Array<{ id: string; scopeKey: string; demander?: string }>,
       epoch = EPOCH,
     ) =>
       judgeCurrencyRoots(engine, { space: SPACE, roots, rows, epoch }).servable;
@@ -1384,7 +1388,7 @@ describe("currency-index", () => {
     /** The reason each of `roots` is refused for, by root. */
     const refusals = (
       roots: string[],
-      rows: Array<{ id: string; scopeKey: string }>,
+      rows: Array<{ id: string; scopeKey: string; demander?: string }>,
       epoch = EPOCH,
     ) =>
       Object.fromEntries(
@@ -1775,6 +1779,132 @@ describe("currency-index", () => {
           refused: ["of:c"],
           held: [],
         });
+      });
+    });
+
+    describe("with a shared slot that one viewer's run wrote", () => {
+      const BOB_SESSION = resolveScopeKey("session", BOB);
+
+      /** The shared slot, as each viewer's session demands it. */
+      const SLOT = { id: "computed:out", scopeKey: "space" };
+      const FOR_ALICE = { ...SLOT, demander: ALICE_SESSION };
+      const FOR_BOB = { ...SLOT, demander: BOB_SESSION };
+
+      /**
+       * A record of `of:piece` whose run for Alice wrote `computed:out` at
+       * her key and left a redirect at the space's, from her prefs.
+       */
+      const storeForAlice = (): number => {
+        const asOf = write(
+          "of:piece",
+          "computed:out",
+          { id: "of:prefs", scope: "user" },
+          { id: "computed:out", scope: "user" },
+        );
+        store(asOf, [
+          record("of:piece", {
+            writes: ["computed:out"],
+            slices: [{
+              key: ALICE_USER,
+              vouched: true,
+              reads: [input("of:prefs", ALICE_USER)],
+              vouches: ["computed:out"],
+              decides: [SLOT],
+            }],
+          }),
+        ]);
+        return asOf;
+      };
+
+      it("returns the root for the viewer whose slice holds a row for the slot", () => {
+        storeForAlice();
+
+        expect(judge(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual([
+          "of:piece",
+        ]);
+      });
+
+      it("refuses the root for a viewer no slice of whose chain holds a row for the slot", () => {
+        // What the slot holds was decided by the other viewer's run, and a
+        // run for this one may write it otherwise.
+
+        storeForAlice();
+
+        expect(refusals(["of:piece"], [ROOT_ROW, FOR_BOB])).toEqual({
+          "of:piece": "unvouched-instance",
+        });
+      });
+
+      it("returns the root for the slot's viewer while another viewer demands something else of the space", () => {
+        storeForAlice();
+
+        expect(
+          judge(["of:piece"], [
+            ROOT_ROW,
+            FOR_ALICE,
+            { id: "of:elsewhere", scopeKey: "space", demander: BOB_SESSION },
+          ]),
+        ).toEqual(["of:piece"]);
+      });
+
+      it("refuses the root for the slot's viewer once an input of the slice that wrote it changed", () => {
+        storeForAlice();
+        write({ id: "of:prefs", scope: "user" });
+        advance();
+
+        expect(refusals(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual({
+          "of:piece": "owner-not-clean",
+        });
+      });
+
+      it("refuses the root for the slot's viewer once another run wrote the slot", () => {
+        // The viewer's row is behind the slot's head, so a start is what
+        // writes the slot as this viewer's run decides it.
+
+        storeForAlice();
+        write("computed:out");
+        advance();
+
+        expect(refusals(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual({
+          "of:piece": "owner-not-clean",
+        });
+      });
+
+      /**
+       * Stores a record of `of:reader`, one slice of which read the slot
+       * for Alice and one for Bob.
+       */
+      const storeReaders = () => {
+        const asOf = storeForAlice();
+        const read = { ...derived("computed:out"), scopeKey: "space" };
+        store(Math.max(asOf, write("of:reader")), [
+          record("of:reader", {
+            slices: [
+              { key: ALICE_USER, vouched: true, reads: [read], vouches: [] },
+              { key: BOB_USER, vouched: true, reads: [read], vouches: [] },
+            ],
+          }),
+        ]);
+      };
+
+      it("stores clean a slice of another piece that read the slot at the viewer's key, and marked `1` one that read it at another viewer's", () => {
+        // For the other viewer the slot is one no slice of their chain
+        // answers for.
+
+        storeReaders();
+
+        expect([
+          markOf("of:reader", ALICE_USER),
+          markOf("of:reader", BOB_USER),
+        ]).toEqual([0, 1]);
+      });
+
+      it("marks `1` a slice of another piece that read the slot at the viewer's key once the slice that wrote it is marked", () => {
+        storeReaders();
+        write({ id: "of:prefs", scope: "user" });
+        advance();
+
+        expect(markOf("of:reader", ALICE_USER)).toBe(1);
       });
     });
 

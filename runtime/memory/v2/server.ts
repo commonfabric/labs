@@ -13393,10 +13393,22 @@ export class Server {
         ? {}
         : { excludePrincipal: options.excludePrincipal },
     );
-    const rows = function* (): Generator<CurrencyInstance> {
+    // Whose view of a slot is asked about decides which slice answers for
+    // it, and a demand row at the space names no pair, so each row carries
+    // the session key of the pair that demands it.
+    const rows = function* (): Generator<
+      CurrencyInstance & { demander?: string }
+    > {
       for (const share of demand) {
         for (const row of share.rows.values()) {
-          yield { id: row.id, scopeKey: row.scopeKey };
+          const { principal, sessionId } = row.identity ?? {};
+          yield {
+            id: row.id,
+            scopeKey: row.scopeKey,
+            ...(principal !== undefined && sessionId !== undefined && {
+              demander: resolveScopeKey("session", { principal, sessionId }),
+            }),
+          };
         }
       }
     };

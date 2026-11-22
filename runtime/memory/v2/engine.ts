@@ -585,6 +585,23 @@ CREATE TABLE IF NOT EXISTS currency_vouch (
 );
 CREATE INDEX IF NOT EXISTS idx_currency_vouch_id
   ON currency_vouch (branch, slice, id);
+-- The document instances at another key that a slice's runs wrote, as the
+-- redirect a run made for one viewer leaves at the user's and the space's
+-- key. What such a slot holds was decided by the run, so its row is filed
+-- under the run's slice, with the key the slot is at and the seq it stood at
+-- when the slice was recorded. A slot several slices' runs wrote has a row
+-- for each.
+CREATE TABLE IF NOT EXISTS currency_decide (
+  branch       TEXT    NOT NULL,
+  slice        TEXT    NOT NULL,
+  piece        TEXT    NOT NULL,
+  id           TEXT    NOT NULL,
+  instance_key TEXT    NOT NULL,
+  seq          INTEGER NOT NULL,
+  PRIMARY KEY (branch, slice, piece, id, instance_key)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_decide_instance
+  ON currency_decide (branch, instance_key, id);
 -- The seq the marks are complete through.
 CREATE TABLE IF NOT EXISTS currency_cursor (
   branch TEXT    NOT NULL PRIMARY KEY,

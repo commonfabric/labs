@@ -171,44 +171,65 @@ describe("piece-currency", () => {
   ) => snapshot.slices.find((slice) => slice.key === key);
 
   /**
-   * The keys of the slices that vouch for `computed:out`, sorted, for a
-   * computation that declares it at `declared` and ran clean at `keys`.
+   * Where `computed:out` is answered for, for a computation that declares it
+   * at `declared` and ran clean at `keys`: each slice that answers for an
+   * instance of it, with the key that instance is at, sorted.
    */
-  const vouchesOf = (declared: CellScope, keys: ScopeKey[] = []) =>
+  const answersOf = (declared: CellScope, keys: ScopeKey[] = []) =>
     snapshotOf({ declared, instances: keys.map((key) => ({ key })) }).slices
-      .filter((slice) => slice.vouches.includes("computed:out"))
-      .map((slice) => slice.key).sort();
+      .flatMap((slice) => [
+        ...(slice.vouches.includes("computed:out")
+          ? [{ slice: slice.key, at: slice.key }]
+          : []),
+        ...slice.decides.filter(({ id }) => id === "computed:out").map((
+          { scopeKey },
+        ) => ({ slice: slice.key, at: scopeKey })),
+      ]).sort((a, b) =>
+        `${a.slice} ${a.at}`.localeCompare(`${b.slice} ${b.at}`)
+      );
 
   const user = resolveScopeKey("user", ALICE);
   const session = resolveScopeKey("session", ALICE);
   const bobUser = resolveScopeKey("user", BOB);
 
   describe("snapshotPieceCurrency()", () => {
-    describe("the slices that vouch for a write", () => {
+    describe("the slice that answers for a write", () => {
       it("is the space slice for a space write, for a computation with no fan-out state", () => {
-        expect(vouchesOf("space")).toEqual(["space"]);
+        expect(answersOf("space")).toEqual([{ slice: "space", at: "space" }]);
       });
 
-      it("is empty for a user write, for a computation with no fan-out state", () => {
-        expect(vouchesOf("user")).toEqual([]);
+      it("is none for a user write, for a computation with no fan-out state", () => {
+        expect(answersOf("user")).toEqual([]);
       });
 
-      it("is the run's slice and each broader one, for a space write of a run at a session instance", () => {
-        expect(vouchesOf("space", [session])).toEqual(
-          [session, "space", user].sort(),
-        );
+      it("is the run's slice, for the value and for the redirect at each broader key, for a space write of a run at a session instance", () => {
+        // What the redirects hold was decided by the run, whose reads are in
+        // its own slice.
+
+        expect(answersOf("space", [session])).toEqual([
+          { slice: session, at: session },
+          { slice: session, at: "space" },
+          { slice: session, at: user },
+        ]);
       });
 
-      it("is the run's user's slice alone, for a user write of a run at the space instance", () => {
-        expect(vouchesOf("user", ["space"])).toEqual([user]);
+      it("is the space slice, for the user's instance, for a user write of a run at the space instance", () => {
+        expect(answersOf("user", ["space"])).toEqual([
+          { slice: "space", at: user },
+        ]);
       });
 
-      it("is the run's session's slice alone, for a session write of a run at a user instance", () => {
-        expect(vouchesOf("session", [user])).toEqual([session]);
+      it("is the user slice, for the session's instance, for a session write of a run at a user instance", () => {
+        expect(answersOf("session", [user])).toEqual([
+          { slice: user, at: session },
+        ]);
       });
 
-      it("is the run's slice and the user slice, for a user write of a run at a session instance", () => {
-        expect(vouchesOf("user", [session])).toEqual([session, user].sort());
+      it("is the run's slice, for the value and for the redirect at the user's key, for a user write of a run at a session instance", () => {
+        expect(answersOf("user", [session])).toEqual([
+          { slice: session, at: session },
+          { slice: session, at: user },
+        ]);
       });
     });
 
@@ -424,6 +445,7 @@ describe("piece-currency", () => {
             },
           ],
           vouches: ["computed:out"],
+          decides: [],
         });
       });
 
@@ -518,6 +540,7 @@ describe("piece-currency", () => {
               },
             ],
             vouches: ["computed:out"],
+            decides: [],
           });
         });
       }
@@ -548,6 +571,7 @@ describe("piece-currency", () => {
         unvouched: ["not-clean"],
         reads: [],
         vouches: [],
+        decides: [],
       });
     });
 
@@ -563,6 +587,7 @@ describe("piece-currency", () => {
         unvouched: [],
         reads: [],
         vouches: ["computed:out"],
+        decides: [{ id: "computed:out", scopeKey: "space" }],
       });
       expect(sliceOf(taken, bobUser)?.unvouched).toEqual(["not-clean"]);
     });
@@ -578,13 +603,14 @@ describe("piece-currency", () => {
         unvouched: ["not-clean"],
         reads: [],
         vouches: [],
+        decides: [],
       });
       expect(sliceOf(taken, user)?.unvouched).toEqual([]);
       expect(
-        taken.slices.filter((slice) => slice.vouches.length > 0).map((slice) =>
-          slice.key
-        ).sort(),
-      ).toEqual(["space", user].sort());
+        taken.slices.filter((slice) =>
+          slice.vouches.length > 0 || slice.decides.length > 0
+        ).map((slice) => slice.key),
+      ).toEqual([user]);
     });
   });
 });

@@ -199,6 +199,7 @@ describe("StoreCurrency", () => {
                   derived: false,
                 })),
                 vouches: [],
+                decides: [],
               }],
             };
           },

@@ -488,6 +488,7 @@ export class StoreCurrency {
           vouched: slice.unvouched.length === 0,
           reads: slice.reads,
           vouches: slice.vouches,
+          ...(slice.decides.length > 0 && { decides: slice.decides }),
           ...(slice.expiresAt !== undefined && { expiresAt: slice.expiresAt }),
         })),
       });
