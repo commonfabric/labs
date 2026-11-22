@@ -9,7 +9,12 @@ import { assertEquals } from "@std/assert";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { parseDiff } from "../lib/view/diff.ts";
 import { createDiffHighlighter } from "../lib/view/diffedit.ts";
-import { languageForFile } from "../lib/view/languages/language.ts";
+import {
+  languageForFile,
+  languageForSource,
+  metadataMatchesSharedExtension,
+} from "../lib/view/languages/language.ts";
+import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
 import { buildView } from "../lib/view/mod.ts";
 import type { Line } from "../lib/view/model.ts";
 
@@ -24,6 +29,81 @@ Deno.test("plain text: unknown and unnamed files select plain text", () => {
   assertEquals(languageForFile("LICENSE").id, "plain-text");
   assertEquals(languageForFile("checksums.sha256").id, "plain-text");
   assertEquals(languageForFile(undefined).id, "plain-text");
+});
+
+Deno.test("plain text: prose, logs, checksums, versions, and records are claimed by name", () => {
+  for (
+    const name of [
+      "AUTHORS",
+      "CONTRIBUTORS",
+      "COPYING",
+      "docs/CNAME",
+      "harness/results/b1-bay.log",
+      "integration-default/workload.stdout",
+      "profile/baseline-on.stderr",
+      "probes/existing-grant-tests.out",
+      "k8s/components/flux/upstream/SHA256SUMS",
+      "src/GO_SHA256SUMS",
+      "MD5SUMS",
+      "coverage-inputs.sha256",
+      "release.sha512",
+      "lib/VERSION",
+      "src/PYTHON_VERSION",
+      ".ops/SETUP_VERSION",
+      "src/updater/protocol-version",
+      ".python-version",
+      ".node-version",
+      ".nvmrc",
+      "raw/safaridriver.pid",
+      "bracket/server.pids",
+      ".beads/dolt-server.port",
+      "tls/p256.crt",
+      "tls/p256.key",
+      "certs/localhost.pem",
+      "apple/scripts/github-known-hosts",
+      ".ssh/known_hosts",
+      "/etc/ssh/ssh_known_hosts",
+      "ansible/secrets/.gitkeep",
+      "docs/.nojekyll",
+    ]
+  ) {
+    assertEquals(languageForFile(name).id, "plain-text");
+    // A claimed name stays plain whatever evidence its content holds.
+    assertEquals(
+      languageForSource(name, '#!/bin/sh\n<?xml version="1.0"?>').id,
+      "plain-text",
+    );
+  }
+  // The name of a log whose source opens with a JSON object leaves it to
+  // content evidence, which a language for structured logs can claim.
+  for (const name of ["review/seed.log", "profile/baseline-on.stderr"]) {
+    assertEquals(languageForFile(name).id, "plain-text");
+    assertEquals(
+      metadataMatchesSharedExtension(
+        plainTextLanguage.metadata,
+        name,
+        '  {"level":"info"}',
+      ),
+      false,
+    );
+    assertEquals(
+      metadataMatchesSharedExtension(plainTextLanguage.metadata, name, "ok"),
+      true,
+    );
+  }
+  // A word that only ends in `version` names no version record.
+  for (
+    const name of [
+      "conversion",
+      "versions",
+      "version",
+      "scripts/bump-version",
+      "scripts/update-known-hosts",
+      "bin/check_version",
+    ]
+  ) {
+    assertEquals(languageForSource(name, "#!/bin/sh\necho").id, "shell");
+  }
 });
 
 Deno.test("plain text: direct documents preserve source without structure", () => {

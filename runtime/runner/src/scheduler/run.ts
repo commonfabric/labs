@@ -1,4 +1,8 @@
-import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
+import {
+  canResolveScopeKey,
+  resolveScopeKey,
+  type ScopeKey,
+} from "@commonfabric/memory/v2";
 import { getAuthoredDebugSource } from "../harness/authored-debug-source.ts";
 import { startReadStats } from "../read-stats.ts";
 import { getLogger } from "@commonfabric/logger";
@@ -15,6 +19,7 @@ import type {
   CommitError,
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
+  MemorySpace,
 } from "../storage/interface.ts";
 import {
   endLocalReadValidationStretch,
@@ -488,6 +493,45 @@ function abandonAction(
   state.tx.abandonStagedWork(error as CommitError);
 }
 
+/**
+ * A read a served run made of a scoped instance that a writer registered on
+ * its runtime owes and had not produced yet, for which the run was
+ * withdrawn.
+ */
+export type UnproducedRead = {
+  /** The instance key of the run that read. */
+  slice: ScopeKey;
+
+  /** The space the instance is in. */
+  space: MemorySpace;
+  id: string;
+
+  /** The scope key of the instance, as the run's identity resolves it. */
+  scopeKey: ScopeKey;
+};
+
+/**
+ * The read `unproduced` names, as a transaction records it
+ * (`unproducedScopedInstance`: `<space>/<scope>/<id>`), made by the run at
+ * `instance`. `undefined` where the scope is none the run's identity names
+ * an instance of.
+ */
+function unproducedReadOf(
+  unproduced: string,
+  instance: FanOutInstance,
+): UnproducedRead | undefined {
+  // Neither a space DID nor a scope holds a slash.
+  const [space, scope, ...rest] = unproduced.split("/");
+  if (scope !== "user" && scope !== "session") return undefined;
+  if (!canResolveScopeKey(scope, instance.identity)) return undefined;
+  return {
+    slice: instance.key,
+    space: space as MemorySpace,
+    id: rest.join("/"),
+    scopeKey: resolveScopeKey(scope, instance.identity),
+  };
+}
+
 export function appendActionRunTrace(state: {
   readonly actionRunTrace: ActionRunTraceEntry[];
   readonly nodes: NodeRegistry;
@@ -573,6 +617,18 @@ export interface SchedulerActionRunState {
   /** Notes that `action` finished a run that was not withdrawn
    * (`Scheduler.watchProducedDocument()`). */
   readonly noteProduced?: (action: Action) => void;
+
+  /**
+   * Notes what the run of `action` at the instance `run` found of the
+   * scoped instances it read: `read` where it read one its writer had not
+   * produced yet and was withdrawn for it, `undefined` where it read none
+   * (`Scheduler.unproducedReads()`).
+   */
+  readonly noteUnproducedRead?: (
+    action: Action,
+    run: ScopeKey,
+    read: UnproducedRead | undefined,
+  ) => void;
   readonly handleError: (error: Error, action: Action) => void;
   readonly resubscribe: (action: Action, log: ReactivityLog) => void;
   readonly markInvalid: (action: Action, options?: MarkInvalidOptions) => void;
@@ -1502,6 +1558,15 @@ function finalizeReactiveActionCommit(
   if (refused === undefined && unproduced === undefined) {
     if (owner !== undefined) owner.produced = true;
     state.noteProduced?.(args.action);
+  }
+  if (args.fanOutRun !== undefined) {
+    state.noteUnproducedRead?.(
+      args.action,
+      args.fanOutRun.instance.key,
+      unproduced === undefined
+        ? undefined
+        : unproducedReadOf(unproduced, args.fanOutRun.instance),
+    );
   }
   const registrationToken = args.registrationToken;
   // Sealing is not durable acceptance. A withdrawn contribution can have read

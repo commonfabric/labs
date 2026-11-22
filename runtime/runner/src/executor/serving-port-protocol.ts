@@ -254,8 +254,18 @@ export type PlaneRequests = {
       roots: string[];
       excludePrincipal: string | undefined;
       epoch: string;
+      running: string[] | undefined;
     };
     result: Awaited<ReturnType<Server["judgeCurrencyRoots"]>>;
+  };
+  "server.setCarriedDemand": {
+    params: {
+      space: string;
+      reader: string;
+      rows: Parameters<Server["setCarriedDemand"]>[2][number][];
+      excludePrincipal: string | undefined;
+    };
+    result: Awaited<ReturnType<Server["setCarriedDemand"]>>;
   };
   "server.foreignWriteAuthorityFor": {
     params: { space: string; principal: string | undefined };

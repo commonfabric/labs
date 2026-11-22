@@ -1104,6 +1104,18 @@ export class Client {
   }
 
   /**
+   * Indicates whether `encoded`, a request encoded for the current
+   * connection, fits what that connection takes in one request sent whole,
+   * in bytes and in values. Everything fits before the first handshake.
+   *
+   * @internal For `SpaceSession`.
+   */
+  fitsOneRequest(encoded: string): boolean {
+    return this.#requestLimits === undefined ||
+      payloadFits(encoded, wholeLimits(this.#requestLimits));
+  }
+
+  /**
    * How many requests this client has sent and not yet seen answered or
    * settled: a diagnostic, since every entry is dropped when its response
    * arrives, its send is refused, or its connection closes.
@@ -1364,8 +1376,9 @@ export class Client {
    *
    * `options.beforeSend` runs once the request is encoded for the connection
    * it goes out on, with nothing left that could still stop it there, so that
-   * `serverFlags` are that connection's; throwing stops the request, unsent,
-   * with the error thrown.
+   * `serverFlags` and the request bounds are that connection's; it is handed
+   * the encoding, and throwing stops the request, unsent, with the error
+   * thrown.
    */
   async request<Result>(
     message: FabricPlainObject,
@@ -1374,7 +1387,7 @@ export class Client {
       epoch?: number;
       encoded?: string;
       onResponse?: (response: ResponseMessage<Result>) => void;
-      beforeSend?: () => void;
+      beforeSend?: (encoded: string) => void;
     } = {},
   ): Promise<Result> {
     if (options.whileConnected === true && !this.#connected) {
@@ -1407,7 +1420,7 @@ export class Client {
     const encoded = options.encoded !== undefined && options.epoch === epoch
       ? options.encoded
       : this.#encodeRequest(message);
-    options.beforeSend?.();
+    options.beforeSend?.(encoded);
     const { onResponse } = options;
     // Set as the response arrives, which on some transports is before the
     // send settles.
@@ -3535,6 +3548,7 @@ export class SpaceSession {
   #restoreComplete: PromiseWithResolvers<void> | undefined;
   #viewCapabilityLostObservers = new Set<() => void>();
   #terminationObservers = new Set<(error: Error) => void>();
+  #serverSeqObservers = new Set<(serverSeq: number) => void>();
   #watchSpecPositions = new Map<string, number[]>();
   #watchView: WatchView | null = null;
   #precedingWatchSyncs: SessionSync[] = [];
@@ -4494,6 +4508,20 @@ export class SpaceSession {
   }
 
   /**
+   * Observes the newest seq of the space this session has learned of
+   * (`serverSeq`) moving forward, whether by an answer to a request of its
+   * own or by an update the server pushes. The seq is that of the space's
+   * own history. It moves for commits this session hears of, its own and
+   * those to documents it watches, and for an answer that names the space's
+   * head, as listing its history or its branches does, which can name a
+   * commit this session is not sent, such as one of another branch.
+   */
+  subscribeServerSeq(observer: (serverSeq: number) => void): () => void {
+    this.#serverSeqObservers.add(observer);
+    return () => this.#serverSeqObservers.delete(observer);
+  }
+
+  /**
    * Observes this session ending with an error, which `closeError` then
    * holds: a revocation (a takeover, an authorization denial, or a space
    * marked for instance names, which requires an update), a permanent
@@ -5090,6 +5118,7 @@ export class SpaceSession {
     this.#viewInterests = [];
     this.#viewCapabilityLostObservers.clear();
     this.#terminationObservers.clear();
+    this.#serverSeqObservers.clear();
     this.#watchView?.close();
     this.#watchView = null;
   }
@@ -5162,6 +5191,7 @@ export class SpaceSession {
     this.#watchView?.close();
     this.#watchView = null;
     this.#endPresenceRooms(error);
+    this.#serverSeqObservers.clear();
     const observers = [...this.#terminationObservers];
     this.#terminationObservers.clear();
     for (const observer of observers) {
@@ -5750,7 +5780,21 @@ export class SpaceSession {
   }
 
   #noteResult(serverSeq: number): void {
-    this.#serverSeq = Math.max(this.#serverSeq, serverSeq);
+    if (serverSeq <= this.#serverSeq) return;
+    // A session closing still hears its in-flight requests answered, and
+    // reports none of them.
+    if (this.#closed) {
+      this.#serverSeq = serverSeq;
+      return;
+    }
+    this.#serverSeq = serverSeq;
+    for (const observer of [...this.#serverSeqObservers]) {
+      try {
+        observer(serverSeq);
+      } catch (cause) {
+        console.error("server-seq subscriber threw:", cause);
+      }
+    }
   }
 
   #noteOperationWatchCursors(sync: SessionSync): void {
@@ -6005,8 +6049,17 @@ export class SpaceSession {
           onResponse: (response) => {
             if (response.ok !== undefined) pendingCommit.applied = response.ok;
           },
-          beforeSend: () => {
+          beforeSend: (encoded) => {
             if (pendingCommit.sent === true) return;
+            // A connection refuses a request past its bounds by closing, and
+            // the commit would be sent again on each connection after it, so
+            // one that does not fit is refused here instead.
+            if (!this.#client.fitsOneRequest(encoded)) {
+              throw oversizedCommitRefusal(
+                memoryMessageFrameBytes(encoded),
+                this.#client.requestBytesLimit,
+              );
+            }
             if (
               carriesMarkedSplice(pendingCommit.commit) &&
               this.#client.serverFlags?.markedSplicesV1 !== true
@@ -6648,6 +6701,26 @@ const protocolError = (message: string): Error => {
  * its writer can retry; it carries no seq to wait for, as the store's own
  * conflicts do.
  */
+/**
+ * A session's refusal of a commit, unsent, because its encoding, `bytes`
+ * long, is past the bounds its connection holds one request to, of `limit`
+ * bytes and of a number of values. It
+ * carries the name the memory server gives a message it refuses for its
+ * size, which the runner reads as a terminal rejection.
+ */
+const oversizedCommitRefusal = (
+  bytes: number,
+  limit: number | undefined,
+): Error =>
+  Object.assign(
+    new Error(
+      `memory v2 commit not sent: its encoding, ${bytes} bytes, is past ` +
+        `the bounds this connection holds one request to (at most ${limit} ` +
+        "bytes)",
+    ),
+    { name: "MessageTooLargeError" },
+  );
+
 const markedSpliceRefusal = (): Error =>
   Object.assign(
     new Error(

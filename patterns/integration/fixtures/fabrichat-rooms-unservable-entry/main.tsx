@@ -14,6 +14,7 @@ import {
   handler,
   NAME,
   pattern,
+  type PerSession,
   type PerUser,
   type Stream,
   UI,
@@ -150,8 +151,14 @@ export interface MainOutput {
   /** The rooms the manager lists for the person. */
   rooms: PerUser<ChatIndexEntry[]>;
 
-  /** The people the person's rooms list, by principal. */
-  people: PerUser<Record<string, ManagerProfileCell[]>>;
+  /**
+   * The people the person's rooms list, by principal, for a session that has
+   * asked for them.
+   */
+  people: PerSession<Record<string, ManagerProfileCell[]>>;
+
+  /** Asks for `people`, for the session. */
+  askForPeople: Stream<unknown>;
 }
 
 export default pattern<MainInput, MainOutput>((
@@ -182,5 +189,6 @@ export default pattern<MainInput, MainOutput>((
     sharedSpaceCatalog: chats.sharedSpaceCatalog,
     rooms: chats.rooms,
     people: chats.people,
+    askForPeople: chats.askForPeople,
   };
 });

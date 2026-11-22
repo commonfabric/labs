@@ -38,13 +38,19 @@ import { yamlLanguage } from "../lib/view/languages/yaml/language.ts";
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
 import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { kotlinLanguage } from "../lib/view/languages/kotlin/language.ts";
+import { rustLanguage } from "../lib/view/languages/rust/language.ts";
 import { tomlLanguage } from "../lib/view/languages/toml/language.ts";
 import { hclLanguage } from "../lib/view/languages/hcl/language.ts";
 import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { makeLanguage } from "../lib/view/languages/make/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
 import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
+import { directiveLanguage } from "../lib/view/languages/directive/language.ts";
 import { iniLanguage } from "../lib/view/languages/ini/language.ts";
+import { orgLanguage } from "../lib/view/languages/org/language.ts";
+import { gitAttributesLanguage } from "../lib/view/languages/gitattributes/language.ts";
+import { leanLanguage } from "../lib/view/languages/lean/language.ts";
+import { leanToolchainLanguage } from "../lib/view/languages/lean-toolchain/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
@@ -146,10 +152,15 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("swift"), swiftLanguage);
   assertEquals(languageForName("kotlin"), kotlinLanguage);
   assertEquals(languageForName("kt"), kotlinLanguage);
+  assertEquals(languageForName("rust"), rustLanguage);
+  assertEquals(languageForName("rs"), rustLanguage);
   assertEquals(languageForName("toml"), tomlLanguage);
   assertEquals(languageForName("hcl"), hclLanguage);
   assertEquals(languageForName("opentofu"), hclLanguage);
   assertEquals(languageForName("terraform"), hclLanguage);
+  assertEquals(languageForName("lean"), leanLanguage);
+  assertEquals(languageForName("lean4"), leanLanguage);
+  assertEquals(languageForName("lean-toolchain"), leanToolchainLanguage);
   assertEquals(languageForName("shell"), shellLanguage);
   assertEquals(languageForName("sh"), shellLanguage);
   assertEquals(languageForName("bash"), shellLanguage);
@@ -162,9 +173,14 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("r8"), proguardLanguage);
   assertEquals(languageForName("ini"), iniLanguage);
   assertEquals(languageForName("dosini"), iniLanguage);
+  assertEquals(languageForName("gitattributes"), gitAttributesLanguage);
   assertEquals(languageForName("xml"), xmlLanguage);
   assertEquals(languageForName("svg"), xmlLanguage);
   assertEquals(languageForName("plist"), xmlLanguage);
+  assertEquals(languageForName("org"), orgLanguage);
+  assertEquals(languageForName("orgmode"), orgLanguage);
+  assertEquals(languageForName("nginx"), directiveLanguage);
+  assertEquals(languageForName("netdata"), directiveLanguage);
   expect(languageForName("binary")).toBe(binaryLanguage);
   expect(languageForName("bytes")).toBe(binaryLanguage);
   assertEquals(languageForName("plain-text"), plainTextLanguage);
@@ -180,14 +196,20 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "python",
     "swift",
     "kotlin",
+    "rust",
     "toml",
     "hcl",
+    "lean",
+    "lean-toolchain",
     "shell",
     "make",
     "properties",
     "ini",
     "proguard",
+    "gitattributes",
     "xml",
+    "org",
+    "directive",
     "binary",
     "plain-text",
   ]);
@@ -210,12 +232,17 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "swift",
     "kotlin",
     "kt",
+    "rust",
+    "rs",
     "toml",
     "hcl",
     "opentofu",
     "tofu",
     "terraform",
     "tf",
+    "lean",
+    "lean4",
+    "lean-toolchain",
     "shell",
     "sh",
     "bash",
@@ -229,9 +256,20 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "cfg",
     "proguard",
     "r8",
+    "gitattributes",
     "xml",
     "svg",
     "plist",
+    "org",
+    "orgmode",
+    "directive",
+    "nginx",
+    "apache",
+    "apacheconf",
+    "nftables",
+    "nft",
+    "netdata",
+    "sysusers",
     "binary",
     "bytes",
     "plain-text",

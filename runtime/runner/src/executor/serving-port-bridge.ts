@@ -396,10 +396,18 @@ export class ServingPortBridge {
     );
     endpoint.onRequest(
       "server.judgeCurrencyRoots",
-      ({ space, roots, excludePrincipal, epoch }) =>
+      ({ space, roots, excludePrincipal, epoch, running }) =>
         server.judgeCurrencyRoots(space, roots, {
           ...(excludePrincipal !== undefined && { excludePrincipal }),
           epoch,
+          ...(running !== undefined && { running }),
+        }),
+    );
+    endpoint.onRequest(
+      "server.setCarriedDemand",
+      ({ space, reader, rows, excludePrincipal }) =>
+        server.setCarriedDemand(space, reader, rows, {
+          ...(excludePrincipal !== undefined && { excludePrincipal }),
         }),
     );
     endpoint.onRequest(

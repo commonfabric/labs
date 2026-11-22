@@ -1,8 +1,10 @@
 import {
   type CellScope,
+  identityOfScopeKey,
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
+  scopeOfScopeKey,
 } from "@commonfabric/memory/v2";
 import { type ArmedTurn, armTurn } from "@commonfabric/async/turn";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
@@ -148,6 +150,7 @@ import { SpeculationLineage } from "./lineage.ts";
 import { SchedulerMaterializers } from "./materializers.ts";
 import { NodeRegistry, type SchedulerNode } from "./node-record.ts";
 import {
+  type ClockDocument,
   clockDocumentKey,
   type PieceCurrencySnapshot,
   snapshotPieceCurrency,
@@ -163,7 +166,11 @@ import {
   unsubscribeSchedulerAction,
 } from "./registration.ts";
 import { sameReactivityLog } from "./reactivity.ts";
-import { runSchedulerAction, type SchedulerActionRunState } from "./run.ts";
+import {
+  runSchedulerAction,
+  type SchedulerActionRunState,
+  type UnproducedRead,
+} from "./run.ts";
 import {
   captureEchoRun,
   computeEchoSteps,
@@ -488,8 +495,18 @@ export class Scheduler {
   });
   #writeIndex!: SchedulerWriteIndex;
 
-  /** The documents a clock writes, as `noteClockDocument()` was told of them. */
-  readonly #clockDocuments = new Set<string>();
+  /**
+   * The documents a clock writes, as `noteClockDocument()` was told of
+   * them.
+   */
+  readonly #clockDocuments = new Map<string, ClockDocument>();
+
+  /**
+   * The read each served run is withdrawn for and waiting on, by the
+   * action and then by the instance key of the run (`unproducedReads()`).
+   */
+  readonly #unproducedReads = new Map<Action, Map<ScopeKey, UnproducedRead>>();
+  #unproducedReadsGeneration = 0;
 
   readonly #materializers = new SchedulerMaterializers(
     this.#nodes.effects,
@@ -1060,6 +1077,9 @@ export class Scheduler {
   ): void {
     unsubscribeSchedulerAction(this.#unsubscribeState, action, options);
     this.#materializers.clearAction(action);
+    if (this.#unproducedReads.delete(action)) {
+      this.#unproducedReadsGeneration += 1;
+    }
     // The node record outlives the registration, so its echo gate would
     // otherwise defer a later registration of the same action.
     this.#echoBreaker.forget(this.#getActionId(action), performance.now());
@@ -1685,12 +1705,18 @@ export class Scheduler {
   }
 
   /**
-   * Records that a clock writes the document at `address`: something other
-   * than a commit decides when its value is out of date, so the currency
-   * index vouches for no slice that read it.
+   * Records that a clock writes the document at `address` on each whole
+   * multiple of `intervalMs` since the epoch, and that `read` returns the
+   * tick the document holds: something other than a commit decides when its
+   * value is out of date, so the currency index holds a slice that read it
+   * current only until the tick after that one.
    */
-  noteClockDocument(address: Pick<IMemorySpaceAddress, "space" | "id">): void {
-    this.#clockDocuments.add(clockDocumentKey(address));
+  noteClockDocument(
+    address: Pick<IMemorySpaceAddress, "space" | "id">,
+    intervalMs: number,
+    read: () => number | undefined,
+  ): void {
+    this.#clockDocuments.set(clockDocumentKey(address), { intervalMs, read });
   }
 
   /**
@@ -1709,9 +1735,20 @@ export class Scheduler {
         dependencies: this.#dependencies,
         writeIndex: this.#writeIndex,
         clockDocuments: this.#clockDocuments,
-        sourceSeqOf: ({ space: source, id }) =>
-          this.runtime.storageManager.open(source).replica
-            .speculationRetirementView?.(id, "space").confirmedSeq,
+        sourceSeqOf: ({ space: source, id, scopeKey }) => {
+          // The replica files a user's or a session's instance under the
+          // identity its key names.
+          const identity = scopeKey === "space"
+            ? undefined
+            : identityOfScopeKey(scopeKey);
+          if (scopeKey !== "space" && identity === undefined) return undefined;
+          return this.runtime.storageManager.open(source).replica
+            .confirmedDocumentSeq(
+              id,
+              scopeOfScopeKey(scopeKey) as CellScope,
+              identity,
+            );
+        },
       },
       space,
       pieceRootId,
@@ -2225,6 +2262,51 @@ export class Scheduler {
       this.#producedWatchers.delete(key);
       for (const wake of watchers) wake();
     }
+  }
+
+  /**
+   * Notes what the run of `action` at the instance `run` found of the
+   * scoped instances it read (`SchedulerActionRunState.noteUnproducedRead`).
+   */
+  #noteUnproducedRead(
+    action: Action,
+    run: ScopeKey,
+    read: UnproducedRead | undefined,
+  ): void {
+    let reads = this.#unproducedReads.get(action);
+    if (read === undefined) {
+      if (reads?.delete(run) !== true) return;
+      if (reads.size === 0) this.#unproducedReads.delete(action);
+    } else {
+      if (reads === undefined) {
+        reads = new Map();
+        this.#unproducedReads.set(action, reads);
+      }
+      const known = reads.get(run);
+      if (
+        known !== undefined && known.id === read.id &&
+        known.scopeKey === read.scopeKey && known.space === read.space
+      ) return;
+      reads.set(run, read);
+    }
+    this.#unproducedReadsGeneration += 1;
+  }
+
+  /**
+   * The reads for which a served run is withdrawn and waiting: each of a
+   * scoped instance that a writer registered here owes and has not
+   * produced for the run's identity. A serving loop demands those
+   * instances, so that the writer runs for them.
+   */
+  unproducedReads(): UnproducedRead[] {
+    return [...this.#unproducedReads.values()].flatMap((reads) => [
+      ...reads.values(),
+    ]);
+  }
+
+  /** A count that moves whenever what `unproducedReads()` returns does. */
+  get unproducedReadsGeneration(): number {
+    return this.#unproducedReadsGeneration;
   }
 
   /** Notes that `action` finished a run that was not withdrawn, waking the
@@ -3933,6 +4015,8 @@ export class Scheduler {
       markActionHasRun: (target) => this.#gates.markActionHasRun(target),
       markNodeHasRun: (target) => this.#markNodeHasRun(target),
       noteProduced: (target) => this.#noteProduced(target),
+      noteUnproducedRead: (target, run, read) =>
+        this.#noteUnproducedRead(target, run, read),
       handleError: (error, target) => this.#handleError(error, target),
       resubscribe: (target, log) => this.resubscribe(target, log),
       markInvalid: (target, options) =>

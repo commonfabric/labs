@@ -35,6 +35,7 @@ type ServerMembers = Pick<
   | "advanceCurrency"
   | "storeCurrencyRecords"
   | "judgeCurrencyRoots"
+  | "setCarriedDemand"
 >;
 
 /**

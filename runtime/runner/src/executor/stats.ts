@@ -361,9 +361,8 @@ export type ServingLoopStats = {
      * in another space that the snapshot cannot name the instance or the seq
      * of), `foreign-write` (another space), `unattributed-writer` (it read a
      * document whose writer names no piece and is not live, not clean, or
-     * runs once for each viewer), `clock-read` (it read a document a clock
-     * writes), `scoped-root`, `source-origin` and `no-pattern`. A record with
-     * two reasons counts under both. */
+     * runs once for each viewer), `scoped-root`, `source-origin` and
+     * `no-pattern`. A record with two reasons counts under both. */
     unvouched: Record<string, number>;
 
     /** Roots put to a judgment, counted at each judgment made. */
@@ -389,16 +388,45 @@ export type ServingLoopStats = {
      * piece does not vouch for. */
     rearmed: number;
 
-    /** Times the loop was woken to judge a root it had left unloaded
-     * because the index changed from outside it: a space a slice read told
-     * this one of a change, or a request made for another space marked a
-     * slice here. */
+    /** Times the loop was woken to judge a root it had left unloaded, or a
+     * piece that runs and is stale upstream, because the index changed
+     * from outside it: a space a slice read told this one of a change, or
+     * a request made for another space marked a slice here. */
     indexWakes: number;
 
+    /** Times the loop was woken to judge a root it had left unloaded, or a
+     * piece that runs and is stale upstream, because the record of a slice
+     * expired: the next tick of a clock the slice read came, which no
+     * commit reports. */
+    expiryWakes: number;
+
     /** Pieces the index held clean that wrote an instance they vouched for
-     * again with no input of theirs changed. Each one is a judgment that
-     * would have served a stale value. */
+     * again, to a value other than the one it held, with no input of theirs
+     * changed. Each one is a judgment that would have served a stale
+     * value. */
     falseClean: number;
+
+    /** Rows of demand the loops offer to carry into other spaces now: an
+     * instance there that a run here read, with a client session whose
+     * actor it was read for (serving-loop.md §3b). A row stands there
+     * unless that space's index proves the instance current. */
+    carried: number;
+
+    /** Rows of carried demand the space they were sent to refused. */
+    carriedRefused: number;
+
+    /** Roots a `skip` loop left unloaded because what the store held of
+     * them was stale only through what is upstream: starting their own
+     * piece would not have made them current, so the loop started the
+     * pieces upstream instead (serving-loop.md §1). */
+    heldUpstream: number;
+
+    /** Pieces, each one whose slices hold a root or one that runs, that
+     * the loop gave up waiting on what is upstream of: no piece named for
+     * one could be started, or each ran and was recorded and it was stale
+     * still. A root is loaded as a refused one is once every piece that
+     * holds it was given up on. */
+    upstreamAbandoned: number;
   };
 
   /** SERVER SETTLE per authored input (serving-loop.md §7; stage-C design
@@ -910,7 +938,12 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     servedFromStore: 0,
     rearmed: 0,
     indexWakes: 0,
+    expiryWakes: 0,
     falseClean: 0,
+    carried: 0,
+    carriedRefused: 0,
+    heldUpstream: 0,
+    upstreamAbandoned: 0,
   },
   settle: { series: [], dropped: 0 },
   settleAdvances: { count: 0, lastDelta: 0, series: [], dropped: 0 },

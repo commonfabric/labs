@@ -5,6 +5,9 @@ import {
   type CurrencyRecord,
   selectCurrencyPiece,
 } from "../v2/currency-index.ts";
+import { aclDocId } from "../acl.ts";
+import { resolveScopeKey } from "../v2.ts";
+import { connect, loopback } from "../v2/client.ts";
 import { applyCommit } from "../v2/engine.ts";
 import { getCurrencyDelivery, Server } from "../v2/server.ts";
 
@@ -236,6 +239,225 @@ describe("v2-server-currency-across-spaces", () => {
         expect(server.currencyReadersArmedOn(SPACE)).toEqual([]);
         expect(told).toEqual([FAR]);
       });
+
+      describe("with a slice of an actor that read that actor's own instance in another space", () => {
+        /** The principal `write()` and `writeOwn()` commit as. */
+        const ALICE = "did:key:alice";
+        const aliceUser = resolveScopeKey("user", { principal: ALICE });
+        const aliceSession = resolveScopeKey("session", {
+          principal: ALICE,
+          sessionId: "session-one",
+        });
+
+        /**
+         * Gives `SOURCE` an access list that grants alice `capability`, or
+         * names her nowhere.
+         */
+        const grant = async (capability?: string): Promise<void> => {
+          localSeq += 1;
+          applyCommit(await server.engineForSpace(SOURCE), {
+            sessionId: "access-list",
+            space: SOURCE,
+            commit: {
+              localSeq,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: aclDocId(SOURCE),
+                value: {
+                  value: {
+                    "did:key:owner": "OWNER",
+                    ...(capability !== undefined && { [ALICE]: capability }),
+                  },
+                },
+              }],
+            },
+          });
+        };
+
+        /**
+         * Commits a write to alice's own instance of `of:prefs` in `SOURCE`,
+         * at `scope`, and returns the commit's seq.
+         */
+        const writeOwn = async (scope: "user" | "session"): Promise<number> => {
+          localSeq += 1;
+          return applyCommit(await server.engineForSpace(SOURCE), {
+            sessionId: "session-one",
+            principal: ALICE,
+            space: SOURCE,
+            commit: {
+              localSeq,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: "of:prefs",
+                scope,
+                value: { value: { n: localSeq } },
+              }],
+            },
+          }).seq;
+        };
+
+        /**
+         * A record of `SPACE`'s piece whose slice at `key` read alice's
+         * instance of `of:prefs` in `SOURCE` at `seq`.
+         */
+        const readingOwn = (key: string, seq: number): CurrencyRecord => ({
+          piece: "of:piece",
+          under: [],
+          vouched: true,
+          writes: [],
+          owned: [],
+          slices: [
+            { key: "space", vouched: true, reads: [], vouches: [] },
+            {
+              key,
+              vouched: true,
+              reads: [{
+                space: SOURCE,
+                id: "of:prefs",
+                scopeKey: key,
+                derived: false,
+                seq,
+              }],
+              vouches: [],
+            },
+          ],
+        });
+
+        /** The mark the slice of `SPACE`'s piece at `key` holds. */
+        const markAt = async (key: string) =>
+          selectCurrencyPiece(await server.engineForSpace(SPACE), {
+            piece: "of:piece",
+            slice: key,
+          })?.mark;
+
+        /** How many instances `SOURCE` holds a registration of. */
+        const registrations = async () =>
+          ((await server.engineForSpace(SOURCE)).database.prepare(
+            `SELECT COUNT(*) AS n FROM currency_reader`,
+          ).get() as { n: number }).n;
+
+        beforeEach(() => {
+          server = newServer();
+        });
+
+        it("stores clean the user's slice, where the actor holds READ on that space", async () => {
+          await grant("READ");
+
+          await store(readingOwn(aliceUser, await writeOwn("user")));
+
+          expect(await markAt(aliceUser)).toBe(0);
+          expect(await registrations()).toBe(1);
+        });
+
+        it("stores clean the session's slice, where the actor holds READ on that space", async () => {
+          await grant("READ");
+
+          await store(readingOwn(aliceSession, await writeOwn("session")));
+
+          expect(await markAt(aliceSession)).toBe(0);
+        });
+
+        it("stores the slice marked `2` once the instance has moved past the seq it was read at", async () => {
+          await grant("READ");
+          const read = await writeOwn("user");
+          await writeOwn("user");
+
+          await store(readingOwn(aliceUser, read));
+
+          expect(await markAt(aliceUser)).toBe(2);
+        });
+
+        it("stores the slice marked `2`, and registers nothing, where that space's access list does not name the actor", async () => {
+          await grant();
+
+          await store(readingOwn(aliceUser, await writeOwn("user")));
+
+          expect(await markAt(aliceUser)).toBe(2);
+          expect(await registrations()).toBe(0);
+        });
+
+        it("stores the slice marked `2`, and drops its registration, once the actor's grant has been withdrawn", async () => {
+          await grant("READ");
+          const read = await writeOwn("user");
+          await store(readingOwn(aliceUser, read));
+          await grant();
+
+          await store(readingOwn(aliceUser, read));
+
+          expect(await markAt(aliceUser)).toBe(2);
+          expect(await registrations()).toBe(0);
+        });
+
+        it("marks the slice `2` at the judgment that follows a change to that space's access list which withdrew the actor's grant", async () => {
+          // The slice is demanded by no session here, so the judgment that
+          // pulls is made of a piece whose `space` slice read that space
+          // too.
+
+          await grant("READ");
+          const read = await writeOwn("user");
+          const shared = await write(SOURCE, "of:far");
+          await store({
+            ...readingOwn(aliceUser, read),
+            slices: [
+              {
+                key: "space",
+                vouched: true,
+                reads: [{
+                  space: SOURCE,
+                  id: "of:far",
+                  scopeKey: "space",
+                  derived: false,
+                  seq: shared,
+                }],
+                vouches: [],
+              },
+              readingOwn(aliceUser, read).slices[1],
+            ],
+          });
+          await servable();
+          expect(await markAt(aliceUser)).toBe(0);
+          expect(server.currencyReadersArmedOn(SOURCE)).toEqual([SPACE]);
+
+          // A client's commit is what a change to an access list is.
+          const client = await connect({ transport: loopback(server) });
+          const owner = await client.mount(SOURCE, {}, (
+            _space,
+            _session,
+            context,
+          ) => ({
+            invocation: {
+              aud: context.audience,
+              challenge: context.challenge.value,
+            },
+            authorization: {},
+          }));
+          await owner.transact({
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: aclDocId(SOURCE),
+              value: { value: { "did:key:owner": "OWNER" } },
+            }],
+          });
+          await client.close();
+          await server.idle();
+          expect(server.currencyReadersArmedOn(SOURCE)).toEqual([]);
+          await servable();
+
+          expect(await markAt(aliceUser)).toBe(2);
+          expect(await registrations()).toBe(1);
+        });
+
+        it("stores the slice marked `2`, and registers nothing, where that space has no access list", async () => {
+          await store(readingOwn(aliceUser, await writeOwn("user")));
+
+          expect(await markAt(aliceUser)).toBe(2);
+          expect(await registrations()).toBe(0);
+        });
+      });
     });
 
     describe("judgeCurrencyRoots()", () => {
@@ -313,6 +535,181 @@ describe("v2-server-currency-across-spaces", () => {
 
         expect(judged.marked.map(({ piece, seq }) => ({ piece, seq })))
           .toEqual([{ piece: "of:producer", seq: changed }]);
+      });
+
+      describe("with a space it reads that holds a slice which expires", () => {
+        /** What `Date.now()` returns in these cases. */
+        let now: number;
+        let clock: Stub<DateConstructor>;
+
+        /** The time `SOURCE`'s slice expires at. */
+        const EXPIRES = 1_700_000_060_000;
+
+        beforeEach(() => {
+          now = 1_700_000_000_000;
+          clock = stub(Date, "now", () => now);
+          server = newServer();
+        });
+
+        afterEach(() => {
+          clock.restore();
+        });
+
+        /**
+         * Records `of:clock` of `space` as computing `computed:tick` until
+         * `EXPIRES`.
+         */
+        const storeClock = async (space = SOURCE) =>
+          await store(
+            {
+              piece: "of:clock",
+              under: [],
+              vouched: true,
+              writes: ["computed:tick"],
+              owned: [],
+              slices: [{
+                key: "space",
+                vouched: true,
+                reads: [],
+                vouches: ["computed:tick"],
+                expiresAt: EXPIRES,
+              }],
+            },
+            space,
+          );
+
+        /**
+         * Records `of:after` of `SOURCE` as computing `computed:after` from
+         * `computed:tick`, and `SPACE`'s piece as having read
+         * `computed:after` at its head.
+         */
+        const storeChain = async (): Promise<void> => {
+          await storeClock();
+          await store(
+            {
+              piece: "of:after",
+              under: [],
+              vouched: true,
+              writes: ["computed:after"],
+              owned: [],
+              slices: [{
+                key: "space",
+                vouched: true,
+                reads: [{
+                  space: SOURCE,
+                  id: "computed:tick",
+                  scopeKey: "space",
+                  derived: true,
+                }],
+                vouches: ["computed:after"],
+              }],
+            },
+            SOURCE,
+          );
+          await store(
+            reading(
+              SOURCE,
+              "computed:after",
+              await headOf(SOURCE, "computed:after"),
+            ),
+          );
+        };
+
+        /** What a judgment of `SPACE`'s piece returns. */
+        const judged = async (space = SPACE) =>
+          await server.judgeCurrencyRoots(space, ["of:piece"], {
+            epoch: EPOCH,
+          });
+
+        it("returns the root, and that time as the time to judge it again", async () => {
+          await storeChain();
+
+          expect(await judged()).toMatchObject({
+            servable: [{ root: "of:piece", piece: "of:piece" }],
+            nextExpiry: EXPIRES,
+          });
+        });
+
+        it("asks nothing of that space before the time", async () => {
+          await storeChain();
+          await judged();
+          const { pulls } = server.currencyDelivery();
+          now = EXPIRES - 1;
+
+          expect((await judged()).servable).toHaveLength(1);
+
+          expect(server.currencyDelivery().pulls).toBe(pulls);
+        });
+
+        it("refuses, once the time has come, a root that read what a piece computes from the expired slice's output", async () => {
+          await storeChain();
+          await judged();
+          const { pulls } = server.currencyDelivery();
+          now = EXPIRES;
+
+          const after = await judged();
+
+          expect(after.servable).toEqual([]);
+          expect(after.nextExpiry).toBeUndefined();
+          expect(server.currencyDelivery().pulls).toBe(pulls + 1);
+        });
+
+        it("returns that time for a root two spaces along from the slice", async () => {
+          await storeChain();
+          await store(
+            reading(SPACE, "of:near", await write(SPACE, "of:near")),
+            FAR,
+          );
+
+          expect(await judged(FAR)).toMatchObject({
+            servable: [{ root: "of:piece", piece: "of:piece" }],
+            nextExpiry: EXPIRES,
+          });
+        });
+
+        it("refuses, once the time has come, a root two spaces along that read what the space between computes from it", async () => {
+          await storeChain();
+          await store(
+            {
+              ...reading(
+                SOURCE,
+                "computed:after",
+                await headOf(SOURCE, "computed:after"),
+              ),
+              writes: ["of:near"],
+              slices: [{
+                key: "space",
+                vouched: true,
+                reads: [{
+                  space: SOURCE,
+                  id: "computed:after",
+                  scopeKey: "space",
+                  derived: false,
+                  seq: await headOf(SOURCE, "computed:after"),
+                }],
+                vouches: ["of:near"],
+              }],
+            },
+          );
+          await store(
+            reading(SPACE, "of:near", await headOf(SPACE, "of:near")),
+            FAR,
+          );
+          await judged(FAR);
+          now = EXPIRES;
+
+          expect((await judged(FAR)).servable).toEqual([]);
+        });
+
+        it("tells a space resting on it without a time when a slice that expires is stored in it", async () => {
+          await armed();
+          told = [];
+
+          await storeClock();
+
+          expect(told).toEqual([SPACE]);
+          expect((await judged()).nextExpiry).toBe(EXPIRES);
+        });
       });
     });
 

@@ -2,6 +2,7 @@ import type { TreeSitterGrammar } from "./adapter.ts";
 import { hclGrammar } from "../hcl/hcl.ts";
 import { kotlinGrammar } from "../kotlin/kotlin.ts";
 import { pythonGrammar } from "../python/python.ts";
+import { rustGrammar } from "../rust/rust.ts";
 import { shellGrammar } from "../shell/shell.ts";
 import { swiftGrammar } from "../swift/swift.ts";
 import { tomlGrammar } from "../toml/toml.ts";
@@ -16,6 +17,7 @@ export const treeSitterGrammars: readonly TreeSitterGrammar[] = [
   hclGrammar,
   kotlinGrammar,
   pythonGrammar,
+  rustGrammar,
   shellGrammar,
   swiftGrammar,
   tomlGrammar,

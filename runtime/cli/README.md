@@ -515,39 +515,39 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-Swift, Kotlin, TOML, HCL, shell, makefile, Java properties, INI, ProGuard, and
-XML files use their own syntax highlighting. HCL covers OpenTofu and Terraform
-configuration named `.tf` or `.tofu`, variable definitions files named
-`.tfvars`, backend configuration files named `.tfbackend`, and other `.hcl`
-files, such as dependency lock files. A string's interpolations and template
-directives are colored as code inside the string. Shell covers Bash and POSIX
-shell scripts named `.sh`, `.bash`, or `.command`, and Bash's startup files,
-such as `.bashrc` and `.profile`. A heredoc's body is colored as a string, with
-the expansions its delimiter allows. The makefile language reads GNU make's
-syntax in files named `Makefile`, `makefile`, `GNUmakefile`, or `.mk`. Make
-passes recipe lines to the shell, so they are colored as shell. The same is true
-of the command in a `!=` assignment and the argument of the `shell` function.
-Make's own variable references and function calls are colored inside that shell
-text. A Swift package manifest is Swift source under its `.swift` extension, and
-a module's `.swiftinterface` is Swift as well. Gradle build and settings scripts
-are Kotlin scripts under the `.kts` extension. Gradle version catalogs and Cargo
-manifests are TOML, as are Cargo lock files. The ProGuard language covers the
-keep rules that ProGuard and R8 read: `proguard-rules.pro` and
-`consumer-rules.pro` select it by name, and another `.pro` file uses it when one
-of its lines starts with one of ProGuard's option names, because Qt project
-files and Prolog use that suffix as well. XML covers Android manifests,
-resources, and layouts, SVG images, and Apple property lists, entitlements, and
-privacy manifests. Web manifests, TLDraw documents, Deno lock files, editor
-workspace files, and Swift package resolutions use the JSON highlighting their
-suffixes do not announce. A `.cfg` file uses JSON highlighting when the source
-in view opens a JSON object; that suffix is shared with unrelated syntaxes, so
-its name alone leaves it as plain text. Transformed compiler output piped
-without a filename keeps TypeScript highlighting when its module header
-identifies it. Python interpreter shebangs select Python for otherwise
-unrecognized names, `swift` and `xcrun swift` shebangs select Swift, and
-`kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs select
-shell, which covers Git hooks and other extensionless programs. `make` and
-`gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
+Swift, Kotlin, Rust, TOML, HCL, Lean, shell, makefile, Java properties, INI,
+ProGuard, XML, and Org mode files use their own highlighting. HCL covers
+OpenTofu and Terraform configuration named `.tf` or `.tofu`, variable
+definitions files named `.tfvars`, backend configuration files named
+`.tfbackend`, and other `.hcl` files, such as dependency lock files. A string's
+interpolations and template directives are colored as code inside the string.
+Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or `.command`,
+and Bash's startup files, such as `.bashrc` and `.profile`. A heredoc's body is
+colored as a string, with the expansions its delimiter allows. The makefile
+language reads GNU make's syntax in files named `Makefile`, `makefile`,
+`GNUmakefile`, or `.mk`. Make passes recipe lines to the shell, so they are
+colored as shell. The same is true of the command in a `!=` assignment and the
+argument of the `shell` function. Make's own variable references and function
+calls are colored inside that shell text. A Swift package manifest is Swift
+source under its `.swift` extension, and a module's `.swiftinterface` is Swift
+as well. Gradle build and settings scripts are Kotlin scripts under the `.kts`
+extension. Gradle version catalogs and Cargo manifests are TOML, as are Cargo
+lock files. The ProGuard language covers the keep rules that ProGuard and R8
+read: `proguard-rules.pro` and `consumer-rules.pro` select it by name, and
+another `.pro` file uses it when one of its lines starts with one of ProGuard's
+option names, because Qt project files and Prolog use that suffix as well. XML
+covers Android manifests, resources, and layouts, SVG images, and Apple property
+lists, entitlements, and privacy manifests. Web manifests, TLDraw documents,
+Deno lock files, editor workspace files, and Swift package resolutions use the
+JSON highlighting their suffixes do not announce. A `.cfg` file uses JSON
+highlighting when the source in view opens a JSON object; that suffix is shared
+with unrelated syntaxes, so its name alone leaves it as plain text. Transformed
+compiler output piped without a filename keeps TypeScript highlighting when its
+module header identifies it. Python interpreter shebangs select Python for
+otherwise unrecognized names, `swift` and `xcrun swift` shebangs select Swift,
+and `kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs
+select shell, which covers Git hooks and other extensionless programs. `make`
+and `gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
 select the TypeScript and JavaScript language family. For an otherwise
 unrecognized name, source that starts with an XML declaration (`<?xml`), after
 any byte order mark, selects XML, which covers Interface Builder documents,
@@ -562,6 +562,15 @@ and suppress unified-diff auto-detection. An explicit language takes priority
 when both options are present. Use `--diff` instead when the pipe is a unified
 diff.
 
+Lean covers Lean 4 source named `.lean`. Lean lets a file add its own notation,
+so the highlighting reads the lexical syntax every Lean file shares: comments,
+strings and the code interpolated into them, other literals, identifiers,
+keywords, and attributes. The structure tree lists namespaces, sections, and
+`mutual` blocks, and the definitions, theorems, instances, structures, classes,
+and inductive types inside them. A project's `lean-toolchain` file, which names
+the Lean release the project builds with, colors the repository that publishes
+the release and the release's name.
+
 INI covers `.ini` files, which include Ansible inventories with that suffix,
 Ansible's `ansible.cfg` and `.ansible.cfg`, and the configuration files of
 Python tools such as `setup.cfg`, `.coveragerc`, `.flake8`, `pylintrc`, and
@@ -570,6 +579,67 @@ lines and comments heads a section whose name does not start the way a JSON
 array's first value does. A line in an Ansible inventory that names a host and
 then sets `name=value` variables colors the host and each variable. The
 structure tree lists sections with the keys and hosts in each.
+
+Org mode covers `.org` files. Headlines, keywords, blocks, comments, drawers,
+tables, lists, links, code, and timestamps are colored, and the structure tree
+lists headlines, each inside the one above it. A source block is colored as the
+language its first parameter names, such as `bash`, when `cf view` supports that
+language and it is not Org, and as a string otherwise.
+
+`.gitattributes` files in any directory use the Git attributes language's syntax
+highlighting. It colors each line's pattern and the wildcards in it, and each
+attribute, whether set, unset with `-`, left unspecified with `!`, or given a
+value with `=`. The structure tree lists the patterns and the macros that
+patterns written `[attr]name` define. A line that Git ignores, such as one
+holding a name Git does not accept, is left uncolored.
+
+The directive configuration language covers the syntax that nginx, Apache httpd,
+nftables, Netdata health alerts, and sysusers.d share: each statement starts
+with a directive and ends at the end of its line, unless the line ends with `\`
+or a list is still open. A `{` that ends a line opens a block and a `}` that
+starts a line closes it, and only a whole line that starts with `#` is a
+comment, unless the line before ends with `\`. In a file in which at least half
+of the statement lines end with `;`, as nginx's and some nftables rulesets' do,
+a `;` ends a statement, any `{` or `}` opens or closes a block, a `#` after
+white space, `;`, `{`, or `}` starts a comment, a statement continues onto a
+line that is indented further, unless that line sets a key or opens a section,
+as an nginx argument list that runs over several lines does, and a quoted string
+runs to its closing quote over as many lines as it takes. It colors directives,
+quoted strings, `$name`, `${name}`, and `%{name}` variable references, numbers
+with units such as `10s`, and the booleans `on`, `off`, `yes`, `no`, `true`, and
+`false`. Netdata's `key: value` lines and Apache's section tags such as
+`<Directory /srv>` are colored as directives and sections. A `{` that follows
+`=` opens a list rather than a block, such as an nftables set, as does a block's
+`{` that a comma follows on its line before any `;`, `{`, or `#`, or that a `}`
+closes later on its line around content without a `;`, `{`, or `#`, counting
+nothing inside quotes. The structure tree lists blocks, sections, and Netdata
+`alarm` and `template` entries. `nginx.conf`, `httpd.conf`, `apache2.conf`, and
+other `.conf` names that begin with one of those words select it, as do
+`.htaccess`, `.nft`, `nftables.conf`, and `nft` shebangs. Another `.conf` file
+uses it when it does not open with a shebang and its first line other than blank
+lines and `#` or `;` comments starts a Netdata entry, opens an Apache section,
+starts with a sysusers.d `u`, `g`, or `m` line, or starts with a word that
+neither ends with `:` nor holds or precedes `=` and then holds a `;` or a `{`
+that does not follow `$` or `%`. A `.conf` file that opens, after blank lines
+and `#` comments, with a `---` document marker or an unindented key with no
+value followed by an indented line or a sequence entry, as a Netdata collector's
+configuration is, is YAML; one whose first line other than blank lines and
+comments heads a section other than one of a systemd unit's is INI; and one that
+opens with `{` is JSON.
+
+Per-platform copies of a Swift package resolution, such as
+`Package.resolved.android`, Xcode string catalogs (`.xcstrings`), CPU profiles
+(`.cpuprofile`), and Firebase's `.firebaserc` are JSON as well. So are `.config`
+and `.lock` files whose source opens a JSON object, as for `.cfg`.
+
+Prose such as `AUTHORS` and `CNAME`, captured output (`.stdout`, `.out`), logs
+and error output (`.log`, `.stderr`) that do not open with a JSON object,
+checksum lists such as `SHA256SUMS` and `.sha256` files, version files such as
+`VERSION`, `GO_VERSION`, `.python-version`, and `.nvmrc`, PID and port records
+(`.pid`, `.port`), SSH `known_hosts` files (`known_hosts`, `ssh_known_hosts`,
+and `github-known-hosts`), and keys and certificates (`.pem`, `.crt`, `.key`)
+are plain text by name, so a shebang or an XML declaration at the start of their
+content does not select another language.
 
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
@@ -682,15 +752,16 @@ a diff whose `index` line names both versions of the file (as `git diff` does),
 and only when the versions the viewer rebuilds from the repository or the
 working tree are the ones named. Editing a comment's text, or adding or removing
 a line that holds only comments and whitespace, leaves the code as it was. Where
-such a line can be content or an error, as in XML text, a YAML scalar, or JSON,
-adding or removing it changes the file too. A line that follows code ending with
-a backslash continues that code, and a first line that starts with `#!` names
-the program that runs the file, so both are read exactly as written. Adding or
-removing a comment on a line that holds anything else changes the code, and so
-does a change to blank lines or other whitespace. Each side is read on its own,
-so a comment marker that turns unchanged lines into a comment changes the code.
-`C` never selects a renamed or new file, a file whose mode changes, or a file
-whose byte order mark is added or removed.
+such a line can be content, an error, or an attribute, as in XML text, a YAML
+scalar, JSON, or a Rust doc comment, adding, removing, or editing it changes the
+file too. A line that follows code ending with a backslash continues that code,
+and a first line that starts with `#!` names the program that runs the file, so
+both are read exactly as written. Adding or removing a comment on a line that
+holds anything else changes the code, and so does a change to blank lines or
+other whitespace. Each side is read on its own, so a comment marker that turns
+unchanged lines into a comment changes the code. `C` never selects a renamed or
+new file, a file whose mode changes, or a file whose byte order mark is added or
+removed.
 
 Markdown files can switch between the source and a rendered terminal view with
 `V`. The rendered view formats headings, emphasis, links, quotes, lists, task

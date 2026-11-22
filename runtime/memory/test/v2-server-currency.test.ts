@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import type { EntityDocument } from "../v2.ts";
 import type { CurrencyRecord } from "../v2/currency-index.ts";
@@ -105,6 +106,8 @@ describe("Server", () => {
             { root: OUTPUT, piece: PIECE },
             { root: "of:outer", piece: PIECE },
           ],
+          held: [],
+          upstream: [],
           refused: {},
           marked: [],
         });
@@ -119,6 +122,8 @@ describe("Server", () => {
           }),
         ).toEqual({
           servable: [],
+          held: [],
+          upstream: [],
           refused: { "other-epoch": 2 },
           marked: [],
         });
@@ -134,6 +139,8 @@ describe("Server", () => {
           }),
         ).toEqual({
           servable: [],
+          held: [],
+          upstream: [],
           refused: { marked: 1 },
           marked: [{ piece: PIECE, slice: "space", seq, under: [] }],
         });
@@ -220,6 +227,118 @@ describe("Server", () => {
         ).toMatchObject({ servable: [], refused: { "unvouched-instance": 1 } });
       });
 
+      it("returns as held a root whose piece read an output of a piece whose input changed, with that read and the piece to start for it", async () => {
+        await seed();
+        const asOf = write({
+          "of:reader": { value: {} },
+          "computed:read": { value: "read", result: link("of:reader") },
+        });
+        await server.storeCurrencyRecords(SPACE, {
+          asOf,
+          seen: [],
+          epoch: EPOCH,
+          records: [{
+            piece: "of:reader",
+            under: [],
+            vouched: true,
+            writes: ["computed:read"],
+            owned: [],
+            slices: [{
+              key: "space",
+              vouched: true,
+              reads: [
+                { space: SPACE, id: OUTPUT, scopeKey: "space", derived: true },
+              ],
+              vouches: ["computed:read"],
+            }],
+          }],
+        });
+        write({ [INPUT]: { value: 2 } });
+
+        expect(
+          await server.judgeCurrencyRoots(SPACE, ["computed:read"], {
+            epoch: EPOCH,
+          }),
+        ).toMatchObject({
+          servable: [],
+          held: [{
+            root: "computed:read",
+            piece: "of:reader",
+            readers: ["of:reader"],
+          }],
+          upstream: [{
+            reader: "of:reader",
+            slice: "space",
+            id: OUTPUT,
+            scopeKey: "space",
+            piece: PIECE,
+          }],
+          refused: {},
+        });
+      });
+
+      it("returns what is upstream of a piece the loop says it runs, with no root asked about", async () => {
+        await seed();
+        const asOf = write({ "of:reader": { value: {} } });
+        await server.storeCurrencyRecords(SPACE, {
+          asOf,
+          seen: [],
+          epoch: EPOCH,
+          records: [{
+            piece: "of:reader",
+            under: [],
+            vouched: true,
+            writes: [],
+            owned: [],
+            slices: [{
+              key: "space",
+              vouched: true,
+              reads: [
+                { space: SPACE, id: OUTPUT, scopeKey: "space", derived: true },
+              ],
+              vouches: [],
+            }],
+          }],
+        });
+        write({ [INPUT]: { value: 2 } });
+
+        expect(
+          await server.judgeCurrencyRoots(SPACE, [], {
+            epoch: EPOCH,
+            running: ["of:reader"],
+          }),
+        ).toMatchObject({
+          servable: [],
+          held: [],
+          upstream: [{ reader: "of:reader", id: OUTPUT, piece: PIECE }],
+        });
+      });
+
+      it("returns the piece for an output one record writes that the space holds no instance of", async () => {
+        // A derived document that exists only at instances narrower than the
+        // space has no back-link to read at the `space` instance.
+
+        const asOf = write({ [PIECE]: { value: {} }, [INPUT]: { value: 1 } });
+        await server.storeCurrencyRecords(SPACE, {
+          asOf,
+          seen: [],
+          epoch: EPOCH,
+          records: [{ ...record(), writes: [OUTPUT, "computed:per-user"] }],
+        });
+
+        expect(
+          await server.judgeCurrencyRoots(SPACE, ["computed:per-user"], {
+            epoch: EPOCH,
+          }),
+        ).toEqual({
+          servable: [{ root: "computed:per-user", piece: PIECE }],
+          held: [],
+          upstream: [],
+          refused: {},
+          marked: [],
+        });
+      });
+
       it("returns no result for missing records, invalid back-links, or a cycle", async () => {
         write({
           "of:plain": { value: 1 },
@@ -235,8 +354,51 @@ describe("Server", () => {
           ),
         ).toEqual({
           servable: [],
+          held: [],
+          upstream: [],
           refused: { "no-record": 4 },
           marked: [],
+        });
+      });
+
+      it("returns the earliest time a slice expires at, and marks that slice once the time has come", async () => {
+        let now = 1_700_000_000_000;
+        using _clock = stub(Date, "now", () => now);
+        const asOf = write({
+          [PIECE]: { value: {} },
+          [INPUT]: { value: 1 },
+          [OUTPUT]: { value: "computed", result: link(PIECE) },
+        });
+        const expiring = record();
+        await server.storeCurrencyRecords(SPACE, {
+          asOf,
+          seen: [],
+          epoch: EPOCH,
+          records: [{
+            ...expiring,
+            slices: [{ ...expiring.slices[0], expiresAt: 1_700_000_060_000 }],
+          }],
+        });
+        expect(
+          await server.judgeCurrencyRoots(SPACE, [PIECE], { epoch: EPOCH }),
+        ).toEqual({
+          servable: [{ root: PIECE, piece: PIECE }],
+          held: [],
+          upstream: [],
+          refused: {},
+          marked: [],
+          nextExpiry: 1_700_000_060_000,
+        });
+        now = 1_700_000_060_000;
+
+        expect(
+          await server.judgeCurrencyRoots(SPACE, [PIECE], { epoch: EPOCH }),
+        ).toEqual({
+          servable: [],
+          held: [],
+          upstream: [],
+          refused: { marked: 1 },
+          marked: [{ piece: PIECE, slice: "space", seq: asOf + 1, under: [] }],
         });
       });
 
@@ -247,6 +409,8 @@ describe("Server", () => {
         expect(await server.judgeCurrencyRoots(SPACE, [], { epoch: EPOCH }))
           .toEqual({
             servable: [],
+            held: [],
+            upstream: [],
             refused: {},
             marked: [{ piece: PIECE, slice: "space", seq, under: [] }],
           });

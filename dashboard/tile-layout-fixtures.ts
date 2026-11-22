@@ -196,7 +196,7 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       extra:
         `<div class="benchmark-count" style="font-size:13px;color:var(--text-muted);margin:5px 0 0">2 benchmarks · last 10 days</div>${twoLines()}`,
       duration: 30 * DAY,
-      hint: "metrics ↗",
+      hint: "metrics ↗ · as JSON at /bench/tiles.json",
       href: "/bench?view=runtime&repo=labs",
     },
   },

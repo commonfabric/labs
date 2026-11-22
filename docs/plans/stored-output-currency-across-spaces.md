@@ -1,7 +1,7 @@
 # Serving a stored output that depends on another space or on a wish
 
-Status: In progress. Steps 1 to 4 are done; the rest is a design, with the
-steps to build it. It
+Status: In progress. Steps 1 to 4, 7 and 8 are done and step 5 is partly
+built; the rest is a design, with the steps to build it. It
 continues [`stored-output-currency.md`](stored-output-currency.md), whose
 stages 1 to 4 are built, and its steps 1 to 3 come before that plan's
 stage 5.
@@ -24,10 +24,9 @@ plan takes each:
 - **A computation that names no piece.** No record covers what such a
   computation wrote, and some of what a wish registers with the scheduler
   is one. A slice that read its output takes over what it read.
-- **A clock.** A wish for `#now/N` reads a cell a timer writes. Nothing
+- **A clock.** A wish for `#now/N` reads a cell a timer writes. No commit
   marks the slice that read it when the interval passes while no runtime
-  holds the timer, so such a slice is never vouched for and its piece
-  always starts.
+  holds the timer, so its record has to say when it stops being current.
 
 A fourth matter comes with leaving more pieces unstarted, and with marks
 that travel between spaces: a computation the scheduler runs whether or not
@@ -54,7 +53,7 @@ of those, and the home space the fixture reads holds no profile.
 | Any other hashtag, such as `#note` | The favorites of the home space and what the space's own root lists. Headless wishes for one query over the space's own root share one resolver, which the wish registers with the scheduler under no piece. | The read in another space, for a search of the home space. Nothing for a search of the space's own root: the slice takes over the shared resolver's reads. |
 | `/`, `#default`, `#mentionable`, `#summaryIndex`, `#knowledgeGraph`, `#pieceRegistry` | The root of the piece's own space, or of the home space or a named space where the wish's `scope` says so. | Nothing known for the piece's own space; the read in another space otherwise. |
 | `#now` | A capture of the piece's first load time, written once to a document of the piece's space and read from then on. | Nothing: the value does not move. |
-| `#now/N` | A cell one timer per runtime writes at each interval, for every wish of that interval in the space. | The read of a document a clock writes (`clock-read`). |
+| `#now/N` | A cell one timer per runtime writes at each interval, for every wish of that interval in the space. | Nothing until the tick after the one the cell holds, which the slice's record names as the time it expires at. |
 
 For the home-space targets measured, the read in another space is the only
 thing in the way, and the index follows it where one memory server holds
@@ -66,8 +65,8 @@ viewer's `user:` slice.
 The timer of `#now/N` runs in every runtime that holds the wish, a
 browser's included, so a browser session ticks the cell and a session with
 no runtime of its own does not. That second kind of session is why the
-slice is not vouched for: left unstarted, its piece would show such a
-session a clock that had stopped.
+slice's record expires: left unstarted past the next tick, its piece would
+show such a session a clock that had stopped.
 
 ## Across spaces
 
@@ -156,9 +155,21 @@ serving host holds on it, so that the source admits it on the decision that
 admitted the read (`protocol.md` §2 and §2b): the free read of space-scoped
 state, or the actor's own grant for a scoped instance.
 
-Two reads are left out, and a slice with either is not vouched for: one of
-an instance narrower than the space, and one whose seq the serving replica
-cannot name.
+A read of a user's or a session's own instance is registered as a shared
+one is, at that instance's key, where the actor the key names holds READ
+on the source: the grant the read itself was admitted under
+(`protocol.md` §2). Where the actor holds none, the instance is not
+registered and its slice is stored marked `2`. The grant is checked each
+time a record is stored and each time the reading space pulls. An instance
+whose actor holds none any longer is forgotten: the reading space's
+registration of it is dropped, and each slice that read it is marked `2`.
+A change to the source's access list disarms every space armed with it, so
+each pulls again before it rests on, and a grant that was withdrawn ends
+the rest of the slices that depended on it.
+
+Two reads are left out, and a slice with either is not vouched for: one
+that names no one instance of a document, and one whose seq the serving
+replica cannot name.
 
 A reading space that no longer holds a row for an instance names it in its
 next request, and the source drops the registration.
@@ -232,7 +243,12 @@ ends by bringing what the store reports of its registered instances up to
 date, for the documents a commit wrote and the pieces whose slices changed,
 so finding the readers to tell is one read of the rows that moved. A row
 takes a position when it changes, and none when its instance is first
-registered, since the space registering it is handed the row.
+registered, since the space registering it is handed the row. An index
+that starts over with its records dropped keeps these rows, and the first
+call that changes it brings every one of them up to date. A reader that
+kept its records then hears that an instance a piece here computes is no
+longer vouched for. An instance nothing computes is plain data, and its
+row stays as it was.
 
 ### A circle of triggers
 
@@ -353,24 +369,93 @@ the depth of the graph.
 
 ### Demand across spaces
 
-Step 2 of the update above needs a rule the specification does not have: a
-read across spaces under a carried actor counts as that actor's demand in
-the source space (OW35 (b)), which touches the demand model and the memory
-server's demand rows, and takes a ruling of its own.
+Step 2 of the update above needs a rule the specification did not have,
+and it is ruled (2026-11-21, `verification-coverage.md` OW35 (b)), in
+full: **a read of an instance in another space by a run under a carried
+actor is that actor's demand in that space.** The demand names the actor,
+and is not the reading space's own, because a `PerUser` cell of the source
+space read from another space is computed for the actor who reads it: the
+source's loop has to run it for that actor, and only a demand that names
+the actor does that.
 
-The demand this plan needs is narrower than that rule in one way and equal
-to it in another. It is registered only for an instance the source reported
-stale. It then stands for as long as the reading space holds a demanded
-piece that reads the instance, so that the producer stays running and
-current while its reader is watched, and it is withdrawn when the last such
-piece is released (the first plan's stage 7).
+**What a carried demand is.** A row in the source space's demand set, of
+the shape a client session's watch gives: the instance that was read, as a
+root, and a demanding pair, which is the actor's principal and session. It
+differs from a client's row in where it comes from, which the row names as
+its origin: the space where that session is a client's, and the session.
+The source's loop treats it as it treats any row. It loads the piece that
+computes the instance, runs it for that pair, and under `skip` judges it
+first and leaves it unstarted while its record proves it current.
+
+**Which pair a read carries.** The slice of the run that read says whose
+it is. A read in a `session` slice carries that slice's pair. A read in a
+`user` slice carries each pair of that user that demands in the reading
+space. A read in the `space` slice was made for everyone, and carries each
+pair that demands in the reading space; a broad demand by a pair is then
+demand for that pair's instance of whatever narrows beneath it in the
+source, as it is for a client (`scopes.md` §2). A pair that reached the
+reading space as a carried demand is carried on with the origin it came
+with, so a chain of spaces passes one actor's demand along it. A demand
+that reached it with no pair, because its actor may not read the space, is
+carried on with its origin too, for the reads made in the `space` slice.
+
+**Which reads are carried.** Those of a started piece, for an instance the
+source's index does not prove current. The reading loop offers every read
+its records hold, and the memory server leaves out the ones that are
+proven: an instance the reader registered, shared or an actor's own, read
+by a space that is armed with the source for no limited time, which the
+source's index holds as one no piece there is behind on. A read the reader
+has not registered always stands, and so does every read of a space the
+reader is not armed with. With a row that stands, stands a row for each
+piece the source's index records as writing its document, for the same
+pair. A serving loop finds the piece of a computed document it is asked for
+through the document's back-link, and an instance that is an actor's own
+may not exist yet for it to find the piece from, so the piece is what it is
+given to load. What stands is worked out
+again whenever the source's index or the arming changes, and a reading
+space that offers rows pulls from the source when it is not armed with it
+and when the source tells it of a change, so that it is armed whenever a
+row could be proven. So a source whose
+instance is current is not asked to run anything, and a reading space
+whose piece is not started carries nothing: demand travels along stale
+edges, and along the edges no index can vouch for.
+
+**Who may be carried.** A pair is admitted into the source only where its
+actor holds READ there, by the check a named scoped read passes
+(`protocol.md` §2, the grant-scoped read). Where the actor does not, a row
+for the actor's own instance is dropped and counted, as the read of it is
+refused. A row for a shared instance still stands, with no pair: a serving
+loop reads a shared instance of another space whoever it runs for
+(`protocol.md` §2b), so the source loads the piece that computes it and
+runs nothing for the actor, as it does for an anonymous session.
+
+**How long it stands.** The reading loop sends its whole set for a source
+whenever the set changes, and the set is replaced. It changes when a piece
+starts or is released, when a run's reads change, when a pair arrives or
+leaves, and when the reading index is told an instance went stale or
+current. A park of the reading space withdraws everything it carried. The
+memory server drops a carried row when the session it names as its origin
+ends, wherever the row is, so two spaces that read each other do not keep
+each other's demand standing once the client that started it has gone.
+
+**What it does to the source space.** A carried demand counts with client
+sessions for whether the source is served: the host activates a parked
+source that receives one and does not park it idle while one stands. It
+does not count as a connected session for an intent that needs a channel
+to its actor (`builtins.md` §4), since there is none.
 
 A reading piece is started when its slice is stale, as today, and the
-demand it sends upstream brings the new value to it as an ordinary commit.
-Leaving the reader unstarted while its producers recompute, and serving it
-from the store when they come out equal, is a later refinement: it needs a
-decision on what a session is shown in the meantime, since no watermark
-spans spaces.
+demand it carries upstream brings the new value to it as an ordinary
+commit. Leaving the reader unstarted while its producers recompute, and
+serving it from the store when they come out equal, is a later refinement:
+it needs a decision on what a session is shown in the meantime, since no
+watermark spans spaces.
+
+**Not in this step.** A source whose store another memory server holds
+receives no carried demand, as it receives no registration. A loop that
+keeps no index carries nothing, since its records are where it finds what
+a run read. A piece that only a warm request or an anonymous session
+demands carries nothing, since neither names an actor to carry.
 
 ## Wish
 
@@ -396,11 +481,38 @@ space. One scoped to the piece's own space reads only that space.
 
 ### The interval clock
 
-A slice that read the cell of `#now/N` is not vouched for today, so its
-piece starts on every demand. It is current until the cell's next tick. Its
-record names that time, a judgment refuses a slice past it, and a loop that
-holds a root unstarted on such a slice loads the root when the time comes.
-The start runs the wish, which holds the timer from then on.
+A slice that read the cell of `#now/N` is current until the tick after the
+one the cell holds. The wish tells the scheduler which document its clock
+writes, at what interval, and how to read the tick it holds, and the
+snapshot gives a slice that read one the time of the following tick as the
+time it expires at, the earliest where it read several. The time is counted
+from the tick the cell holds and not from the time of the snapshot, so a
+slice computed from a tick that is late is stored as expired already, and a
+cell that holds no tick gives a time that has passed. The index keeps that
+time beside the slice (`currency_expiry`). Each call that brings the marks
+up to date marks `2` every slice whose time has come, with what is
+downstream of it, and reports it at a seq above the store's head, since no
+input the store holds made it stale. So a judgment refuses a root that
+rests on a slice past its time, and starts the piece, which runs the wish
+and holds the timer from then on.
+
+While no runtime holds the clock, no commit lands at that time, so a loop
+that left a root unstarted has to ask. A judgment returns the time to judge
+again at, and the loop sets one timer for it while any root is left
+unstarted. When it fires the loop judges again, which marks the slice and
+loads the root.
+
+No commit tells another space when a slice here expires either, so a pull
+arms the reading space only until then. The time a space may be rested on
+until is the earliest time a slice of it expires at, or the earliest time
+its own arming with a space it reads runs out, so the time holds along a
+chain of spaces. A judgment in the reading space that falls after it pulls
+again, which marks the expired slice in the source and returns what is
+downstream of it as stale. The time a judgment returns is the same one for
+its own space, so the loop of a space that reads an expiring slice two
+spaces along sets its timer for that slice. A record stored in a space that
+makes that time earlier, or gives it one where it had none, tells each
+space armed with it for longer, which pulls again.
 
 ## Computations that run without demand
 
@@ -458,6 +570,56 @@ computation that wrote outside them is recorded as unbounded.
 
 An effect is left as it is. It runs while its piece is started, and a mark
 on a demanded piece's slice starts the piece.
+
+### The first step: a materializer runs while its space is served
+
+*(RULED 2026-11-21.)* A materializer runs eagerly, and not on demand,
+because what it will write cannot be predicted: that is why the scheduler
+keeps it live, at low priority. The first step keeps that, and bounds it
+by the space instead of by the destinations. While a serving loop serves a
+space for any demand, a piece of that space that holds a materializer and
+is marked is started, whether or not the demand has anything to do with
+it, and its materializers run at low priority. A space nothing demands
+runs none of them. Such a piece may be marked often, by inputs that change
+often, so starting it may need a throttle or a debounce beyond this.
+
+For this the index needs to know which pieces hold a materializer, which a
+record can say, and the loop needs the marked ones among them after each
+advance. It needs nothing about where a materializer writes. The cases
+above are the finer rule, for a space that is served and should still not
+run every materializer it holds, and for a space another space reads while
+nothing serves it.
+
+### What the rows for an envelope need
+
+Three facts about the scheduler and the index decide how the first two cases
+above are built, once the first step is not enough. The first two are not
+settled.
+
+- **An envelope names where a link is held, not what is written.** For a
+  computation handed a writable cell, the envelope is the slot that holds
+  the link to the cell, and the document the write lands in is the link's
+  target (`space-server-currency-wish.test.ts`). So the documents an
+  envelope leads to are known from what a run wrote or by following the
+  envelope's links, and not from the envelope's own addresses. The scheduler
+  keeps a run's reads and replaces its writes with the declared write
+  surface (`setSchedulerDependencies()`), so what a run wrote beyond that
+  surface is not kept today for a computation that runs once.
+- **A document a materializer writes into can have other writers.** A cell
+  handed to a computation is one a client may write too, and the index of a
+  collection is written by a materializer for each element in it
+  (`collection-index-member.ts`). A vouch row says a clean run stands behind
+  the whole instance, and a revision above it marks the slice that vouched.
+  Vouching for such a document would have each of its writers marked by
+  every other, and none of them would rest. The rows for an envelope need a
+  relation of their own: one that marks the readers of the document when the
+  materializer's slice is marked, asks for no vouch, and is not marked by
+  another writer's revision.
+- **A stale producer is started from what its record says it writes.**
+  Within one space as across spaces, a reader's stale read starts the piece
+  the index records as writing the instance (the first plan's stage 5, and
+  step 5 here). A document a materializer wrote within its envelope is in
+  no record's write rows, so a reader of it starts nothing.
 
 ### A write into another space at an undeclared destination
 
@@ -523,9 +685,11 @@ of who reads what, the trigger's fan-out and its retries, sits behind an
 interface of its own, so a service between spaces can take it over without
 a change to the other two.
 
-One is owed:
+A third is ruled:
 
-3. **The demand rule of OW35 (b)**, as above.
+3. **The demand rule of OW35 (b), in full**: a read across spaces under a
+   carried actor is that actor's demand in the source space ("Demand
+   across spaces").
 
 ## Not worked out
 
@@ -564,8 +728,9 @@ One is owed:
 1. **Measure what blocks each kind of wish.** Done, with a serving-loop
    fixture for each row of the table above, read through the reasons a
    slice was not vouched for (`currency.unvouched`). A slice that read the
-   interval clock was vouched for and left a session with no runtime of its
-   own a stopped clock under `skip`; it is no longer vouched for.
+   interval clock was vouched for with no end and left a session with no
+   runtime of its own a stopped clock under `skip`; step 7 gives its record
+   a time it expires at.
 2. **Rows for a read in another space.** Done, for two spaces one memory
    server holds. The snapshot carries the source's sequence number; a
    record's reads are registered with their source; both sides keep their
@@ -580,18 +745,41 @@ One is owed:
    a circle of triggers. `skip` acts on a slice that read
    another space. Which readers are armed is held in memory, and a trigger
    that leaves the process is not built.
-5. **Demand across spaces**, with its ruling, built together with the first
-   plan's stage 5, which is the same mechanism within one space.
-6. **Computations that run without demand.** Envelopes among the write
-   rows; a computation recorded as unbounded from what it wrote; the
-   unsettled space, settled before a judgment in it or a pull from it
-   returns; the writer's registration for a declared destination in another
-   space; and the counts the open question needs. Built on step 5, which
-   starts a producer.
-7. **The interval clock's expiry.**
+5. **Demand across spaces**, as ruled, built together with the first
+   plan's stage 5, which is the same mechanism within one space. Built:
+   carried rows in the memory server's demand set, with their origin, their
+   access check, their end and the rows the source's index proves current
+   left out; the reading loop's set, sent when it changes and withdrawn at
+   a park; and activation and parking of the source, which follow from the
+   rows being held among the source's sessions. Measured:
+   [the record](../history/development/performance/2026-11-21-carried-demand-cost.md).
+   A return with nothing changed hands the source no demand. A carried
+   demand costs the source the admission of its rows and the start of its
+   pieces, which it pays for viewers of its own too. The reading loop sends
+   its whole set whenever it changes, and each reading piece is recorded
+   again with every viewer's slice at each start; both are costs still to
+   take out.
+6. **Computations that run without demand.** Not started. First, as ruled:
+   a record says whether its piece holds a materializer, and a loop that
+   serves a space for any demand starts the marked pieces that do, at low
+   priority, with a throttle if measurement asks for one. Then the finer
+   rule: envelopes among the write rows; a computation recorded as
+   unbounded from what it wrote; the unsettled space, settled before a
+   judgment in it or a pull from it returns; the writer's registration for
+   a declared destination in another space; and the counts the open
+   question needs. The finer rule is built on step 5, which starts a
+   producer in another space, and on the first plan's stage 5, which starts
+   one in the same space, and "What the rows for an envelope need" lists
+   what is to be settled before it.
+7. **The interval clock's expiry.** Done. A space is armed with one it
+   reads only until the earliest slice there expires.
 8. **Measure** a social space whose pieces read each viewer's profile, with
    two viewers and with many, for the starts saved and for what a change to
-   one profile costs its readers.
+   one profile costs its readers. Done:
+   [the record](../history/development/performance/2026-11-21-currency-index-across-spaces.md).
+   A return starts nothing. A judgment is repeated for every unstarted root
+   on each change of demand, and one watching viewer's change starts each
+   piece they watch for every viewer; both are costs still to take out.
 
 ## Acceptance tests
 
@@ -643,11 +831,20 @@ For the serving loop, in `runtime/runner/test/executor/`:
 11. The chain above, with all three recorded and none running: a demand for
     C alone starts B and A, and C's session reads the value derived from the
     new input.
-12. In that chain, when A's recomputation leaves `a` equal, B's mark clears
-    and B is not started again.
+12. In that chain, when A's recomputation leaves `a` equal, the marks of B
+    and C clear and C's session reads the value it held. Both exist in
+    `space-server-currency-chain.test.ts`, with a viewer who holds no grant
+    on the first two spaces, and with a demand for C that starts nothing
+    while no input changed. That B, once the demand for `b` has started it,
+    derives nothing further is not checked.
 13. A piece that reads `#now/N` is served from the store within the
     interval and started after it, and a root a loop holds unstarted is
-    loaded when the interval passes.
+    loaded when the interval passes. Both exist in
+    `space-server-currency-wish.test.ts`, and the index's side in
+    `v2-currency-index.test.ts`. A root in another space that read what a
+    piece computes from the expiring slice's output is refused once the
+    time has come, one space along and two, in
+    `v2-server-currency-across-spaces.test.ts`.
 14. A piece whose headless wish shares a hashtag resolver is recorded
     clean, with the resolver's read of the space's root among its slice's
     reads. This exists in `space-server-currency-wish.test.ts`; two pieces
@@ -671,6 +868,38 @@ For computations that run without demand, in both places:
     its armed readers without a pull.
 19. A reader of an instance that a piece in another space declares it
     writes is marked `1` while that piece's slice is marked there.
+
+For demand across spaces. All four exist: 20 in
+`runtime/memory/test/v2-server-carried-demand.test.ts`, 21 in
+`runtime/runner/test/executor/carried-demand.test.ts`, and 22 in
+`runtime/runner/test/executor/space-server-carried-demand.test.ts`, with a
+change to a shared input of the other space, which reaches both viewers:
+
+20. A row carried into a space stands in its demand set with the origin
+    session's pair, tells the serving host as an opened session does, is
+    left out while the space's index proves its instance current and stands
+    again once a piece there is behind on it, is refused for an actor's own
+    instance without that actor's READ grant, and is dropped when its
+    origin session ends.
+21. A read made in the `space` slice is carried for every demanding pair,
+    one made in a user's slice for that user's pairs, one made in a
+    session's slice for that pair, and each user's own instance of a
+    document for that user's pairs and no other's.
+22. A piece in one space whose runs read a `PerUser` instance of another
+    space, watched by two viewers who have no session in that other space:
+    its loop computes each viewer's instance, each viewer reads their own
+    through the piece, and a change to an input there reaches them.
+23. A slice that read its actor's own instance in another space, a user's
+    or a session's, is stored clean where the actor holds READ there and
+    marked `2` where the actor holds none, and nothing is registered for
+    the second. A grant withdrawn afterward marks the slice `2` and drops
+    its registration, at the next record and at the judgment that follows
+    the change to the access list
+    (`v2-server-currency-across-spaces.test.ts`). Under `skip`
+    the piece of test 22 is left unstarted, and carries nothing, while
+    each viewer's instance is unchanged, and is started when an input of
+    the other space's piece changes, which brings each viewer the new
+    value (`space-server-carried-demand.test.ts`).
 
 ## Related
 

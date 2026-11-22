@@ -128,9 +128,17 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
         "deno.lock",
         "bay.code-workspace",
         "ios/Package.resolved",
+        "android/swift/Package.resolved.android",
         "images/syzkaller/default-gvisor-config.cfg",
+        "Resources/Localizable.xcstrings",
+        "performance/consumed-source-dedup.cpuprofile",
+        ".firebaserc",
       ],
       aliases: ["json", "jsonc"],
+      unclaimedFilenames: [
+        "Sources/WeaverBridge/swift-java.config",
+        "tests/support/cf_harness_runtime_selection.lock",
+      ],
     },
     beforeEvidence: { text: '"tasks"', className: "propertyName" },
     afterEvidence: { text: '"tasks"', className: "propertyName" },
@@ -182,6 +190,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "python",
+    // A Python `def` line is also a Lean definition, and Lean colors the name
+    // it declares as Python does.
+    highlightingPeers: ["lean"],
     surveyRepository: "loom",
     surveyCommit: "43a4afe18fbfc37ab8a11da8fe5011f0be81f6e7",
     surveyPath: "src/bin/loom-size-report.py",
@@ -212,6 +223,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "python",
+    // A Python `def` line is also a Lean definition, and Lean colors the name
+    // it declares as Python does.
+    highlightingPeers: ["lean"],
     surveyRepository: "specs",
     surveyCommit: "34fb8680caa9f68005a438854fa5dc2ef15ff953",
     surveyPath: "cfc/formal/scripts/check-architecture.py",
@@ -224,6 +238,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "python",
+    // A Python `def` line is also a Lean definition, and Lean colors the name
+    // it declares as Python does.
+    highlightingPeers: ["lean"],
     surveyRepository: "legibility",
     surveyCommit: "ff46a8e811e0f75246b2fe1cafa8e18954dede3f",
     surveyPath: "src/probe/artifact_refs.py",
@@ -236,6 +253,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "python",
+    // A Python `def` line is also a Lean definition, and Lean colors the name
+    // it declares as Python does.
+    highlightingPeers: ["lean"],
     surveyRepository: "raia",
     surveyCommit: "a9998da33e2a04df830d684cd6eef1a3ec2a4f59",
     surveyPath: "bench/analyze.py",
@@ -248,6 +268,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "python",
+    // A Python `def` line is also a Lean definition, and Lean colors the name
+    // it declares as Python does.
+    highlightingPeers: ["lean"],
     surveyRepository: "gvisor",
     surveyCommit: "0da391ef9ab8d513fba6412f4b14680917a00556",
     surveyPath: "vdso/check_vdso.py",
@@ -293,6 +316,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "swift",
+    // A Swift `let` declaration of one name is also a Rust one, and Rust
+    // colors the name it binds as Swift does.
+    highlightingPeers: ["rust"],
     surveyRepository: "gvisor",
     surveyCommit: "bb309e286c61e1a5a5f9893666443a9ea31c4f17",
     surveyPath: "tools/cfc-sandbox/Package.swift",
@@ -332,6 +358,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "kotlin",
+    // Directive configuration colors the word that opens a statement as a
+    // keyword, as Kotlin colors the `suspend` modifier that opens a line.
+    highlightingPeers: ["directive"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "776e81bca0cbee698d99808973212273b62af8d0",
     surveyPath:
@@ -370,6 +399,59 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "uploadKeystore", className: "binding" },
     afterEvidence: { text: "uploadKeystore", className: "binding" },
     incompleteEvidence: { text: "uploadKeystore", className: "binding" },
+  },
+  {
+    languageId: "rust",
+    surveyRepository: "infra",
+    surveyCommit: "808299e59e8e07d4a283dc129e73079ec4977ac8",
+    surveyPath: "memory-router/src/state.rs",
+    before: new URL("./rust-infra/before.rs", import.meta.url),
+    after: new URL("./rust-infra/after.rs", import.meta.url),
+    incomplete: new URL("./rust-infra/incomplete.rs", import.meta.url),
+    selection: {
+      filenames: [
+        "memory-router/src/state.rs",
+        "memory-router/fuzz/fuzz_targets/parsers.rs",
+        "memory-router/src/worker/tests.rs",
+        "projects/fabrival/src/fabrival-rust/fvi/src/main.rs",
+        "images/basic/rust/helloworld.rs",
+      ],
+      aliases: ["rust", "rs"],
+    },
+    beforeEvidence: { text: "track_holdings", className: "functionName" },
+    afterEvidence: { text: "track_watch_usage", className: "functionName" },
+    incompleteEvidence: {
+      text: "track_watch_usage",
+      className: "functionName",
+    },
+  },
+  {
+    languageId: "rust",
+    surveyRepository: "danfuzz-land",
+    surveyCommit: "1b1dd23ebf2e774ed52dd95cb317c5cc7f4f124f",
+    surveyPath:
+      "projects/fabrival/src/fabrival-rust/fabrival/src/identifier.rs",
+    before: new URL("./rust-danfuzz-land/before.rs", import.meta.url),
+    after: new URL("./rust-danfuzz-land/after.rs", import.meta.url),
+    incomplete: new URL("./rust-danfuzz-land/incomplete.rs", import.meta.url),
+    beforeEvidence: { text: "is_identifier", className: "functionName" },
+    afterEvidence: { text: "has_a_limit_of_100", className: "functionName" },
+    incompleteEvidence: {
+      text: "rejects_non_identifiers",
+      className: "functionName",
+    },
+  },
+  {
+    languageId: "rust",
+    surveyRepository: "gvisor",
+    surveyCommit: "a5f0778c3895302c448f4db3b977aeae2b4dfc59",
+    surveyPath: "images/basic/rust/helloworld.rs",
+    before: new URL("./rust-gvisor/before.rs", import.meta.url),
+    after: new URL("./rust-gvisor/after.rs", import.meta.url),
+    incomplete: new URL("./rust-gvisor/incomplete.rs", import.meta.url),
+    beforeEvidence: { text: "main", className: "functionName" },
+    afterEvidence: { text: "main", className: "functionName" },
+    incompleteEvidence: { text: "main", className: "functionName" },
   },
   {
     languageId: "toml",
@@ -424,7 +506,49 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     },
   },
   {
+    languageId: "lean",
+    surveyRepository: "specs",
+    surveyCommit: "57d00d343109b34e279a11efcb8517ff0e25e9c4",
+    surveyPath: "cfc/formal/Cfc/LabelTransitions/OutputDispatch.lean",
+    before: new URL("./lean-specs/before.lean", import.meta.url),
+    after: new URL("./lean-specs/after.lean", import.meta.url),
+    incomplete: new URL("./lean-specs/incomplete.lean", import.meta.url),
+    selection: {
+      filenames: [
+        "cfc/formal/Cfc/LabelTransitions/OutputDispatch.lean",
+        "cfc/formal/Main.lean",
+        "economical-model/theory/lean/DualEconomy.lean",
+      ],
+      aliases: ["lean", "lean4"],
+    },
+    beforeEvidence: { text: "inductive", className: "storageKeyword" },
+    afterEvidence: { text: "theorem", className: "storageKeyword" },
+    incompleteEvidence: { text: "structure", className: "storageKeyword" },
+  },
+  {
+    languageId: "lean-toolchain",
+    surveyRepository: "specs",
+    surveyCommit: "57d00d343109b34e279a11efcb8517ff0e25e9c4",
+    surveyPath: "cfc/formal/lean-toolchain",
+    before: new URL("./lean-toolchain-specs/before", import.meta.url),
+    after: new URL("./lean-toolchain-specs/after", import.meta.url),
+    incomplete: new URL("./lean-toolchain-specs/incomplete", import.meta.url),
+    selection: {
+      filenames: [
+        "cfc/formal/lean-toolchain",
+        "economical-model/theory/lean/lean-toolchain",
+      ],
+      aliases: ["lean-toolchain"],
+    },
+    beforeEvidence: { text: "leanprover/lean4", className: "typeName" },
+    afterEvidence: { text: "leanprover/lean4", className: "typeName" },
+    incompleteEvidence: { text: "leanprover/lean4", className: "typeName" },
+  },
+  {
     languageId: "shell",
+    // `local` is also a Lean declaration modifier, which Lean colors as shell
+    // colors the declaration.
+    highlightingPeers: ["lean"],
     surveyRepository: "infra",
     surveyCommit: "e86055db01424713770930acc24b5a20d2e96448",
     surveyPath: "k8s/scripts/force-sync-externalsecrets.sh",
@@ -528,8 +652,11 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   {
     languageId: "ini",
     // An INI `name=value` line is a valid make assignment, and make colors
-    // the name as INI colors its keys.
-    highlightingPeers: ["make"],
+    // the name as INI colors its keys. An Ansible inventory host line is also
+    // a Git attributes line, whose attributes color as the host's variables.
+    // Rust reads the host line as an expression ending in a field access, and
+    // colors the field, which is the host's variable, as INI colors it.
+    highlightingPeers: ["make", "gitattributes", "rust"],
     surveyRepository: "infra",
     surveyCommit: "cfe4ac630b0b1e223d57bed12ae02fa6c53b9eb2",
     surveyPath: "ansible/rapids-inventory.ini",
@@ -551,6 +678,9 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
   },
   {
     languageId: "proguard",
+    // A ProGuard option line is a directive statement, and directive
+    // configuration colors the option that opens it as ProGuard does.
+    highlightingPeers: ["directive"],
     surveyRepository: "commonfabric-weaver",
     surveyCommit: "df01b1c67c027f3b3de39a5bd85e2f84312d6495",
     surveyPath: "android/app/proguard-rules.pro",
@@ -568,6 +698,80 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     beforeEvidence: { text: "-keep", className: "keyword" },
     afterEvidence: { text: "-keep", className: "keyword" },
     incompleteEvidence: { text: "-keep", className: "keyword" },
+  },
+  {
+    languageId: "gitattributes",
+    surveyRepository: "labs",
+    surveyCommit: "f94ac6bb1b1206bebe19228f4305edb7201fd97e",
+    surveyPath: ".gitattributes",
+    before: new URL("./gitattributes-labs/before.gitattributes", import.meta.url),
+    after: new URL("./gitattributes-labs/after.gitattributes", import.meta.url),
+    incomplete: new URL(
+      "./gitattributes-labs/incomplete.gitattributes",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [".gitattributes", "src/.gitattributes"],
+      aliases: ["gitattributes"],
+    },
+    beforeEvidence: { text: "**", className: "regex" },
+    afterEvidence: { text: "**", className: "regex" },
+    incompleteEvidence: { text: "**", className: "regex" },
+  },
+  {
+    languageId: "gitattributes",
+    surveyRepository: "commonfabric-weaver",
+    surveyCommit: "470efd7ecc4a90702d60c761eb5780c04f6546cd",
+    surveyPath: ".gitattributes",
+    before: new URL(
+      "./gitattributes-weaver/before.gitattributes",
+      import.meta.url,
+    ),
+    after: new URL("./gitattributes-weaver/after.gitattributes", import.meta.url),
+    incomplete: new URL(
+      "./gitattributes-weaver/incomplete.gitattributes",
+      import.meta.url,
+    ),
+    beforeEvidence: { text: "**", className: "regex" },
+    afterEvidence: { text: "**", className: "regex" },
+    incompleteEvidence: { text: "**", className: "regex" },
+  },
+  {
+    languageId: "gitattributes",
+    // A pattern followed by one `name=value` attribute is also an Ansible
+    // inventory host line, whose variable INI colors as Git attributes color
+    // the attribute.
+    highlightingPeers: ["ini"],
+    surveyRepository: "loom",
+    surveyCommit: "f788015adc43cc8d7b3b3bb7f50f2066428a6dbc",
+    surveyPath: "src/.gitattributes",
+    before: new URL("./gitattributes-loom/before.gitattributes", import.meta.url),
+    after: new URL("./gitattributes-loom/after.gitattributes", import.meta.url),
+    incomplete: new URL(
+      "./gitattributes-loom/incomplete.gitattributes",
+      import.meta.url,
+    ),
+    beforeEvidence: { text: "ours", className: "string" },
+    afterEvidence: { text: "ours", className: "string" },
+    incompleteEvidence: { text: "ours", className: "string" },
+  },
+  {
+    languageId: "gitattributes",
+    surveyRepository: "infra",
+    surveyCommit: "cc5cd853a3c76ae8de1104525d4b2a64c0653aca",
+    surveyPath: ".gitattributes",
+    before: new URL(
+      "./gitattributes-infra/before.gitattributes",
+      import.meta.url,
+    ),
+    after: new URL("./gitattributes-infra/after.gitattributes", import.meta.url),
+    incomplete: new URL(
+      "./gitattributes-infra/incomplete.gitattributes",
+      import.meta.url,
+    ),
+    beforeEvidence: { text: "*", className: "regex" },
+    afterEvidence: { text: "*", className: "regex" },
+    incompleteEvidence: { text: "*", className: "regex" },
   },
   {
     languageId: "xml",
@@ -605,6 +809,69 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     },
   },
   {
+    languageId: "org",
+    surveyRepository: "gvisor",
+    surveyCommit: "bb309e286c61e1a5a5f9893666443a9ea31c4f17",
+    surveyPath: "scenarios.org",
+    before: new URL("./org-gvisor/before.org", import.meta.url),
+    after: new URL("./org-gvisor/after.org", import.meta.url),
+    incomplete: new URL("./org-gvisor/incomplete.org", import.meta.url),
+    selection: {
+      filenames: ["scenarios.org", "cfc-gvisor.org", "notes/PLAN.ORG"],
+      aliases: ["org", "orgmode"],
+    },
+    beforeEvidence: { text: "Scenarios", className: "sectionHeader" },
+    afterEvidence: { text: "TODO", className: "keyword" },
+    incompleteEvidence: { text: "#+begin_src", className: "keyword" },
+  },
+  {
+    languageId: "directive",
+    surveyRepository: "infra",
+    surveyCommit: "d17b6041f60c91fe83c66e914cd62c5e9084a517",
+    surveyPath: "ansible/roles/netdata/files/health.d/web_log.conf",
+    before: new URL("./directive-infra/before.conf", import.meta.url),
+    after: new URL("./directive-infra/after.conf", import.meta.url),
+    incomplete: new URL("./directive-infra/incomplete.conf", import.meta.url),
+    selection: {
+      filenames: [
+        "images/benchmarks/nginx/nginx.conf",
+        "images/benchmarks/nginx/nginx_gofer.conf",
+        "images/benchmarks/httpd/apache2-tmpdir.conf",
+        "httpd.conf",
+        "public/.htaccess",
+        "files/cve-2026-98432.nft",
+        "/etc/nftables.conf",
+      ],
+      aliases: [
+        "directive",
+        "nginx",
+        "apache",
+        "apacheconf",
+        "nftables",
+        "nft",
+        "netdata",
+        "sysusers",
+      ],
+      shebangs: ["#!/usr/sbin/nft -f"],
+      unclaimedFilenames: ["netdata/health.d/web_log.conf"],
+    },
+    beforeEvidence: { text: "template", className: "keyword" },
+    afterEvidence: { text: "template", className: "keyword" },
+    incompleteEvidence: { text: "crit", className: "keyword" },
+  },
+  {
+    languageId: "directive",
+    surveyRepository: "gvisor",
+    surveyCommit: "82e8d12aed0ff0b736b1c937799b910beec68eb9",
+    surveyPath: "images/benchmarks/nginx/nginx.conf",
+    before: new URL("./directive-gvisor/before.conf", import.meta.url),
+    after: new URL("./directive-gvisor/after.conf", import.meta.url),
+    incomplete: new URL("./directive-gvisor/incomplete.conf", import.meta.url),
+    beforeEvidence: { text: "daemon", className: "keyword" },
+    afterEvidence: { text: "sendfile", className: "keyword" },
+    incompleteEvidence: { text: "root", className: "keyword" },
+  },
+  {
     languageId: "plain-text",
     surveyRepository: "raia",
     surveyCommit: "6b9cc95befe5f7cf0929eb569d9a1157e62d2374",
@@ -620,6 +887,28 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
         "NOTICE",
         "LICENSE.third-party",
         "NOTICE.third-party",
+        "AUTHORS",
+        "docs/CNAME",
+        "harness/results/b1-bay.log",
+        "integration-default/workload.stdout",
+        "profile/baseline-off.stderr",
+        "probes/existing-grant-tests.out",
+        "k8s/components/flux/upstream/SHA256SUMS",
+        "src/GO_SHA256SUMS",
+        "coverage-inputs.sha256",
+        "lib/VERSION",
+        "src/DENO_VERSION",
+        "src/updater/protocol-version",
+        ".python-version",
+        "docs/history/tutorials/.nvmrc",
+        "round5/raw/safaridriver.pid",
+        "round5/raw/server.pids",
+        ".beads/dolt-server.port",
+        "tls/server.crt",
+        "tls/server.key",
+        "certs/localhost.pem",
+        "ansible/secrets/.gitkeep",
+        "docs/.nojekyll",
       ],
       aliases: ["plain-text", "text", "plaintext"],
     },
