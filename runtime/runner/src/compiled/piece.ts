@@ -39,8 +39,10 @@ import {
   bucketDocumentCollections,
   rowDocumentCollections,
 } from "../../../../base/pattern-compiler/exec/row-documents.ts";
+import { scopedDocument } from "../../../../base/pattern-compiler/exec/scope-instances.ts";
 import {
   argumentOf,
+  identifierOf,
   Ref,
 } from "../../../../base/pattern-compiler/exec/store.ts";
 import { makeFrame, runInFrame } from "../builder/pattern.ts";
@@ -387,6 +389,7 @@ export class CompiledPiece {
       // would each write it.
       if (!this.#basisOfEveryKey || this.#madeSinceBasis) {
         this.#madeSinceBasis = false;
+        this.#sourceOfNoNumber();
         this.#basis.record(
           given,
           (given.getWriteAttemptLog?.().length ?? 0) > 0,
@@ -514,6 +517,7 @@ export class CompiledPiece {
     // next resume then brings it before it starts the executor.
     for (const doc of transactions.absent) this.#basis.source(doc);
     this.#keepMinted(tx);
+    this.#sourceOfNoNumber();
     this.#basis.record(tx, true);
     this.#started = true;
     this.#bring();
@@ -677,6 +681,23 @@ export class CompiledPiece {
             sessionId: this.#runtime.scopeKeyIdentity.sessionId,
           },
         },
+    );
+  }
+
+  /**
+   * Has the basis of a piece that has named a document of a scope name a
+   * source that has no sequence number, so that no resume finds the basis
+   * current: the name of a document of a scope that nothing writes. A
+   * document of a scope the piece wrote itself is compared as one it
+   * wrote lately, which a resume in another runtime finds unchanged.
+   */
+  #sourceOfNoNumber(): void {
+    if (!this.transactions.scoped) return;
+    this.#basis.source(
+      scopedDocument(
+        identifierOf({ type: "scopes", parent: this.#result }),
+        "user",
+      ),
     );
   }
 
