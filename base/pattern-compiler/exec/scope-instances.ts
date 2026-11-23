@@ -187,11 +187,11 @@ export class ScopeInstances {
 
   /**
    * Marks the entries of `name` that are set aside as not current: all of
-   * them, or the one of the scope key `key`.
+   * them, or those of the scope keys `of` accepts.
    */
-  staleAside(name: string, key?: string): void {
+  staleAside(name: string, of?: (key: string) => boolean): void {
     for (const [scoped, entry] of this.#aside.get(name) ?? []) {
-      if (key === undefined || key === scoped) entry.stale = true;
+      if (of === undefined || of(scoped)) entry.stale = true;
     }
   }
 

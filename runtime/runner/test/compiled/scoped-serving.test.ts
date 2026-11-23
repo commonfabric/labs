@@ -13,6 +13,7 @@ import {
   type PatternProgram,
   setUpCompiledPiece,
 } from "../../src/compiled/setup.ts";
+import { ACLManager } from "../../src/acl-manager.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 
@@ -22,7 +23,7 @@ const fixture = (name: string, extension: string): URL =>
     import.meta.url,
   );
 
-const FIXTURES = ["scoped", "scoped-rows"];
+const FIXTURES = ["scoped", "runtime-builtins"];
 const ARTIFACTS = new Map<string, Artifact>();
 const PROGRAMS = new Map<string, PatternProgram>();
 for (const name of FIXTURES) {
@@ -269,5 +270,37 @@ describe("a compiled piece that two principals demand under the serving loop", (
     await reads(later, againByAnn, "nickname", "Ann");
     await reads(latest, againByBob, "nickname", "Bob");
     expect(serving.pieces().flatMap((piece) => piece.refusals)).toEqual([]);
+  });
+
+  // `fixtures/runtime-builtins.tsx` computes the level the access list of
+  // the space grants, which `spaceAccess` answers for the acting principal.
+  it("answers a built-in that reads for the acting principal for each principal", async () => {
+    const [first, second] = [clientOf(ann), clientOf(bob)];
+    const access = new ACLManager(first, space);
+    await access.set(ann.did(), "OWNER");
+    await access.set(bob.did(), "READ");
+    await setUp(first, "runtime-builtins", { notes: ["one"] });
+    type Levels = { level: string; record: unknown };
+    const levelOf = async (client: Runtime, level: string) => {
+      const read = readBy<Levels>(client, "runtime-builtins").key("level");
+      cancels.push(read.sink(() => {}));
+      await waitForCellValue<string>(
+        client,
+        read as unknown as Cell<string>,
+        (held) => held === level,
+        { stuckLabel: `a client reads the level ${level}` },
+      );
+    };
+
+    await levelOf(first, "OWNER");
+    await levelOf(second, "READ");
+
+    // A change of the access list is answered again for the principal it
+    // is of.
+    await access.set(bob.did(), "WRITE");
+
+    await levelOf(second, "WRITE");
+    await levelOf(first, "OWNER");
+    expect(serving.pieces()[0].refusals).toEqual([]);
   });
 });

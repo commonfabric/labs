@@ -402,6 +402,12 @@ export class CompiledPiece {
       invalidate: () => this.#invalidate(),
       stamp: (given: IExtendedStorageTransaction, what: string) =>
         this.#stamp(given, what),
+      scopeKey: (scope: "user" | "session") => transactions.scopeKey(scope),
+      piece: {
+        space,
+        pieceId: `space:${result.id}`,
+        pieceRootId: result.id,
+      },
     };
     const answers = new RuntimeAnswers(builtinsContext);
     this.#cancels.push(() => answers.stop());

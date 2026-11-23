@@ -15,9 +15,10 @@
  * attests) is decided by the runtime's code and not here.
  *
  * A function called in a derivation is also recorded with
- * `RuntimeAnswers`: one action of the scheduler asks each recorded
- * question again when something the answers read changes, and marks the
- * cone instances that used an answer that is now another.
+ * `RuntimeAnswers`, for the principal the derivation is for: an action of
+ * the scheduler for each question asks it again when something its answer
+ * read changes, and marks the cone instances that used an answer that is
+ * now another.
  */
 import {
   FabricBytes,
@@ -69,6 +70,7 @@ import type { Runtime } from "../runtime.ts";
 import type { Action } from "../scheduler/types.ts";
 import { joinSpaceMembers } from "../space-members.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { scopeKeyOf } from "./scopes.ts";
 
 /** What the built-ins of a piece are given of the piece. */
 export type RuntimeBuiltinsContext = {
@@ -82,6 +84,10 @@ export type RuntimeBuiltinsContext = {
   invalidate: () => void;
   /** Stamps a transaction a scheduler action of the piece is given. */
   stamp: (tx: IExtendedStorageTransaction, what: string) => void;
+  /** The scope key of the principal the evaluation in progress is for. */
+  scopeKey: (scope: "user" | "session") => string;
+  /** The piece, as an action of the scheduler names it. */
+  piece: { space: MemorySpace; pieceId: string; pieceRootId: string };
 };
 
 /** A text that is the same for two answers that are the same. */
@@ -101,20 +107,42 @@ const textOf = (value: unknown): string => {
   }
 };
 
+/** What one principal was given as the answer to a question. */
+type Answered = {
+  /** The text of the answer the users were given. */
+  last: string;
+  /** The memo entries that used the answer, by instance and name. */
+  users: Map<string, { instance: Instance; key: string }>;
+};
+
+/** A question a derivation asked, and what each principal was answered. */
+type Asked = {
+  ask: () => unknown;
+  /** By the scope key of the principal the derivation ran for. */
+  by: Map<string, Answered>;
+  /** The action that asks again, and what stops it. */
+  action: Action;
+  cancel: Cancel;
+};
+
 /**
  * The answers the runtime gave to derivations of a piece, each with the
- * cone instances that used it, and the action that asks again.
+ * principal it was given for and the memo entries that used it.
+ *
+ * Each question has an action of the scheduler of its own, which asks the
+ * question again through the transaction the scheduler gives it. So the
+ * scheduler runs the action of a question when something the answer to
+ * that question read changes, and no other. The action names the piece
+ * and reads the principal its run is for, which makes it a computation of
+ * the scope `user`: a serving loop runs it once for each principal that
+ * demands the piece, and each run compares with what that principal was
+ * answered.
  */
 export class RuntimeAnswers {
   readonly #context: RuntimeBuiltinsContext;
-  readonly #asked = new Map<string, {
-    ask: () => unknown;
-    last: string;
-    users: Map<string, { instance: Instance; key: string }>;
-  }>();
-  #watch: Action | undefined;
-  #cancel: Cancel | undefined;
+  readonly #asked = new Map<string, Asked>();
 
+  /** Constructs an instance that holds no answer. */
   constructor(context: RuntimeBuiltinsContext) {
     this.#context = context;
   }
@@ -122,7 +150,8 @@ export class RuntimeAnswers {
   /**
    * Records that the evaluation in progress of the executor of `instance`,
    * where there is one, used the answer `answer` to the question
-   * `question`, which `ask` asks again.
+   * `question`, which `ask` asks again. The answer is that of the
+   * principal the evaluation is for.
    */
   used(
     instance: Instance,
@@ -132,72 +161,96 @@ export class RuntimeAnswers {
   ): void {
     const by = instance.evaluationInProgress();
     if (by === undefined) return;
-    let held = this.#asked.get(question);
+    const { runtime, scopeKey } = this.#context;
+    let asked = this.#asked.get(question);
+    if (asked === undefined) {
+      asked = this.#watch(question, ask);
+      this.#asked.set(question, asked);
+    }
+    const principal = scopeKey("user");
+    let held = asked.by.get(principal);
     if (held === undefined) {
-      held = { ask, last: textOf(answer), users: new Map() };
-      this.#asked.set(question, held);
-      this.#rerun();
+      held = { last: textOf(answer), users: new Map() };
+      asked.by.set(principal, held);
+      // The scheduler learns what the answer reads when the action runs.
+      runtime.scheduler.invalidateAction(asked.action);
     }
     held.users.set(`${by.instance.id}\n${by.key}`, by);
   }
 
   /** Stops asking. */
   stop(): void {
-    this.#cancel?.();
-    this.#cancel = undefined;
+    for (const { cancel } of this.#asked.values()) cancel();
     this.#asked.clear();
   }
 
-  /**
-   * Has the action run, so that the scheduler knows what the answer to a
-   * question first asked reads. The first call registers the action.
-   */
-  #rerun(): void {
-    const { runtime } = this.#context;
-    if (this.#watch !== undefined) {
-      runtime.scheduler.invalidateAction(this.#watch);
-      return;
-    }
-    const watch: Action = (tx) => this.#askAgain(tx);
-    this.#watch = watch;
-    this.#cancel = runtime.scheduler.subscribe(watch, { isEffect: true });
+  /** How many questions have an action. */
+  get questions(): number {
+    return this.#asked.size;
+  }
+
+  /** Registers the action that asks `question` again. */
+  #watch(question: string, ask: () => unknown): Asked {
+    const { runtime, piece } = this.#context;
+    const action: Action = (tx) => this.#askAgain(tx, question);
+    const asked: Asked = {
+      ask,
+      by: new Map(),
+      action,
+      cancel: runtime.scheduler.subscribe(action, {
+        isEffect: true,
+        observationIdentity: piece,
+      }),
+    };
+    return asked;
   }
 
   /**
-   * Asks each question again through `tx`, under a frame of the kind
-   * `lift`. An answer that is another than the one its users were given
-   * marks them, and the derivation of the piece then evaluates them.
+   * Asks `question` again through `tx`, under a frame of the kind `lift`,
+   * for the principal the run on `tx` is for. An answer that is another
+   * than the one that principal's users were given marks them, and the
+   * derivation of the piece then evaluates them.
    */
-  #askAgain(tx: IExtendedStorageTransaction): void {
+  #askAgain(tx: IExtendedStorageTransaction, question: string): void {
     const { runtime, space, invalidate, stamp } = this.#context;
+    const asked = this.#asked.get(question);
+    if (asked === undefined) return;
     stamp(tx, "answers");
-    let marked = false;
-    runInFrame(
-      makeFrame({ runtime, tx, space, frameKind: "lift" }),
-      () => {
-        for (const [question, held] of this.#asked) {
-          // An answer no cone instance uses is not asked for again.
-          if (held.users.size === 0) {
-            this.#asked.delete(question);
-            continue;
-          }
-          let now: string;
-          try {
-            now = textOf(held.ask());
-          } catch (error) {
-            now = `threw: ${error}`;
-          }
-          if (now === held.last) continue;
-          held.last = now;
-          for (const { instance, key } of held.users.values()) {
-            instance.markStale(key);
-          }
-          held.users.clear();
-          marked = true;
-        }
-      },
+    // The principal of the run, read as the runtime gives it, which makes
+    // the run one of the scope `user` for the scheduler.
+    runtime.homeSpacePrincipalFor(tx);
+    const principal = scopeKeyOf(
+      "user",
+      tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity,
     );
-    if (marked) invalidate();
+    const held = asked.by.get(principal);
+    if (held === undefined) return;
+    // An answer no memo entry uses is not asked for again.
+    if (held.users.size === 0) {
+      asked.by.delete(principal);
+      return;
+    }
+    let now: string;
+    try {
+      now = runInFrame(
+        makeFrame({ runtime, tx, space, frameKind: "lift" }),
+        () => textOf(asked.ask()),
+      );
+    } catch (error) {
+      now = `threw: ${error}`;
+    }
+    if (now === held.last) return;
+    held.last = now;
+    // The entry that used the answer is one for every principal, or one of
+    // this principal or of a session of it.
+    const sessions = `session:${principal.slice("user:".length)}:`;
+    const ofPrincipal = (key: string) =>
+      key === principal || key.startsWith(sessions);
+    for (const { instance, key } of held.users.values()) {
+      instance.markStale(key, ofPrincipal);
+    }
+    held.users.clear();
+    invalidate();
   }
 }
 
@@ -245,11 +298,16 @@ export const runtimeBuiltins = (
     name: string,
     // deno-lint-ignore no-explicit-any
     run: (...given: any[]) => unknown,
+    /** Whether the answer is one for the acting principal. */
+    forPrincipal = false,
   ) =>
   (...args: unknown[]): unknown => {
     const converted = args.map(given);
     const answer = run(...converted);
     if (topFrame()?.frameKind === "lift") {
+      // What used an answer that is of the acting principal is of the
+      // scope `user`: another principal is not given its value.
+      if (forPrincipal) instance.store.scopes?.touch("user");
       answers.used(
         instance,
         `${name}\n${textOf(converted)}`,
@@ -284,7 +342,7 @@ export const runtimeBuiltins = (
     writtenPrincipalOf: reading("writtenPrincipalOf", writtenPrincipalOf),
     resultOwnerOf: reading("resultOwnerOf", resultOwnerOf),
     // What the access list of a space holds.
-    spaceAccess: reading("spaceAccess", spaceAccess),
+    spaceAccess: reading("spaceAccess", spaceAccess, true),
     spaceAccessOf: reading("spaceAccessOf", spaceAccessOf),
     spaceMembers: reading("spaceMembers", spaceMembers),
     spaceDeleted: reading("spaceDeleted", spaceDeleted),

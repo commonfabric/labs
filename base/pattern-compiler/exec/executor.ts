@@ -10180,14 +10180,16 @@ export class Instance {
    * (`evaluationInProgress()`). The entry is evaluated when it is next
    * demanded, and what used it is marked with it.
    */
-  markStale(key: string, scoped?: string): void {
+  markStale(key: string, scoped?: string | ((key: string) => boolean)): void {
     const entry = this.#memo.get(key);
-    // The entry of another scope key than the one named is set aside.
-    this.store.scopes?.staleAside(`${this.id}\n${key}`, scoped);
-    if (
-      scoped !== undefined && entry?.scoped !== undefined &&
-      entry.scoped !== scoped
-    ) return;
+    const of = typeof scoped === "string"
+      ? (key: string) => key === scoped
+      : scoped;
+    // The entry of another scope key than those named is set aside.
+    this.store.scopes?.staleAside(`${this.id}\n${key}`, of);
+    if (of !== undefined && entry?.scoped !== undefined && !of(entry.scoped)) {
+      return;
+    }
     if (entry !== undefined) entry.stale = true;
     const slot = this.#slots.get(key);
     if (slot !== undefined) this.#mark(slot);
