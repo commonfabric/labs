@@ -10,7 +10,10 @@ import {
   yamlDocument,
   yamlHighlightLines,
 } from "../lib/view/languages/yaml/yaml.ts";
-import { languageForFile } from "../lib/view/languages/language.ts";
+import {
+  languageForFile,
+  languageForSource,
+} from "../lib/view/languages/language.ts";
 import type { Line, TokenClass } from "../lib/view/model.ts";
 import { parseDiff } from "../lib/view/diff.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
@@ -41,6 +44,29 @@ Deno.test("yaml: path matching recognizes yml and yaml", () => {
   assertEquals(languageForFile("config.json").id, "json");
   assertEquals(languageForFile("yaml.ts").id, "typescript");
   assertEquals(languageForFile(undefined).id, "plain-text");
+});
+
+Deno.test("yaml: a .conf file selects YAML when it opens with a block key or a document marker", () => {
+  const collector = "jobs:\n  - name: toolshed-binary\n";
+
+  assertEquals(
+    languageForSource("netdata/go.d/systemdunits.conf", collector).id,
+    "yaml",
+  );
+  assertEquals(languageForSource("a.conf", "# jobs\n\n---\na: 1\n").id, "yaml");
+  assertEquals(languageForSource("a.conf", "jobs: # all\n\t- x\n").id, "yaml");
+  assertEquals(languageForSource("a.conf", "jobs:\n- x\n").id, "yaml");
+  assertEquals(
+    languageForSource("a.conf", "--- # generated\na: 1\n").id,
+    "yaml",
+  );
+  assertEquals(languageForSource("a.conf", "jobs:\n-x\n").id, "plain-text");
+  assertEquals(languageForSource("a.conf", "jobs:").id, "plain-text");
+  assertEquals(
+    languageForSource("a.conf", "template: web_log\n  on: x\n").id,
+    "directive",
+  );
+  assertEquals(languageForSource("a.yaml.txt", collector).id, "plain-text");
 });
 
 Deno.test("yaml: keys and scalar types receive distinct classes", () => {

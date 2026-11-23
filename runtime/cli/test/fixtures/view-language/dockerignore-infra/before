@@ -1,0 +1,6 @@
+**
+!memory-router/
+!memory-router/Cargo.toml
+!memory-router/Cargo.lock
+!memory-router/src/
+!memory-router/src/*.rs

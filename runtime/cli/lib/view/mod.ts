@@ -1,10 +1,11 @@
 /**
  * Entry point for `cf view`. Reads input bytes, selects a language and decodes
- * through it, then parses once — as a unified diff when it reads as one,
- * otherwise with the selected language. It then launches the interactive
- * pager (when stdout is a TTY) or prints the selected source or rendered
- * representation and exits, mirroring how `less`/`bat` behave when their
- * output is redirected.
+ * through it, then parses — as a unified diff when it reads as one, otherwise
+ * with the selected language — and parses again whenever that parse started
+ * loading a parser, as an Org source block can. It then launches the
+ * interactive pager (when stdout is a TTY) or prints the selected source or
+ * rendered representation and exits, mirroring how `less`/`bat` behave when
+ * their output is redirected.
  * Filename-free compiler output keeps the transformed TypeScript default.
  * Other source uses filename, shebang, and signature metadata unless an
  * explicit language selects another language.
@@ -27,6 +28,7 @@ import {
   byteInputFor,
   decodeLanguageInput,
   diffSemanticsFor,
+  finishGrammarLoads,
   type Language,
   languageForName,
   languageForTransformedOutput,
@@ -235,7 +237,11 @@ export async function buildPreparedView(
 }> {
   const selected = selectView(input, file, forceDiff, selection);
   await prepareLanguages(selected.languages);
-  return builtView(selected);
+  // A language embedded in another, such as the language an Org source block
+  // names, starts loading its parser when a parse reaches it.
+  let view = builtView(selected);
+  while (await finishGrammarLoads()) view = builtView(selected);
+  return view;
 }
 
 /**

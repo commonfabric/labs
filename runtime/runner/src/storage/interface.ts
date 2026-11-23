@@ -1404,6 +1404,14 @@ export interface IStorageProvider {
     options?: { branch?: BranchName; before?: number; limit?: number },
   ): Promise<CommitSummary[]>;
 
+  /**
+   * Observes the newest seq of the space this provider has learned of
+   * moving forward: a commit of its own being accepted, or the server
+   * pushing a commit to a document it watches. Returns the function that
+   * stops observing.
+   */
+  subscribeServerSeq?(observer: (serverSeq: number) => void): () => void;
+
   /** Returns the space's branches, deleted ones included. */
   listBranches?(): Promise<BranchInfo[]>;
 
@@ -2202,6 +2210,17 @@ export interface IStorageTransaction {
    * identity; the full journal remains available through getReadActivities.
    */
   getPotentiallyExternalReadActivities?(): Iterable<IReadActivity> | undefined;
+
+  /**
+   * Optional. Freezes every record that
+   * `getPotentiallyExternalReadActivities` lists, so that each keeps the
+   * metadata object it carries; that object stays as open to change as it
+   * was. Returns a count that advances whenever that list gains a record or
+   * is emptied, so two calls that return the same count frame a list of the
+   * same records, each with the same metadata object. Returns `undefined`
+   * where the transaction froze nothing.
+   */
+  freezeReadActivityRecords?(): number | undefined;
 
   /**
    * Optional ordered log of every applied write attempt, in transaction

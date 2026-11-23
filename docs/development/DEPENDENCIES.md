@@ -489,6 +489,14 @@ install script, which the pager never uses; its dependencies are the two
 `tree-sitter-python` already brings. Roll it with the runtime, then run the
 `cf view` HCL tests and `cf view` against a `.tf` file.
 
+Rust reaches its grammar through `runtime/cli/lib/view/languages/rust/rust.ts`,
+and the CLI pins `tree-sitter-rust` exactly. That package is the official Rust
+grammar and ships its WebAssembly build. Like `tree-sitter-python`, it also
+ships generated C source, native bindings, and an install script, which the
+pager never uses; its dependencies are the two `tree-sitter-python` already
+brings. Roll it with the runtime, then run the `cf view` Rust tests and
+`cf view` against a `.rs` file.
+
 Shell reaches its grammar through `runtime/cli/lib/view/languages/shell/shell.ts`,
 and the CLI pins `tree-sitter-bash` exactly. That package is the official Bash
 grammar and ships its WebAssembly build, which the pager loads for Bash and

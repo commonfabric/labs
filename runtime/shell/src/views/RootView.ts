@@ -431,13 +431,14 @@ export class XRootView extends BaseView implements ShellApp {
   );
 
   /**
-   * The runtime task, its generation counter, and the unload handler, which
-   * a test drives directly.
+   * The runtime task, its generation counter, its current rejection, and the
+   * unload handler, which a test drives directly.
    */
   get accessForTestingOnly(): {
     readonly onBeforeUnload: (event: BeforeUnloadEvent) => void;
     rt: Task<[AppState | undefined], RuntimeInternals | undefined>;
     readonly runtimeGeneration: number;
+    readonly runtimeTaskError: unknown;
   } {
     // deno-lint-ignore no-this-alias
     const outerThis = this;
@@ -451,6 +452,11 @@ export class XRootView extends BaseView implements ShellApp {
       },
       get runtimeGeneration() {
         return outerThis.#runtimeGeneration;
+      },
+      get runtimeTaskError() {
+        return outerThis.#rt.status === TaskStatus.ERROR
+          ? outerThis.#rt.error
+          : undefined;
       },
     };
   }

@@ -77,6 +77,7 @@ import type {
 } from "../src/storage/interface.ts";
 import {
   isAclDocumentWriteRefusal,
+  markScopedDefaultSeed,
   stageSpaceAccessChanges,
   stampWaveRunContext,
   WaveAccumulator,
@@ -1083,6 +1084,34 @@ describe("stage D seal-into-wave", () => {
     expect(commitMeta.holder).toBe(lease.holder);
   });
 
+  it("annotates each space-scoped write of a run that acts as nobody with the action whose run made it", async () => {
+    const lease = await liveLease();
+    const leasedWave = newWave({ lease });
+    runtime.installSealDestination(leasedWave);
+    const a = runtime.getCell<{ value: number }>(space, "made-a", undefined);
+    const b = runtime.getCell<{ value: number }>(space, "made-b", undefined);
+    const tx1 = runtime.edit();
+    stampWaveRunContext(tx1, { actionId: "derive-a", kind: "derivation" });
+    a.withTx(tx1).set({ value: 1 });
+    expect((await tx1.commit().settled).error).toBeUndefined();
+    const tx2 = runtime.edit();
+    stampWaveRunContext(tx2, { actionId: "derive-b", kind: "derivation" });
+    b.withTx(tx2).set({ value: 2 });
+    expect((await tx2.commit().settled).error).toBeUndefined();
+    runtime.clearSealDestination();
+
+    const outcome = await leasedWave.commitWave(newSink());
+    await leasedWave.settled();
+
+    const row = engine.database.prepare(
+      `SELECT annotations FROM "commit" WHERE seq = :seq`,
+    ).get({ seq: outcome.seq }) as { annotations: string };
+    expect(decodeMemoryBoundary(row.annotations)).toEqual([
+      { op: 0, action: "derive-a" },
+      { op: 1, action: "derive-b" },
+    ]);
+  });
+
   it("drops superseded pure writes (C8a) and the derivations that read them; the authored value survives", async () => {
     const lease = await liveLease();
     const wave = newWave({ lease });
@@ -1343,6 +1372,65 @@ describe("stage D seal-into-wave", () => {
         | undefined)?.waveWithdrawalCause,
     ).toBe("contribution-dropped");
     // The authored value stands: nothing of the wave reached the store.
+    expect(outcome.seq).toBeUndefined();
+    expect(Engine.readState(engine, { id: wLink.id })?.document).toEqual({
+      value: { value: 99 },
+    });
+  });
+
+  it("drops a scoped-default seed when the viewer wrote the instance before the wave opened and the seed had yet to see the write", async () => {
+    // The loop's own writes read the same lagging view. A seed that found a
+    // viewer's instance absent, sealing into a wave opened after the
+    // viewer's first write was admitted, would otherwise create the
+    // instance over that write.
+
+    const w = runtime.getCell<{ value: number }>(
+      space,
+      "wave-stale-bookkeeping",
+      undefined,
+    );
+    await w.sync();
+    const wLink = w.getAsNormalizedFullLink();
+    Engine.applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: wLink.id,
+          value: { value: { value: 99 } },
+        }],
+      },
+    });
+    const lease = await liveLease();
+    const wave = newWave({ lease });
+    expect(
+      Engine.selectDocHead(engine, { id: wLink.id, scopeKey: "space" }),
+    ).toBeLessThanOrEqual(wave.basisSeq);
+    runtime.installSealDestination(wave);
+
+    const tx = runtime.edit();
+    stampWaveRunContext(tx, { actionId: "seed-w", kind: "bookkeeping" });
+    markScopedDefaultSeed(tx);
+    expect(w.withTx(tx).get()).toBeUndefined();
+    w.withTx(tx).set({ value: 1 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const settlement = waveSettlementOf(tx);
+    expect(settlement).toBeDefined();
+
+    runtime.clearSealDestination();
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+
+    expect(outcome.aborted).toBeUndefined();
+    expect(outcome.dispositions[0]).toEqual({ kind: "dropped" });
+    expect(
+      ((await settlement!).error as
+        | { waveWithdrawalCause?: unknown }
+        | undefined)?.waveWithdrawalCause,
+    ).toBe("contribution-dropped");
     expect(outcome.seq).toBeUndefined();
     expect(Engine.readState(engine, { id: wLink.id })?.document).toEqual({
       value: { value: 99 },
@@ -1815,7 +1903,12 @@ describe("stage D seal-into-wave", () => {
       Record<string, unknown>
     >;
     expect(annotations).toEqual([
-      { op: 0, actingUser: "did:key:alice", actingSession: "sess-1" },
+      {
+        op: 0,
+        actingUser: "did:key:alice",
+        actingSession: "sess-1",
+        action: "handle-vote",
+      },
     ]);
     const basis = selectSchedulerBasisRows(engine, {
       branch: "",

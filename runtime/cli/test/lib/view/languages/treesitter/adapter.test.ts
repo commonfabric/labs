@@ -10,6 +10,7 @@ import { expect } from "@std/expect";
 
 import {
   createHighlighter,
+  finishGrammarLoads,
   highlightLines,
   onGrammarLoad,
   parseDocument,
@@ -144,6 +145,41 @@ describe("adapter", () => {
       } finally {
         stop();
       }
+    });
+  });
+
+  describe("finishGrammarLoads()", () => {
+    it("waits for a load that a parse started, and then finds none", async () => {
+      const pending: TreeSitterGrammar = {
+        ...pythonGrammar,
+        id: "python-finished-after-use",
+      };
+
+      expect(classesOf(highlightLines(pending, "x = 1"), "x = 1"))
+        .toEqual(["plain"]);
+      expect(await finishGrammarLoads()).toBe(true);
+
+      expect(classesOf(highlightLines(pending, "x = 1"), "1"))
+        .toEqual(["number"]);
+      expect(await finishGrammarLoads()).toBe(false);
+    });
+
+    it("rejects with a started load's failure once, without starting it again", async () => {
+      const missing: TreeSitterGrammar = {
+        ...pythonGrammar,
+        id: "python-unreadable-after-use",
+        wasmUrl: () => new URL("./no-such-grammar.wasm", import.meta.url).href,
+      };
+
+      highlightLines(missing, "x = 1");
+      await expect(finishGrammarLoads()).rejects.toThrow(
+        /the python-unreadable-after-use grammar could not be read from/,
+      );
+
+      expect(await finishGrammarLoads()).toBe(false);
+      expect(classesOf(highlightLines(missing, "x = 1"), "x = 1"))
+        .toEqual(["plain"]);
+      expect(await finishGrammarLoads()).toBe(false);
     });
   });
 

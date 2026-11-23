@@ -5167,6 +5167,12 @@ type ProviderOptions = {
   /** Called when the space's memory session is replaced on reconnect. */
   onSessionReplaced?: () => void;
 
+  /**
+   * Called when the newest seq of the space the replica's session has
+   * learned of moves forward; see `SpaceSession.subscribeServerSeq()`.
+   */
+  onServerSeq?: (serverSeq: number) => void;
+
   /** Called when `sessionError()` starts reporting `error`. */
   onSessionError?: (error: Error) => void;
 
@@ -5349,6 +5355,7 @@ class Provider
 
   #routeAbort = new AbortController();
   #operationSubscriptions = new Set<ProviderOperationSubscription>();
+  #serverSeqObservers = new Set<(serverSeq: number) => void>();
   #presenceMemberships = new Set<ProviderPresenceMembership>();
 
   /**
@@ -5385,6 +5392,17 @@ class Provider
           address.scope,
           address.scopeKey,
         ),
+      // Observers belong to the provider, so a replacement replica's session
+      // reports to the same ones.
+      onServerSeq: (serverSeq) => {
+        for (const observer of [...this.#serverSeqObservers]) {
+          try {
+            observer(serverSeq);
+          } catch (cause) {
+            console.error("server-seq subscriber threw:", cause);
+          }
+        }
+      },
       // A released root is not read again on a replacement replica.
       onWatchesReleased: (roots) => {
         for (const root of roots) {
@@ -5815,7 +5833,9 @@ class Provider
    */
   isUnused(): boolean {
     return !this.#destroyed && this.#operationSubscriptions.size === 0 &&
-      this.#presenceMemberships.size === 0 && this.replica.isUnused();
+      this.#presenceMemberships.size === 0 &&
+      // Someone following the space's history is using it.
+      this.#serverSeqObservers.size === 0 && this.replica.isUnused();
   }
 
   ensureSession(): Promise<void> {
@@ -5897,6 +5917,12 @@ class Provider
     options?: { branch?: BranchName; before?: number; limit?: number },
   ): Promise<CommitSummary[]> {
     return this.#followReplacement((replica) => replica.listHistory(options));
+  }
+
+  /** See `IStorageProvider.subscribeServerSeq`. */
+  subscribeServerSeq(observer: (serverSeq: number) => void): () => void {
+    this.#serverSeqObservers.add(observer);
+    return () => this.#serverSeqObservers.delete(observer);
   }
 
   listBranches(): Promise<BranchInfo[]> {
@@ -5981,6 +6007,7 @@ class Provider
       subscription.cancel?.();
     }
     this.#operationSubscriptions.clear();
+    this.#serverSeqObservers.clear();
     this.#routeAbort.abort(new Error("memory replica closed"));
     this.options.routeState.generation++;
     await this.replica.close();
@@ -5994,6 +6021,7 @@ class Provider
         subscription.cancel?.();
       }
       this.#operationSubscriptions.clear();
+      this.#serverSeqObservers.clear();
       this.#routeAbort.abort(new Error("memory replica closed"));
       this.options.routeState.generation++;
     }
@@ -6679,6 +6707,11 @@ export class SpaceReplica
   #onAccessChange?: (error: Error | undefined) => void;
   #onSessionAnswered?: () => void;
   #cancelTermination: Cancel | undefined;
+  #onServerSeq?: (serverSeq: number) => void;
+  #cancelServerSeq: Cancel | undefined;
+
+  /** The newest seq this replica has reported to `#onServerSeq`. */
+  #reportedServerSeq = 0;
   #onSessionReplaced?: () => void;
   #onSessionError?: (error: Error) => void;
 
@@ -6714,6 +6747,7 @@ export class SpaceReplica
     this.#subscription = options.subscription;
     this.#onAccessChange = options.onAccessChange;
     this.#onSessionAnswered = options.onSessionAnswered;
+    this.#onServerSeq = options.onServerSeq;
     this.#onSessionReplaced = options.onSessionReplaced;
     this.#onSessionError = options.onSessionError;
     this.#scopeKeyIdentity = options.scopeKeyIdentity;
@@ -8540,6 +8574,8 @@ export class SpaceReplica
   async close(): Promise<void> {
     this.#cancelTermination?.();
     this.#cancelTermination = undefined;
+    this.#cancelServerSeq?.();
+    this.#cancelServerSeq = undefined;
     this.#localCoverageObservers.clear();
     this.#viewPlanObservers.clear();
     this.#cancelViewCapabilityLost?.();
@@ -8719,6 +8755,8 @@ export class SpaceReplica
   closeNow(): void {
     this.#cancelTermination?.();
     this.#cancelTermination = undefined;
+    this.#cancelServerSeq?.();
+    this.#cancelServerSeq = undefined;
     this.#localCoverageObservers.clear();
     this.#viewPlanObservers.clear();
     this.#cancelViewCapabilityLost?.();
@@ -13808,6 +13846,17 @@ export class SpaceReplica
     return false;
   }
 
+  /**
+   * Helper for `#memoizedSessionHandle()`, which reports `serverSeq` to
+   * `#onServerSeq` when it is newer than the one reported last.
+   */
+  #reportServerSeq(serverSeq: number): void {
+    if (this.#onServerSeq === undefined) return;
+    if (!(serverSeq > this.#reportedServerSeq)) return;
+    this.#reportedServerSeq = serverSeq;
+    this.#onServerSeq(serverSeq);
+  }
+
   #memoizedSessionHandle(): Promise<{
     client: SessionConnection;
     session: MemoryV2Client.SpaceSession;
@@ -13841,6 +13890,15 @@ export class SpaceReplica
           this.#lastAuthorizationError = null;
           this.#onAccessChange?.(undefined);
           this.#onSessionAnswered?.();
+          this.#cancelServerSeq?.();
+          this.#cancelServerSeq = this.#onServerSeq === undefined
+            ? undefined
+            : resolved.session.subscribeServerSeq((serverSeq) =>
+              this.#reportServerSeq(serverSeq)
+            );
+          // A session opened anew starts at the seq its open answered, which
+          // it reports to no observer, so the replica reports it here.
+          this.#reportServerSeq(resolved.session.serverSeq);
           this.#cancelTermination?.();
           this.#cancelTermination = resolved.session.subscribeTermination(
             (error) => {

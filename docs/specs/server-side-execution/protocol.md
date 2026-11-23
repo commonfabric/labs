@@ -112,7 +112,12 @@ path. (ii) `system` commits carry no user attribution in the commit
 ledger — the envelope is the server's own session — which is
 deliberately accepted; per-user attribution for blob writes is a
 named future hardening, out of v2 scope, in the same family as §2's
-grant-scoped foreign reads.
+grant-scoped foreign reads. The runtime client's own uploads do not
+take that path: `handleUploadBlob()`
+(`runtime/runtime-client/src/backends/runtime-processor.ts`) commits
+the record on the uploader's session, so those writes are `authored`
+and carry the uploader's attribution, and only the route's writes are
+`system`.
 
 **Both arms carry a class; only the ON arm enforces one.** `class`
 metadata is WRITTEN in every arm from stage A onward and ENFORCED
@@ -276,9 +281,9 @@ does not: the server admitting it also DID the work, so producer
 and admitter share one trust environment at the envelope, and
 envelope identity verifies nothing there. The SpaceServer therefore
 commits under its own service identity — the envelope principal IS
-the lease holder §2 checks — and TWO DISTINCT things ride WITHIN
-the commit. Conflating them is the error this paragraph exists to
-prevent:
+the lease holder §2 checks — and THREE DISTINCT things ride WITHIN
+the commit. Conflating the first two is the error this paragraph
+exists to prevent:
 
 - **ADDRESSING — the explicit `scope_key`, one per scoped write.**
   It names WHICH INSTANCE the row is. The engine keys rows by it
@@ -321,6 +326,19 @@ prevent:
   known scope — attributes it right; counted as
   `earlyEmitRefusals`). Handler runs are unchanged (the event's
   server-stamped `firedAt` is their explicit actor, LD1).
+
+- **PRODUCER — the action id, one per write a run makes (RULED
+  2026-11-22).** The durable identity of the action whose run made
+  the write, the one the run's basis rows are keyed by
+  (serving-loop.md §3b). With the attribution it names the run, so a
+  stored write says which run produced it, and the run's basis rows
+  say what that run read. Every write of a scheduler run and of the
+  serving loop's direct commit carries it, a space-scoped write of
+  a run that acts as nobody included. A write of an effect
+  completion names none: it lands a result, and no run derives it.
+  Recorded, not
+  read, like the attribution: a mechanism that starts DECIDING from
+  it needs a spec edit here first.
 
 Attributed, not signed, today — and RECORDED, not read, today
 (stated after the 2026-08-03 provenance audit asked): no
@@ -541,10 +559,12 @@ refused: a foreign scoped read naming no actor's instance, and one
 whose actor the list does not grant. Resolution against a per-doc
 grant store with `capabilityRef` carriage, the finer design OW13
 names, stays owed and would narrow this grant, never widen it. A
-granted read is a service-session read: it registers no
-identity-bearing demand in the foreign space, so the instance it reads
-is as the foreign space's own loop last derived it for that actor
-(verification-coverage.md OW35). Cross-space serving therefore reads
+granted read is a service-session read, which is not itself demand in
+the foreign space. The reading loop carries the actor's demand there
+apart from the read, where it keeps the currency index and one memory
+server holds both spaces (serving-loop.md §3b; verification-coverage.md
+OW35); elsewhere the instance it reads is as the foreign space's own loop
+last derived it for that actor. Cross-space serving therefore reads
 foreign SPACE-scope state freely (§2b's free-read row) and foreign
 SCOPED state under the actor's grant alone. A refusal is no load for
 served delivery to wait on, and it is never silently empty for the
@@ -989,9 +1009,11 @@ disabled (README §3.5).
   the explicit `scope_key` on every scoped write (addressing) and
   the acting identity on every action RUN's writes, where the run
   has one — §1 (attribution,
-  `action × instance`). The pair's CARRIAGE is server-internal
+  `action × instance`); and the PRODUCER §1 defines, the action id
+  on every write a run makes (RULED 2026-11-22). Their CARRIAGE is
+  server-internal
   admission input (like `commitClass`/`holder`: `ClientCommit`
-  cannot express it), and its STORED form is a per-op-indexed
+  cannot express it), and their STORED form is a per-op-indexed
   sidecar on the commit row — recorded, never wire, never pushed;
   admission consumes only the addressing half, to key scoped rows
   (§1's recorded-not-read attribution). Anything further needs a

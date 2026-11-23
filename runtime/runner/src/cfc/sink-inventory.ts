@@ -35,14 +35,11 @@ export type InitialSinkName =
  *
  * `sqliteQuery` is the sink whose request is a read handed to the storage
  * provider holding a space's replicas: the statement, its parameters, and the
- * database the query names. Its own space is the ordinary case, and there the
- * parameters reach nobody the document's residency does not already name, so
- * the bound this sink wants is the database's space rather than a clause
- * list. The registry admits a static clause list per sink and nothing of that
- * shape, the way it admits nothing of the `agent` sink's per-request shape,
- * so `builtins/sqlite-builtins.ts` applies it: a query whose REQUEST carries
- * confidentiality and whose database lies in another space is refused before
- * that request is staged.
+ * database the query names, in this space or another. Every space is served
+ * by an attested runtime running the same code, which applies the same
+ * access rules, so the server of another space is no different from the
+ * server of this one; which rows each reader is shown is decided by the rows'
+ * labels in that reader's runtime.
  */
 export const KNOWN_SINKS = [
   "fetchBinary",
@@ -73,10 +70,9 @@ export type KnownSinkName = (typeof KNOWN_SINKS)[number];
  * space's replicas. For that space's OWN data it reaches nobody the
  * destination document's residency does not already name, which is why a
  * rule written for a release leaving the runtime has no business firing
- * there. A request naming another space's database does leave; what keeps
- * that out of the gate's hands is that the sqlite builtin refuses it before
- * staging when the request carries a label, so the class says where a
- * request goes rather than whether it may.
+ * there. A request naming another space's database reaches that space's
+ * server, an attested runtime applying the same rules; the class says where
+ * a request goes rather than whether it may.
  */
 export type SinkClass = "network" | "agent" | "storage";
 
@@ -175,23 +171,17 @@ const LLM_SINK_UNGATED: SinkUngatedRationale = Object.freeze({
  * query's statement and parameters reach the storage provider whatever
  * confidentiality the transaction carries.
  *
- * Ungated rather than public-only because the bound a sqlite read wants is
- * not a clause list: the provider a same-space query reaches holds every
- * replica byte of the document the result lands in, so no audience the label
- * excludes learns anything from the parameters, while a public-only ceiling
- * would refuse every query a pattern parameterizes out of its own space's
- * data. What the bound turns on is WHERE the database is, and the registry
- * admits a static clause list per sink and nothing per request.
- * `builtins/sqlite-builtins.ts` applies it instead, refusing a query whose
- * REQUEST carries confidentiality and whose database lies in another space
- * before that request is staged.
+ * Ungated rather than public-only because a public-only ceiling would refuse
+ * every query a pattern parameterizes out of the data it reads, while the
+ * server a query reaches, in this space or another, is an attested runtime
+ * applying the same access rules. A deployment that wants a confidentiality
+ * gate on sqlite reads declares a ceiling for the sink.
  */
 const SQLITE_QUERY_SINK_UNGATED: SinkUngatedRationale = Object.freeze({
   reason:
-    "the bound a sqlite read wants is the database's own space rather than a clause list, and a per-sink ceiling cannot express it",
+    "a sqlite query's statement and parameters reach only the server of the database's space, an attested runtime applying the same access rules, and a public-only ceiling would refuse every query parameterized by the data it reads",
   owner: "CFC runtime (sink governance) with the sqlite builtin",
-  retirement:
-    "the gate reads a per-request bound off the request — measured on the transaction's flow join rather than the consumed set, which counts a query's reads of its own settled result — so the residency check the builtin applies before staging moves to the ceiling",
+  retirement: "a deployment declares a confidentiality ceiling for the sink",
 });
 
 /** One posture's decision about every known sink. */

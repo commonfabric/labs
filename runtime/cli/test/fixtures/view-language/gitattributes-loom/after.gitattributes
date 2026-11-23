@@ -1,0 +1,3 @@
+# Always keep main's version of pieces.json on merge — piece IDs are
+# ephemeral deploy artifacts that change every deploy cycle.
+coordination/pieces.json merge=ours
