@@ -7154,6 +7154,45 @@ export class Instance {
   }
 
   /**
+   * On the root, for a change of the documents `docs` that is no write to
+   * a document the store holds, as a change of their labels or a change of
+   * a document that this executor has not read: marks the body of each
+   * element that the storage lists as a reader of one of them and whose
+   * row an assembly holds as stored. The executor holds no entry and no
+   * record of such a row, so the body is evaluated, and the row is stored
+   * and given its record as a row evaluated here is. Returns whether it
+   * marked one.
+   */
+  #evaluateStoredReaders(docs: readonly string[]): boolean {
+    if (this.#seeds.size === 0) return false;
+    let marked = false;
+    for (const doc of docs) {
+      for (const reader of this.options.units?.readers(doc) ?? []) {
+        const assembly = this.#name("assembly", reader.collection, []);
+        if (!this.#seeds.has(assembly)) continue;
+        if (!this.#tables.get(assembly)?.byKey.has(reader.key)) continue;
+        const name = this.#name("element", reader.collection, [], reader.key);
+        if (this.#memo.has(name)) continue;
+        this.#adoptStored(reader.collection, reader.key, name);
+        this.#mark(this.#slot(name));
+        marked = true;
+      }
+    }
+    return marked;
+  }
+
+  /**
+   * Another writer changed the documents `docs`, which the store of this
+   * executor does not hold. Marks the body of each element whose row is
+   * left as stored and which the storage lists as a reader of one of them
+   * (`StoredUnits.readers`), and returns whether there was one: whoever
+   * runs the executor then calls `settle()`.
+   */
+  changedUnread(docs: readonly string[]): boolean {
+    return this.root.#evaluateStoredReaders(docs);
+  }
+
+  /**
    * Tells the store that keeps the units what an evaluation of the body
    * of an element of a collection of `#listed` read.
    */
@@ -10942,6 +10981,7 @@ export class Instance {
     _alone = false,
     stored = false,
   ): void {
+    this.#evaluateStoredReaders(changes.map(({ doc }) => doc));
     const regrouped = new Set<string>();
     for (const instance of new Set([this, ...this.#instances.values()])) {
       for (const key of instance.#regroupReaders(changes)) regrouped.add(key);

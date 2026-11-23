@@ -171,6 +171,30 @@ describe("an event to the stream of a row after another serving loop took a comp
     expect(piece.instance.counts.elementEvaluations).toBe(1);
   });
 
+  it("evaluates the body of the row of an item that a client changes after an event woke the piece", async () => {
+    const { sender, cell, reader, read } = await takenOver(100);
+    await send(sender, cell, 7, "touch", {});
+    await holds(reader, read, labels(100), 1);
+    await takeover.serving.host.whenQuiescent();
+    const item = sender.getCell<Item>(takeover.space, "item 9");
+    await item.sync();
+
+    await takeover.commit(
+      sender,
+      (tx) => item.withTx(tx).key("title").set("late"),
+    );
+
+    const expected = labels(100);
+    expected[9] = "late!";
+    await holds(reader, read, expected, 1);
+    await takeover.serving.host.whenQuiescent();
+    const [piece] = takeover.serving.pieces();
+    expect(piece.refusals).toEqual([]);
+    // The body of the row whose stream took the event, and the body of
+    // the row whose item changed.
+    expect(piece.instance.counts.elementEvaluations).toBe(2);
+  });
+
   it("handles events to the streams of two rows and of a row added since, and a third serving loop finds the piece current", async () => {
     const { sender, cell, reader, read, result } = await takenOver(100);
     const expected = labels(100);

@@ -567,6 +567,9 @@ export class RuntimeTransactions implements TransactionHooks {
     | undefined;
   readonly #onChanges: ((changes: ChangeByOther[]) => void) | undefined;
   readonly #onLabels: (() => void) | undefined;
+  readonly #unheld:
+    | { reads(entity: string): boolean; changed(entities: string[]): void }
+    | undefined;
   readonly #onApplied: (() => void) | undefined;
   /**
    * For a resumed instance: the documents of the executor that the replica
@@ -650,6 +653,20 @@ export class RuntimeTransactions implements TransactionHooks {
        */
       labels?: () => void;
       /**
+       * What the adapter asks and tells of the entities of the space of
+       * the instance that the executor holds no document of, while the
+       * executor holds rows as stored (`rowsHeld`): a row left as stored
+       * was derived from documents that this executor has not read.
+       * `reads` says whether a row may have read the entity, so that the
+       * replica keeps the document and reports a write to it. `changed`
+       * is called with the entities that a commit of another writer
+       * changed, value or label.
+       */
+      unheld?: {
+        reads(entity: string): boolean;
+        changed(entities: string[]): void;
+      };
+      /**
        * Called when the replica applied the commit of a transaction the
        * adapter was handed, after the executor was told of the labels it
        * stored.
@@ -695,6 +712,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#onStream = options.stream;
     this.#onChanges = options.changes;
     this.#onLabels = options.labels;
+    this.#unheld = options.unheld;
     this.#onApplied = options.applied;
     this.#onRefused = options.refused;
     this.#sources = options.sources;
@@ -731,8 +749,26 @@ export class RuntimeTransactions implements TransactionHooks {
           const byOther: ChangeByOther[] = [];
           const seen = new Set<string>();
           let labelsByOther = false;
+          // The entities that another writer changed and that the executor
+          // holds no document of, while it holds rows as stored. A document
+          // that a read brings into the replica is no change.
+          const unheld = !own && this.#unheld !== undefined &&
+              this.#keptArrays.size > 0 &&
+              notification.space === this.#space &&
+              notification.type !== "load" && notification.type !== "pull"
+            ? new Set<string>()
+            : undefined;
           for (const { address, before, after } of notification.changes) {
             const doc = this.#byEntity.get(address.id);
+            if (doc === undefined || !this.#documents.has(doc)) {
+              // A row can have read the entity where the basis of the
+              // piece names it.
+              if (
+                unheld !== undefined && address.scope === "space" &&
+                (doc === undefined || !this.#rowDocuments.has(doc)) &&
+                this.#unheld?.reads(address.id) === true
+              ) unheld.add(address.id);
+            }
             if (doc === undefined) continue;
             // Two spaces can hold documents of one entity.
             if (this.#spaceOf(doc) !== notification.space) continue;
@@ -848,6 +884,9 @@ export class RuntimeTransactions implements TransactionHooks {
           }
           if (byOther.length > 0) this.#onChanges?.(byOther);
           if (labelsByOther) this.#onLabels?.();
+          if (unheld !== undefined && unheld.size > 0) {
+            this.#unheld?.changed([...unheld]);
+          }
           return undefined;
         },
       };
@@ -863,7 +902,11 @@ export class RuntimeTransactions implements TransactionHooks {
       address,
     ) => {
       const doc = this.#byEntity.get(address.id);
-      return doc !== undefined && address.space === this.#spaceOf(doc);
+      if (doc !== undefined) return address.space === this.#spaceOf(doc);
+      // A row left as stored was derived from documents the executor has
+      // not named: the replica keeps those, and reports a write to one.
+      return this.#keptArrays.size > 0 && address.space === this.#space &&
+        this.#unheld?.reads(address.id) === true;
     });
   }
 

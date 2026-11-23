@@ -67,6 +67,14 @@ import {
 } from "./transactions.ts";
 import { compartmentEvaluator } from "./value-code.ts";
 
+/**
+ * The names under which the executor of a piece can have read the document
+ * of `entity`: the entity for a document it did not make, and the entity
+ * without `of:` for one an instance of the piece made.
+ */
+const unheldNames = (entity: string): string[] =>
+  entity.startsWith("of:") ? [entity, entity.slice("of:".length)] : [entity];
+
 /** What `startCompiledPiece()` takes beside the compiled pattern. */
 export type CompiledPieceOptions = {
   /**
@@ -195,6 +203,11 @@ export class CompiledPiece {
     created: 0,
     made: {},
   };
+  /**
+   * Whether the piece was started to leave rows as stored
+   * (`CompiledPieceOptions.stale`).
+   */
+  readonly #byUnits: boolean;
   /** The instance exists: a change by another writer can be applied. */
   #started = false;
   #stopped = false;
@@ -209,6 +222,7 @@ export class CompiledPiece {
     options: CompiledPieceOptions,
   ) {
     this.#runtime = runtime;
+    this.#byUnits = options.resume === true && options.stale !== undefined;
     const result = resultCell.getAsNormalizedFullLink();
     if (result.path.length > 0) {
       throw new Error("The result cell of a compiled piece is a whole entity.");
@@ -231,6 +245,11 @@ export class CompiledPiece {
       stream: (entity, stream) => this.#registerStream(entity, stream),
       changes: (changes) => this.#changedByOthers(changes),
       labels: () => this.#invalidate(),
+      unheld: {
+        reads: (entity) =>
+          unheldNames(entity).some((doc) => this.#basis.has(doc)),
+        changed: (entities) => this.#changedUnheld(entities),
+      },
       applied: () => {
         if (this.#started && this.instance.relabelPending) this.#invalidate();
       },
@@ -568,25 +587,59 @@ export class CompiledPiece {
   }
 
   /**
+   * Another writer changed entities that the executor holds no document
+   * of, while it holds rows as stored: the body of each row that the
+   * storage lists as a reader of one of them is marked, and the derivation
+   * runs where there is one.
+   */
+  #changedUnheld(entities: string[]): void {
+    this.#afterNotification(() => {
+      if (this.instance.changedUnread(entities.flatMap(unheldNames))) {
+        this.#invalidate();
+      }
+    });
+  }
+
+  /**
+   * Runs `apply`, which tells the executor of a change that a notification
+   * of the replica named, where the piece runs: at once, or, for a piece
+   * that holds rows as stored, once the replica has applied the commit the
+   * notification is of. The executor of such a piece reads the list of the
+   * readers of a changed document, and a read inside the notification of a
+   * commit gives a document the replica does not hold as absent.
+   */
+  #afterNotification(apply: () => void): void {
+    if (!this.#started || this.#stopped) return;
+    if (!this.#byUnits) {
+      apply();
+      return;
+    }
+    queueMicrotask(() => {
+      if (!this.#stopped) apply();
+    });
+  }
+
+  /**
    * Applies the changes another writer committed to the documents the
    * executor holds, which marks what read them, and has the derivation run.
    */
   #changedByOthers(changes: ChangeByOther[]): void {
-    if (!this.#started || this.#stopped) return;
-    for (const { doc, path, value, splice } of changes) {
-      this.#counts.changesByOthers += 1;
-      const ref = new Ref(doc, path);
-      if (splice === undefined) this.instance.store.write(ref, value);
-      else {
-        this.instance.store.splice(
-          ref,
-          splice.start,
-          splice.removed,
-          splice.members,
-        );
+    this.#afterNotification(() => {
+      for (const { doc, path, value, splice } of changes) {
+        this.#counts.changesByOthers += 1;
+        const ref = new Ref(doc, path);
+        if (splice === undefined) this.instance.store.write(ref, value);
+        else {
+          this.instance.store.splice(
+            ref,
+            splice.start,
+            splice.removed,
+            splice.members,
+          );
+        }
       }
-    }
-    this.#invalidate();
+      this.#invalidate();
+    });
   }
 }
 
