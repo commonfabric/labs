@@ -279,6 +279,26 @@ type CaptionPath = {
   cards: (string | number)[];
   /** The path of the caption below a card. */
   caption: (string | number)[];
+  /**
+   * Where the array of cards is stored in chunks (`SCALE_LISTS`): how many
+   * cards each chunk held when the path was found. The array then holds
+   * the chunks, and a card stands in its chunk.
+   */
+  chunks?: number[];
+};
+
+/** The path of the card at `index`, below the array of cards. */
+const cardAt = (
+  { chunks }: CaptionPath,
+  index: number,
+): (string | number)[] => {
+  if (chunks === undefined) return [index];
+  let chunk = 0;
+  while (chunk < chunks.length - 1 && index >= chunks[chunk]) {
+    index -= chunks[chunk];
+    chunk += 1;
+  }
+  return [chunk, index];
 };
 
 /**
@@ -368,6 +388,34 @@ const captionPathOf = async (
       );
       return caption === undefined ? undefined : { cards: path, caption };
     }
+    // An array of cards that is stored in chunks holds the chunks, each an
+    // array of cards.
+    if (Array.isArray(value) && value.length > 0 && size > 0) {
+      const first = await resolved(value[0], {
+        ...base,
+        path: [...base.path, "0"],
+      });
+      if (Array.isArray(first.value) && first.value.length > 0) {
+        const chunks = [first.value.length];
+        for (let at = 1; at < value.length; at++) {
+          const chunk = await resolved(value[at], {
+            ...base,
+            path: [...base.path, `${at}`],
+          });
+          chunks.push(Array.isArray(chunk.value) ? chunk.value.length : 0);
+        }
+        if (chunks.reduce((sum, length) => sum + length, 0) >= size) {
+          const caption = await below(
+            first.value[0],
+            { ...first.base, path: [...first.base.path, "0"] },
+            0,
+          );
+          return caption === undefined
+            ? undefined
+            : { cards: path, caption, chunks };
+        }
+      }
+    }
     for (const [name, member] of Object.entries(value)) {
       if (name === "$cell") continue;
       const found = await walk(
@@ -413,7 +461,14 @@ export const runServing = async (
         ? {}
         : { policy: { storeReadThrough: true } }),
       pieces: {
-        piece: { now: 1_000_000 },
+        // `SCALE_LISTS=documents` stores the links to the rows and to the
+        // buckets of the board in documents of their own.
+        piece: {
+          now: 1_000_000,
+          ...(Deno.env.get("SCALE_LISTS") === "documents"
+            ? { lists: "documents" as const }
+            : {}),
+        },
         resumed: (_result, piece) => resumed.push(piece),
         failed: (_result, error) => {
           failures.push(`${error}`);
@@ -689,7 +744,11 @@ export const runServing = async (
           result.getAsNormalizedFullLink(),
         ).key("$UI" as never);
         for (
-          const segment of [...captionAt.cards, card, ...captionAt.caption]
+          const segment of [
+            ...captionAt.cards,
+            ...cardAt(captionAt, card),
+            ...captionAt.caption,
+          ]
         ) caption = caption.key(segment);
         screenSinks.push(caption.sink(() => {}));
       }
@@ -743,7 +802,7 @@ export const runServing = async (
       const ordered = !board.module.endsWith("board-filing-order.tsx");
       const card = [
         ...captionAt.cards,
-        ordered ? 0 : middle,
+        ...cardAt(captionAt, ordered ? 0 : middle),
         ...captionAt.caption,
       ];
       // deno-lint-ignore no-explicit-any

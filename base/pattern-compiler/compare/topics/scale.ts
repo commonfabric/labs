@@ -111,6 +111,10 @@
  * a field of the same topic that the board does not read (`write alone`):
  * what the write itself costs, the memory server's handling included.
  *
+ * With `SCALE_LISTS=documents`, the arm `runner` and the arm `serving` store
+ * the links to the row documents and to the bucket documents of the board
+ * in documents of their own (`CompiledPieceOptions.lists`).
+ *
  * With `SCALE_LOAD_ROWS` set to a number, the arm `runner` loads the board
  * with at most that many row documents in one transaction
  * (`CompiledPieceOptions.loadRows`), and with `Infinity` in one transaction.
@@ -1677,6 +1681,11 @@ const runToday = async (
             // are documents of their own.
             ...(Deno.env.get("SCALE_ROWS") === "in-place"
               ? { rows: "in-place" as const }
+              : {}),
+            // `SCALE_LISTS=documents` stores the links to the rows and to
+            // the buckets in documents of their own.
+            ...(Deno.env.get("SCALE_LISTS") === "documents"
+              ? { lists: "documents" as const }
               : {}),
             // `SCALE_LOAD_ROWS` is the most row documents one transaction
             // of the load holds; `Infinity` loads in one transaction.
