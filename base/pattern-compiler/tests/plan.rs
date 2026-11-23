@@ -5198,13 +5198,14 @@ fn a_key_of_an_index_whose_type_is_not_resolved_is_reported_as_unsupported() {
     let analysis = program(
         r#"/// <cts-enable />
 import { pattern, type Writable } from "commonfabric";
+import { keyOf } from "./not-given.ts";
 interface Topic { title: string; mentions: Writable<Topic>[] }
 export const Inverse = pattern<
   { topics: Writable<Topic[]> },
   { count: number }
 >(({ topics }) => {
   const pairs = topics.flatMap((from) => from.mentions.map((to) => ({ from, to })));
-  const byMentioned = pairs.groupBy((pair) => pair.to);
+  const byMentioned = pairs.groupBy((pair) => keyOf(pair));
   return { count: byMentioned.lookup(topics.get()[0]).length };
 });
 "#,

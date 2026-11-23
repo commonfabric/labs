@@ -84,7 +84,7 @@ fn literal_kind(text: &str) -> &'static str {
     }
 }
 
-fn is_falsy_literal(text: &str) -> bool {
+pub(crate) fn is_falsy_literal(text: &str) -> bool {
     matches!(text, "false" | "0" | "0n" | "\"\"" | "''" | "``" | "-0")
 }
 
@@ -874,7 +874,7 @@ impl<'a> Resolver<'_, 'a> {
         }
     }
 
-    fn assume_truthy(&self, sense: bool, ty: TypeId) -> TypeId {
+    pub(crate) fn assume_truthy(&self, sense: bool, ty: TypeId) -> TypeId {
         if self.shape(ty) == Shape::Boolean {
             return self.intern(Shape::Literal(sense.to_string()));
         }
@@ -1107,6 +1107,9 @@ impl<'a> Resolver<'_, 'a> {
         if sense {
             for (tested, other) in [(left, right), (right, left)] {
                 let chain = match tested {
+                    // A literal is compared below, where the chain may
+                    // also read a discriminant of the reference.
+                    Expression::ChainExpression(_) if self.unit_of(module, other).is_some() => None,
                     Expression::ChainExpression(chain) => {
                         let present = self.typed_at(module, other, 0).is_ok_and(|ty| {
                             self.present(ty) == ty
@@ -1144,21 +1147,36 @@ impl<'a> Resolver<'_, 'a> {
             };
             // A chain that is not `undefined` did not stop, so each
             // receiver it tests with `?.` is present.
+            let mut ty = ty;
+            let mut absent_reads_undefined = false;
             if let Expression::ChainExpression(chain) = tested {
                 let defined = match &value {
                     Unit::Undefined => !sense,
                     Unit::Null => !sense && !strict,
                     Unit::Literal(_) => sense,
                 };
-                if defined && self.chain_tests(module, &chain.expression, reference) {
-                    return self.present(ty);
-                }
-                // The path the chain reads is narrowed as a path is. A
-                // receiver of the chain is not narrowed by it otherwise.
-                match self.reference_of(module, tested) {
-                    Some(tested) if tested == *reference => {
-                        return self.assume_value(&value, strict, sense, ty);
+                let tests = self.chain_tests(module, &chain.expression, reference);
+                // The path the chain reads is narrowed as a path is, and a
+                // receiver whose property the chain reads is narrowed as
+                // by a discriminant, below. A receiver of the chain is not
+                // narrowed by it otherwise.
+                let read = self.reference_of(module, tested);
+                let discriminates = read.as_ref().is_some_and(|read| {
+                    read.root == reference.root
+                        && read.path.len() == reference.path.len() + 1
+                        && read.path.starts_with(&reference.path)
+                });
+                if defined && tests {
+                    ty = self.present(ty);
+                    if !discriminates {
+                        return ty;
                     }
+                }
+                match read {
+                    Some(read) if read == *reference => {
+                        return self.assume_value(&value, strict, sense, !reference.data, ty);
+                    }
+                    Some(_) if discriminates => absent_reads_undefined = tests,
                     _ => continue,
                 }
             }
@@ -1166,7 +1184,7 @@ impl<'a> Resolver<'_, 'a> {
                 continue;
             };
             if tested == *reference {
-                return self.assume_value(&value, strict, sense, ty);
+                return self.assume_value(&value, strict, sense, !reference.data, ty);
             }
             // A discriminant: `x.kind === "mix"` narrows `x`.
             let discriminates = tested.root == reference.root
@@ -1190,6 +1208,13 @@ impl<'a> Resolver<'_, 'a> {
                             None if index.is_some() => true,
                             None => value.is_undefined(strict) == sense || !sense,
                         }
+                    }
+                    // `x?.kind` with `x` absent reads `undefined`, so the
+                    // absent member stays where the comparison with
+                    // `undefined` holds, or the one with another value
+                    // does not.
+                    Shape::Null | Shape::Undefined if absent_reads_undefined => {
+                        value.is_undefined(strict) == sense
                     }
                     Shape::Null | Shape::Undefined => !sense,
                     _ => true,
@@ -1276,7 +1301,14 @@ impl<'a> Resolver<'_, 'a> {
         }
     }
 
-    fn assume_value(&self, value: &Unit, strict: bool, sense: bool, ty: TypeId) -> TypeId {
+    fn assume_value(
+        &self,
+        value: &Unit,
+        strict: bool,
+        sense: bool,
+        unknown_narrows: bool,
+        ty: TypeId,
+    ) -> TypeId {
         if let (Shape::Boolean, Unit::Literal(literal)) = (self.shape(ty), value) {
             if literal_kind(literal) == "boolean" {
                 let holds = (literal == "true") == sense;
@@ -1287,6 +1319,14 @@ impl<'a> Resolver<'_, 'a> {
             return self.filter(ty, |member, _| !self.is_unit(member, value, strict));
         }
         match self.shape(ty) {
+            // A value typed `unknown` that is strictly `undefined` or
+            // `null` has that type. A data position is not narrowed
+            // (§7.8), and the caller leaves it out.
+            Shape::Unknown if strict && unknown_narrows => match value {
+                Unit::Undefined => self.intern(Shape::Undefined),
+                Unit::Null => self.intern(Shape::Null),
+                Unit::Literal(_) => ty,
+            },
             Shape::Union(members) => {
                 let kept: Vec<TypeId> = members
                     .iter()
