@@ -348,6 +348,30 @@ export type Code = {
   unsupported: { kind: string; file: string; start: number }[];
 };
 
+/**
+ * Makes a function of the text of a module of value code: the statements
+ * of `source` are its body, in strict mode, and `parameters` are the names
+ * of its parameters, which the statements read as free names. What other
+ * free names the statements can read is the evaluator's to decide.
+ */
+export type ModuleEvaluator = (
+  module: { path: string; source: string },
+  parameters: readonly string[],
+) => (...given: unknown[]) => void;
+
+/**
+ * The evaluator that confines nothing: the function is made in the realm
+ * the executor runs in, and its free names are the globals of that realm.
+ */
+export const evaluateWithFunction: ModuleEvaluator = (
+  { path, source },
+  parameters,
+) =>
+  new Function(
+    ...parameters,
+    `"use strict";\n${source}\n//# sourceURL=compiled:${path}`,
+  ) as (...given: unknown[]) => void;
+
 /** One pattern of the output of `pattern-compiler emit`. */
 export type Artifact = {
   name?: string;
@@ -1204,11 +1228,18 @@ const matchesPath = (pattern: readonly string[], path: readonly string[]) =>
  * writes go to the position the handle names.
  */
 export class Handle {
+  /**
+   * The instance, and the host of the cone the body runs in, which records
+   * its reads. A body is handed the handle, so the two are private: what
+   * reads a member of the handle reaches neither.
+   */
+  readonly #instance: Instance;
+  readonly #host: Host | undefined;
+
   constructor(
-    readonly instance: Instance,
+    instance: Instance,
     readonly target: Ref | StreamRef,
-    /** The host of the cone the body runs in, which records its reads. */
-    readonly host: Host | undefined,
+    host: Host | undefined,
     /** The `identity` slot of the handle, and the path below its cell. */
     readonly slot: number | undefined,
     readonly below: readonly string[],
@@ -1219,14 +1250,30 @@ export class Handle {
     readonly declared?: Schema,
     /** The handle is to a value with no stored address: a write fails. */
     readonly fixed = false,
-  ) {}
+  ) {
+    this.#instance = instance;
+    this.#host = host;
+  }
+
+  /** A handle of `instance` to the same position that refuses a write. */
+  refusingWrites(instance: Instance): Handle {
+    return new Handle(
+      instance,
+      this.target,
+      this.#host,
+      this.slot,
+      this.below,
+      this.declared,
+      true,
+    );
+  }
 
   get(): unknown {
     if (this.target instanceof StreamRef) return { $stream: true };
     const target = this.target;
-    return this.instance.readThrough(
+    return this.#instance.readThrough(
       this,
-      () => this.#typed(target, this.declared, this.host?.reads, 0),
+      () => this.#typed(target, this.declared, this.#host?.reads, 0),
     );
   }
 
@@ -1242,7 +1289,7 @@ export class Handle {
     reads: Position[] | undefined,
     depth: number,
   ): unknown {
-    const { store } = this.instance;
+    const { store } = this.#instance;
     // A plain value in place that the body reads is a copy (ruling Z25).
     if (!declaresHandle(schema, depth)) {
       return store.read(ref, reads, true, schema);
@@ -1252,7 +1299,7 @@ export class Handle {
     const member = (segment: string, at: Ref) => {
       const below = schemaBelow(schema, segment);
       return typeof below === "object" && below.asCell !== undefined
-        ? new Handle(this.instance, at, this.host, undefined, [], below)
+        ? new Handle(this.#instance, at, this.#host, undefined, [], below)
         : this.#typed(at, below, reads, depth + 1);
     };
     if (Array.isArray(located.value)) {
@@ -1295,9 +1342,9 @@ export class Handle {
   key(segment: string | number): Handle {
     if (this.target instanceof StreamRef) return this;
     return new Handle(
-      this.instance,
+      this.#instance,
       this.target.key(`${segment}`),
-      this.host,
+      this.#host,
       this.slot,
       [...this.below, `${segment}`],
       schemaBelow(this.declared, `${segment}`),
@@ -1315,14 +1362,14 @@ export class Handle {
         "a write through a handle to a value the instance holds no address for",
       );
     }
-    const recorded = this.instance.written(this);
+    const recorded = this.#instance.written(this);
     try {
-      this.instance.store.write(
+      this.#instance.store.write(
         this.target,
-        this.instance.detached(
+        this.#instance.detached(
           this.target,
-          this.instance.anchored(
-            this.instance.stored(this.instance.returned(value)),
+          this.#instance.anchored(
+            this.#instance.stored(this.#instance.returned(value)),
           ),
         ),
       );
@@ -1343,12 +1390,12 @@ export class Handle {
    */
   update(members: Record<string, unknown>): Handle {
     const at = this.target instanceof Ref
-      ? this.instance.store.locate(this.target, true)
+      ? this.#instance.store.locate(this.target, true)
       : undefined;
     const base = at === undefined || at.missing ? this : new Handle(
-      this.instance,
+      this.#instance,
       at.ref,
-      this.host,
+      this.#host,
       this.slot,
       this.below,
       this.declared,
@@ -1375,7 +1422,7 @@ export class Handle {
         "a write through a handle to a value the instance holds no address for",
       );
     }
-    const located = this.instance.store.locate(this.target, true);
+    const located = this.#instance.store.locate(this.target, true);
     // Where the place holds nothing, the array starts from the default
     // that the place declares, as a write below the root of a state cell
     // does: the default nearest the end of the links the handle resolves
@@ -1389,20 +1436,20 @@ export class Handle {
       : Array.isArray(declared)
       ? structuredClone(declared)
       : [];
-    const recorded = this.instance.written(this.key("*"), decided);
+    const recorded = this.#instance.written(this.key("*"), decided);
     try {
       // A record that is pushed gets a document of its own, as a record
       // in a list that is set does (`Instance.anchored`).
-      const pushed = this.instance.anchored(
+      const pushed = this.#instance.anchored(
         members.map((member) =>
-          this.instance.stored(this.instance.returned(member))
+          this.#instance.stored(this.#instance.returned(member))
         ),
       ) as unknown[];
       // An array that is stored is changed in place, as a splice.
       if (Array.isArray(located.value)) {
-        this.instance.store.splice(this.target, held.length, 0, pushed);
+        this.#instance.store.splice(this.target, held.length, 0, pushed);
       } else {
-        this.instance.store.write(this.target, [...held, ...pushed]);
+        this.#instance.store.write(this.target, [...held, ...pushed]);
       }
     } finally {
       recorded();
@@ -1424,7 +1471,7 @@ export class Handle {
     first = false,
   ): { positions: number[]; read: Observed[]; list?: Address } {
     if (this.target instanceof StreamRef) return { positions: [], read: [] };
-    const { store } = this.instance;
+    const { store } = this.#instance;
     const list = this.target;
     const located = store.locate(list, true);
     if (!Array.isArray(located.value)) return { positions: [], read: [] };
@@ -1439,7 +1486,9 @@ export class Handle {
       const at = list.key(`${index}`);
       // A position that holds a link is compared as the reference it
       // holds, which reads nothing of the document the link names.
-      let same = this.instance.unreported(() => this.instance.same(at, member));
+      let same = this.#instance.unreported(() =>
+        this.#instance.same(at, member)
+      );
       if (isLink(held)) {
         read.push({
           address: { doc, path: [...path, `${index}`] },
@@ -1450,7 +1499,7 @@ export class Handle {
           address: { doc, path: [...path, `${index}`] },
           observes: "value",
         });
-        same ||= this.instance.same(
+        same ||= this.#instance.same(
           store.read(located.ref.key(`${index}`), undefined, true),
           member,
         );
@@ -1472,9 +1521,9 @@ export class Handle {
    */
   #kept(through: Handle, decided: Observed[], list: Address | undefined): void {
     if (list === undefined) return;
-    const recorded = this.instance.written(through, decided, false);
+    const recorded = this.#instance.written(through, decided, false);
     try {
-      this.instance.membersKept(list);
+      this.#instance.membersKept(list);
     } finally {
       recorded();
     }
@@ -1494,7 +1543,7 @@ export class Handle {
         "a write through a handle to a value the instance holds no address for",
       );
     }
-    const recorded = this.instance.written(this, decided);
+    const recorded = this.#instance.written(this, decided);
     try {
       // From the last position on, so that each position named is the one
       // the member holds when it is removed, and each run of positions next
@@ -1505,7 +1554,7 @@ export class Handle {
         while (end + 1 < last.length && last[end + 1] === last[end] - 1) {
           end++;
         }
-        this.instance.store.splice(this.target, last[end], end - run + 1, []);
+        this.#instance.store.splice(this.target, last[end], end - run + 1, []);
         run = end + 1;
       }
     } finally {
@@ -1521,13 +1570,13 @@ export class Handle {
 
   send(event: unknown): void {
     if (this.target instanceof StreamRef) {
-      this.instance.queue(this.target, event);
+      this.#instance.queue(this.target, event);
       return;
     }
-    const located = this.instance.store.locate(this.target, true);
+    const located = this.#instance.store.locate(this.target, true);
     if (isStream(located.value)) {
       const { binding, keys, instance } = located.value.$stream;
-      this.instance.queue(new StreamRef(binding, keys, instance), event);
+      this.#instance.queue(new StreamRef(binding, keys, instance), event);
       return;
     }
     // A stream the instance was given, which the argument holds nothing
@@ -1537,7 +1586,7 @@ export class Handle {
       located.value === undefined &&
       isStreamSchema(located.ref.schema ?? this.declared)
     ) {
-      this.instance.written(this)();
+      this.#instance.written(this)();
       return;
     }
     this.set(event);
@@ -1576,9 +1625,9 @@ export class Handle {
   elementById(key: unknown): Handle {
     if (this.target instanceof StreamRef) return this;
     return new Handle(
-      this.instance,
-      this.instance.keyedElement(this.target, `${key}`),
-      this.host,
+      this.#instance,
+      this.#instance.keyedElement(this.target, `${key}`),
+      this.#host,
       this.slot,
       [...this.below, "*"],
       schemaBelow(this.declared, "0"),
@@ -1586,7 +1635,7 @@ export class Handle {
   }
 
   equals(other: unknown): boolean {
-    return this.instance.same(this, other);
+    return this.#instance.same(this, other);
   }
 
   resolveAsCell(): Handle {
@@ -3398,6 +3447,12 @@ export class Instance {
        */
       globals?: Record<string, unknown>;
       /**
+       * What makes a function of the text of a module of value code
+       * (`ModuleEvaluator`). The default is `evaluateWithFunction`, which
+       * gives the code the globals of the realm.
+       */
+      evaluate?: ModuleEvaluator;
+      /**
        * `patches`: a transaction does not count the bytes of each
        * document it wrote as a whole (`Transaction.bytes`), which costs
        * a pass over the document.
@@ -3938,7 +3993,8 @@ export class Instance {
   loading = false;
 
   #load() {
-    this.#runtimeObject = this.#runtime();
+    // Value code is handed this object and can replace none of its members.
+    this.#runtimeObject = Object.freeze(this.#runtime());
     this.loading = true;
     this.#module(this.code.main);
     for (const { module } of this.code.modules) this.#module(module);
@@ -3959,12 +4015,12 @@ export class Instance {
       throw new Unsupported("an import of a module the artifact does not hold");
     }
     const globals = Object.entries(this.root.options.globals ?? {});
-    const run = new Function(
+    const evaluate = this.root.options.evaluate ?? evaluateWithFunction;
+    const run = evaluate(text, [
       "$rt",
       "$exports",
       ...globals.map(([name]) => name),
-      `"use strict";\n${text.source}\n//# sourceURL=compiled:${text.path}`,
-    );
+    ]);
     run(this.#runtimeObject, exports, ...globals.map(([, value]) => value));
     return exports;
   }
@@ -12756,15 +12812,7 @@ export class Instance {
       // A write through a handle to a value the instance computes fails
       // (PL §3.11).
       if (reference && given instanceof Handle) {
-        given = new Handle(
-          this,
-          given.target,
-          given.host,
-          given.slot,
-          given.below,
-          given.declared,
-          true,
-        );
+        given = given.refusingWrites(this);
       }
       this.bindSlot(host, slot, from, found);
       // A literal the binding gives its state is a constant of the plan:

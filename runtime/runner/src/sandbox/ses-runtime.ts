@@ -178,6 +178,17 @@ export function evaluateFunctionSourceInSES(
   }
 }
 
+/**
+ * Makes a compartment whose globals are `globals` beside the shared
+ * intrinsics, with its global object frozen, and locks the realm down first.
+ */
+export function createLockedCompartment(
+  globals: Record<string, unknown>,
+): { evaluate(source: string): unknown } {
+  ensureSESInitialized(true);
+  return createCompartment(globals);
+}
+
 export function ensureSESLockdown(): void {
   ensureSESInitialized(true);
 }

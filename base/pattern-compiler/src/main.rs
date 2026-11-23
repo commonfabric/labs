@@ -33,7 +33,9 @@ commands:
       its value code as one JSON artifact: the plan, the JavaScript of each
       module the plan's code is written in, and what an executor needs
       beside the plan. With --corpus and a patterns directory, print one
-      line of JSON per accepted module.
+      line of JSON per accepted module. With --accepted, print the
+      diagnostics to the standard error and no artifact, and exit with a
+      failure, unless every module is accepted.
   bodies <file>...
       Print the bodies of the given modules as JSON.
   time <patterns directory> <manifest> [--iterations=<n>] [--plans]
@@ -107,6 +109,21 @@ fn parsed(analysis: &ProgramAnalysis) -> bool {
         }
     }
     analysis.failures.is_empty()
+}
+
+/// Whether every module of an analysis parses and is in the subset. Prints
+/// to the standard error each parse failure, each error and each warning.
+fn accepted(analysis: &ProgramAnalysis) -> bool {
+    let mut accepted = parsed(analysis);
+    for module in &analysis.modules {
+        accepted &= module.accepted();
+        for diagnostic in &module.diagnostics {
+            if diagnostic.severity != pattern_compiler::diagnostics::Severity::Hint {
+                eprintln!("{diagnostic}");
+            }
+        }
+    }
+    accepted
 }
 
 fn check(paths: &[&str], hints: bool) -> std::io::Result<bool> {
@@ -240,6 +257,9 @@ fn emit(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
     pattern_compiler::emit::request(true);
     let analysis = analyze(&files);
     pattern_compiler::emit::request(false);
+    if flags.contains(&"--accepted") && !accepted(&analysis) {
+        return Ok(false);
+    }
     let mut modules = plans_json(&analysis, corpus);
     let root = if corpus { paths[0] } else { "" };
     for module in &mut modules {

@@ -1114,6 +1114,29 @@ imports `exec/` by relative path, and `exec/` imports nothing of the runtime.
   and derives again. The result document of an instance is taken with the rows
   of its collections left out, and the next derivation stores every row again.
 
+- **Value code in a compartment.** The executor makes the functions of a
+  module's text with the evaluator it is given (`ModuleEvaluator`, the option
+  `evaluate` of `Instance`), by default `new Function` (`evaluateWithFunction`).
+  A compiled piece gives it `compartmentEvaluator()` of
+  `runtime/runner/src/compiled/value-code.ts`: one SES compartment with a frozen
+  global object and the globals a module of today's bundles has, in a realm that
+  is locked down. A handler runs under a frame of a handler, so the gated `Date`
+  and `Math` give it the time of its event, to the second, and a random draw;
+  the derivation and the code of module scope have neither.
+  `CompiledPieceOptions.evaluate` takes another evaluator, which the harnesses
+  use to measure what the compartment costs. A handle keeps the instance in
+  private fields, and the classes of what a function body is given are frozen.
+  The names `$rt` and `$h` are kept from a pattern by the crate's check alone.
+- **Compile on load.** `PatternCompiler` of
+  `runtime/runner/src/compiled/compile.deno.ts` writes the files of a program to
+  a directory of their own, runs the crate's release binary there with
+  `emit --accepted`, and returns the artifacts. With a cache directory it keeps
+  what the binary printed under the hash of the binary and the hash of the
+  source. An absent binary is `PatternCompilerMissingError`, and a program the
+  crate refuses is `PatternCompileError` with the diagnostics. Nothing in the
+  runtime calls it: a harness compiles and hands the artifact to
+  `startCompiledPiece`.
+
 `compare/runner-path.ts` starts today's piece and the compiled piece with the
 same calls of the runtime over the lists of `fixtures/runner-lists.tsx`, makes
 each change through a cell, and reports what a change costs each from the write
@@ -1141,13 +1164,26 @@ deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run runner
 deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts report runner.jsonl
 ```
 
+`compare/sandbox-cost.ts` measures the evaluators, one call of a value function,
+the patterns of `fixtures/sandbox-cost.tsx` on the executor in memory, and the
+crate's binary beside today's compile; `runner-path.ts` and `runner-corpus.ts`
+take `--evaluate=function` for the same comparison on the runner path:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/sandbox-cost.ts calls
+deno run -A --no-check base/pattern-compiler/compare/sandbox-cost.ts executor --arm=function
+deno run -A --no-check base/pattern-compiler/compare/sandbox-cost.ts compile
+```
+
 The tests are in `runtime/runner/test/compiled/`: `piece.test.ts`,
 `row-documents.test.ts`, which holds those of the load in bounded transactions,
 `layout-labels.test.ts`, which compares what a read consumes with rows as
 documents and in place, `refused-commit.test.ts`, and `created-members.test.ts`
-for an instance that a handler makes. They load the artifacts of
-`compare/fixtures/`, so they need no build of the crate. Notes 579 on of
-`SPEC-NOTES.md` have what is stubbed and the figures.
+for an instance that a handler makes, `value-code.test.ts` for the compartment,
+and `compile.test.ts` for `PatternCompiler`, with a shell script in the place of
+the binary. They load the artifacts of `compare/fixtures/`, so they need no
+build of the crate. `compare/test/compile-on-load.test.ts` runs the release
+binary. Notes 579 on of `SPEC-NOTES.md` have what is stubbed and the figures.
 
 ## Topics
 
@@ -1298,6 +1334,7 @@ cargo run --release -- plan --corpus ../../patterns
 cargo run --release -- plan --corpus ../../patterns --json
 cargo run --release -- emit path/to/module.tsx
 cargo run --release -- emit --corpus ../../patterns
+cargo run --release -- emit --accepted path/to/module.tsx
 ```
 
 `check` takes the modules of one program: an import between two of them is
