@@ -35,6 +35,17 @@
  *
  * With `--profile=<file>`, the sampling profile of the process over the
  * appends is written to the file, in the format of the V8 inspector.
+ *
+ * `memory` holds what the process says of itself at the end of each step,
+ * in megabytes: the resident set and the V8 heap in use as the step left
+ * them, and the heap in use after a collection, where the process was
+ * started with `--v8-flags=--expose-gc`. The process holds the memory
+ * server, the serving loop and both clients, so each figure is of all of
+ * them. `before` is read ahead of the setup, `load` once both clients read
+ * the last row, `events` after the events, `takeover` once the loop that
+ * took the space over is quiescent, which is after the comparison of the
+ * basis and before any executor, and `firstEvent` and `secondEvent` once
+ * the loop is quiescent behind each.
  */
 // deno-lint-ignore no-external-import -- The sampling profiler is reached through this Node builtin alone.
 import inspector from "node:inspector";
@@ -60,6 +71,28 @@ const repository = fromFileUrl(new URL("../../../", import.meta.url));
 const round = (milliseconds: number) => Math.round(milliseconds * 10) / 10;
 const median = (values: number[]) =>
   [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+
+/** What the process holds, in megabytes (`measure`, `memory`). */
+type Memory = { rss: number; heap: number; retained?: number };
+
+/**
+ * The resident set and the V8 heap in use, and the heap in use after a
+ * collection where the process exposes one.
+ */
+const memoryNow = (): Memory => {
+  const megabytes = (bytes: number) => Math.round(bytes / 104_857.6) / 10;
+  const { rss, heapUsed } = Deno.memoryUsage();
+  const collect = (globalThis as { gc?: () => void }).gc;
+  if (collect === undefined) {
+    return { rss: megabytes(rss), heap: megabytes(heapUsed) };
+  }
+  collect();
+  return {
+    rss: megabytes(rss),
+    heap: megabytes(heapUsed),
+    retained: megabytes(Deno.memoryUsage().heapUsed),
+  };
+};
 
 /** The inputs one transaction of the setup holds at most. */
 const ITEMS_PER_TRANSACTION = 1_000;
@@ -142,6 +175,7 @@ const measure = async (
       if (error !== undefined) throw error;
     }
     const result = sender.getCell<List>(space, "list");
+    const memory: Record<string, Memory> = { before: memoryNow() };
     const began = performance.now();
     const tx = sender.edit();
     if (arm === "compiled") {
@@ -184,6 +218,8 @@ const measure = async (
     await visible(sender, result, length - 1, `t${length - 1}!`);
     const load = round(loaded - began);
     progress("both clients read the last row");
+    await serving.host.whenQuiescent();
+    memory.load = memoryNow();
 
     // The sender holds the marker of each stream, by which a send to the
     // member of the result is the append of an event.
@@ -256,6 +292,7 @@ const measure = async (
     // nothing reads the last row, which is the demand that has the loop
     // reach the piece, and the sender then sends one more event.
     await serving.host.whenQuiescent();
+    memory.events = memoryNow();
     const restarted = performance.now();
     await serving.restart();
     const late = client();
@@ -271,6 +308,7 @@ const measure = async (
       checked: resumed.map(({ checked }) => checked),
       evaluations: afterRead?.instance.counts.evaluations ?? 0,
     };
+    memory.takeover = memoryNow();
     progress("another serving loop serves the piece");
     const first = await timed(
       "rename",
@@ -279,6 +317,7 @@ const measure = async (
       "after the resume!",
     );
     await serving.host.whenQuiescent();
+    memory.firstEvent = memoryNow();
     const woken = serving.pieces()[0];
     const second = await timed(
       "rename",
@@ -286,6 +325,8 @@ const measure = async (
       0,
       "second after the resume!",
     );
+    await serving.host.whenQuiescent();
+    memory.secondEvent = memoryNow();
     await late.dispose();
     const summary = (runs: { sender: number; reader: number }[]) => ({
       runs: runs.length,
@@ -306,6 +347,7 @@ const measure = async (
       load,
       rename: summary(renames),
       add: summary(adds),
+      memory,
       ...(counts === undefined ? {} : { piece: counts }),
       resume: {
         ...resume,

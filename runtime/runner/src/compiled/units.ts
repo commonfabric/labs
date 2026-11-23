@@ -51,6 +51,8 @@ export const readersPartDocumentOf = (result: string, part: number): string =>
 type Flag = {
   pattern: string;
   plain: Record<string, boolean>;
+  /** The collections of which a row depends on the position of its element. */
+  position: Record<string, true>;
   parts: Record<string, 1>;
 };
 
@@ -105,6 +107,9 @@ export class PieceUnits<Tx extends object> implements StoredUnits {
   readonly #wroteWhole = new WeakMap<Tx, number[]>();
   /** Whether each collection is plain, as far as this runtime was told. */
   readonly #plain = new Map<number, boolean>();
+  /** The collections of which this runtime was told that a row depends on
+   * the position of its element. */
+  readonly #position = new Set<number>();
   /** What the document of the units holds, where that is known. */
   #stored: Flag | undefined;
   #storedRead = false;
@@ -142,7 +147,13 @@ export class PieceUnits<Tx extends object> implements StoredUnits {
       }
       const parts: Record<string, 1> = {};
       for (const part of readersPartsOf(held)) parts[`${part}`] = 1;
-      this.#stored = { pattern: held.pattern, plain, parts };
+      const position: Record<string, true> = {};
+      if (isRecord(held.position)) {
+        for (const collection of Object.keys(held.position)) {
+          position[collection] = true;
+        }
+      }
+      this.#stored = { pattern: held.pattern, plain, position, parts };
     }
     return this.#stored;
   }
@@ -200,6 +211,14 @@ export class PieceUnits<Tx extends object> implements StoredUnits {
   }
 
   /** @inheritDoc */
+  positioned(collection: number): boolean {
+    const flag = this.#flag();
+    return this.#position.has(collection) ||
+      (flag?.pattern === this.#pattern &&
+        flag.position[`${collection}`] === true);
+  }
+
+  /** @inheritDoc */
   readers(doc: string): readonly StoredReader[] {
     const entries = this.#part(basisPartOf(doc))?.[doc];
     if (entries === undefined) return [];
@@ -231,7 +250,8 @@ export class PieceUnits<Tx extends object> implements StoredUnits {
   }
 
   /** @inheritDoc */
-  read({ collection, key, plain, reads }: ElementReads): void {
+  read({ collection, key, plain, position, reads }: ElementReads): void {
+    if (position) this.#position.add(collection);
     if (!this.#plain.has(collection) || !plain) {
       this.#plain.set(
         collection,
@@ -372,19 +392,28 @@ export class PieceUnits<Tx extends object> implements StoredUnits {
     }
     const parts: Record<string, 1> = { ...flag?.parts };
     for (const part of fresh.keys()) parts[`${part}`] = 1;
+    // A collection of which a row once depended on the position of its
+    // element stays one: a row that no longer does is evaluated when its
+    // element moves, which stores what it held.
+    const position: Record<string, true> = flag?.pattern === this.#pattern
+      ? { ...flag.position }
+      : {};
+    for (const collection of this.#position) position[`${collection}`] = true;
     const names = Object.keys(plain);
     if (
       this.#plain.size > 0 &&
       (flag?.pattern !== this.#pattern ||
         names.length !== Object.keys(flag.plain).length ||
         names.some((name) => flag.plain[name] !== plain[name]) ||
+        Object.keys(position).length !== Object.keys(flag.position).length ||
         Object.keys(parts).length !== Object.keys(flag.parts).length)
     ) {
-      this.#stored = { pattern: this.#pattern, plain, parts };
+      this.#stored = { pattern: this.#pattern, plain, position, parts };
       this.#storedRead = true;
       this.#storage.write(tx, unitsDocumentOf(this.#result), [], {
         pattern: this.#pattern,
         plain: { ...plain },
+        position: { ...position },
         parts: { ...parts },
       });
       wrote += 1;

@@ -52,13 +52,21 @@ export type ElementReads = {
   collection: number;
   key: string;
   /**
-   * Whether a change of what the evaluation depends on is always a change
-   * of a document at a path it read: it used no other entry, read no
-   * position of its element, demanded no cone with side-writes and read
-   * through no reference by key. The rows of a collection are left as
-   * stored only while every element of it is such.
+   * Whether a change of what the row of the element depends on is always
+   * a change of a document at a path of `reads`, or of the position of the
+   * element where `position` says so: the body and the entries it used
+   * that are kept under the key of the element used no entry that is kept
+   * elsewhere, demanded no cone with side-writes and read through no
+   * reference by key. The rows of a collection are left as stored only
+   * while every element of it is such.
    */
   plain: boolean;
+  /** Whether the row depends on the position of the element. */
+  position: boolean;
+  /**
+   * What the body read, and what each entry read that the body used and
+   * that is kept under the key of the element.
+   */
   reads: { doc: string; path: readonly string[]; own: boolean }[];
 };
 
@@ -101,6 +109,11 @@ export type StoredUnits = {
    * (`ElementReads.plain`).
    */
   listed(collection: number): boolean;
+  /**
+   * Whether the row of an element of `collection` that the storage holds
+   * depends on the position of its element (`ElementReads.position`).
+   */
+  positioned(collection: number): boolean;
   /** The elements that the storage lists as readers of a document. */
   readers(doc: string): readonly StoredReader[];
   /** The executor holds the rows of `keys` at `path` as stored. */
@@ -125,14 +138,20 @@ export type StoredUnits = {
  * the children of a view node, which the evaluation of the result says.
  *
  * - its rows are documents of their own (`rows`, as
- *   `rowDocumentCollections` gives them), and its source is a slot that
- *   holds an array, so each element is a reference;
- * - nothing but a handler binding is declared inside its element body: no
- *   state cell, no instance, no operation and no other collection, and no
- *   cone of the body has side-writes. A row then names no document that
- *   exists only once the body ran. The stream of a binding of the body is
- *   named by the binding and the key of the element, so it is known with
- *   no evaluation (`boundInElement`);
+ *   `rowDocumentCollections` gives them), so each element is a reference:
+ *   its source is a slot that holds an array of references, the output of
+ *   a `lift` or a `computed` that gives a reference at each member, or a
+ *   `filter` or a `sortBy` over such a source. The executor evaluates a
+ *   source that is no slot once when it is resumed, and leaves the rows;
+ * - nothing but a handler binding and another collection is declared
+ *   inside its element body: no state cell, no instance and no operation,
+ *   and no cone of the body has side-writes. A row then names no document
+ *   that exists only once the body ran. The stream of a binding of the
+ *   body is named by the binding and the key of the element, so it is
+ *   known with no evaluation (`boundInElement`). A binding in the element
+ *   body of a collection inside the body is named by the keys of both
+ *   elements, of which the second is known only once the body ran, so a
+ *   collection whose body holds such a binding is left out;
  * - no label template of the plan folds over it: the label of a fold is
  *   formed from the labels of the members, which the executor holds for
  *   the members it evaluated.
@@ -153,9 +172,13 @@ export const storedRowCollections = (
       ...plan.stateCells,
       ...plan.children ?? [],
       ...plan.operations,
-      ...plan.collections,
     ]
   ) for (const collection of inside(within)) declaredIn.add(collection);
+  for (const { within } of plan.bindings) {
+    const elements = inside(within);
+    if (elements.length < 2) continue;
+    for (const collection of elements) declaredIn.add(collection);
+  }
   for (const cone of plan.cones) {
     if (cone.sideWrites === undefined) continue;
     for (const collection of inside(cone.within)) declaredIn.add(collection);
@@ -177,8 +200,12 @@ export const storedRowCollections = (
     if (!rows.has(index) || declaredIn.has(index) || folded.has(index)) {
       return;
     }
-    if (collection.construct !== "map" || collection.within.length > 0) return;
-    if (collection.source.slot === undefined) return;
+    // A pattern that is compiled in at a call site adds a `site` step to
+    // the `within` of what it declares, and names no element.
+    if (
+      collection.construct !== "map" ||
+      collection.within.some((step) => step.element !== undefined)
+    ) return;
     if (collection.source.entries === true) return;
     const place = plan.outputs.find((output) => output.collection === index);
     if (place === undefined || place.path.includes("*")) return;
