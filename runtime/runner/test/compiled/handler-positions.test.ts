@@ -24,7 +24,7 @@ const artifact = async (): Promise<Artifact> => {
   return patterns.find(({ name }) => name === "default")!;
 };
 
-type Filed = { count: number };
+type Filed = { count: number; file: { title: string; name: string } };
 
 describe("what a handler of a compiled piece writes of an input it changes at one position", () => {
   let runtime: Runtime;
@@ -116,9 +116,7 @@ describe("what a handler of a compiled piece writes of an input it changes at on
         if (!unchanged) recorded.push(`${target.id}/${target.path.join("/")}`);
       }
     });
-    result.key("file" as never).send(
-      { title: "new", name: "added" } as never,
-    );
+    result.key("file").send({ title: "new", name: "added" });
     await runtime.scheduler.idleWithPendingCommits();
     expect(piece.refusals).toEqual([]);
     const pathsOf = (cell: Cell<unknown>) =>
