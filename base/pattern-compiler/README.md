@@ -1330,5 +1330,22 @@ is stored in the shape of today's index data, and another instance that is
 handed it looks up a key by reading that bucket
 (`compare/fixtures/kept-index.tsx`). `Object.entries(record).map(f)` over a
 record that is an input is a collection keyed by the entry's name
-(`compare/fixtures/record-entries.tsx`). `keys()`, `keyEntries()`, a `lookup` by
-a cell and a sort by a key are not built (`SPEC-NOTES.md`, notes 610 to 623).
+(`compare/fixtures/record-entries.tsx`), and its rows are documents of their own
+where the record declares its values as cells
+(`compare/fixtures/names-table.tsx`).
+
+The key of an index, and the key of a `lookup` in an index of the same instance,
+is observed as a value where its type is a scalar and as the reference it is
+where its type is a cell. A key whose type the crate does not resolve, and a
+`lookup` by a cell in an index the instance is handed, are listed as
+unsupported. The members of a bucket that a `lookup` gave are elements with the
+keys they have in the index's source, so a per-element construct over a bucket
+forms no key of its own. A kept index over rows that are documents holds a
+reference by key to each row (`Instance` option `rowDocuments`), and holds a
+copy of the row otherwise. `compare/fixtures/crossref.tsx` is the inverse of a
+relation of references built from these: a `flatMap` into pairs, a `groupBy` of
+the pairs by a cell, a `map` that looks up each member, and an index of the rows
+that the result keeps.
+
+`keys()`, `keyEntries()`, a sort by a key and one label entry for all buckets of
+an index are not built (`SPEC-NOTES.md`, notes 610 to 635).

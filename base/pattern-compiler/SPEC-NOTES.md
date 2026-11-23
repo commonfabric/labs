@@ -12269,3 +12269,338 @@ names the case. `PL` is `plan-and-label-templates.md`, `ES` is
      `keyBy`, with no `Operation` record (note 617). P73: a bucket lists its
      members in the order of the source, where today's runtime gave another
      order in one probe (note 618).
+
+## Milestone 3, fifth round: the constructs on Topics
+
+Notes 624 on are about the fifth round of milestone 3 (2026-11-22). Whenever a
+note says `map`, it names the case. `PL` is `plan-and-label-templates.md`.
+
+624. **What the round did.** In order: the label of a value read through a
+     reference that an upstream row holds, which was an under-label (note 625);
+     tests of an index over rows, of `keyBy`, of an index in an element body and
+     of bucket order (note 626); a key that is a cell (note 627); the members of
+     a bucket as elements (note 628); a kept index over rows that are documents
+     (note 629); the entries of a record of references (note 630); reads that
+     find what a reference names (note 631); the two Topics boards on the
+     constructs (note 632), measured (note 633), with what still follows the
+     board (note 634). Not built: the sort by a key of note 614, `keys()` and
+     `keyEntries()`, which Topics does not use, and the one label entry for all
+     buckets of P69.
+625. **Soundness: a value read through a reference in an upstream row was stored
+     with the label of the reference alone (provisional decision P74).** A `map`
+     over an array of references whose row holds a member of the element, as
+     `{ tag: item.tag }` does, holds a reference to where the element stores it,
+     and the plan gives that output the `identity` slot of the position. A
+     per-element construct over the result of that `map` whose body reads the
+     value, as `rows.map((row) => row.tag + "!")` does and as the key function
+     of `rows.groupBy((row) => row.tag)` does, has a `value` slot of root
+     `element`, which `Instance.bindSlot` of `exec/executor.ts` bound to the
+     upstream output and to nothing else. `inputsFor` of
+     `runtime/runner/src/cfc/plan-labels.ts` gave that slot the label of the
+     output, which is the label of the reference: it holds nothing of the label
+     of the value at the position the reference names.
+     - _What it gave._ With each item a cell under a clause of its own,
+       `"even!"` computed from the tag of the first item was stored with no
+       clause. A bucket of an index over such rows was stored with the clauses
+       of its own members and without the keys of the others, and the occupied
+       keys with no clause. The defect is in a chain of two per-element
+       constructs where the row of the first holds a member of its element as a
+       reference and the body of the second reads the value. It is no defect of
+       the index: the `map` over a `map` of the fixture has it, and so has every
+       such chain since the upstream binding was built. Which patterns of the
+       corpus hold such a chain was not counted.
+     - _What is built._ `bindSlot` keeps, beside the upstream element, the
+       stored positions that the read of the slot went through, where the slot
+       does not observe `identity`. `SlotBinding` of the write record takes
+       `through` beside `output`, in `exec/plan-write.ts` and in
+       `runtime/runner/src/cfc/types.ts`, and `inputsFor` joins the label of
+       that read with the label of the output: the confidentiality of both, and
+       the integrity both carry. The site carries the `SPEC-PENDING` marker: a
+       binding of a slot to an output and to a read at once is in no clause of
+       the specification.
+     - _Tests._ `runtime/runner/test/compiled/chained-maps.test.ts` (the fixture
+       `chained-maps.tsx`) and `index-of-rows.test.ts` (the fixture
+       `index-of-rows.tsx`), each with the rows as documents and in place, with
+       a count beside the rows that no clause reaches. Both were written first
+       and failed for the stated reason.
+     - _Not examined:_ a value read through a reference that the upstream row
+       reached by crossing a link reads the position behind the link, and the
+       label of the link crossed is in the upstream output's label alone where
+       the runtime stores one with the link. The test with a note behind a link
+       of the item has the clause of the note and not that of the item, and that
+       is also what a `map` that reads `item.note.text` directly stores.
+626. **Tests of what the fourth round built without one.**
+     `runtime/runner/test/compiled/index-modes.test.ts`: `keyBy` over an array
+     of references (the fixture `key-index.tsx`), where what a row read of the
+     first item of its tag has the clause of every item and the row's tag, for a
+     tag with an item and for one with none; and a `groupBy` in the body of a
+     `map` over an array of references (`index-in-body.tsx`), where the bucket a
+     row read has the clauses of the items of the row's own group and of no
+     other group. `exec/test/collection-index.test.ts`: the order of a bucket
+     after a member moves in the source and after a member returns to a bucket.
+     All three passed as written, after the code.
+627. **A key that is a cell (provisional decision P75).** `Emitter::key_class`
+     of `src/plan.rs` gives the class a key is observed in from its type:
+     `value` for a scalar, `identity` for a cell, an object or an unknown, and
+     nothing for a type the crate does not resolve, which the plan lists as
+     unsupported (`the key of an index whose type is not resolved`). The crate
+     does not resolve the type of a row of a `map` written in the body of a
+     `flatMap`, so the key function of an index over such rows has its parameter
+     annotated. `lookup` in an index of the same instance passes a cell key as
+     the reference it is (`Facts::cell_key` of `src/emit.rs`), and the executor
+     files a cell under the address it names. A `lookup` by a cell in an index
+     the instance is handed is listed as unsupported: the buckets of a stored
+     index are members of a record that a `pick` chooses by a value. Tests:
+     `tests/plan.rs`,
+     `a_cell_key_of_an_index_and_of_a_lookup_is_observed_as_a_reference` and the
+     two tests of the refusals, each seen to fail first.
+628. **Scale: a `map` over a bucket hashed every member whole, through every
+     reference (provisional decision P76).** `Host.lookup` gave the members of a
+     bucket as an array of values, and a per-element construct over an array
+     that a computation returned keys each plain value by the salted hash of the
+     value with every link followed (`Instance.#table`). For a bucket of pairs
+     that hold references to topics that mention each other, the value read is a
+     graph in which a topic is reached by many paths, and the hash walks it as a
+     tree: the fixture did not load at 50 topics. `Host.lookup` now names the
+     members as the elements of the index's source they are (`bucketElements`),
+     with the keys they have there, and `#table` takes them. _The same hash
+     stays_ for any `map` over an array of plain values that hold references to
+     documents that refer to each other; nothing in the crate refuses it.
+     - `Index`, when its assembly is formed again whole, compared no bucket and
+       marked the users of all of them, so one change of a pair evaluated the
+       row of every topic. It now marks the buckets whose members differ.
+629. **A kept index over rows that are documents (provisional decision P77).** A
+     kept index over the rows of another per-element construct held a copy of
+     each row. Reading such a bucket keys the copies by the hash of note 628.
+     Where the rows are documents of their own (the `Instance` option
+     `rowDocuments`, which `startCompiledPiece` sets from
+     `rowDocumentCollections`), `Instance.indexRecord` gives a reference by key
+     to the row at its place in the result. `Store.locate` finds a row of an
+     array named in `Store.rowKeys` by its element key, with a table of
+     positions formed once for a list of keys, and keeps no copy of the row to
+     find a change of the key by. `RuntimeTransactions.#encode` writes the
+     reference as a link to the row's document. So the index is written when a
+     member enters or leaves a bucket and not when a row changes, and a read of
+     a member reads the row's document under the row's label. Where the rows are
+     in place, the bucket holds copies as before. Test:
+     `runtime/runner/test/compiled/crossref.test.ts`, the link at the bucket's
+     position.
+630. **The entries of a record of references (provisional decision P78).**
+     `rowDocumentCollections` of `exec/row-documents.ts` takes a `map` over the
+     entries of a record whose schema declares its values as cells, so the rows
+     of `Object.entries(names).map(([name, member]) => ({ member, name }))` are
+     documents (`names-table.tsx`, `names-table.test.ts`, written first and seen
+     to fail on the row that was no link). The number of rows and the name of a
+     row have the clause of the record and of no member.
+     - _Why the probe of the fourth round gave no row on today's runtime._ The
+       fixture declares the members as `Item` with the fields `title` and
+       `note`, and the probe stored members without `note`. Today's runtime
+       reads the record under the argument schema, and a member that does not
+       fit it gives no row. With members that hold what the type declares, the
+       same source gives the same rows on today's runtime for a record of cells,
+       and for a record declared as `Record<string, Writable<T>>`.
+     - _An over-label that stays:_ a constant beside the rows, as
+       `kind: "table"`, has no record of the plan and takes the join of the
+       transaction, which holds the clause of the record.
+631. **Scale: a read that finds what a reference names was a read of the named
+     document whole (provisional decision P79).** The element table of a
+     collection over an array of references, and the keys of the array, are
+     formed from what each link names. Those reads were registered as reads of
+     the named position and everything below it, so a write to any field of any
+     member marked every assembly over the array, formed the keys of the array
+     again, and had each derivation locate every member and report a read of it
+     to the transaction: an edit of a title read 1,013 positions at 1,000
+     topics. `Position.own` of `exec/store.ts` marks such a read:
+     `Store.changedSince` and the marking of readers in `Instance` take a write
+     at the position for a change and a write below it for none. A document that
+     comes to exist, or whose root is replaced by a link, is a write at the
+     position. `Store.#others` noted each document after a scan of those noted
+     before, which was the square of the members when the keys of an array of
+     references were formed; it keeps a set. A `flatMap` has no path that
+     applies a change to its assembly; one whose source and whose segments
+     stayed is left as it is, and any other change forms it whole. Test:
+     `exec/test/crossref.test.ts`, the last three cases.
+632. **The two Topics boards on the constructs (provisional decisions P80 and
+     P81).** On the branch `claude/compiled-pattern-topics-runs`, in
+     `board-filing-order.tsx` and `board-sorted-references.tsx`.
+     - _`crossrefTable`_ is a `flatMap` over the array of topic references that
+       gives one pair for each mention, a plain value in place that holds two
+       references; a `groupBy` of the pairs by the topic mentioned, a cell; and
+       a `map` over the array of topic references whose body looks up the pairs
+       of its topic and maps them to the topic that mentions. The rows of that
+       `map` are documents of their own.
+     - _`crossrefIndexOf`_ is `pivot.groupBy((row) => row.name)`, an index over
+       the result of a `map` over an array of references, whose buckets hold
+       references to the row documents (note 629).
+     - _`namesTable`_ is
+       `Object.entries(names).map(([name, member]) => ({ member, name }))` in a
+       `computed`, over a record of references, with rows as documents.
+     - _What differs from the lifts:_ a topic the board lists at two entries has
+       two rows of the pivot, and a key of the namespace that the name grammar
+       does not admit has a row of the table.
+     - _The verb `addTopic` is a handler (P81)_ whose state declares the mention
+       universe, the pivot and its index as cells. As an `action` in the pattern
+       body it closes over the three, and the executor hands a handler each
+       value it closes over read whole (`Instance.#attempt`), which for these is
+       every row and, through the references in the rows, every topic. The same
+       holds for any `action` that passes a collection on to an instance it
+       makes. _Plan:_ the crate observes a captured value that the body only
+       passes on as `identity`.
+     - _The topic_ reads its backlinks in the `lift` `backlinksOf`, which reads
+       the one bucket of the topic's number in the stored index by its key and
+       does not scan the table where the bucket holds no row of the topic. It
+       does not call `lookup`: the input `boardCrossrefIndex` is the one that
+       `main.tsx` hands the index of the `lift` through, and the type of an
+       input cannot be both.
+     - _Today's runtime does not take the two boards (P80)._ `groupBy` is
+       declared on a cell of an array (`IDerivable.groupBy`,
+       `this: AnyBrandedCell<unknown[]>`), the result of `flatMap` or `map` in a
+       pattern body is typed as a plain array, and a cast to a cell type is
+       refused by the transformer and by the crate. So a grouping of the result
+       of another per-element construct, which both the pivot and its index
+       need, is in the compiled language alone, and the arms `today` and
+       `today-labeled` of the harness run `main.tsx` and no longer these two
+       boards. The facts the arm `runner` reads of each board at 100 topics,
+       over the load, six edits and three creates, equal those the arm
+       `today-labeled` read of the same board with the lifts, recorded before
+       the change. _Alternative that today's types take:_ a key function that
+       returns the list of mentions, so that the grouping is over the array of
+       topic references itself, with no pairs and no `flatMap`; today's
+       `groupBy` takes one key.
+633. **Topics on the constructs, measured.** The arm `runner` of
+     `compare/topics/scale.ts`, rows as documents, the load in bounded
+     transactions, no pull, one process for each board, size and schema, three
+     runs of each, load averages of 3.2 to 5.7 on an 18-core machine. A cell is
+     the median of the three runs of the time until the board is up to date, in
+     ms; a create is the median of three creates in each run. The mentions are
+     declared as references in the harness's topic schema
+     (`SCALE_TOPIC_SCHEMA=mentions-as-cells`).
+
+     | `filing-order`           | 100 | 1,000 | 2,000 |
+     | ------------------------ | --: | ----: | ----: |
+     | load                     | 370 | 3,329 | 6,748 |
+     | edit of a title, first   |  39 |   227 |   455 |
+     | edit of a title, middle  |  15 |    48 |    89 |
+     | edit of a title, last    |  14 |   213 |    83 |
+     | edit of the mentions     |  21 |   107 |   866 |
+     | edit of the `shortName`  |  45 |   452 | 1,204 |
+     | edit of `lastActivityAt` |  37 |   234 |   462 |
+     | create                   | 159 | 1,141 | 2,174 |
+
+     | `sorted-references`      | 100 | 1,000 | 2,000 |
+     | ------------------------ | --: | ----: | ----: |
+     | load                     | 401 | 3,321 | 7,163 |
+     | edit of a title, first   |  43 |   230 |   464 |
+     | edit of a title, middle  |  15 |    48 |    95 |
+     | edit of a title, last    |  14 |   237 |    87 |
+     | edit of the mentions     |  22 |   102 |   569 |
+     | edit of the `shortName`  |  47 |   444 | 1,245 |
+     | edit of `lastActivityAt` |  84 |   664 | 1,351 |
+     | create                   | 171 | 1,853 | 3,355 |
+
+     What one step does on `filing-order` at 100, 1,000 and 2,000 topics, from
+     the first run:
+
+     | step                     | evaluations | positions read     | records given     | piece's own ms | preparation ms |
+     | ------------------------ | ----------: | ------------------ | ----------------- | -------------- | -------------- |
+     | edit of a title, middle  |           5 | 11, 11, 11         | 10, 10, 10        | 3, 11, 21      | 5, 22, 43      |
+     | edit of the mentions     |          12 | 103, 1,003, 2,003  | 6, 6, 6           | 7, 51, 817     | 6, 32, 67      |
+     | edit of the `shortName`  |           8 | 11, 11, 11         | 71, 521, 1,021    | 8, 112, 363    | 12, 141, 449   |
+     | edit of `lastActivityAt` |           3 | 10, 10, 10         | 8, 8, 8           | 3, 12, 21      | 6, 42, 79      |
+     | create                   |          21 | 801, 7,101, 14,101 | 202, 1,102, 2,102 | 48, 384, 721   | 41, 271, 544   |
+
+     Each step makes 2 commits, a create 3. On `sorted-references` the edit of
+     `lastActivityAt` reads 410, 4,010 and 8,010 positions and gives 403, 4,003
+     and 8,003 records, which is the `lift` `topicsByActivity`. With the
+     harness's default topic schema the times are within a tenth of these at 100
+     and 1,000 topics, and at 2,000 an edit of a title in the middle takes 134
+     ms and a create 3,233 ms on `filing-order`. Every table, with the lowest
+     and the highest run and the counters of both boards and schemas, is in
+     `tables.md` of the round's raw output.
+634. **Every measured step still follows the board, and what each is made of.**
+     The evaluations do not: 5, 12, 8, 3 and 21 at every size. The time does,
+     for each step, and it is slower than with the three lifts for the edits the
+     lifts did not run on (note 606: an edit of a title 10 to 17 ms and of
+     `lastActivityAt` 9 to 14 ms at 1,000 and 2,000 on `filing-order`). No step
+     was profiled after the last changes of the round; the causes below are read
+     from the counters and from one profile of an edit of a title before
+     note 631.
+     - _An edit of a title, and of `lastActivityAt` on `filing-order`._ 11
+       positions and 10 records at every size, and the piece's own time and the
+       preparation both double from 1,000 to 2,000. The result document now
+       holds an index with a bucket and a label entry for each topic, and three
+       arrays of links to row documents. What of the preparation and of the
+       executor's comparison of the result (note 605) follows the size of that
+       document was not separated. The first edit of a run and some edits of the
+       last topic take 200 to 450 ms more than the piece and the preparation
+       account for (note 606 saw the same for the last topic).
+     - _An edit of the mentions._ One position read for each topic: the
+       `flatMap` is formed whole when a segment changes and locates every member
+       (note 631). _Plan:_ the segments kept by element, as the rows of a `map`
+       are.
+     - _An edit of the `shortName`._ A record given for half of the topics and
+       20 recorded: not traced. It is the index of the rows by name or the
+       pivot's row; the piece's own time and the preparation are 0.36 s and 0.45
+       s at 2,000.
+     - _A create._ One record for each row of the pivot and 7 positions read for
+       each topic, as with the lifts, and the time is that of note 606. The
+       record of each row names the membership of the index it looked up, which
+       is the fold over every pair and over every topic's list of mentions. A
+       topic that is made has a label of its own, so the fold gains a group and
+       each row's label is formed again. This is the cost that note 611 states
+       for a row that reads its bucket, and the one entry of P69, or a pivot
+       whose rows hold their bucket by reference, is what removes it.
+     - _An edit of `lastActivityAt` on `sorted-references`_ is the `lift` over
+       the whole list; the sort by a key of note 614 is what it needs, and is
+       not built.
+635. **Provisional decisions of the round, and what was not done.** P74: a slot
+     that reads the value a reference in an upstream row names has the label of
+     the upstream output joined with the label of that read (note 625). P75: the
+     key of an index and of a `lookup` is observed by its type, a key of an
+     unresolved type and a `lookup` by a cell in a handed index are refused
+     (note 627). P76: the members of a bucket are elements with the keys of the
+     index's source (note 628). P77: a kept index over rows that are documents
+     holds references by key to the rows (note 629). P78: the rows of a `map`
+     over the entries of a record of references are documents (note 630). P79: a
+     read that finds what a reference names is no read of what is stored below
+     the named position (note 631). P80: a grouping of the result of another
+     per-element construct is in the compiled language alone, and the two
+     measured boards no longer run on today's runtime (note 632). P81: a verb
+     that passes a collection on to an instance it makes is a handler with cells
+     in its state (note 632). Not done: the sort by a key, `keys()` and
+     `keyEntries()`, the one label entry of P69, the profile of a step at 1,000
+     after the last changes, and the label sizes with a clause for each topic.
+
+### CFC questions deferred
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. A read of which reference a position holds consumes, in the runtime's
+   resolution, the label of what the link names, where the runtime stored that
+   label with the link: the `mentionedBy` of a row of the fixture `crossref.tsx`
+   has the clause of a topic that is mentioned and is in no array the pattern
+   reads (`crossref.test.ts`). Whether that is the intended label of a reference
+   that is compared and not followed.
+2. A value reached by crossing a link in a member, as `item.note.text`, is
+   stored with the clause of the note and without the clause of the item whose
+   link was crossed, in a direct `map` and in a chain of two (note 625). Whether
+   the label of the link position, declared at the root of the item's schema,
+   should be consumed when the link is followed.
+3. A constant of the result that no record of the plan covers takes the join of
+   the transaction (note 630): an over-label.
+4. The label of a row that reads its bucket holds the fold over every member's
+   key, so each row is given its record again when a member with a label of its
+   own enters the source (note 634). Whether the membership of an index may be
+   held once and consumed through a reference (P69).
+5. `Position.own` (note 631) changes what marks a reader and what forms the keys
+   of an array again; it changes no record. Whether a transaction that no longer
+   reports a read of each member of an array it only locates consumes less than
+   it should: the rows' own records name the positions their bodies read, and
+   the membership record names the array.
+6. A handler that is handed a kept index as a cell and reads one bucket by its
+   key in a `lift` (`backlinksOf`) is labeled by what the read went through, and
+   not by a `lookup` of the plan. Whether a miss, which reads a position that
+   holds nothing, consumes the membership of the index.
+7. The join of `SlotBinding.through` takes the integrity that the output and the
+   read both carry, and the read's alone where the output has no label (note
+   625).
