@@ -100,9 +100,13 @@ import {
   TRUSTED_REPLACE_REFUSED_INBOX_ACTION,
 } from "../private-inbox/private-inbox.tsx";
 
-// Types from favorites-manager.tsx
+// A stored favorite, as `favoriteEntrySchema` in `@commonfabric/home-schemas`
+// declares it.
 type Favorite = {
-  cell: { [NAME]?: string };
+  // A link to the favorited piece. Typed as a cell, so reading a favorite does
+  // not read the piece: that read would join the piece's confidentiality into
+  // every handler that touches the favorites, and through them into the list.
+  cell: Writable<{ [NAME]?: string }>;
   // Discovery tags snapshotted from the piece's schema when favorited.
   tags: string[];
   userTags: string[];
