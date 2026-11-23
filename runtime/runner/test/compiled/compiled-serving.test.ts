@@ -167,6 +167,10 @@ describe("a compiled piece under the serving loop", () => {
     return cell;
   };
 
+  /** The member of the result that links to the stream `name`. */
+  const streamOf = (cell: Cell<List>, name: string): Cell<unknown> =>
+    cell.key(name as never) as unknown as Cell<unknown>;
+
   /**
    * Waits until `cell` holds rows with `labels` and `events` events. A
    * state cell that nothing wrote has no document, so a client reads
@@ -219,7 +223,7 @@ describe("a compiled piece under the serving loop", () => {
         cells[at],
         inMemory(artifact, 3, EVENTS.slice(0, index)),
       );
-      cells[at].key(name as never).send(event as never);
+      streamOf(cells[at], name).send(event);
     }
 
     const expected = inMemory(artifact, 3, EVENTS);
@@ -245,7 +249,7 @@ describe("a compiled piece under the serving loop", () => {
     const cell = reading(sender, result);
     await holds(sender, cell, inMemory(artifact, 3, []));
     for (const [index, [name, event]] of EVENTS.slice(0, 2).entries()) {
-      cell.key(name as never).send(event as never);
+      streamOf(cell, name).send(event);
       await holds(
         sender,
         cell,
@@ -255,7 +259,7 @@ describe("a compiled piece under the serving loop", () => {
 
     await serving.restart();
     for (const [index, [name, event]] of EVENTS.slice(2).entries()) {
-      cell.key(name as never).send(event as never);
+      streamOf(cell, name).send(event);
       await holds(
         sender,
         cell,
@@ -278,7 +282,7 @@ describe("a compiled piece under the serving loop", () => {
     await holds(sender, cell, inMemory(artifact, 3, []));
 
     serving.rejectNextWave();
-    cell.key("add" as never).send(EVENTS[1][1] as never);
+    streamOf(cell, "add").send(EVENTS[1][1]);
 
     // The handler ran twice, and the second run counted from what the
     // storage holds: one event, and one item added.
@@ -298,7 +302,7 @@ describe("a compiled piece under the serving loop", () => {
     const { artifact, result } = await setUp(sender, 3);
     const sent = reading(sender, result);
     await holds(sender, sent, inMemory(artifact, 3, []));
-    sent.key("rename" as never).send(EVENTS[0][1] as never);
+    streamOf(sent, "rename").send(EVENTS[0][1]);
     await holds(sender, sent, inMemory(artifact, 3, EVENTS.slice(0, 1)));
 
     const reader = client();
