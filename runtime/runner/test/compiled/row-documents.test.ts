@@ -266,7 +266,9 @@ describe("the rows of a `map` over an array declared as references", () => {
       );
 
       expect(piece.refusals).toEqual([]);
-      const rows = storedRows(result).map((row) => parseLink(row as never).id!);
+      const rows: string[] = storedRows(result).map((row) =>
+        parseLink(row as never).id!
+      );
       expect(rows.length).toBe(5);
       const resultId = result.getAsNormalizedFullLink().id;
       const holding = (id: string) =>
