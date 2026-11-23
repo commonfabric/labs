@@ -1953,7 +1953,10 @@ type WritePolicyInputPathNode = {
   inputs: { position: number; input: WritePolicyInput }[];
 };
 
-/** The path index of each document's list `writePolicyInputsForDocument()` built. */
+/**
+ * The path index of each document's list that
+ * `writePolicyInputsForDocument()` built.
+ */
 const writePolicyInputPathIndexes = new WeakMap<
   readonly WritePolicyInput[],
   WritePolicyInputPathNode
