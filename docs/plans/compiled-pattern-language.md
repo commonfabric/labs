@@ -17745,9 +17745,13 @@ says what it is, why it waits, and what it needs.
 The owner expects a larger gain, earlier, from the per-element forms over
 the members of a record: "I imagine Object.keys and Object.entries and maybe
 Object.values would be a bigger win earlier". `Object.entries(record).map`
-is built. `Object.keys(x).map`, `Object.values(x).map`, and a `filter` or a
-`flatMap` over the entries of a record are not; 59 files under `patterns/`
-call one of the three functions. This is work before the launch; the
+is built for a record that is an input of the pattern, over a record of
+references and over a record of plain values in place (P70); over a record
+the instance computed it is a plain array generated from scratch and is
+evaluated whole. `Object.keys(x).map`, `Object.values(x).map`, and a
+`filter` or a `flatMap` over the entries of a record are not built. Under
+`patterns/`, 59 `.tsx` files call `Object.keys`, `Object.values` or
+`Object.entries`, 25 of them outside tests; with `.ts` files it is 133. This is work before the launch; the
 [handoff document](compiled-pattern-language-handoff.md) lists it among the
 open lines of work.
 

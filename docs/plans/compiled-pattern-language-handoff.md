@@ -349,12 +349,14 @@ insertion by comparison or the recognition of comparators of the form
 today's runtime and stay, by the same ruling.
 
 **Per-element forms over the members of a record** (trunk; not built).
-`Object.entries(record).map` is built. `Object.keys(x).map`,
-`Object.values(x).map`, and a `filter` or a `flatMap` over the entries of a
-record are evaluated whole. The owner named these on 2026-11-23 as the
+`Object.entries(record).map` is built for a record that is an input of the
+pattern, over a record of references and over a record of plain values in
+place (P70); over a record the instance computed it is evaluated whole.
+`Object.keys(x).map`, `Object.values(x).map`, and a `filter` or a `flatMap`
+over the entries of a record are evaluated whole. The owner named these on 2026-11-23 as the
 recognition to do before `Object.groupBy`, which is in the plan's section
-"After the launch"; 59 files under `patterns/` call one of the three
-functions.
+"After the launch". Under `patterns/`, 59 `.tsx` files call one of the
+three functions, 25 of them outside tests; with `.ts` files it is 133.
 
 **Authored `computed` bodies that are not promoted** (all branches).
 `language-subset.md` §6.1 promotes a `computed` whose body is
