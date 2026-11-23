@@ -92,6 +92,11 @@
  * its label in place. The file grows with the square of the board where
  * each topic has a clause of its own, so it is for boards of a few topics.
  *
+ * With `SCALE_WRITE_ALONE` set, the arms of the runtime's own calls
+ * (`runner`, `today`, `today-labeled`) time, before each edit, a write of
+ * a field of the same topic that the board does not read (`write alone`):
+ * what the write itself costs, the memory server's handling included.
+ *
  * With `SCALE_CPU_PROFILE` set to the path of a file, the run is sampled
  * every half millisecond and the profile of the whole process is written
  * there when the arm has run, in the format of the V8 inspector.
@@ -1418,6 +1423,7 @@ const runToday = async (
               (before?.piece.derivations ?? 0),
             changesByOthers: piece.counts.changesByOthers -
               (before?.piece.changesByOthers ?? 0),
+            ownMs: round(piece.counts.ownMs - (before?.piece.ownMs ?? 0)),
             reads: after.reads - (before?.records.reads ?? 0),
             writes: after.writes - (before?.records.writes ?? 0),
             recordsGiven: after.recordsGiven -
@@ -1485,7 +1491,18 @@ const runToday = async (
           },
         );
       }));
+    // With `SCALE_WRITE_ALONE` set, a step `write alone` precedes each
+    // edit: the same writer writes a field of the same topic that the
+    // board does not read, so the step is what the write itself costs on
+    // this arm, with no derivation behind it.
+    const writeAlone = Deno.env.get("SCALE_WRITE_ALONE") !== undefined;
     for (const at of edited(size)) {
+      if (writeAlone) {
+        await measure(`write alone ${at}`, () =>
+          commit((tx) => {
+            cells[at].withTx(tx).key("unreadByTheBoard").set(`Written ${at}`);
+          }));
+      }
       await measure(`edit topic ${at}`, () =>
         commit((tx) => {
           cells[at].withTx(tx).key("title").set(`Edited topic ${at}`);
