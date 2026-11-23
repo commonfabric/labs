@@ -1207,15 +1207,16 @@ series.
 `patterns/integration/fabrichat-setup.bench.ts` measures the steps a headless
 FabriChat integration test spends almost all of its time in: the ones the
 `fabrichat-room-list-*` tests repeat many times before they assert anything,
-and the Home and profile the seeded room above brings up for every member. Its `fabrichat setup`
-group has one series per step:
+and the Home and profile the seeded room above brings up for every member. Its
+`fabrichat setup` group has one series per step:
 
 - `home cold` brings up a new person's Home with `ensureDefaultPattern()`, with
-  the client, and the serving loop when there is one, compiling into one
-  compile cache that starts empty, so the Home pattern compiles from source
-  once. What the process keeps beyond that cache, the compiler's own modules
-  and its parse memos among them, is already warm by then, so the one-time cost
-  the first Home in a process also pays is not part of this series.
+  the client, and the serving loop when it runs in this process rather than in
+  a worker of its own, compiling into one compile cache that starts empty, so
+  the Home pattern compiles from source once. What the process keeps beyond
+  that cache, the compiler's own modules and its parse memos among them, is
+  already warm by then, so the one-time cost the first Home in a process also
+  pays is not part of this series.
 - `home warm` is the same with the compile caches holding what earlier
   bring-ups compiled, as for every later person.
 - `profile` creates the person's profile through Home's `createProfile`, sent

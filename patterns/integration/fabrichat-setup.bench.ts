@@ -9,11 +9,11 @@
  * Each step is its own benchmark in the `fabrichat setup` group:
  *
  * - `home cold`: `ensureDefaultPattern()` for a new person, until the client
- *   has settled, with the client, and the serving loop when there is one,
- *   compiling into one compile cache that starts empty, so the Home pattern
- *   compiles from source once. What the process keeps beyond that cache, the
- *   compiler's own modules and its parse memos among them, is already warm
- *   when the first measured invocation starts.
+ *   has settled, with the client, and the serving loop when it runs in this
+ *   process, compiling into one compile cache that starts empty, so the Home
+ *   pattern compiles from source once. What the process keeps beyond that
+ *   cache, the compiler's own modules and its parse memos among them, is
+ *   already warm when the first measured invocation starts.
  * - `home warm`: the same with the compile caches holding what earlier
  *   bring-ups compiled.
  * - `profile`: Home's `createProfile`, sent as a click on its reviewed action,

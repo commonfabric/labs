@@ -571,6 +571,8 @@ export class RoomListServer {
       const served = await listenServingMemoryServer({
         serve,
         aclMode: "enforce",
+        // A loop the environment puts in a worker takes no closure; the
+        // worker builds a cache of its own.
         ...(runsInWorker() ? {} : { moduleByteCache: cache }),
       });
       return new RoomListServer(
