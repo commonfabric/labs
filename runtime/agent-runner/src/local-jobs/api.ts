@@ -826,26 +826,35 @@ async (request: Request): Promise<Response> => {
       }
       const read = enqueueRequestOf(body);
       if ("error" in read) return refuse(400, "invalid_request", read.error);
-      const profile = options.profiles.get(read.profile);
-      if (profile === undefined) {
-        return refuse(
-          400,
-          "unknown_profile",
-          `The host names no profile \`${read.profile}\`.`,
-        );
-      }
-      const narrowed = narrowLocalJobProfile(profile, read.request);
-      if ("refusal" in narrowed) {
-        return refuse(400, "beyond_profile", narrowed.refusal);
-      }
+      // A request the store already holds is answered with its job, so a
+      // caller that lost the reply recovers it after the host's profiles
+      // change; only a job to be added is held to them.
       const enqueued = store.enqueue(
         read.caller,
         read.profile,
         read.idempotencyKey,
         read.request,
+        {
+          admit: (name, request) => {
+            const profile = options.profiles.get(name);
+            if (profile === undefined) {
+              return {
+                code: "unknown_profile",
+                error: `The host names no profile \`${name}\`.`,
+              };
+            }
+            const narrowed = narrowLocalJobProfile(profile, request);
+            return "refusal" in narrowed
+              ? { code: "beyond_profile", error: narrowed.refusal }
+              : undefined;
+          },
+        },
       );
       if ("conflict" in enqueued) {
         return refuse(409, "idempotency_conflict", enqueued.conflict);
+      }
+      if ("refusal" in enqueued) {
+        return refuse(400, enqueued.refusal.code, enqueued.refusal.error);
       }
       if (enqueued.created) options.kick();
       return json(enqueued.created ? 201 : 200, { job: enqueued.job });

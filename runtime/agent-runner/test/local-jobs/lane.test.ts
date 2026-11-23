@@ -70,6 +70,7 @@ const REQUEST = {
 /** Helper for tests, which reads the id of the job an enqueue added. */
 const idOf = (result: ReturnType<LocalJobStore["enqueue"]>): string => {
   if ("conflict" in result) throw new Error(result.conflict);
+  if ("refusal" in result) throw new Error(result.refusal.error);
   return result.job.id;
 };
 

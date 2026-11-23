@@ -2241,7 +2241,8 @@ cf agent runner --identity ./my.key --api-url https://toolshed.example \
 | `--max-concurrent-local`    | How many local jobs run at once, beside and apart from `--max-concurrent`. Defaults to 2.                                         |
 | `--local-only`              | Serve local jobs and start no Fabric lane; `--identity` and `--api-url` are then not needed.                                      |
 
-The model provider is the one `cf-harness` is configured with under its harness
+The model provider is the one `cf-harness` resolves, from
+`CF_HARNESS_MODEL_PROVIDER` and then the persisted preference in its harness
 home directory, except for a local job whose profile names one
 ([Local jobs](#local-jobs)). The Fabric lane uses the `context` prompt role, so
 the default `enforce-strict` mode admits only `submit_result`; set
@@ -2472,15 +2473,17 @@ contract before that restriction is widened.
 A profile may name the `model` its jobs run, in place of the runner's `--model`,
 and the `modelProvider` they run on, `openai-codex` or
 `openai-compatible-gateway`, which the runner passes to `cf-harness` as
-`--model-provider`. A profile naming a provider fixes the account its jobs'
-model calls are billed to; one naming none leaves `cf-harness` to resolve a
-provider as each job starts, from `CF_HARNESS_MODEL_PROVIDER` and then the
-harness home's persisted preference. A provider `cf-harness` does not accept
-refuses the profile file. A follow-up continues its predecessor's recorded run,
-and `cf-harness` refuses to continue a run on a model or provider other than the
-one it recorded. A follow-up under a profile whose `modelProvider` differs from
-its predecessor's recorded provider therefore fails `PROVIDER_FAILURE` before
-any model call, with the `errorDetail`
+`--model-provider`. A profile naming a provider fixes the provider its jobs'
+model calls go to; one naming none leaves `cf-harness` to resolve a provider as
+each job starts, from `CF_HARNESS_MODEL_PROVIDER` and then the harness home's
+persisted preference. Such a profile that bounds model calls fails each job that
+resolves to `openai-compatible-gateway`, which cannot verify the bounds. The
+runner refuses a profile file naming a provider `cf-harness` does not know. A
+follow-up continues its predecessor's recorded run, and `cf-harness` refuses to
+continue a run on a provider other than the one it recorded, or on another model
+where it recorded one. A follow-up under a profile whose `modelProvider` differs
+from its predecessor's recorded provider therefore fails `PROVIDER_FAILURE`
+before any model call, with the `errorDetail`
 `continue provider mismatch: run uses <recorded>, requested <profile's>`. It
 records no run, so the conversation it ends can open no further follow-up; a
 host that changes a profile's provider starts a new job instead. A job pinned to
@@ -2517,8 +2520,9 @@ key.
 
 Enqueue commits its job and first event in a SQLite WAL transaction with
 `synchronous = FULL` before acknowledging it. Repeating a caller's idempotency
-key with the same request returns that job; a different request or profile
-returns a conflict.
+key with the same request returns that job, even after the host's profiles
+change or drop the job's profile, since only a job to be added is held to the
+profiles; a different request or profile returns a conflict.
 
 A caller sends another message with `POST /jobs/<id>/messages`, also bounded at
 1 MiB of UTF-8 JSON:

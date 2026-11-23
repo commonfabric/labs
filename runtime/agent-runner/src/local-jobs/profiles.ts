@@ -57,7 +57,6 @@ import type { MemorySpace } from "@commonfabric/runner";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
-/** One profile, as the host file states it. */
 /**
  * The provider that cannot verify `maxInputBytes` or `maxOutputTokens`: the
  * harness refuses a run under it with either, as its model client is built.
@@ -68,6 +67,7 @@ const GATEWAY_PROVIDER: HarnessModelProviderId = "openai-compatible-gateway";
 const GATEWAY_BOUNDS_REFUSAL =
   "`maxInputBytes` and `maxOutputTokens` need a provider that verifies them, which `openai-compatible-gateway` does not";
 
+/** One profile, as the host file states it. */
 export interface LocalJobProfile extends HarnessModelLimits {
   /** The tools a job may use; a result schema adds `submit_result`. */
   tools: string[];
@@ -97,13 +97,14 @@ export interface LocalJobProfile extends HarnessModelLimits {
   model?: string;
 
   /**
-   * The `cf-harness` model provider every job under this profile runs on,
-   * and so the account its model calls are billed to. Absent, the harness
-   * resolves one as it does for any run, from its environment and then its
-   * persisted preference, when the job starts. A request cannot set or
-   * change it. A follow-up continues its predecessor's recorded run, which
-   * the harness refuses to continue on a provider other than the one it
-   * recorded.
+   * The `cf-harness` model provider every job under this profile runs on.
+   * Absent, the harness resolves one as it does for any run, from its
+   * environment and then its persisted preference, when the job starts; a
+   * profile that sets `maxInputBytes` or `maxOutputTokens` with no provider
+   * then fails each job that resolves to `openai-compatible-gateway`. A
+   * request cannot set or change it. A follow-up continues its
+   * predecessor's recorded run, which the harness refuses to continue on a
+   * provider other than the one it recorded.
    */
   modelProvider?: HarnessModelProviderId;
 
