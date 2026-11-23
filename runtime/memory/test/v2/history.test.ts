@@ -4,6 +4,7 @@ import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
+import { SPACE_INVITES_REVISION_DOC_ID } from "../../space-invites.ts";
 import {
   type BranchName,
   encodeMemoryBoundary,
@@ -726,6 +727,33 @@ describe("history", () => {
       restore({ sourceSeq: then });
 
       expect(valueOf(`of:${space}`)).toBe("access list");
+    });
+
+    it("leaves the invitation service's revision document as it is", () => {
+      const record = (revision: number) =>
+        applyCommit(engine, {
+          sessionId: "invite-service",
+          space,
+          commitClass: "system",
+          commit: {
+            localSeq: ++localSeq,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: SPACE_INVITES_REVISION_DOC_ID,
+              value: { value: { revision } },
+            }],
+          },
+        });
+      record(1);
+      const then = set("of:a", "old");
+      record(2);
+      set("of:a", "new");
+
+      const commit = restore({ sourceSeq: then });
+
+      expect(valueOf(SPACE_INVITES_REVISION_DOC_ID)).toEqual({ revision: 2 });
+      expect(commit?.revisions.map(({ id }) => id)).toEqual(["of:a"]);
     });
 
     it("throws for a seq below a compaction, and writes nothing", () => {
