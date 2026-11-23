@@ -17,6 +17,7 @@ import {
   schemaTrackerKey,
   trackedRecordKey,
 } from "../src/graph-query.ts";
+import { rendererVDOMSchema, vnodeSchema } from "../src/schemas.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 
 const SPACE = "did:key:graph-query-test" as MemorySpace;
@@ -1667,6 +1668,155 @@ describe("graph-query", () => {
           expect(handoffsOver(shallow)).toBe(0);
           expect(handoffsOver(deep)).toBeGreaterThan(0);
         });
+      });
+
+      describe("over a link held as an opaque cell", () => {
+        // A reader that holds a link as a cell of unknown type holds the
+        // handle and reads nothing through it, so the walk loads no target
+        // for it and reports no link into another space for it.
+
+        const OTHER = "did:key:graph-query-other" as MemorySpace;
+        const opaque: JSONSchema = { asCell: ["cell"], type: "unknown" };
+        const reading: JSONSchema = {
+          type: "object",
+          properties: { name: { type: "string" } },
+        };
+
+        /**
+         * Walks `of:root` under `selector`, and returns the ids of the
+         * other documents the walk asked for, sorted.
+         */
+        const reachedFrom = (
+          documents: Map<string, FabricValue>,
+          selector: SchemaPathSelector,
+        ): string[] => {
+          const { manager, walk } = walkOver(documents);
+          const root = documentFor(manager, "of:root");
+          walk.visit(root, selector);
+          return [...new Set(manager.requested)]
+            .filter((key) => key !== keyFor("of:root"))
+            .map((key) => key.slice(key.lastIndexOf("/") + 1))
+            .toSorted();
+        };
+
+        const roomBehindLink = () =>
+          new Map<string, FabricValue>([
+            [keyFor("of:root"), { room: linkTo("of:room") }],
+            [keyFor("of:room"), { name: "one" }],
+          ]);
+
+        it("loads the target of the link its selector's path ends at, under a schema that reads it", () => {
+          expect(
+            reachedFrom(roomBehindLink(), {
+              path: ["value", "room"],
+              schema: reading,
+            }),
+          ).toEqual(["of:room"]);
+        });
+
+        it("loads no target of the link its selector's path ends at, under an opaque cell schema", () => {
+          expect(
+            reachedFrom(roomBehindLink(), {
+              path: ["value", "room"],
+              schema: opaque,
+            }),
+          ).toEqual([]);
+        });
+
+        it("follows a link partway along its selector's path, and loads no target of the link the path ends at", () => {
+          const documents = new Map<string, FabricValue>([
+            [keyFor("of:root"), { entry: linkTo("of:entry") }],
+            [keyFor("of:entry"), { room: linkTo("of:room") }],
+            [keyFor("of:room"), { name: "one" }],
+          ]);
+
+          expect(
+            reachedFrom(documents, {
+              path: ["value", "entry", "room"],
+              schema: opaque,
+            }),
+          ).toEqual(["of:entry"]);
+        });
+
+        it("follows a write redirect its selector's path ends at, and loads no target of the link behind it", () => {
+          const documents = new Map<string, FabricValue>([
+            [keyFor("of:root"), {
+              room: {
+                "/": {
+                  [LINK_V1_TAG]: {
+                    id: "of:slot",
+                    path: [],
+                    overwrite: "redirect",
+                  },
+                },
+              },
+            }],
+            [keyFor("of:slot"), linkTo("of:room")],
+            [keyFor("of:room"), { name: "one" }],
+          ]);
+
+          expect(
+            reachedFrom(documents, {
+              path: ["value", "room"],
+              schema: opaque,
+            }),
+          ).toEqual(["of:slot"]);
+        });
+
+        it("reports a link into another space under a schema that reads it, and none under an opaque cell schema", () => {
+          const crossingsUnder = (schema: JSONSchema): string[] => {
+            const manager = new StubObjectManager(
+              new Map<string, FabricValue>([[keyFor("of:root"), {
+                room: {
+                  "/": {
+                    [LINK_V1_TAG]: { id: "of:room", path: [], space: OTHER },
+                  },
+                },
+              }]]),
+            );
+            const crossings: string[] = [];
+            const walk = new GraphQueryWalk({
+              manager,
+              space: SPACE,
+              schemaTracker: new MapSetStringToPathSelectors(true),
+              identity: TEST_SCOPE_IDENTITY,
+              onCrossing: (key) => crossings.push(key),
+            });
+            walk.visit(documentFor(manager, "of:root"), {
+              path: ["value", "room"],
+              schema,
+            });
+            return crossings;
+          };
+
+          expect(crossingsUnder(reading).length).toBe(1);
+          expect(crossingsUnder(opaque)).toEqual([]);
+        });
+
+        for (
+          const [name, schema, type] of [
+            ["rendered view", rendererVDOMSchema, "vnode"],
+            ["view node", vnodeSchema, "vnode"],
+          ] as const
+        ) {
+          it(`loads the target of an ordinary prop's link and none of \`$cell\`'s, under the ${name} schema`, () => {
+            const documents = new Map<string, FabricValue>([
+              [keyFor("of:root"), {
+                type,
+                name: "cf-cell-link",
+                props: {
+                  $cell: linkTo("of:room"),
+                  label: linkTo("of:label"),
+                },
+              }],
+              [keyFor("of:label"), "Room one"],
+              [keyFor("of:room"), { name: "one" }],
+            ]);
+
+            expect(reachedFrom(documents, { path: ["value"], schema }))
+              .toEqual(["of:label"]);
+          });
+        }
       });
     });
   });
