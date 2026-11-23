@@ -1,0 +1,382 @@
+[
+  {
+    "module": "compare/fixtures/scoped-operand.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {
+            "0": {
+              "captures": [],
+              "named": true
+            }
+          },
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/scoped-operand.tsx",
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst pick = $rt.data(handler((event, { prefs }) => {\n  prefs.set({ color: event.color });\n}));\n\nconst $default = $rt.data((pattern(\"sha256:91400126dbdece7aa17f12c1bf1e5f9f18d6026dcde2f4fa9cf42ecd07747072\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => ($h.operand(\"??\", $h.select(0, $h.v($h.slot(1)), true), () => $h.slot(1), () => $h.slot(2))));\nreturn $rt.thunk(($h) => (({ chosen: $h.output(0), pick: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { prefs }) => {\n  prefs.set({ color: event.color });\n})($e, $s));"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0
+            },
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 29,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/2",
+              "handler": {
+                "body": 0
+              },
+              "name": "pick",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "prefs"
+                  ],
+                  "place": {
+                    "slot": 1
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "pick",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "color"
+                  ],
+                  "slot": 3
+                },
+                {
+                  "at": [
+                    "binding",
+                    "prefs"
+                  ],
+                  "handle": true,
+                  "slot": 4
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 4
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 3
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 4
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/scoped-operand.tsx",
+                "start": 741
+              },
+              "bodies": [],
+              "entry": "chosen",
+              "picks": [],
+              "selectors": [
+                0
+              ],
+              "slots": [
+                0,
+                1,
+                2
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "chosen"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                ],
+                "condition": {
+                  "op": "slot",
+                  "slot": 0
+                },
+                "op": "select",
+                "selector": 0
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:91400126dbdece7aa17f12c1bf1e5f9f18d6026dcde2f4fa9cf42ecd07747072"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [
+            {
+              "arity": 2
+            }
+          ],
+          "slots": [
+            {
+              "observes": "shape",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "fallback"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "color"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "prefs"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/4"
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "prefs",
+              "schema": "unhashed:schema/5",
+              "scope": "user",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "fallback": {
+                  "properties": {
+                    "color": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "color"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "fallback"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "chosen": {
+                  "properties": {
+                    "color": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "color"
+                  ],
+                  "type": "object"
+                },
+                "pick": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "properties": {
+                    "color": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "color"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "chosen",
+                "pick"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "properties": {
+                "color": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "color"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "properties": {
+                    "color": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "color"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "asCell": [
+                "cell"
+              ]
+            }
+          },
+          {
+            "id": "unhashed:schema/5",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "properties": {
+                    "color": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "color"
+                  ],
+                  "type": "object"
+                }
+              ]
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

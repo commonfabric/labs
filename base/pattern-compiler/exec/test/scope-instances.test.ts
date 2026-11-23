@@ -150,6 +150,31 @@ describe("an instance with state of the scope `user`, evaluated for two principa
     ).toEqual(held);
   });
 
+  it("writes the document of a principal again that a refused commit took back, and evaluates nothing of another principal", () => {
+    resultOf("ann");
+    resultOf("bob");
+    // The state document of the `wish`, whose request the evaluation of
+    // the operation wrote for each principal.
+    const state =
+      [...instance.store.docs].find(([doc, { kind }]) =>
+        kind === "operation state" && doc.endsWith("~user:ann")
+      )![0];
+    const named = state.slice(0, -":ann".length);
+    const before = instance.counts.evaluations;
+
+    // The commit that first wrote the document of Ann was refused: the
+    // storage holds none. The entries that are in the memo are Bob's.
+    as("ann", () => instance.restore(named, undefined));
+    expect(instance.store.docs.has(state)).toBe(false);
+    resultOf("bob");
+    expect(instance.counts.evaluations).toBe(before);
+
+    expect(resultOf("ann").greeting).toBe("hello the profile of ann");
+    expect(
+      (instance.store.docs.get(state)?.value as { request: unknown }).request,
+    ).toEqual({ query: "#profile" });
+  });
+
   it("stores a value of the scope `user` in no document of the space", () => {
     send("ann", "rename", { name: "Annabel" });
     resultOf("ann");
@@ -347,5 +372,76 @@ describe('a pattern compiled in through `asScope("user")`', () => {
 
     expect(resultOf("bob").first.label).toBe("first (open)");
     expect(resultOf("ann").first.label).toBe("first");
+  });
+});
+
+// `fixtures/scoped-operand.tsx`: `prefs.get() ?? fallback`, where `prefs`
+// is a state cell of the scope `user` and `fallback` a record of the
+// space. The operand that `??` selects is passed on as the reference it
+// is (`Host.operand`).
+describe("a left operand of `??` that is of the scope `user`", () => {
+  let acting: string;
+  let instance: Instance;
+
+  const chosenBy = (principal: string): { color: string } => {
+    acting = principal;
+    instance.settle();
+    return (instance.result() as { chosen: { color: string } }).chosen;
+  };
+
+  beforeEach(async () => {
+    acting = "ann";
+    instance = new Instance(
+      await artifact("scoped-operand"),
+      { fallback: { $link: { doc: "fallback", path: [] } } },
+      {
+        documents: [{
+          id: "fallback",
+          kind: "prefs",
+          value: { color: "gray" },
+        }],
+        scopes: {
+          keyOf: (scope: Scope) =>
+            scope === "user" ? `user:${acting}` : `session:${acting}:s`,
+        },
+      },
+    );
+    instance.settle();
+  });
+
+  it("gives each principal the operand its own state selects", () => {
+    acting = "ann";
+    const stream = instance.streams().find(({ path }) =>
+      path.join("/") === "pick"
+    )!;
+    expect(instance.send(stream.binding, { color: "red" }).committed).toBe(
+      true,
+    );
+
+    expect(chosenBy("ann")).toEqual({ color: "red" });
+    expect(chosenBy("bob")).toEqual({ color: "gray" });
+    expect(chosenBy("ann")).toEqual({ color: "red" });
+  });
+
+  it("stores the selected reference of a principal in no document of the space", () => {
+    acting = "ann";
+    const stream = instance.streams().find(({ path }) =>
+      path.join("/") === "pick"
+    )!;
+    instance.send(stream.binding, { color: "red" });
+    chosenBy("ann");
+    chosenBy("bob");
+
+    const shared = [...instance.store.docs]
+      .filter(([doc, { kind }]) => !doc.includes("~") && kind !== "stream")
+      .map(([, document]) => JSON.stringify(document));
+    expect(shared.some((text) => text.includes("red"))).toBe(false);
+    // The result holds one link for every principal, to the place of the
+    // output in the instances of the scope.
+    expect(
+      (instance.store.docs.get("result")?.value as { chosen: unknown }).chosen,
+    ).toEqual({
+      $link: expect.objectContaining({ path: ["chosen"] }),
+    });
   });
 });

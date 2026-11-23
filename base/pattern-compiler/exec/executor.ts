@@ -14987,7 +14987,20 @@ export class Instance {
     for (
       const { instance, key } of root.#wroteAside.get(doc)?.values() ?? []
     ) {
-      instance.#memo.delete(key);
+      // The write that was taken back was made for the scope key that is
+      // evaluated for now. Where the memo holds the entry of another key,
+      // that entry stays, and the entry set aside for this key is the one
+      // that is no longer current.
+      const { scopes } = store;
+      const held = instance.#memo.get(key);
+      scopes?.staleAside(
+        `${instance.id}\n${key}`,
+        (scoped) => scopes.acting(scoped),
+      );
+      if (
+        scopes === undefined || held?.scoped === undefined ||
+        scopes.acting(held.scoped)
+      ) instance.#memo.delete(key);
       instance.#markUsers(key);
       instance.#nowDue();
     }
