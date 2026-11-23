@@ -192,8 +192,8 @@ Deno.test("labs ci trust: only first-attempt success counts as green", async () 
 Deno.test("ci trust: each tile links to its repository's page, and each cell to its run", async () => {
   const cases = [
     { tile: labsCiTrust, page: "/repos?name=labs" },
-    { tile: loomCiTrust, page: "/repos?name=loom" },
-    { tile: weaverCiTrust, page: "/repos?name=commonfabric-weaver" },
+    { tile: loomCiTrust, page: "/repos?name=cfs" },
+    { tile: weaverCiTrust, page: "/repos?name=weaver" },
   ];
   for (const { tile, page } of cases) {
     const passed = run({ html_url: `https://github.com/${tile.repo}/actions/runs/1` });

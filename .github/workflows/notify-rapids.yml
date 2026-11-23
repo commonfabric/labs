@@ -90,7 +90,7 @@ jobs:
           app-id: ${{ vars.RAPIDS_APP_ID }}
           private-key: ${{ secrets.RAPIDS_APP_PRIVATE_KEY }}
           owner: commonfabric
-          repositories: loom
+          repositories: cfs
           permission-actions: write
           permission-contents: read
       - name: 📤 Notify Loom dependency integration
@@ -100,6 +100,6 @@ jobs:
           PRODUCER_RUN: ${{ github.event.workflow_run.id }}
         run: |
           gh api --method POST \
-            repos/commonfabric/loom/actions/workflows/rapids-dependencies.yml/dispatches \
+            repos/commonfabric/cfs/actions/workflows/rapids-dependencies.yml/dispatches \
             -f ref=main -f 'inputs[producer]=commonfabric/labs' \
             -f "inputs[run_id]=$PRODUCER_RUN"

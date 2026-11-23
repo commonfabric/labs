@@ -111,6 +111,18 @@ describe("RunListFile", () => {
         expect((await loadHead()).drift).toBe(-3);
       });
 
+      it("returns a head another instance saved under a name its repository had before under the name it has now", async () => {
+        const before = head(runs(30, 21), { repo: "commonfabric/loom" });
+        const other = head(runs(40, 31), { repo: "commonfabric/loom-scripts" });
+        await new RunListFile(path).save(() => [before, other], 0);
+
+        expect((await load("ci.yml", "commonfabric/cfs"))?.runs).toEqual(
+          before.runs,
+        );
+        expect((await load("ci.yml", "commonfabric/loom-scripts"))?.runs)
+          .toEqual(other.runs);
+      });
+
       it("returns no heads when the file does not exist", async () => {
         expect(await load()).toBeUndefined();
       });

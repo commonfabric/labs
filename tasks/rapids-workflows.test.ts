@@ -45,6 +45,9 @@ const workflowSchema = z.object({
 /** Fields of a workflow step that these protocol checks consume. */
 type Step = z.infer<typeof stepSchema>;
 
+/** The repository each notify job of `notify-rapids.yml` dispatches to. */
+const NOTIFIED_REPOSITORY = { infra: "infra", loom: "cfs" };
+
 /** Reads the committed workflow and validates the fields these tests consume. */
 async function workflow(name: string) {
   return workflowSchema.parse(parse(
@@ -388,7 +391,7 @@ describe("rapids-workflows", () => {
       "app-id": "${{ vars.RAPIDS_APP_ID }}",
       "private-key": "${{ secrets.RAPIDS_APP_PRIVATE_KEY }}",
       owner: "commonfabric",
-      repositories: "infra,loom,labs,commonfabric-weaver,gvisor",
+      repositories: "infra,cfs,labs,weaver,gvisor",
       "permission-contents": "read",
       "permission-actions": "read",
     });
@@ -569,7 +572,7 @@ describe("rapids-workflows", () => {
       "app-id": "${{ vars.RAPIDS_APP_ID }}",
       "private-key": "${{ secrets.RAPIDS_APP_PRIVATE_KEY }}",
       owner: "commonfabric",
-      repositories: "infra,loom",
+      repositories: "infra,cfs",
       "permission-contents": "read",
     });
     const deploy = oneStep(steps, (step) => step.id === "deploy");
@@ -722,7 +725,7 @@ describe("rapids-workflows", () => {
       head_branch: "main",
       head_repository: { full_name: "commonfabric/labs" },
     };
-    for (const target of ["infra", "loom"]) {
+    for (const [target, repository] of Object.entries(NOTIFIED_REPOSITORY)) {
       const job = notify.jobs[`notify-${target}`];
       // These guards use the shared boolean/property subset of Actions and JS.
       const accepts = new Function(
@@ -767,7 +770,7 @@ describe("rapids-workflows", () => {
         (step) =>
           step.uses?.startsWith("actions/create-github-app-token@") ?? false,
       );
-      expect(token.with.repositories).toBe(target);
+      expect(token.with.repositories).toBe(repository);
       expect(token.with["permission-actions"]).toBe("write");
       expect(token.with["permission-contents"]).toBe("read");
       expect(job.steps.some((step) => step.uses?.includes("checkout@")))
@@ -777,7 +780,7 @@ describe("rapids-workflows", () => {
 
   it("sends paired producer hints for CI and an empty-input reconciliation for deployment", async () => {
     const notify = await workflow("notify-rapids.yml");
-    for (const target of ["infra", "loom"]) {
+    for (const [target, repository] of Object.entries(NOTIFIED_REPOSITORY)) {
       const job = notify.jobs[`notify-${target}`];
       const send = oneStep(
         job.steps,
@@ -813,7 +816,7 @@ describe("rapids-workflows", () => {
           "api",
           "--method",
           "POST",
-          `repos/commonfabric/${target}/actions/workflows/${endpoint}/dispatches`,
+          `repos/commonfabric/${repository}/actions/workflows/${endpoint}/dispatches`,
         ];
         expect(result.calls.split("\n")).toEqual(
           path === ".github/workflows/deno.yml"

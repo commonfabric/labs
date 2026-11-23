@@ -68,7 +68,7 @@ jobs:
           app-id: ${{ vars.RAPIDS_APP_ID }}
           private-key: ${{ secrets.RAPIDS_APP_PRIVATE_KEY }}
           owner: commonfabric
-          repositories: infra,loom
+          repositories: infra,cfs
           permission-contents: read
 
       - name: 🔎 Verify the infra commit belongs to main

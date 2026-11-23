@@ -46,7 +46,7 @@ jobs:
           app-id: ${{ vars.RAPIDS_APP_ID }}
           private-key: ${{ secrets.RAPIDS_APP_PRIVATE_KEY }}
           owner: commonfabric
-          repositories: infra,loom,labs,commonfabric-weaver,gvisor
+          repositories: infra,cfs,labs,weaver,gvisor
           permission-contents: read
           permission-actions: read
 

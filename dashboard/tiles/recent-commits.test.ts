@@ -925,7 +925,7 @@ describe("recent-commits", () => {
         expect(rowsOf(view.extra)[0]).toContain(
           `<a class="evarrow" data-focus-key="pr-arrow-${key}" href="https://github.com/${REPO}/pull/3" target="_blank" rel="noopener" aria-label="Open landed change on GitHub">↗</a>`,
         );
-        expect(rowsOf(view.extra)[2]).toContain("commonfabric-weaver · green · ");
+        expect(rowsOf(view.extra)[2]).toContain("weaver · green · ");
         // The list's scroll position carries over live updates.
         expect(view.extra).toContain(
           '<div class="evscroll" data-focus-key="commits">',

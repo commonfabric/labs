@@ -19,7 +19,7 @@ const HOUR = 3_600_000;
 const NOW = Date.UTC(2026, 8, 30, 12, 0);
 
 const LABS = "commonfabric/labs";
-const LOOM = "commonfabric/loom";
+const LOOM = "commonfabric/cfs";
 const LABS_MAIN = runSource(LABS, "deno.yml", "main");
 const LABS_PRS = runSource(LABS, "deno.yml", "pull requests");
 
@@ -70,7 +70,7 @@ function run(over: Partial<Run> = {}): Run {
 function collection(over: Partial<CiJobs> = {}): CiJobs {
   return {
     jobs: [job()],
-    repos: ["labs", "loom"],
+    repos: ["labs", "cfs"],
     unreadableRepos: [],
     collectedAt: NOW - 2 * MINUTE,
     ...over,
@@ -172,7 +172,7 @@ describe("repo-page", () => {
 
     it("lists a repository only a tile names", async () => {
       const { html } = await page(board([LOOM_TRUST]), collection({ jobs: [], repos: [] }), "");
-      expect(html).toContain(`href="/repos?name=loom"`);
+      expect(html).toContain(`href="/repos?name=cfs"`);
     });
 
     it("draws a card naming the worst thing wrong for a repository in trouble, and a name for one passing", async () => {
@@ -180,7 +180,7 @@ describe("repo-page", () => {
         board([]),
         collection({
           jobs: [
-            job({ repo: "loom", workflow: "Tests", status: "bad", failing: true, result: "failure" }),
+            job({ repo: "cfs", workflow: "Tests", status: "bad", failing: true, result: "failure" }),
             job({ repo: "labs" }),
           ],
         }),
@@ -314,11 +314,11 @@ describe("repo-page", () => {
       }
       // The same link reaches another page, so it stays a link there.
       const elsewhere = await page(
-        board([tile("labs ci trust", { repo: "commonfabric/loom" })], {
+        board([tile("labs ci trust", { repo: "commonfabric/cfs" })], {
           "labs ci trust": view("bad"),
         }),
         collection(),
-        "?name=loom",
+        "?name=cfs",
       );
       expect(elsewhere.html).toContain(`<div class="card bad" data-focus-key="labs ci trust"><a class="tile-head" href="/repos?name=labs" aria-description="repository ↗" title="repository ↗"><div class="texture"></div>`);
     });
@@ -544,7 +544,7 @@ describe("repo-page", () => {
     });
 
     it("links a run's duration to the commit's CI Gantt for labs, and not for other repositories", async () => {
-      const WEAVER = "commonfabric/commonfabric-weaver";
+      const WEAVER = "commonfabric/weaver";
       const weaverMain = runSource(WEAVER, "ci.yml", "main");
       const { html: labs } = await page(
         board([TRUST], {}, new Map([[runSourceKey(LABS_MAIN), { runs: [run()] }]])),
@@ -557,11 +557,11 @@ describe("repo-page", () => {
           [tile("weaver ci trust", { repo: WEAVER, runSources: [weaverMain] })],
           {},
           new Map([[runSourceKey(weaverMain), {
-            runs: [run({ html_url: "https://github.com/commonfabric/commonfabric-weaver/actions/runs/11" })],
+            runs: [run({ html_url: "https://github.com/commonfabric/weaver/actions/runs/11" })],
           }]]),
         ),
         collection(),
-        "?name=commonfabric-weaver",
+        "?name=weaver",
       );
       expect(weaver).toContain(`<span class="took">30m 00s</span>`);
       expect(weaver).not.toContain("/ci-gantt");
@@ -610,7 +610,7 @@ describe("repo-page", () => {
             job({ workflow: "Lunch", status: "unknown", result: "no completed run" }),
             job(),
             job({ workflow: "Deploy", status: "bad", failing: true, result: "failure" }),
-            job({ repo: "loom", workflow: "Tests (fast)" }),
+            job({ repo: "cfs", workflow: "Tests (fast)" }),
           ],
         }),
         "?name=labs",
@@ -675,8 +675,8 @@ describe("repo-page", () => {
     });
 
     it("offers every repository in its switch, with its own selected", async () => {
-      const { html } = await page(board([]), collection(), "?name=loom");
-      expect(html).toContain(`<option value="/repos?name=labs">labs</option><option value="/repos?name=loom" selected>loom</option>`);
+      const { html } = await page(board([]), collection(), "?name=cfs");
+      expect(html).toContain(`<option value="/repos?name=cfs" selected>cfs</option><option value="/repos?name=labs">labs</option>`);
       // The heading leads back to the index.
       expect(html).toContain(`<b><a href="/repos">Repositories</a></b>`);
     });
