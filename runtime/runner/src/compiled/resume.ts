@@ -130,6 +130,14 @@ export const syncCompiledPiece = async (
   artifact: Artifact,
   resultCell: Cell<unknown>,
   further: readonly string[] = [],
+  /**
+   * Whether what the result document links to is brought. A load of a
+   * piece whose result document is empty brings the document alone: a
+   * sync that follows links stays a query of the session, which the memory
+   * server evaluates again, over every link of the document, each time the
+   * piece appends a row to it.
+   */
+  rows = true,
 ): Promise<void> => {
   const { space, id } = resultCell.getAsNormalizedFullLink();
   const states = artifact.plan.stateCells
@@ -152,7 +160,7 @@ export const syncCompiledPiece = async (
         id: entityOf(document),
         path: [],
         scope: "space",
-      }, EVERYTHING).sync()
+      }, document === id && !rows ? NOTHING_BELOW : EVERYTHING).sync()
     ),
   );
 };

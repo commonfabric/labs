@@ -282,7 +282,8 @@ const start = async (
       sealed: { failed },
     });
   }
-  await syncCompiledPiece(runtime, artifact, resultCell);
+  // The result document is empty, and the piece alone writes it.
+  await syncCompiledPiece(runtime, artifact, resultCell, [], false);
   const tx = runtime.edit();
   opened(tx);
   let piece: CompiledPiece;
