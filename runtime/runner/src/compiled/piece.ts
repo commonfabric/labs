@@ -322,9 +322,12 @@ export class CompiledPiece {
 /**
  * Starts a piece from a compiled pattern, as `Runtime.run` starts one from a
  * pattern: `argument` holds values and cells, and `resultCell` is the cell
- * whose entity becomes the result document. The creation of the instance
- * and its first derivation are written into `tx`, which the caller commits.
- * Throws where the experimental option `compiledPatterns` is off.
+ * whose entity becomes the result document. The caller commits `tx`. The
+ * creation of the instance and the row documents of its first derivation
+ * are committed here, in bounded transactions
+ * (`CompiledPieceOptions.loadRows`), and the rest of the first derivation is
+ * written into `tx`. Throws where the experimental option `compiledPatterns`
+ * is off.
  */
 export const startCompiledPiece = (
   runtime: Runtime,

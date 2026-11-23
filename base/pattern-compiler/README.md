@@ -1049,9 +1049,21 @@ behind the experimental option `compiledPatterns`.
 `startCompiledPiece(runtime, tx, artifact, argument, resultCell)` of
 `runtime/runner/src/compiled/piece.ts` is the call beside `Runtime.run`: the
 entity of `resultCell` is the result document, every other document of the
-executor is an entity of the same space, and the creation and the first
-derivation are written into `tx`, which the caller commits. The runner imports
-`exec/` by relative path, and `exec/` imports nothing of the runtime.
+executor is an entity of the same space, and the caller commits `tx`. The runner
+imports `exec/` by relative path, and `exec/` imports nothing of the runtime.
+
+- **The load.** The creation and the first derivation are written in bounded
+  transactions (`RuntimeTransactions.within` with `loadRows`). The piece commits
+  the documents the instance makes for itself first, in a transaction that makes
+  the reads the caller had made in `tx`. It then commits each row document whose
+  write records name stored positions alone and include one for the row whole,
+  in transactions of at most `CompiledPieceOptions.loadRows` rows, 250 unless
+  given. Everything else, the links to the rows among it, is written into `tx`.
+  Until the caller commits `tx`, the storage holds row documents that nothing
+  links to, each under the label it has when the load is done. A load whose `tx`
+  the caller wrote into before the start is written into `tx` whole, since a
+  position staged there is readable there alone, and so is one with `loadRows`
+  set to `Infinity`. The documents a `lift` writes for its rows stay in `tx`.
 
 - **Events.** A stream of the executor is stored as a link to an entity that
   holds the runtime's stream marker, and the piece registers an event handler of
@@ -1065,7 +1077,11 @@ derivation are written into `tx`, which the caller commits. The runner imports
   after an event, after a change by another writer, when a commit of another
   writer changed a label the executor read, and after a refused commit.
   `Runtime.idle()` therefore resolves when the piece is up to date. The action
-  opts out of the scheduler's delay for actions that are slow on average.
+  opts out of the scheduler's delay for actions that are slow on average. Where
+  a handler made instances, the action first derives those alone
+  (`Instance.settleMade`), and runs again for the rest in a transaction of its
+  own: a `lift` over a list then finds the labels of a new member stored and
+  gives no record again for the rows of the members before.
 - **Labels that change.** The label of a write record is formed again when a
   label that its inputs read changed and the record was not given again, whether
   or not a value changed with the label (`Instance.labelsChanged`). The store
@@ -1107,17 +1123,31 @@ until the scheduler is idle with no commit pending:
 deno run -A --no-check base/pattern-compiler/compare/runner-path.ts 100 1000
 deno run -A --no-check base/pattern-compiler/compare/runner-path.ts --arms=compiled --case=declared --rows=in-place 100 1000
 deno run -A --no-check base/pattern-compiler/compare/runner-path.ts --arms=alone --case=declared --no-pull 100 1000
+deno run -A --no-check base/pattern-compiler/compare/runner-path.ts --arms=compiled --case=declared --no-pull --inputs-first 100 1000 10000
 ```
 
 The arm `alone` starts no piece and makes the same changes: its time is that of
 the harness's own writes, which a change of the members of a long array is most
-of.
+of. With `--inputs-first` the inputs are committed before the piece is started,
+which is what lets the piece load in bounded transactions.
+
+`compare/runner-corpus.ts` runs each module of the corpus as a compiled piece
+with the generated inputs and events, and beside it on the executor with its
+documents in memory, and reports how many pieces start, handle every event, have
+no commit refused and hold the values the executor in memory holds:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run runner.jsonl
+deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts report runner.jsonl
+```
 
 The tests are in `runtime/runner/test/compiled/`: `piece.test.ts`,
-`row-documents.test.ts`, `layout-labels.test.ts`, which compares what a read
-consumes with rows as documents and in place, and `refused-commit.test.ts`. They
-load the artifacts of `compare/fixtures/`, so they need no build of the crate.
-Notes 579 on of `SPEC-NOTES.md` have what is stubbed and the figures.
+`row-documents.test.ts`, which holds those of the load in bounded transactions,
+`layout-labels.test.ts`, which compares what a read consumes with rows as
+documents and in place, `refused-commit.test.ts`, and `created-members.test.ts`
+for an instance that a handler makes. They load the artifacts of
+`compare/fixtures/`, so they need no build of the crate. Notes 579 on of
+`SPEC-NOTES.md` have what is stubbed and the figures.
 
 ## Topics
 

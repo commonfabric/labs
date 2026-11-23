@@ -1,0 +1,332 @@
+/**
+ * Runs the corpus on the runner path: every module the crate emits a plan
+ * for, each with the generated inputs and events of `corpus.ts`, as a
+ * compiled piece started with `startCompiledPiece` in a runtime of its own
+ * on emulated storage, and beside it on the executor with its documents in
+ * memory (`ExecutorRun`), which is what the value comparison of
+ * `values-corpus.ts` holds against today's runtime.
+ *
+ * Run from the repository root, after `cargo build --release` in
+ * `base/pattern-compiler`:
+ *
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts report <results.jsonl>`
+ *
+ * `run` appends one line per module and leaves out a module the file
+ * already has. The inputs are plain values in the argument, so the run
+ * says whether a piece starts, takes its events through the scheduler and
+ * holds the values the executor in memory holds, and says little of
+ * labels. An event is queued with the scheduler for the entity that holds
+ * the stream's marker, which is where `Cell.send` on the member of the
+ * result arrives.
+ *
+ * A module that needs `wish` or requests an effect is left out: nothing
+ * answers a request of a compiled piece on the runner path.
+ */
+import { Identity } from "@commonfabric/identity";
+
+import {
+  type CompiledPiece,
+  startCompiledPiece,
+} from "../../../runtime/runner/src/compiled/piece.ts";
+import { Runtime } from "../../../runtime/runner/src/runtime.ts";
+import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
+import type { Artifact } from "../exec/executor.ts";
+import {
+  artifactsOf,
+  type CorpusModule,
+  corpusModules,
+  eventOrder,
+  mainPattern,
+} from "./corpus.ts";
+import { generateEvent, generateInputs } from "./generate.ts";
+import { scenarioAudience } from "./harness.ts";
+import { argumentOf, categoryOf, ExecutorRun, normalize } from "./values.ts";
+
+type EmittedModule = Omit<CorpusModule, "patterns"> & {
+  patterns: Artifact[];
+};
+
+/** What became of one module on the runner path. */
+type Outcome = {
+  module: string;
+  pattern?: string;
+  /** Why the module was not run. */
+  skipped?: string;
+  /** Whether the piece started and its first commit was taken. */
+  started?: boolean;
+  /** Why it did not start: the class, and the first line of the reason. */
+  startFailure?: { category: string; detail: string };
+  /** The events of the scenario, and what became of them. */
+  events?: { sent: number; handled: number; failures: string[] };
+  /** The reasons of the commits of the piece that the storage refused. */
+  refusals?: string[];
+  /**
+   * Whether the piece holds, after the events, the values the executor in
+   * memory holds, and where the first difference is where it does not.
+   */
+  equal?: boolean;
+  difference?: string;
+};
+
+/** The path of the first difference between two values, as text. */
+const firstDifference = (
+  a: unknown,
+  b: unknown,
+  path = "",
+): string | undefined => {
+  if (JSON.stringify(a) === JSON.stringify(b)) return undefined;
+  if (
+    typeof a === "object" && a !== null && typeof b === "object" &&
+    b !== null && Array.isArray(a) === Array.isArray(b)
+  ) {
+    const names = new Set([...Object.keys(a), ...Object.keys(b)]);
+    for (const name of names) {
+      const found = firstDifference(
+        (a as Record<string, unknown>)[name],
+        (b as Record<string, unknown>)[name],
+        `${path}/${name}`,
+      );
+      if (found !== undefined) return found;
+    }
+  }
+  return path === "" ? "/" : path;
+};
+
+/** Why a plan cannot run on the runner path, where it cannot. */
+const needs = (plan: Artifact["plan"]): string | undefined => {
+  const operations =
+    (plan as { operations?: { kind?: string }[] }).operations ?? [];
+  if (operations.some(({ kind }) => kind === "wish")) return "needs `wish`";
+  if (operations.some(({ kind }) => kind === "effect")) {
+    return "requests an effect";
+  }
+  return undefined;
+};
+
+const runOne = async (
+  module: EmittedModule,
+  artifacts: (id: string) => Artifact | undefined,
+): Promise<Outcome> => {
+  const chosen = await mainPattern(module);
+  if (chosen === undefined) {
+    return { module: module.module, skipped: "exports no pattern" };
+  }
+  const artifact = chosen.pattern;
+  const base = { module: module.module, pattern: artifact.name };
+  if ((artifact.code?.unsupported ?? []).length > 0) {
+    return {
+      ...base,
+      skipped: `no value code: ${artifact.code.unsupported[0].kind}`,
+    };
+  }
+  const needed = needs(artifact.plan);
+  if (needed !== undefined) return { ...base, skipped: needed };
+  const { plan, schemas } = artifact;
+  const inputs = generateInputs(plan, schemas, await scenarioAudience());
+  const argument = argumentOf({ argument: {}, inputs });
+  const events = eventOrder(plan, "outside first").map((binding) => ({
+    binding,
+    event: generateEvent(plan, schemas, binding),
+  }));
+  const now = Date.now();
+
+  // The executor with its documents in memory.
+  const alone = new ExecutorRun(artifact, argument, artifacts, {
+    completion: () => undefined,
+    now,
+  } as never);
+  alone.start(undefined);
+  events.forEach(({ binding, event }, index) => {
+    const [held] = alone.held(binding);
+    if (held !== undefined) {
+      alone.committed(index, binding, event, held.elements);
+    }
+  });
+
+  const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+  const space = signer.did();
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+    cfcFlowLabels: "persist",
+    experimental: { compiledPatterns: true },
+    servingPosture: true,
+  });
+  let piece: CompiledPiece | undefined;
+  try {
+    const result = runtime.getCell<unknown>(space, "corpus on the runner");
+    const tx = runtime.edit();
+    try {
+      piece = startCompiledPiece(
+        runtime,
+        tx,
+        artifact,
+        argument,
+        result.withTx(tx),
+        { artifacts, now },
+      );
+    } catch (error) {
+      tx.abort();
+      return { ...base, started: false, startFailure: categoryOf(error) };
+    }
+    runtime.prepareTxForCommit(tx);
+    const { error } = await tx.commit().settled;
+    await runtime.scheduler.idleWithPendingCommits();
+    if (error !== undefined) {
+      return {
+        ...base,
+        started: false,
+        startFailure: {
+          category: `the first commit was refused: ${error.name}`,
+          detail: `${error.message}`.split("\n")[0].slice(0, 200),
+        },
+        refusals: [...piece.refusals],
+      };
+    }
+    let handled = 0;
+    const failures: string[] = [];
+    for (const { binding, event } of events) {
+      const stream = piece.instance.streams().find((held) =>
+        held.binding === binding && held.instance === undefined &&
+        held.elements !== undefined
+      );
+      const entity = stream === undefined
+        ? undefined
+        : piece.transactions.entityOfStream({
+          binding: stream.binding,
+          keys: stream.keys,
+        });
+      if (entity === undefined) {
+        failures.push("no stream of the binding is stored");
+        continue;
+      }
+      const before = piece.counts;
+      runtime.scheduler.queueEvent(
+        { space, id: entity, path: [], scope: "space" },
+        piece.transactions.encode(event),
+      );
+      await runtime.scheduler.idleWithPendingCommits();
+      const after = piece.counts;
+      if (
+        after.events > before.events &&
+        after.eventsRefused === before.eventsRefused
+      ) handled += 1;
+      else failures.push("the handler did not commit");
+    }
+    const here = normalize(piece.instance.result());
+    const there = normalize(alone.result());
+    const difference = firstDifference(here, there);
+    return {
+      ...base,
+      started: true,
+      events: { sent: events.length, handled, failures },
+      refusals: [...piece.refusals].map((reason) => reason.slice(0, 200)),
+      equal: difference === undefined,
+      ...(difference === undefined ? {} : { difference }),
+    };
+  } catch (error) {
+    return {
+      ...base,
+      started: piece !== undefined,
+      startFailure: categoryOf(error),
+    };
+  } finally {
+    piece?.stop();
+    await runtime.dispose();
+    await storageManager.close();
+  }
+};
+
+const readResults = async (file: string): Promise<Outcome[]> => {
+  try {
+    return (await Deno.readTextFile(file)).split("\n").filter((line) =>
+      line.length > 0
+    ).map((line) => JSON.parse(line));
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return [];
+    throw error;
+  }
+};
+
+const run = async (file: string, part: string | undefined) => {
+  const modules = await corpusModules() as EmittedModule[];
+  const artifacts = artifactsOf(modules as unknown as CorpusModule[]);
+  const done = new Set((await readResults(file)).map(({ module }) => module));
+  for (const module of modules) {
+    if (done.has(module.module)) continue;
+    if (part !== undefined && !module.module.includes(part)) continue;
+    let outcome: Outcome;
+    try {
+      outcome = await runOne(module, artifacts);
+    } catch (error) {
+      outcome = {
+        module: module.module,
+        started: false,
+        startFailure: categoryOf(error),
+      };
+    }
+    await Deno.writeTextFile(file, `${JSON.stringify(outcome)}\n`, {
+      append: true,
+    });
+  }
+};
+
+const report = async (file: string) => {
+  const outcomes = await readResults(file);
+  const count = (of: (outcome: Outcome) => string | undefined) => {
+    const counts = new Map<string, number>();
+    for (const outcome of outcomes) {
+      const key = of(outcome);
+      if (key !== undefined) counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return [...counts].sort(([, a], [, b]) => b - a);
+  };
+  const ran = outcomes.filter(({ skipped }) => skipped === undefined);
+  const started = ran.filter((outcome) => outcome.started);
+  const allHandled = started.filter(({ events }) =>
+    events !== undefined && events.handled === events.sent
+  );
+  console.log(`modules: ${outcomes.length}`);
+  console.log(`not run: ${outcomes.length - ran.length}`);
+  for (const [reason, n] of count(({ skipped }) => skipped)) {
+    console.log(`  ${n}  ${reason}`);
+  }
+  console.log(`run: ${ran.length}`);
+  console.log(`started: ${started.length}`);
+  for (
+    const [reason, n] of count(({ startFailure }) => startFailure?.category)
+  ) console.log(`  did not start, ${n}: ${reason}`);
+  console.log(`every event handled: ${allHandled.length}`);
+  console.log(
+    `no commit refused: ${
+      started.filter(({ refusals }) => (refusals ?? []).length === 0).length
+    }`,
+  );
+  console.log(
+    `equal to the executor in memory: ${
+      started.filter(({ equal }) => equal).length
+    }`,
+  );
+  for (
+    const [reason, n] of count(({ events }) => events?.failures[0])
+  ) console.log(`  an event failed, ${n}: ${reason}`);
+  for (
+    const [reason, n] of count(({ refusals }) =>
+      refusals?.[0]?.replaceAll(/of:[\w:-]+/g, "<entity>").slice(0, 110)
+    )
+  ) console.log(`  a commit refused, ${n}: ${reason}`);
+};
+
+if (import.meta.main) {
+  const [command, file, part] = Deno.args;
+  if (command === "run" && file !== undefined) await run(file, part);
+  else if (command === "report" && file !== undefined) await report(file);
+  else {
+    console.error(
+      "usage: runner-corpus.ts run <results.jsonl> [part of a module path] | report <results.jsonl>",
+    );
+    Deno.exit(2);
+  }
+}
