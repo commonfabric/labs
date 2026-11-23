@@ -3269,6 +3269,17 @@ export class Instance {
   #outside = false;
   /** On the root: the entries being evaluated, innermost last. */
   readonly #evaluating: { instance: Instance; key: string }[] = [];
+  /**
+   * On the root: the cone instances whose evaluation wrote a document as a
+   * side-write, by the identifier of the document and then by the name of
+   * the entry. `restore` drops the entries of the writers of a document it
+   * takes from the storage. The map holds an entry for each document that
+   * a cone instance wrote, for as long as the executor runs.
+   */
+  readonly #wroteAside = new Map<
+    string,
+    Map<string, { instance: Instance; key: string }>
+  >();
   /** The run of a function body in progress (ES §2.8, "Identity"). */
   #running: Running | undefined;
   /** The events handled, which name the run of a handler. */
@@ -4230,6 +4241,12 @@ export class Instance {
     const held = open.writes.get(name) ?? { ...writer, at: [] };
     held.at.push({ doc, path: [...path] });
     open.writes.set(name, held);
+    let writers = this.#wroteAside.get(doc);
+    if (writers === undefined) {
+      writers = new Map();
+      this.#wroteAside.set(doc, writers);
+    }
+    writers.set(name, writer);
   }
 
   /**
@@ -14277,9 +14294,24 @@ export class Instance {
    * derivation stores each path that differs and every row. The work
    * follows the size of the result, which a refused commit is taken to
    * allow.
+   *
+   * The memo entry of each cone instance that wrote the document as a
+   * side-write is dropped, as `#abort` drops it for a transaction that
+   * the executor undoes: the entry is current against what the cone read,
+   * and the document no longer holds what the cone wrote, so a later
+   * evaluation performs the write (ES §1.6). The cone instance stays
+   * known as a writer of the document: an evaluation that writes what the
+   * document already holds changes nothing and is not seen as a write.
    */
   restore(doc: string, value: unknown): void {
     const { root, store } = this;
+    for (
+      const { instance, key } of root.#wroteAside.get(doc)?.values() ?? []
+    ) {
+      instance.#memo.delete(key);
+      instance.#markUsers(key);
+      instance.#nowDue();
+    }
     const owner = doc === root.id ? root : root.#instances.get(doc);
     if (owner === undefined) {
       if (value === undefined) {
