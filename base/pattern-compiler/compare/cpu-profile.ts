@@ -2,6 +2,7 @@
  * The sampling profiler of the process, for a harness that profiles one of
  * its steps. The profile is in the format of the V8 inspector.
  */
+// deno-lint-ignore no-external-import -- The sampling profiler is reached through this Node builtin alone.
 import inspector from "node:inspector";
 
 /**
