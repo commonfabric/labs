@@ -1,5 +1,5 @@
 /// <cts-enable />
-import { pattern } from "commonfabric";
+import { pattern, type Writable } from "commonfabric";
 
 interface Item {
   id: string;
@@ -33,6 +33,18 @@ export const Chained = pattern<{ items: Item[] }, { rows: Row[] }>(
   ({ items }) => {
     const open = items.filter((item) => !item.done);
     const rows = open.map((item) => ({
+      label: item.title + "!",
+      done: item.done,
+    }));
+    return { rows };
+  },
+);
+
+// The same `map` over an array that the type declares as references: the
+// rows of this one are documents of their own on the runner path.
+export const Cells = pattern<{ items: Writable<Item[]> }, { rows: Row[] }>(
+  ({ items }) => {
+    const rows = items.map((item) => ({
       label: item.title + "!",
       done: item.done,
     }));

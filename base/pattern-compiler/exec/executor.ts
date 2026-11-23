@@ -2211,7 +2211,9 @@ export type TransactionHooks = {
    * stores the array then writes those positions and the number of
    * members, and no other position. `inputs` is the table the records name
    * their inputs in, one for the transaction, which gains entries as
-   * records are given.
+   * records are given. `made` is the splice of every change that is one,
+   * whatever its records are of: whoever stores the rows of an array apart
+   * from the array needs it for each.
    */
   change(
     doc: string,
@@ -2221,6 +2223,7 @@ export type TransactionHooks = {
     writes?: readonly PlanWrite[],
     splice?: { start: number; removed: number; inserted: number },
     inputs?: InputsTable,
+    made?: { start: number; removed: number; inserted: number },
   ): void;
 
   /**
@@ -2779,6 +2782,7 @@ export class Instance {
           ? splice
           : undefined,
         this.#inputsTable,
+        change.splice,
       );
     }
     if (open !== undefined) {
@@ -4941,10 +4945,9 @@ export class Instance {
     unit.values = [...values];
     unit.positions = undefined;
     if ("path" in unit.place) {
-      this.store.rowKeys.set(
-        JSON.stringify([this.id, unit.place.path]),
-        () => unit.keys,
-      );
+      const at = JSON.stringify([this.id, unit.place.path]);
+      this.store.rowKeys.set(at, () => unit.keys);
+      this.store.rowCollections.set(at, unit.collection);
     }
     const forms = values.map((value, index) =>
       this.#formOf(

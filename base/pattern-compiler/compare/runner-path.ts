@@ -4,7 +4,7 @@
  * from the write that causes it until the runtime is settled (milestone 3
  * of `docs/plans/compiled-pattern-language-integration.md`).
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today] [lengths]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today] [--case=<part of a name>] [--no-pull] [lengths]`
  *
  * Both arms run in a runtime of their own on emulated storage, with
  * `cfcFlowLabels` at `persist` and the input under a schema with one
@@ -13,7 +13,10 @@
  * `compiledPatterns` and the serving posture. Each change is a write to the
  * input by a writer outside the piece, made through a cell in a transaction
  * of the runtime. A change is timed from before the write until the
- * scheduler is idle with no commit pending, after the result was pulled.
+ * scheduler is idle with no commit pending. Today's piece computes what a
+ * reader demands, so its step pulls the result first, which reads all of
+ * it; the compiled piece derives without a reader, and a pull of its result
+ * is timed apart unless `--no-pull` is given.
  *
  * The cases are those of `growth.ts` over the patterns of
  * `fixtures/runner-lists.tsx`: a `map` over an array of references, a `map` over
@@ -21,6 +24,8 @@
  * `filter` over plain values in place, which is the result of another
  * per-element construct.
  */
+// deno-lint-ignore no-external-import -- The sampling profiler is reached through this Node builtin alone.
+import inspector from "node:inspector";
 import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 
@@ -53,6 +58,11 @@ export type Arm = "compiled" | "today";
 export type StepCost = {
   /** From before the write until the runtime is settled, in milliseconds. */
   ms: number;
+  /**
+   * For the compiled piece: the time of a pull of the result behind the
+   * step, until the runtime is settled again. It is no part of `ms`.
+   */
+  pull?: number;
   /** The commits the storage applied. */
   commits: number;
   /** The entities those commits changed. */
@@ -132,6 +142,8 @@ export type Running = {
  */
 export const running = async (
   arm: Arm,
+  /** Whether a pull of the compiled piece's result follows each step. */
+  pulls: boolean,
   start: (
     runtime: Runtime,
     space: MemorySpace,
@@ -182,25 +194,40 @@ export const running = async (
     runtime.prepareTxForCommit(tx);
     const { error } = await tx.commit().settled;
     if (error !== undefined) throw error;
-    await result?.pull();
+    // Today's piece computes what a reader demands, so its step pulls the
+    // result, which reads all of it. The compiled piece derives without a
+    // reader; a pull of its result is timed apart (`StepCost.pull`).
+    if (arm === "today") await result?.pull();
     await runtime.settled();
     await runtime.scheduler.idleWithPendingCommits();
     const ms = performance.now() - began;
+    const commitsOfStep = commits;
+    const documentsOfStep = changed.size;
+    const preparations = timed("extended-storage-transaction/prepareCfc");
+    const runs = count("scheduler/scheduler/run/action") +
+      count("scheduler/execute/event");
+    let pull: number | undefined;
+    if (arm === "compiled" && pulls) {
+      const pulled = performance.now();
+      await result?.pull();
+      await runtime.settled();
+      await runtime.scheduler.idleWithPendingCommits();
+      pull = round(performance.now() - pulled);
+    }
     if (piece !== undefined && piece.refusals.length > 0) {
       throw new Error(
         `The storage refused a commit of the piece: ${piece.refusals[0]}`,
       );
     }
-    const preparations = timed("extended-storage-transaction/prepareCfc");
     const after = piece?.transactions.counts;
     return {
       ms: round(ms),
-      commits,
-      documents: changed.size,
+      ...(pull === undefined ? {} : { pull }),
+      commits: commitsOfStep,
+      documents: documentsOfStep,
       preparations: preparations.count,
       prepareMs: round(preparations.ms),
-      runs: count("scheduler/scheduler/run/action") +
-        count("scheduler/execute/event"),
+      runs,
       ...(piece === undefined || before === undefined || after === undefined
         ? {}
         : {
@@ -285,7 +312,12 @@ export type Row = {
  * Starts the pattern of `one` at `length` items on one arm and returns
  * what makes each change of `growth.ts`.
  */
-const growthArm = async (arm: Arm, one: Case, length: number) => {
+const growthArm = async (
+  arm: Arm,
+  one: Case,
+  length: number,
+  pulls: boolean,
+) => {
   const audience = await scenarioAudience();
   const ifc = { confidentiality: [inputClause("items", audience)] };
   const itemSchema = {
@@ -316,6 +348,7 @@ const growthArm = async (arm: Arm, one: Case, length: number) => {
   };
   const { running: run, load } = await running(
     arm,
+    pulls,
     async (runtime, space, tx) => {
       for (let index = 0; index < length; index++) {
         held.push(make(runtime, space, tx));
@@ -414,6 +447,31 @@ const growthArm = async (arm: Arm, one: Case, length: number) => {
   return { run, load, operations };
 };
 
+/**
+ * Starts the sampling profiler of the process and returns what stops it
+ * and writes the profile to `file`.
+ */
+const startProfile = async (file: string): Promise<() => Promise<void>> => {
+  const session = new inspector.Session();
+  session.connect();
+  const post = (method: string, params?: object) =>
+    new Promise<unknown>((resolve, reject) =>
+      session.post(
+        method,
+        params,
+        (error: Error | null, result?: unknown) =>
+          error === null ? resolve(result) : reject(error),
+      )
+    );
+  await post("Profiler.enable");
+  await post("Profiler.setSamplingInterval", { interval: 200 });
+  await post("Profiler.start");
+  return async () => {
+    const { profile } = await post("Profiler.stop") as { profile: unknown };
+    await Deno.writeTextFile(file, JSON.stringify(profile));
+  };
+};
+
 if (import.meta.main) {
   const flags = Deno.args.filter((argument) => argument.startsWith("--"));
   const given = Deno.args.filter((argument) => !argument.startsWith("--"));
@@ -422,6 +480,10 @@ if (import.meta.main) {
     flags.find((one) => one.startsWith(`--${name}=`))?.split("=")[1];
   const later = Number(flag("later") ?? 5);
   const arms = (flag("arms") ?? "compiled,today").split(",") as Arm[];
+  // `--profile=<file>` with `--operation=<name>`: a CPU profile of the
+  // later changes of that operation on the compiled piece.
+  const profile = flag("profile");
+  const profiled = flag("operation") ?? "edit one field";
   const cases = flag("case") === undefined
     ? CASES
     : CASES.filter(({ name }) => name.includes(flag("case")!));
@@ -429,7 +491,10 @@ if (import.meta.main) {
     for (const length of lengths) {
       const started = [];
       for (const arm of arms) {
-        started.push({ arm, ...(await growthArm(arm, one, length)) });
+        started.push({
+          arm,
+          ...(await growthArm(arm, one, length, !flags.includes("--no-pull"))),
+        });
       }
       const row = (operation: string, costs: Row): void =>
         console.log(JSON.stringify({ ...costs, operation }));
@@ -453,11 +518,16 @@ if (import.meta.main) {
             operations[operation](tx, turn)
           );
           let sum = 0;
+          const stopProfile = arm === "compiled" && profile !== undefined &&
+              operation === profiled
+            ? await startProfile(profile)
+            : undefined;
           for (turn = 1; turn <= later; turn++) {
             sum += (await run.measure((tx) =>
               operations[operation](tx, turn)
             )).ms;
           }
+          await stopProfile?.();
           costs[arm] = {
             ...first,
             ...(later > 0 ? { later: round(sum / later) } : {}),

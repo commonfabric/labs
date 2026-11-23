@@ -204,6 +204,21 @@ type Given = {
   failed: string | undefined;
 };
 
+/**
+ * An array of the result of the instance the executor was started with
+ * whose rows are stored as documents of their own: where it stands, and
+ * the keys of the rows as the storage holds them, by position.
+ */
+type RowArray = {
+  doc: string;
+  path: string[];
+  /** The text the executor's store names the array by (`Store.rowKeys`). */
+  text: string;
+  keys: string[];
+  /** The position of each key, formed when it is asked for. */
+  positions?: Map<string, number>;
+};
+
 /** What a handed transaction leaves for when its commit is applied. */
 type Handed = {
   unchanged: Map<string, Map<string, string>>;
@@ -330,6 +345,21 @@ export class RuntimeTransactions implements TransactionHooks {
    * it leaves for when its commit is applied where it was handed.
    */
   readonly #own = new WeakMap<object, Handed | undefined>();
+  /**
+   * The collections of the plan of the instance the executor was started
+   * with whose rows are stored as documents of their own; none where the
+   * rows of every collection stay in place.
+   */
+  readonly #rowCollections: ReadonlySet<number>;
+  /** The arrays whose rows are documents of their own, by their document. */
+  readonly #rowArrays = new Map<string, RowArray[]>();
+  /**
+   * The row documents that the change being written wrote with what they
+   * held, by their identifier.
+   */
+  readonly #rowsHeld = new Set<string>();
+  /** The array and the key of each row document, by its identifier. */
+  readonly #rowDocuments = new Map<string, { array: RowArray; key: string }>();
   /** The stream each entity that holds a stream marker is of. */
   readonly #streams = new Map<string, StreamOfExecutor>();
   /** The stream entities the transaction in progress wrote first. */
@@ -368,6 +398,15 @@ export class RuntimeTransactions implements TransactionHooks {
        */
       countRecordBytes?: boolean;
       /**
+       * The collections of the plan of `artifact` whose rows are stored as
+       * documents of their own, each named by the array and the key of the
+       * row, with a link to it at the row's position
+       * (`rowDocumentCollections` of the executor). The rows of every
+       * other collection, and of every collection of another artifact,
+       * are stored in place.
+       */
+      rowDocuments?: ReadonlySet<number>;
+      /**
        * Called when a value first stored holds a stream of the executor.
        * The stream is then stored as a link to an entity that holds the
        * runtime's stream marker, which a `Cell.send` resolves to; without
@@ -395,6 +434,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#runtime = runtime;
     this.#space = space;
     this.#owner = options.owner;
+    this.#rowCollections = options.rowDocuments ?? new Set();
     this.#onStream = options.stream;
     this.#onChanges = options.changes;
     this.#onApplied = options.applied;
@@ -634,7 +674,30 @@ export class RuntimeTransactions implements TransactionHooks {
       tx.abort();
       this.#touched.clear();
     }
-    if (changes.length > 0) this.#labelsChanged?.(changes, false, stored);
+    if (changes.length > 0) {
+      this.#labelsChanged?.(this.#toExecutor(changes), false, stored);
+    }
+  }
+
+  /**
+   * Label changes of documents the storage holds, as changes of the
+   * executor's documents: a change of a row document is one below the
+   * position of its row.
+   */
+  #toExecutor(changes: readonly LabelChange[]): LabelChange[] {
+    if (this.#rowDocuments.size === 0) return [...changes];
+    return changes.map(({ doc, paths, alone }) => {
+      if (!this.#rowDocuments.has(doc)) {
+        return { doc, paths, ...(alone === undefined ? {} : { alone }) };
+      }
+      const moved = (path: readonly string[]) =>
+        this.#addressOfStored(doc, path).path;
+      return {
+        doc: this.#addressOfStored(doc, []).doc,
+        paths: paths.map(moved),
+        ...(alone === undefined ? {} : { alone: alone.map(moved) }),
+      };
+    });
   }
 
   /** The stored labels of a document of the executor, read through `tx`. */
@@ -776,6 +839,14 @@ export class RuntimeTransactions implements TransactionHooks {
     if (this.#compiledPattern !== undefined && isPrimitiveCellLink(value)) {
       readMaybeLink(tx, address);
     }
+    // A read at or above an array whose rows are documents of their own
+    // reads every row.
+    for (const array of this.#rowArrays.get(doc) ?? []) {
+      if (!isPrefix(path, array.path)) continue;
+      for (const key of array.keys) {
+        tx.readValueOrThrow(this.#address(this.#rowDocument(array, key), []));
+      }
+    }
   }
 
   /** @inheritDoc */
@@ -795,6 +866,16 @@ export class RuntimeTransactions implements TransactionHooks {
       )
     ) return undefined;
     const table = this.#runtime.compiledPlans.labels;
+    // The label of a read of the value at or above an array whose rows are
+    // documents of their own is over every row: no one identifier is kept.
+    if (
+      observes === "value" &&
+      (this.#rowArrays.get(doc) ?? []).some((array) =>
+        isPrefix(path, array.path)
+      )
+    ) return undefined;
+    const executorDoc = doc;
+    ({ doc, path } = this.#placeOf(executorDoc, path));
     if (!this.#metadata.has(doc)) {
       const tx = this.#tx ?? this.#runtime.edit();
       try {
@@ -836,6 +917,7 @@ export class RuntimeTransactions implements TransactionHooks {
     writes?: readonly PlanWrite[],
     splice?: { start: number; removed: number; inserted: number },
     inputs?: InputsTable,
+    made?: { start: number; removed: number; inserted: number },
   ): void {
     const tx = this.#open();
     this.#counts.writes += 1;
@@ -844,6 +926,17 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#written.set(doc, written);
     const document = store.docs.get(doc);
     const attempts = tx.getWriteAttemptLog?.().length;
+    const rows = this.#rowArraysOf(doc, store);
+    this.#rowsHeld.clear();
+    // The array of rows the change is of, where it is one, and whether the
+    // change is of a path above such an array.
+    const array = rows.find((one) => samePath(one.path, path));
+    const above = rows.some((one) =>
+      one.path.length > path.length && isPrefix(path, one.path)
+    );
+    // The address the storage holds a path of the document at: that of a
+    // row document for a path below a row that is one.
+    const at = (below: readonly string[]) => this.#address(doc, below);
     // Whether the change was written as the positions of a splice, which
     // are then the paths written, and the path of the change is not.
     let spliced = false;
@@ -861,9 +954,37 @@ export class RuntimeTransactions implements TransactionHooks {
       this.#created.push(doc);
       tx.writeValueOrThrow(
         this.#address(doc, []),
-        this.#encode(document.value),
+        this.#encodeWithRows(tx, store, rows, [], document.value),
       );
       this.#enroll(tx, doc);
+    } else if (array !== undefined || above) {
+      const held = store.peek(doc, path);
+      const cut = made ?? splice;
+      if (array !== undefined && cut !== undefined && Array.isArray(held)) {
+        // The records of a splice the executor gives as one of positions
+        // (`splice`) are of those positions; the record of any other names
+        // the array, which is then written whole, as links.
+        spliced = splice !== undefined;
+        this.#spliceRows(tx, store, array, held, cut, written, spliced);
+        // The executor gives a record for each position behind the splice,
+        // which an array that holds its rows in place writes again. The
+        // document of a row that stayed is not written, and the record of
+        // its row is the one it has.
+        const { length } = array.path;
+        writes = writes?.filter(({ target }) => {
+          if (
+            target.doc !== doc || target.path.length <= length ||
+            !isPrefix(array.path, target.path)
+          ) return true;
+          const index = Number(target.path[length]);
+          return index >= cut.start && index < cut.start + cut.inserted;
+        });
+      } else {
+        tx.writeValueOrThrow(
+          this.#address(doc, path),
+          this.#encodeWithRows(tx, store, rows, path, held),
+        );
+      }
     } else {
       const parent = path.length === 0
         ? undefined
@@ -881,34 +1002,28 @@ export class RuntimeTransactions implements TransactionHooks {
         spliced = true;
         if (moved) {
           written.push([...path, "length"]);
-          tx.writeValueOrThrow(
-            this.#address(doc, [...path, "length"]),
-            held.length,
-          );
+          tx.writeValueOrThrow(at([...path, "length"]), held.length);
         }
-        for (let at = splice.start; at < end; at++) {
-          written.push([...path, `${at}`]);
+        for (let index = splice.start; index < end; index++) {
+          written.push([...path, `${index}`]);
           tx.writeValueOrThrow(
-            this.#address(doc, [...path, `${at}`]),
-            this.#encode(held[at]),
+            at([...path, `${index}`]),
+            this.#encode(held[index]),
           );
         }
       } else if (absent) {
-        tx.writeValueOrThrow(this.#address(doc, path), undefined, {
-          delete: true,
-        });
+        tx.writeValueOrThrow(at(path), undefined, { delete: true });
       } else {
-        tx.writeValueOrThrow(
-          this.#address(doc, path),
-          this.#encode(store.peek(doc, path)),
-        );
+        tx.writeValueOrThrow(at(path), this.#encode(store.peek(doc, path)));
       }
     }
     if (!spliced) written.push([...path]);
     // A write can change the label of a value a reader's own value does
     // not change with, so the label entries the document stores before
     // the transaction are kept as for a write that changes no value.
-    if (this.#compiledPattern !== undefined) this.#noteUnchanged(doc);
+    if (this.#compiledPattern !== undefined) {
+      this.#noteUnchanged(this.#placeOf(doc, path).doc);
+    }
     // The write policy of the write, as a cell's write records it
     // (`Cell.set`): the schema the write was made under where it declares
     // labels, and otherwise the schema the document's stored labels name.
@@ -927,11 +1042,239 @@ export class RuntimeTransactions implements TransactionHooks {
         "Write records were given without their table of inputs.",
       );
     }
+    // A row document that was written with what it held is not written: the
+    // records of its row are those of a write that left the value as it
+    // was, as the records of a change that wrote nothing are.
+    const held = this.#rowsHeld.size === 0
+      ? []
+      : writes.filter((write) =>
+        this.#rowsHeld.has(
+          this.#placeOf(write.target.doc, write.target.path).doc,
+        )
+      );
+    if (held.length > 0) {
+      this.#record(held, true, inputs);
+      const kept = new Set(held);
+      writes = writes.filter((write) => !kept.has(write));
+      if (writes.length === 0) return;
+    }
     this.#record(
       writes,
       attempts !== undefined && tx.getWriteAttemptLog?.().length === attempts,
       inputs,
     );
+  }
+
+  /**
+   * The arrays of a document whose rows are stored as documents of their
+   * own, with those the executor's store names since the last call.
+   */
+  #rowArraysOf(doc: string, store: Store): RowArray[] {
+    if (this.#rowCollections.size === 0 || doc !== this.#owner) return [];
+    let arrays = this.#rowArrays.get(doc);
+    if (arrays === undefined) {
+      arrays = [];
+      this.#rowArrays.set(doc, arrays);
+    }
+    if (arrays.length < this.#rowCollections.size) {
+      for (const [text, collection] of store.rowCollections) {
+        if (!this.#rowCollections.has(collection)) continue;
+        const [of, path] = JSON.parse(text) as [string, string[]];
+        if (of !== doc || arrays.some((one) => one.text === text)) continue;
+        arrays.push({ doc, path, text, keys: [] });
+      }
+    }
+    return arrays;
+  }
+
+  /** The identifier of the document of the row of `key` of an array. */
+  #rowDocument(array: RowArray, key: string): string {
+    const id = identifierOf({ rows: [array.doc, ...array.path], key });
+    if (!this.#rowDocuments.has(id)) this.#rowDocuments.set(id, { array, key });
+    return id;
+  }
+
+  /**
+   * Where the storage holds a path of a document of the executor: a path
+   * below a row that is a document of its own is a path of that document,
+   * and every other path is itself.
+   */
+  #placeOf(doc: string, path: readonly string[]): Address {
+    for (const array of this.#rowArrays.get(doc) ?? []) {
+      const { length } = array.path;
+      if (path.length <= length || !isPrefix(array.path, path)) continue;
+      const key = /^\d+$/.test(path[length])
+        ? array.keys[Number(path[length])]
+        : undefined;
+      if (key === undefined) break;
+      return {
+        doc: this.#rowDocument(array, key),
+        path: path.slice(length + 1),
+      };
+    }
+    return { doc, path: [...path] };
+  }
+
+  /**
+   * The executor's address of a path of a document the storage holds: for a
+   * row document, the path below the position of its row.
+   */
+  #addressOfStored(doc: string, path: readonly string[]): Address {
+    const row = this.#rowDocuments.get(doc);
+    if (row === undefined) return { doc, path: [...path] };
+    const { array, key } = row;
+    if (array.positions === undefined) {
+      array.positions = new Map(array.keys.map((one, index) => [one, index]));
+    }
+    return {
+      doc: array.doc,
+      path: [...array.path, `${array.positions.get(key) ?? -1}`, ...path],
+    };
+  }
+
+  /** Writes the document of a row whole, and returns the link to it. */
+  #writeRow(
+    tx: IExtendedStorageTransaction,
+    array: RowArray,
+    key: string,
+    value: unknown,
+  ): FabricValue {
+    const id = this.#rowDocument(array, key);
+    const address = this.#address(id, []);
+    const attempts = tx.getWriteAttemptLog?.().length;
+    tx.writeValueOrThrow(address, this.#encode(value));
+    // A write of what the document holds is no write of the transaction.
+    if (
+      attempts !== undefined && tx.getWriteAttemptLog?.().length === attempts
+    ) this.#rowsHeld.add(id);
+    else this.#rowsHeld.delete(id);
+    this.#enroll(tx, id);
+    // The write policy of the write, as `change` records it for a path.
+    recordRelevantSchemaWritePolicyInput(tx, address, undefined);
+    return createSigilLinkFromParsedLink({
+      id: address.id,
+      space: address.space,
+      path: [],
+    });
+  }
+
+  /**
+   * A value of a document at `path` as the storage holds it: `#encode`,
+   * with each row of an array of `rows` at or below the path written as a
+   * document of its own and a link to it in its place.
+   */
+  #encodeWithRows(
+    tx: IExtendedStorageTransaction,
+    store: Store,
+    rows: readonly RowArray[],
+    path: readonly string[],
+    value: unknown,
+  ): FabricValue {
+    const array = rows.find((one) => samePath(one.path, path));
+    if (array !== undefined) {
+      if (!Array.isArray(value)) {
+        this.#dropRows(tx, array, array.keys);
+        array.keys = [];
+        array.positions = undefined;
+        return this.#encode(value);
+      }
+      const keys = [...(store.rowKeys.get(array.text)?.() ?? [])];
+      if (keys.length !== value.length) {
+        throw new Error("The executor named no key for a row of an array.");
+      }
+      const now = new Set(keys);
+      this.#dropRows(tx, array, array.keys.filter((key) => !now.has(key)));
+      array.keys = keys;
+      array.positions = undefined;
+      return value.map((row, index) =>
+        this.#writeRow(tx, array, keys[index], row)
+      );
+    }
+    const on = rows.filter((one) =>
+      one.path.length > path.length && isPrefix(path, one.path)
+    );
+    if (on.length === 0 || !isWalkableObjectNotArray(value)) {
+      return this.#encode(value);
+    }
+    return Object.fromEntries(
+      Object.entries(value).map(([name, member]) => [
+        name,
+        this.#encodeWithRows(tx, store, on, [...path, name], member),
+      ]),
+    );
+  }
+
+  /** Removes the documents of the rows of `keys`. */
+  #dropRows(
+    tx: IExtendedStorageTransaction,
+    array: RowArray,
+    keys: readonly string[],
+  ): void {
+    for (const key of keys) {
+      const id = this.#rowDocument(array, key);
+      tx.writeValueOrThrow(this.#address(id, []), undefined, { delete: true });
+    }
+  }
+
+  /**
+   * Writes a splice of an array whose rows are documents of their own: the
+   * document of each row that entered, whole, the number of members where
+   * it changed, and a link at each position the splice changed. The
+   * document of a row that left is removed.
+   */
+  #spliceRows(
+    tx: IExtendedStorageTransaction,
+    store: Store,
+    array: RowArray,
+    held: readonly unknown[],
+    splice: { start: number; removed: number; inserted: number },
+    written: (readonly string[])[],
+    positions: boolean,
+  ): void {
+    const { doc, path } = array;
+    const keys = store.rowKeys.get(array.text)?.() ?? [];
+    const entered = keys.slice(splice.start, splice.start + splice.inserted);
+    if (entered.length !== splice.inserted) {
+      throw new Error("The executor named no key for a row that entered.");
+    }
+    const left = array.keys.splice(splice.start, splice.removed, ...entered);
+    array.positions = undefined;
+    const stay = new Set(entered);
+    this.#dropRows(tx, array, left.filter((key) => !stay.has(key)));
+    const linkAt = (index: number): FabricValue => {
+      const key = array.keys[index];
+      if (
+        index >= splice.start && index < splice.start + splice.inserted
+      ) return this.#writeRow(tx, array, key, held[index]);
+      const id = this.#rowDocument(array, key);
+      return createSigilLinkFromParsedLink({
+        id: this.entityOf(id),
+        space: this.#spaceOf(id),
+        path: [],
+      });
+    };
+    // A position of the array is written at the array itself, which
+    // `#address` would take for a path of the row's document.
+    const here = (below: string[]): NormalizedFullLink => ({
+      space: this.#spaceOf(doc),
+      id: this.entityOf(doc),
+      path: [...path, ...below],
+      scope: "space",
+    });
+    if (!positions) {
+      tx.writeValueOrThrow(here([]), held.map((_, index) => linkAt(index)));
+      return;
+    }
+    const moved = splice.removed !== splice.inserted;
+    const end = moved ? held.length : splice.start + splice.inserted;
+    if (moved) {
+      written.push([...path, "length"]);
+      tx.writeValueOrThrow(here(["length"]), held.length);
+    }
+    for (let index = splice.start; index < end; index++) {
+      written.push([...path, `${index}`]);
+      tx.writeValueOrThrow(here([`${index}`]), linkAt(index));
+    }
   }
 
   /**
@@ -952,8 +1295,12 @@ export class RuntimeTransactions implements TransactionHooks {
     schema: Schema | undefined,
     store: Store,
   ): void {
+    // A path below a row that is a document of its own is spelled from the
+    // root of that document.
+    const stored = this.#placeOf(doc, path);
+    const base = path.length - stored.path.length;
     const isIndex = (at: number) =>
-      /^(0|[1-9][0-9]*)$/.test(path[at]) &&
+      at >= base && /^(0|[1-9][0-9]*)$/.test(path[at]) &&
       Array.isArray(store.peek(doc, path.slice(0, at)));
     const first = path.findIndex((_, at) => isIndex(at));
     if (first < 0) {
@@ -1021,7 +1368,9 @@ export class RuntimeTransactions implements TransactionHooks {
       tx.abort();
       unchanged.clear();
     }
-    if (changes.length > 0) this.#labelsChanged?.(changes, true, stored);
+    if (changes.length > 0) {
+      this.#labelsChanged?.(this.#toExecutor(changes), true, stored);
+    }
   }
 
   /** @inheritDoc */
@@ -1115,7 +1464,9 @@ export class RuntimeTransactions implements TransactionHooks {
       });
       if (unchanged) {
         this.#counts.unchangedRecords += 1;
-        this.#noteUnchanged(write.target.doc);
+        this.#noteUnchanged(
+          this.#placeOf(write.target.doc, write.target.path).doc,
+        );
       }
     }
   }
@@ -1361,12 +1712,13 @@ export class RuntimeTransactions implements TransactionHooks {
   }
 
   /** The runtime's address of a position of a document of the executor. */
-  #cfcAddress({ doc, path }: Address): CfcAddress {
+  #cfcAddress(address: Address): CfcAddress {
+    const { doc, path } = this.#placeOf(address.doc, address.path);
     return {
       space: this.#spaceOf(doc),
       id: this.entityOf(doc),
       scope: "space",
-      path: [...path],
+      path,
     };
   }
 
@@ -1468,7 +1820,10 @@ export class RuntimeTransactions implements TransactionHooks {
       return new Map(
         [...this.#documents].map((
           doc,
-        ) => [doc, this.#decode(tx.readValueOrThrow(this.#address(doc, [])))]),
+        ) => [
+          doc,
+          this.#decode(tx.readValueOrThrow(this.#address(doc, [])), tx),
+        ]),
       );
     } finally {
       tx.abort();
@@ -1527,10 +1882,11 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /** The address of a path of a document of the executor. */
   #address(doc: string, path: readonly string[]): NormalizedFullLink {
+    const place = this.#placeOf(doc, path);
     return {
-      space: this.#spaceOf(doc),
-      id: this.entityOf(doc),
-      path: [...path],
+      space: this.#spaceOf(place.doc),
+      id: this.entityOf(place.doc),
+      path: place.path,
       scope: "space",
     };
   }
@@ -1659,12 +2015,23 @@ export class RuntimeTransactions implements TransactionHooks {
     return { kind: "external", value: this.#decode(value) };
   }
 
-  /** A stored value, with each of the runtime's links written back. */
-  #decode(value: unknown): unknown {
+  /**
+   * A stored value, with each of the runtime's links written back. With
+   * `rows`, a link to the document of a row is written back as the row,
+   * read through that transaction.
+   */
+  #decode(value: unknown, rows?: IExtendedStorageTransaction): unknown {
     if (isPrimitiveCellLink(value)) {
       const link = parseLink(value);
       const stream = this.#streams.get(link.id ?? "");
       if (stream !== undefined) return { $stream: stream };
+      const row = this.documentOf(link.id ?? "");
+      if (rows !== undefined && this.#rowDocuments.has(row)) {
+        return this.#decode(
+          rows.readValueOrThrow(this.#address(row, [])),
+          rows,
+        );
+      }
       return {
         $link: {
           doc: this.documentOf(link.id ?? ""),
@@ -1676,13 +2043,13 @@ export class RuntimeTransactions implements TransactionHooks {
       };
     }
     if (Array.isArray(value)) {
-      return value.map((member) => this.#decode(member));
+      return value.map((member) => this.#decode(member, rows));
     }
     if (isWalkableObjectNotArray(value)) {
       return Object.fromEntries(
         Object.entries(value).map(([name, member]) => [
           name,
-          this.#decode(member),
+          this.#decode(member, rows),
         ]),
       );
     }
@@ -1735,6 +2102,13 @@ const aboveLinks = (
   }
   return [...path];
 };
+
+const samePath = (a: readonly string[], b: readonly string[]): boolean =>
+  a.length === b.length && a.every((segment, index) => segment === b[index]);
+
+const isPrefix = (prefix: readonly string[], path: readonly string[]) =>
+  prefix.length <= path.length &&
+  prefix.every((segment, index) => segment === path[index]);
 
 /** What a value holds at a path, or `undefined` where it holds nothing. */
 const valueAt = (value: unknown, path: readonly string[]): unknown => {

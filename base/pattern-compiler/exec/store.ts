@@ -838,6 +838,12 @@ export class Store {
    */
   readonly rowKeys = new Map<string, () => readonly string[]>();
 
+  /**
+   * The collection of the plan of the instance whose result holds each
+   * array of `rowKeys`, by the same text.
+   */
+  readonly rowCollections = new Map<string, number>();
+
   /** The key of the row at a position of a stored array, where known. */
   #rowKey(
     doc: string,

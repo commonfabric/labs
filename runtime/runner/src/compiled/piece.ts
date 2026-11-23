@@ -33,6 +33,7 @@ import {
   type Artifact,
   Instance,
 } from "../../../../base/pattern-compiler/exec/executor.ts";
+import { rowDocumentCollections } from "../../../../base/pattern-compiler/exec/row-documents.ts";
 import { Ref } from "../../../../base/pattern-compiler/exec/store.ts";
 import type { Cancel } from "../cancel.ts";
 import { type Cell, convertCellsToLinks } from "../cell.ts";
@@ -63,6 +64,14 @@ export type CompiledPieceOptions = {
   now?: number;
   /** Whether the size of the write records is counted. */
   countRecordBytes?: boolean;
+  /**
+   * Where the rows of a `map` over an array the plan declares as references
+   * are stored, where a row is a record or a view node. `documents`, the
+   * default: each row in a document of its own, named by the array and the
+   * key of the row, with a link at the row's position. `in-place`: in the
+   * array. The rows of every other collection are stored in place.
+   */
+  rows?: "documents" | "in-place";
 };
 
 /** What a compiled piece did, counted. */
@@ -116,6 +125,9 @@ export class CompiledPiece {
       owner: result.id,
       artifact,
       countRecordBytes: options.countRecordBytes,
+      ...(options.rows === "in-place"
+        ? {}
+        : { rowDocuments: rowDocumentCollections(artifact) }),
       stream: (entity, stream) => this.#registerStream(entity, stream),
       changes: (changes) => this.#changedByOthers(changes),
       applied: () => {
