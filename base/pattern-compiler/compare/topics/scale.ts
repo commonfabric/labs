@@ -1165,6 +1165,12 @@ const count = (name: string): number => {
 
 /** A step of today's runtime, with its preparations where it stores labels. */
 export type TodayStep = Step & {
+  /**
+   * On the arm `runner`: the time of a pull of the result behind the step,
+   * until the runtime is settled again, in milliseconds. It is no part of
+   * `settle`.
+   */
+  pull?: number;
   /** On the arm `runner`: what the compiled piece did in the step. */
   compiled?: Record<string, number>;
   /** The preparations of Contextual Flow Control, and their time. */
@@ -1283,8 +1289,11 @@ const runToday = async (
       "topics scale",
       compiled?.resultSchema,
     );
-    const settle = async () => {
-      await result.pull();
+    // Today's piece computes what a reader demands, so the step pulls the
+    // result, which reads all of it. The compiled piece derives without a
+    // reader, and the pull of its result is timed apart (`TodayStep.pull`).
+    const settle = async (pull = piece === undefined) => {
+      if (pull) await result.pull();
       await runtime.settled();
       // The commits the scheduler made are counted to the step that
       // caused them, on every arm of this function.
@@ -1374,6 +1383,17 @@ const runToday = async (
       const done = performance.now();
       const preparations = timed("extended-storage-transaction/prepareCfc");
       const after = piece?.transactions.counts;
+      const commitsOfStep = count("storage.v2.transaction/commit/commitNative");
+      const documentsOfStep = changed.size;
+      const workOfStep = count("scheduler/scheduler/run/action");
+      // A reader of the whole result of the compiled piece, as the pull of
+      // today's piece is one: its time, apart from the step's.
+      let pull: number | undefined;
+      if (piece !== undefined && Deno.env.get("SCALE_NO_PULL") === undefined) {
+        const began = performance.now();
+        await settle(true);
+        pull = round(performance.now() - began);
+      }
       record(steps, {
         arm,
         size,
@@ -1399,9 +1419,10 @@ const runToday = async (
               (before?.records.recordBytes ?? 0),
           },
         }),
-        work: count("scheduler/scheduler/run/action"),
-        commits: count("storage.v2.transaction/commit/commitNative"),
-        documents: changed.size,
+        ...(pull === undefined ? {} : { pull }),
+        work: workOfStep,
+        commits: commitsOfStep,
+        documents: documentsOfStep,
         facts: facts(),
         heap: heapAfterCollection(arm, size, step),
         preparations: preparations.count,
