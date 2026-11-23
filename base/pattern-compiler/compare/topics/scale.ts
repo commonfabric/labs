@@ -1531,10 +1531,10 @@ const runToday = async (
       // where no entry nearer to the path replaces them.
       const reader = runtime.edit();
       try {
-        const { space, id, scope, type } = result.getAsNormalizedFullLink();
+        const { space, id, scope } = result.getAsNormalizedFullLink();
         const metadata = readStoredCfcMetadata(
           reader,
-          { space, id, scope, type },
+          { space, id, scope },
         );
         for (const entry of metadata?.labelMap.entries ?? []) {
           if (entry.path.length > 2) continue;
