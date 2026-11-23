@@ -57,6 +57,7 @@ import {
   setCfcTrustSnapshot,
 } from "../storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { runtimeWritePolicyAuthorization } from "../cfc/types.ts";
 import type { FabricValue } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity";
 import {
@@ -277,6 +278,30 @@ export class CompiledPiece {
       },
     });
     this.transactions = transactions;
+    // A piece brought into being outside any scheduled action is the act
+    // of the principal its transaction acts for, as on today's path
+    // (`Runner.#setupInternal`): what the start initializes in the piece's
+    // own documents is attributed to them, so a first value whose type adds
+    // integrity of the current principal names them, and is refused where
+    // the transaction acts for no one. A piece that is resumed is not
+    // brought into being, and one started from a stored argument is started
+    // by a serving runtime for the client that set it up, whom the
+    // transaction of the start does not name: its first values are
+    // initialized on nobody's behalf.
+    if (
+      options.resume !== true && options.storedArgument !== true &&
+      tx.tx.sourceAction === undefined
+    ) {
+      // Where a harness names the principal the piece acts for, the start
+      // acts for them as a handler's run does.
+      this.#stamp(tx, "start");
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization, {
+        space,
+        id: result.id,
+        scope: result.scope,
+      });
+      transactions.attributeFirstValuesIn(tx);
+    }
     const basisDocument = basisDocumentOf(result.id);
     this.#basis = new PieceBasis(
       artifact,
@@ -528,7 +553,8 @@ export class CompiledPiece {
    * the serving posture and no serving loop stamped the transaction
    * (`CompiledPieceOptions.actsFor`): the runtime's built-ins and the
    * preparation of a commit read the principal of a run from its stamp.
-   * `what` is `handler` for the run of a handler, which acts as the
+   * `what` is `handler` for the run of a handler and `start` for the
+   * transaction that brings the piece into being, which act as the
    * principal, and anything else for a derivation, whose reads of a scoped
    * document are those of the principal.
    */
@@ -541,12 +567,13 @@ export class CompiledPiece {
     // The claims a handler's write makes about the current principal name
     // the principal of the transaction's trust snapshot, which the stamper
     // of a serving loop sets beside the actor.
-    if (what === "handler") {
+    const acts = what === "handler" || what === "start";
+    if (acts) {
       setCfcTrustSnapshot(tx, this.#runtime.trustSnapshotForPrincipal(actsFor));
     }
     stampWaveRunContext(
       tx,
-      what === "handler"
+      acts
         ? {
           actionId: `compiled-piece:${what}:${this.#result}`,
           kind: "event-handler",
@@ -588,6 +615,9 @@ export class CompiledPiece {
       const writer = transactions.handlerOf(stream);
       const before = tx.getCfcState().implementationIdentity;
       if (writer !== undefined) setCfcImplementationIdentity(tx, writer);
+      // The principal invoked the handler, so what its run initializes is
+      // theirs, as on today's path (`Runner`, where it runs a handler).
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
       try {
         // The frame of a handler, under which the gated `Date` and `Math`
         // of the value code give the time of the event and a random draw,

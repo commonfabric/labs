@@ -124,26 +124,25 @@ describe("the actor of an event of a compiled piece, in a runtime in the serving
     expect(authorsOf(runtime, space, piece)).toEqual([carol.did()]);
   });
 
-  it("stores no integrity of a principal for the first value of the state cell", async () => {
-    const { piece, error } = await start("principal-integrity");
+  it("stores the integrity of the principal the start acts for, for the first value of the state cell", async () => {
+    // The piece is brought into being for the principal, as a piece of
+    // today's path is for the principal whose transaction sets it up.
+    const carol = await Identity.fromPassphrase("compiled piece actor carol");
+    const { piece, error } = await start("principal-integrity", carol);
 
     expect(error).toBeUndefined();
-    expect(authorsOf(runtime, space, piece)).toEqual([]);
+    expect(authorsOf(runtime, space, piece)).toEqual([carol.did()]);
   });
 
-  it("refuses the write of a handler whose event has no actor", async () => {
-    const { piece, result } = await start("principal-integrity");
+  it("refuses the start of a piece whose first value adds integrity of the current principal where the start acts for no one", async () => {
+    // The write of a handler whose event has no actor is refused the same
+    // way: the scenario `fixtures/principal-integrity` of
+    // `base/pattern-compiler/compare/both-paths-scenarios.ts` sends one.
+    const { error } = await start("principal-integrity");
 
-    result.key("sign").send({ text: "from no one" } as never);
-    await runtime.scheduler.idleWithPendingCommits();
-
-    expect(piece.refusals.length).toBeGreaterThan(0);
-    for (const refusal of piece.refusals) {
-      expect(refusal).toContain(
-        "current-principal integrity requires the run's actor at /",
-      );
-    }
-    expect(piece.instance.result()).toMatchObject({ signed: "" });
+    expect(error?.message).toContain(
+      "current-principal integrity requires the run's actor at /",
+    );
   });
 
   it("refuses a derivation that writes a value declared as authored by the current user", async () => {
@@ -154,8 +153,12 @@ describe("the actor of an event of a compiled piece, in a runtime in the serving
     const carol = await Identity.fromPassphrase("compiled piece actor carol");
     const { error } = await start("principal-derived", carol);
 
+    // The start acts for the principal, so the refusal is of the writer:
+    // a derivation is no writer a claim admits. Today's path holds a
+    // computed output to no claim of the result type and commits; see the
+    // scenario `fixtures/principal-derived`.
     expect(error?.message).toContain(
-      "current-principal integrity requires the run's actor at /shouted",
+      "writeAuthorizedBy requires a trusted verified binding identity at /shouted",
     );
   });
 });

@@ -3013,7 +3013,10 @@ export type TransactionHooks = {
    * in, as `change` has them. The value is not written
    * again; whoever stores labels stores the label of the records for the
    * value the path holds, since what the body read decided that the value
-   * stays (ruling Z67).
+   * stays (ruling Z67). `declared` is what the handler that made the write
+   * declares for the handle it wrote through, as `change` has it: the
+   * write was attempted, and whoever holds a write to a write policy holds
+   * the attempt to it.
    */
   unchanged?(
     doc: string,
@@ -3022,6 +3025,7 @@ export type TransactionHooks = {
     schema: Schema | undefined,
     writes: readonly PlanWrite[],
     inputs: InputsTable,
+    declared?: DeclaredWrite,
   ): void;
 
   /**
@@ -4039,6 +4043,7 @@ export class Instance {
               schema,
               writes,
               this.#inputsTable,
+              this.#writing.declared,
             );
           }
         };

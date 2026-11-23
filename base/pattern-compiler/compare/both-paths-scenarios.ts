@@ -81,6 +81,44 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    // The forging handlers before any handler of the room wrote: the
+    // claims of the argument type are stored when the room starts.
+    name: "writer-policy/main forged first",
+    pieces: [
+      {
+        name: "room",
+        module: "patterns/dev/test/writer-policy/main.tsx",
+        as: "alice",
+      },
+      {
+        name: "forger",
+        module: "base/pattern-compiler/compare/fixtures/room-forger.tsx",
+        argument: ({ room }) => ({
+          entries: room.key("entries" as never),
+          frozen: room.key("frozen" as never),
+        }),
+        as: "bob",
+      },
+    ],
+    steps: [
+      { piece: "forger", stream: "forgeEntry", as: "bob" },
+      { piece: "forger", stream: "forgeFrozen", as: "bob" },
+    ],
+  },
+  {
+    name: "fixtures/made-write-policy",
+    pieces: [{
+      name: "outer",
+      module: "base/pattern-compiler/compare/fixtures/made-write-policy.tsx",
+      as: "alice",
+    }],
+    steps: [
+      { stream: "forge", event: { text: "forged first" }, as: "bob" },
+      { stream: "record", event: { text: "recorded" }, as: "alice" },
+      { stream: "forge", event: { text: "forged" }, as: "bob" },
+    ],
+  },
+  {
     name: "fixtures/write-policy-unnamed",
     pieces: [{
       name: "notes",
@@ -155,7 +193,9 @@ export const SCENARIOS: Scenario[] = [
       name: "signed",
       module: "base/pattern-compiler/compare/fixtures/principal-integrity.tsx",
     }],
-    steps: [{ stream: "sign", event: { text: "from alice" }, as: "alice" }],
+    // No step: the piece does not exist on either path, and an event to a
+    // stream of it waits for a piece that never loads.
+    steps: [],
   },
   {
     name: "fixtures/principal-derived",

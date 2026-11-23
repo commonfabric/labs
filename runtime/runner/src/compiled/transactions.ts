@@ -83,8 +83,10 @@ import {
 import { readMaybeLink } from "../link-resolution.ts";
 import type { Runtime } from "../runtime.ts";
 import { ignoreReadForScheduling } from "../scheduler.ts";
+import { markReadAsAttemptedWrite } from "../storage/reactivity-log.ts";
 import { handlerIdentityOf } from "./handler-identity.ts";
 import { appendedBehind } from "./appended.ts";
+import { DeclaredPolicies } from "./declared-policy.ts";
 import { isStateCellSeed, recordStateCellSeed } from "./initialization.ts";
 import {
   declaresMemberPolicy,
@@ -477,6 +479,13 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #resultPolicy: ResultPolicy | undefined;
   /** The transaction `#resultPolicy` was last recorded for. */
   #resultPolicyIn: IExtendedStorageTransaction | undefined;
+  /**
+   * The write policies declared for the argument documents, and for the
+   * result documents of the instances a body or a handler made.
+   */
+  readonly #declared = new DeclaredPolicies();
+  /** The documents `#declared` was recorded for, by transaction. */
+  readonly #declaredIn = new WeakMap<object, Set<string>>();
   /** The paths the transaction in progress wrote, by document. */
   readonly #written = new Map<string, (readonly string[])[]>();
   /** The stored labels of each document `labelOf` read, per transaction. */
@@ -727,6 +736,9 @@ export class RuntimeTransactions implements TransactionHooks {
       ? undefined
       : this.#register(options.artifact);
     this.#artifact = options.artifact;
+    if (options.artifact !== undefined && options.owner !== undefined) {
+      this.#declared.declare(options.owner, options.artifact, false);
+    }
     this.#resultPolicy = writePoliciesOf(
       options.artifact?.schemas.find(({ id }) =>
         id === (options.artifact?.plan as { resultSchema?: unknown })
@@ -895,6 +907,22 @@ export class RuntimeTransactions implements TransactionHooks {
     });
   }
 
+  /**
+   * The transaction that brings the piece into being for the principal it
+   * acts for (`attributeFirstValuesIn`).
+   */
+  #attributedIn: IExtendedStorageTransaction | undefined;
+
+  /**
+   * Has the first value of each state cell that `tx` writes attributed to
+   * the principal `tx` acts for: `tx` is the transaction that brings the
+   * piece into being on their behalf, which the caller marked for the
+   * result document (`markCfcAttributedInitialization`).
+   */
+  attributeFirstValuesIn(tx: IExtendedStorageTransaction): void {
+    this.#attributedIn = tx;
+  }
+
   /** Registers a compiled pattern with the runtime, once. */
   #register(artifact: Artifact): string {
     let identity = this.#registered.get(artifact);
@@ -952,6 +980,7 @@ export class RuntimeTransactions implements TransactionHooks {
   /** @inheritDoc */
   instantiated(instance: string, artifact: Artifact): void {
     this.#artifactOf.set(instance, artifact);
+    this.#declared.declare(instance, artifact, true);
     if (this.#compiledPattern === undefined) return;
     this.#patternOf.set(instance, this.#register(artifact));
   }
@@ -1906,6 +1935,9 @@ export class RuntimeTransactions implements TransactionHooks {
     // Whether the change was written as the positions of a splice, which
     // are then the paths written, and the path of the change is not.
     let spliced = false;
+    // Whether the change is the first write of a document the storage does
+    // not hold.
+    const creates = document !== undefined && !this.#documents.has(doc);
     if (document === undefined) {
       if (!this.#documents.delete(doc)) return;
       tx.writeValueOrThrow(this.#address(doc, []), undefined, {
@@ -1935,7 +1967,16 @@ export class RuntimeTransactions implements TransactionHooks {
         );
         tx.writeValueOrThrow(this.#address(doc, []), whole);
         if (isStateCellSeed(document, path, schema, writes)) {
-          recordStateCellSeed(tx, this.#address(doc, []), whole);
+          const seeded = this.#address(doc, []);
+          recordStateCellSeed(tx, seeded, whole);
+          // The state cell is a document of the piece the transaction
+          // brings into being for the principal it acts for.
+          if (this.#attributedIn === tx) {
+            tx.markCfcAttributedInitialization(
+              runtimeWritePolicyAuthorization,
+              { space: seeded.space, id: seeded.id, scope: seeded.scope },
+            );
+          }
         }
       }
       this.#enroll(tx, doc);
@@ -2141,6 +2182,7 @@ export class RuntimeTransactions implements TransactionHooks {
       );
     }
     if (doc === this.#owner) this.#recordResultPolicy(tx, path, store);
+    else this.#recordDeclaredPolicy(tx, doc, path, store, creates);
     if (this.#compiledPattern === undefined) return;
     // A write of the value the storage holds is no write of the
     // transaction: its records are given as those of a write that left the
@@ -2756,6 +2798,58 @@ export class RuntimeTransactions implements TransactionHooks {
   }
 
   /**
+   * Records, for a write at `path` of an argument document or of the
+   * result document of an instance a body or a handler made, the write
+   * policies the type of its pattern declares (`DeclaredPolicies`), once
+   * for each transaction and document, so that the write answers to them
+   * and the stored envelope names them. A reference at a path that
+   * declares a writer claim is recorded as a binding the runtime staged
+   * there where the write is the one that makes an argument document, in
+   * which the maker hands the instance its cells, or a derivation's write
+   * of a result document (CFC specification §8.15.4,
+   * `08-15-write-authority.md`: "The reference that exposes the new cell is
+   * protected in its own right"). A plain value at such a path is the
+   * write of whoever wrote it, and answers to the claim.
+   */
+  #recordDeclaredPolicy(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+    path: readonly string[],
+    store: Store,
+    creates: boolean,
+  ): void {
+    const declared = this.#declared.of(doc);
+    if (declared === undefined) return;
+    const { policy, of } = declared;
+    let recorded = this.#declaredIn.get(tx);
+    if (recorded === undefined) {
+      recorded = new Set();
+      this.#declaredIn.set(tx, recorded);
+    }
+    if (!recorded.has(doc)) {
+      recorded.add(doc);
+      recordRelevantSchemaWritePolicyInput(
+        tx,
+        this.#address(doc, []),
+        policy.schema,
+      );
+    }
+    if (of === "argument" ? !creates : this.#cause === "event") return;
+    for (const claimed of policy.claimed) {
+      if (!isPrefix(path, claimed) && !isPrefix(claimed, path)) continue;
+      const held = store.peek(doc, claimed);
+      if (!isLink(held)) continue;
+      const at = this.#address(doc, claimed);
+      tx.recordCfcWritePolicyInput({
+        kind: "initialization",
+        mode: "binding",
+        target: { space: at.space, id: at.id, scope: at.scope, path: at.path },
+        value: this.#encode(held),
+      }, runtimeWritePolicyAuthorization);
+    }
+  }
+
+  /**
    * Keeps the label entries a document stores before the transaction in
    * progress stores, for a write that left a value of the document as it
    * was, the label of that write.
@@ -2811,9 +2905,33 @@ export class RuntimeTransactions implements TransactionHooks {
     schema: Schema | undefined,
     writes: readonly PlanWrite[],
     inputs: InputsTable,
+    declared?: DeclaredWrite,
   ): void {
     if (this.#compiledPattern === undefined) return;
     const tx = this.#open();
+    // A handler's write of the value a position holds is an attempt to
+    // write it, which a write policy of the position is held to as it is
+    // for a write that changes the value: the read is marked as today's
+    // write of an equal value marks its read (`diffAndUpdate`), and the
+    // policies the handler's own state type declares are recorded as for
+    // a change.
+    if (this.#cause === "event") {
+      tx.readValueOrThrow(this.#address(doc, path), {
+        meta: { ...ignoreReadForScheduling, ...markReadAsAttemptedWrite },
+      });
+      const own = declared === undefined || declared.schema === schema
+        ? undefined
+        : writePoliciesOf(declared.schema);
+      if (own !== undefined) {
+        this.#recordSchema(
+          tx,
+          declared!.doc,
+          declared!.path,
+          own.schema as Schema,
+          store,
+        );
+      }
+    }
     // The write policy of each path a record names, as `change` records it
     // for a write: the label is stored under the policy a write of the
     // path is held to.

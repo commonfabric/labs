@@ -26,10 +26,14 @@
  *   does (`runtime/cli/lib/trusted-action-event.ts`).
  * - **The claims.** After each step the stored label envelope of the
  *   document behind each member of the result is read with
- *   `readStoredCfcMetadata`. What is compared is the integrity of each
- *   entry at or below the member, and the writer claims, the UI contracts
- *   and the added integrity that the schema the envelope names declares
- *   there. The identity of a module differs between the paths by
+ *   `readStoredCfcMetadata`. What is compared as the claims is the
+ *   integrity of each entry at or below the member that names a principal
+ *   (an atom with a `kind`, which a schema's added integrity mints), and
+ *   the writer claims, the UI contracts and the added integrity that the
+ *   schema the envelope names declares there. Every other integrity atom of
+ *   an entry is what the flow of the transaction stored, such as the atom
+ *   that names the handler that transformed a value; it is compared apart,
+ *   as `flow`. The identity of a module differs between the paths by
  *   construction (note 764 of `SPEC-NOTES.md`), so a writer claim is
  *   compared by the path of its binding.
  *
@@ -121,6 +125,11 @@ export type StepOutcome = {
   values: Record<string, string>;
   /** The claims stored, by piece and member (`piece.member`). */
   claims: Record<string, StoredClaims>;
+  /**
+   * The integrity stored that names no principal, by piece and member and
+   * then by the path of its entry, where there is some.
+   */
+  flow: Record<string, Record<string, string[]>>;
 };
 
 /** What one path did with a scenario. */
@@ -146,7 +155,10 @@ export type PathOutcome = {
 export type Difference = {
   /** `start <n>`, `step <n>` or `run`. */
   at: string;
-  /** What differs: `committed`, `message`, `values`, `claims`, `failure`. */
+  /**
+   * What differs: `committed`, `message`, `values`, `claims`, `flow` or
+   * `failure`.
+   */
   what: string;
   today: unknown;
   compiled: unknown;
@@ -174,7 +186,7 @@ const comparable = (message: string, names: Map<string, string>): string => {
   let line = message.split("\n")[0];
   for (const [did, name] of names) line = line.replaceAll(did, `<${name}>`);
   return line
-    .replace(/of:[A-Za-z0-9_-]+/g, "<entity>")
+    .replace(/of:[A-Za-z0-9_:-]+/g, "<entity>")
     .replace(/did:key:[A-Za-z0-9]+/g, "<principal>")
     .replace(/\bba[a-z0-9]{20,}\b/g, "<hash>")
     .slice(0, 300);
@@ -220,8 +232,7 @@ const policyLines = (ifc: Record<string, unknown>): string[] => {
 /**
  * The write policies a schema declares at and below `path`, by the path of
  * the schema node from there, with `*` for the members of an array or of a
- * record. A `$ref` into `$defs` of the root is followed; any other is
- * named and not followed.
+ * record. A `$ref` into `$defs` of the root is followed; any other is not.
  */
 export const policiesOf = (
   root: unknown,
@@ -251,10 +262,10 @@ export const policiesOf = (
   const walk = (given: unknown, at: string, depth: number): void => {
     const node = resolved(given);
     if (!isObjectNotArray(node) || depth > 12) return;
-    if (typeof node.$ref === "string") {
-      found[at] = [`not followed: ${node.$ref}`];
-      return;
-    }
+    // A definition another schema document holds is not read: today's
+    // path stores the definitions of a type apart, and the compiled path
+    // in place, so only one of them would name it.
+    if (typeof node.$ref === "string") return;
     if (isObjectNotArray(node.ifc)) {
       const lines = policyLines(node.ifc);
       if (lines.length > 0) found[at] = lines;
@@ -372,9 +383,16 @@ const runPath = async (
     reported = all.length;
     return since.map((refusal) => comparable(refusal, names));
   };
-  /** The claims stored for the member `member` of `cell`. */
-  const claimsOf = (cell: Cell<unknown>, member: string): StoredClaims => {
+  /**
+   * The claims stored for the member `member` of `cell`, and the other
+   * integrity stored there.
+   */
+  const claimsOf = (
+    cell: Cell<unknown>,
+    member: string,
+  ): { claims: StoredClaims; flow: Record<string, string[]> } => {
     const claims: StoredClaims = { integrity: {}, policies: {} };
+    const flow: Record<string, string[]> = {};
     const tx = runtime.edit();
     try {
       const link = (cell.key(member as never) as Cell<unknown>).withTx(tx)
@@ -384,20 +402,19 @@ const runPath = async (
         id: link.id,
         scope: link.scope,
       });
-      if (metadata === undefined) return claims;
+      if (metadata === undefined) return { claims, flow };
       const at = link.path.map(String);
       for (const entry of metadata.labelMap.entries) {
         const path = entry.path.map(String);
         if (at.some((step, index) => path[index] !== step)) continue;
-        const integrity = (entry.label.integrity ?? []).map((atom) =>
-          comparable(text(atom), names)
-        );
-        if (integrity.length === 0) continue;
         const key = `/${path.slice(at.length).join("/")}`;
-        claims.integrity[key] = [
-          ...(claims.integrity[key] ?? []),
-          ...integrity,
-        ].sort();
+        for (const atom of entry.label.integrity ?? []) {
+          const into = isObjectNotArray(atom) && "kind" in atom
+            ? claims.integrity
+            : flow;
+          into[key] = [...(into[key] ?? []), comparable(text(atom), names)]
+            .sort();
+        }
       }
       const schema = loadSchemaDocument(tx, link.space, metadata.schemaHash);
       claims.policies = policiesOf(schema, at);
@@ -408,12 +425,15 @@ const runPath = async (
     } finally {
       tx.abort();
     }
-    return claims;
+    return { claims, flow };
   };
   /** What every piece holds now, and the claims stored for it. */
-  const held = async (): Promise<Pick<StepOutcome, "values" | "claims">> => {
+  const held = async (): Promise<
+    Pick<StepOutcome, "values" | "claims" | "flow">
+  > => {
     const values: Record<string, string> = {};
     const claims: Record<string, StoredClaims> = {};
+    const flow: StepOutcome["flow"] = {};
     for (const [name, result] of Object.entries(results)) {
       let value: unknown;
       try {
@@ -425,10 +445,14 @@ const runPath = async (
       if (!isObjectNotArray(value)) continue;
       for (const member of Object.keys(value).sort()) {
         if (member.startsWith("$")) continue;
-        claims[`${name}.${member}`] = claimsOf(result, member);
+        const stored = claimsOf(result, member);
+        claims[`${name}.${member}`] = stored.claims;
+        if (Object.keys(stored.flow).length > 0) {
+          flow[`${name}.${member}`] = stored.flow;
+        }
       }
     }
-    return { values, claims };
+    return { values, claims, flow };
   };
   try {
     for (const piece of scenario.pieces) {
@@ -538,7 +562,15 @@ export const differencesOf = (
     a: StepOutcome | undefined,
     b: StepOutcome | undefined,
   ) => {
-    for (const what of ["committed", "message", "values", "claims"] as const) {
+    for (
+      const what of [
+        "committed",
+        "message",
+        "values",
+        "claims",
+        "flow",
+      ] as const
+    ) {
       if (text(a?.[what]) !== text(b?.[what])) {
         differences.push({
           at,
