@@ -43,6 +43,7 @@ import {
   linkedSchema,
   markerOf,
   memberKey,
+  membersInOrder,
   type Name,
   OUTPUT,
   type Position,
@@ -2164,8 +2165,10 @@ export class Host {
     if (value instanceof Handle) return value.get();
     if (Array.isArray(value)) return value.map((member) => this.v(member));
     if (isRecord(value)) {
+      // A record a computation made, in the order a read of it from the
+      // storage gives (`membersInOrder`).
       return Object.fromEntries(
-        Object.entries(value).map(([name, member]) => [name, this.v(member)]),
+        membersInOrder(value).map((name) => [name, this.v(value[name])]),
       );
     }
     return value;

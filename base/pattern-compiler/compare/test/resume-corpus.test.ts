@@ -45,4 +45,24 @@ describe("a module of the corpus that a second runtime resumes from its basis", 
     expect(outcome.refusals).toEqual([]);
     expect(outcome.equal).toBe(true);
   });
+
+  // Each of the two renders a record as text, so the text holds the order
+  // in which the value code read the members of the record: the order of
+  // the storage, in the runtime that wrote the record as in the one that
+  // read it from the storage.
+  for (
+    const path of [
+      "/dev/gideon-tests/test-record-key-set-56.tsx",
+      "/apps/budget-tracker/expense-form.tsx",
+    ]
+  ) {
+    it(`holds the values of the executor in memory after the later events, for ${path}, which renders the members of a record in their order`, async () => {
+      const outcome = await resumed(path);
+
+      expect(outcome.resume?.current).toBe(true);
+      expect(outcome.events?.handled).toBe(outcome.events?.sent);
+      expect(outcome.refusals).toEqual([]);
+      expect(outcome.equal).toBe(true);
+    });
+  }
 });

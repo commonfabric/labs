@@ -21,6 +21,7 @@ import {
   jsonFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 
+import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
 import { PartedDocuments, type PartsOptions } from "./parts.ts";
 
 /** The members of a JSON schema the executor reads. */
@@ -200,6 +201,20 @@ export const withDefaults = (
   }
   return value;
 };
+
+/**
+ * The names of the members of a record in the order every reader of the
+ * storage finds them in: the storage keeps a record with its names in the
+ * order of their UTF-8 bytes (`JsonEncodeAct.encodePlainObject`), and the
+ * process that wrote a record holds the names as they were written until
+ * the stored document replaces its own. Value code that reads which names
+ * a record holds is handed this order in every process, so that what it
+ * derives from the order is the same before and after a restart. A record
+ * that is built from the names in this order holds a name that is an array
+ * index before every other, as every record of the language does.
+ */
+export const membersInOrder = (record: object): readonly string[] =>
+  utf8SortedKeysOf(record);
 
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value) &&
@@ -2467,15 +2482,15 @@ export class Store {
     if (isRecord(value)) {
       const outer = bounded ? containerOf(shape) : shape;
       const declared = bounded ? declaredMembers(shape) : undefined;
+      // The members in the order of the storage, whatever order the
+      // process that wrote the record holds them in (`membersInOrder`).
       const copy = Object.fromEntries(
-        Object.entries(value).filter(([name]) =>
+        membersInOrder(value).filter((name) =>
           declared === undefined || declared.includes(name)
-        ).map((
-          [name, member],
-        ) => [
+        ).map((name) => [
           name,
           this.#copy(
-            member,
+            value[name],
             reads,
             open,
             here.key(name),
