@@ -68,12 +68,12 @@ import {
 import { listenCompiledServingMemoryServer } from "../../../../runtime/runner/src/compiled/serving-memory-server.deno.ts";
 import { compiledPiecesOf } from "../../../../runtime/runner/src/compiled/serving.ts";
 import { setUpCompiledPiece } from "../../../../runtime/runner/src/compiled/setup.ts";
-import { StorageManager } from "../../../../runtime/runner/src/storage/cache.deno.ts";
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
 import { joinSpaceMembers } from "../../../../runtime/runner/src/space-members.ts";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
+  StorageManager,
 } from "../../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../../exec/executor.ts";
 import { startCpuProfile } from "../cpu-profile.ts";
