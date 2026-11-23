@@ -9766,8 +9766,9 @@ export class Runner {
   /**
    * Prepares a named piece's run for another attempt after its start
    * transaction was refused over a policy manifest another participant
-   * installed first, or over documents it claimed absent that the store
-   * holds. Resolves `"retry"` when the caller should run it again,
+   * installed first, over documents it claimed absent that the store
+   * holds, or over a document this replica changed between the start's read
+   * of it and its commit. Resolves `"retry"` when the caller should run it again,
    * `"settled"` when the start was stopped or the runtime torn down during
    * the wait, so there is nothing left to report, and otherwise the failure
    * the caller's failure arm reports, as it does for any other refusal: the
@@ -9784,9 +9785,16 @@ export class Runner {
    * run from the start, where the install reads the manifest as present.
    * A start that read documents its replica had not loaded is refused the
    * same way ({@link refusalClaimsOnlyAbsence}), and after the catch-up has
-   * loaded them the run from the start reads them as present. Every other
-   * refusal stays terminal, a stale read over a revision of the piece's own
-   * documents included: whether a re-commit converges against a serving
+   * loaded them the run from the start reads them as present. A start whose
+   * basis moved on this replica itself, before its commit was sent, is
+   * refused by the replica's own consistency check
+   * (`isStorageTransactionInconsistent`, a stale basis that re-running
+   * resolves): another transaction here wrote a document the start read, as
+   * a parent piece's start writes the owner link of a per-session cell its
+   * nested piece's start read as absent. The change is already in the
+   * replica, so the run from the start reads it. Every other refusal stays
+   * terminal, the store's stale-read refusal over a revision of the piece's
+   * own documents included: whether a re-commit converges against a serving
    * side's derived writes is a different question, which
    * `#catchUpAndStartOnStaleRead()` answers by committing nothing.
    *
@@ -9809,23 +9817,26 @@ export class Runner {
     // and a newer lifecycle epoch.
     const key = this.#getDocKey(resultCell);
     const manifest = refusalNamesPolicyManifest(error);
+    const staleBasis = isStorageTransactionInconsistent(error);
     if (
-      (!manifest && !refusalClaimsOnlyAbsence(error)) ||
+      (!manifest && !staleBasis && !refusalClaimsOnlyAbsence(error)) ||
       installedRegistration === undefined ||
       this.#cancels.get(key) !== installedRegistration
     ) {
       return { failure: error };
     }
+    const reason = manifest
+      ? "lost a policy manifest install to another participant"
+      : staleBasis
+      ? "read a document this replica changed before the start committed"
+      : "claimed documents absent that the store holds";
     this.stop(resultCell);
     ownership.markInstalled(undefined);
     this.#registerPendingDeferredStart(key, ownership);
     logger.info(
       "piece-start-commit-retrying",
-      "piece-run start " +
-        (manifest
-          ? "lost a policy manifest install to another participant"
-          : "claimed documents absent that the store holds") +
-        "; running it again once storage has caught up",
+      `piece-run start ${reason}; running it again once storage has ` +
+        "caught up",
       resultCell.getAsNormalizedFullLink().id,
       error,
     );
@@ -9846,9 +9857,7 @@ export class Runner {
       return {
         failure: catchUpLoadFailure(
           `piece-run start of ${resultCell.getAsNormalizedFullLink().id} ` +
-            (manifest
-              ? "lost a policy manifest install"
-              : "claimed documents absent that the store holds"),
+            reason,
           unloaded,
         ),
       };
