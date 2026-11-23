@@ -9398,9 +9398,11 @@ export class Instance {
         const inputs = this.#inputsOf(cone, keys);
         if (inputs !== undefined) this.#forget(inputs);
       }
-      this.#regroupKey(at.collection, at.around, at.key);
       // The records whose template folds over the collection hold its
-      // groups, which the change of the element's label changed.
+      // groups. An element whose cone instances consume what they consumed
+      // before is in the group it was in, and those records hold the
+      // label they were given.
+      if (!this.#regroupKey(at.collection, at.around, at.key)) continue;
       for (
         const key of this.root.#recordFolds.get(
           `${this.id}\n${at.collection}`,
@@ -9475,14 +9477,15 @@ export class Instance {
    * the element is a plain value in place, where it is known. Where the
    * set of groups changes, the element of the enclosing collection that
    * holds this one is updated in turn. The work is the number of groups
-   * of the folded collections inside the element.
+   * of the folded collections inside the element. Returns whether the
+   * element is in another group than before.
    */
   #regroupKey(
     collection: number,
     around: readonly string[],
     key: string,
     inPlace?: boolean,
-  ): void {
+  ): boolean {
     const name = this.#name("assembly", collection, around);
     let table = this.#groups.get(name);
     if (table === undefined) {
@@ -9530,6 +9533,7 @@ export class Instance {
     if (inPlace === true) table.notInPlace.delete(key);
     else if (inPlace === false) table.notInPlace.add(key);
     if (changed) this.#regroupEnclosing(collection, around);
+    return was !== id;
   }
 
   /**
