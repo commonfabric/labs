@@ -28,7 +28,6 @@ import {
   commitReply,
   commitSendReaction,
   type ComposerCell,
-  entityKeyOf,
   isDeleted,
   type JoiningManager,
   type MessageCell,
@@ -36,6 +35,7 @@ import {
   type ReactionsValue,
   readableReactions,
   type RepliedMessage,
+  resolvedKeyOf,
   type RoomStreamEvent,
   tellManagerJoined,
   viewKeyOf,
@@ -361,7 +361,7 @@ export const FabriChatMessageRow = pattern<
   const pickerOpen = new Writable.perSession(false);
   const togglePicker = action(() => pickerOpen.set(!pickerOpen.get()));
   const tallies = computed(() => {
-    const key = entityKeyOf(message.resolveAsCell()) ?? "unsaved";
+    const key = resolvedKeyOf(message) ?? "unsaved";
     return reactionTallies(
       message.get()?.reactions,
       myProfile?.get() === undefined ? undefined : myProfile,

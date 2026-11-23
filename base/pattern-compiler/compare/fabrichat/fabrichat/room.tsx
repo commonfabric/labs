@@ -106,6 +106,7 @@ import {
   prepareAttach,
   removalRequestId,
   type RepliedMessage,
+  resolvedMessage,
   rightsOf,
   type RoomStreamEvent,
   type RoomWindowEvent,
@@ -1376,6 +1377,17 @@ const ensureSpaceFileStore = handler<
   else if (rootKeeps) root.send();
 });
 
+/**
+ * The title a member last set, or the one the room was created with. It is
+ * a function of its own for the reason `resolvedKeyOf()` gives, of
+ * `elementById`.
+ */
+const titleSetIn = (
+  titles: TitlesCell | undefined,
+  about: Cell<AboutRecord> | undefined,
+): string | undefined =>
+  titles?.elementById(TITLE_KEY).get()?.title ?? about?.get()?.title;
+
 /** What a room stores, and who is looking at it. */
 export interface FabriChatRoomCoreInput {
   /** The space's root, which may explicitly declare this conversation. */
@@ -1788,9 +1800,7 @@ export const FabriChatRoomCore = pattern<
     },
   );
   // The title a member last set outranks the one the room was created with.
-  const title = computed((): string | undefined =>
-    titles?.elementById(TITLE_KEY).get()?.title ?? about?.get()?.title
-  );
+  const title = computed((): string | undefined => titleSetIn(titles, about));
   const aboutView = {
     kind,
     title,
@@ -1840,7 +1850,7 @@ export const FabriChatRoomCore = pattern<
       const root = composer.get()?.thread;
       return openThreadKey === "" || root === undefined
         ? []
-        : [root.resolveAsCell()];
+        : [resolvedMessage(root)];
     },
   );
   // The session's open thread: its root, and every message in the thread the

@@ -473,6 +473,18 @@ export type ThreadTitleRequestsCell = Writable<
 //
 
 /** The entity a cell names, as a string, or `undefined` if it names none. */
+/**
+ * The key of the cell `message` resolves to. It is a function of its own
+ * because the emitter does not yet translate `resolveAsCell` in a promoted
+ * `computed`, and a call of an authored function there is a body.
+ */
+export const resolvedKeyOf = (message: MessageCell): string | undefined =>
+  entityKeyOf(message.resolveAsCell());
+
+/** The cell `message` resolves to, for the reason `resolvedKeyOf()` gives. */
+export const resolvedMessage = (message: MessageCell): MessageCell =>
+  message.resolveAsCell();
+
 export const entityKeyOf = (cell: unknown): string | undefined => {
   const ref = getEntityId(cell);
   return ref === undefined ? undefined : entityRefToString(ref);
