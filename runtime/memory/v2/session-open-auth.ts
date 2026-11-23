@@ -24,6 +24,7 @@
  */
 
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
+import { isPlainObject } from "@commonfabric/js-values/types";
 import {
   hashOf,
   isFabricPlainObject,
@@ -314,6 +315,29 @@ export const SESSION_OPEN_COMMAND = "/memory/session.open";
  * signatures an open can make the server verify small.
  */
 export const MAX_PROOF_CHAIN_LENGTH = 8;
+
+/**
+ * Whether `message` is a `session.open` naming a connection-authenticated
+ * `principal` whose `authorization` presents a proof chain and nothing else:
+ * `proofs`, a non-empty list of at most {@link MAX_PROOF_CHAIN_LENGTH}
+ * entries. This is the one `authorization` a routed open may carry. A signed
+ * open's `authorization` would authenticate the principal itself, which a
+ * routed open leaves to the router's connection authentication; a chain only
+ * names whose grant the session's capability resolves from, and
+ * {@link verifySessionOpenProofs} checks that it ends at the principal.
+ */
+export const carriesOnlySessionOpenProofs = (
+  message: Record<string, unknown>,
+): boolean => {
+  const { authorization } = message;
+  return message.type === "session.open" &&
+    typeof message.principal === "string" &&
+    isPlainObject(authorization) &&
+    Object.keys(authorization).length === 1 &&
+    Array.isArray(authorization.proofs) &&
+    authorization.proofs.length >= 1 &&
+    authorization.proofs.length <= MAX_PROOF_CHAIN_LENGTH;
+};
 
 export type VerifySessionOpenProofsOptions = {
   /** The space the open names. */

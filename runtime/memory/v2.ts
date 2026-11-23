@@ -1930,8 +1930,11 @@ export type SessionOpenRequest = {
 
   /**
    * The authenticated principal of the connection the session opens as. A
-   * request naming one carries no signature of its own, and the server reads
-   * neither `invocation` nor `authorization` from it.
+   * request naming one carries no signature of its own: the server reads no
+   * `invocation` from it, and from `authorization` only `proofs`, a proof
+   * chain the request may present (04-protocol.md section 4.5.1), which is
+   * also the one `authorization` a routed open may carry
+   * (`carriesOnlySessionOpenProofs`).
    */
   principal?: string;
 
