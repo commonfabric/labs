@@ -1,7 +1,10 @@
 import type { InputsTable, PlanInputs, SlotBindings } from "./plan-write.ts";
 
-/** The most texts an instance of `InputsDigests` holds an identifier for. */
-const HELD = 65_536;
+/**
+ * The most characters of text an instance of `InputsDigests` holds numbers
+ * for in one generation.
+ */
+const HELD = 8_000_000;
 
 /**
  * Names what the inputs of a place hold by a number that two sets of
@@ -11,14 +14,21 @@ const HELD = 65_536;
  *
  * The number is found from the content, each binding and each set of
  * inputs once for a table, so naming every record of a transaction is
- * work in the size of the table. A content the instance has not held since
- * it last let its texts go has a number no earlier content had, so two
- * equal numbers always stand for equal contents, and two equal contents
- * can have two numbers.
+ * work in the size of the table. The texts are held in two generations of
+ * at most `HELD` characters each: a text that was not named while the
+ * older generation filled is let go, and has another number when it is
+ * named again. A number is used once, so two equal numbers always stand
+ * for equal contents, and two equal contents can have two numbers.
  */
 export class InputsDigests {
-  /** The number of each content, by its text. */
+  /** The number of each content named in this generation, by its text. */
   #numbers = new Map<string, number>();
+
+  /** The numbers of the generation before. */
+  #before = new Map<string, number>();
+
+  /** The characters of the texts of `#numbers`. */
+  #held = 0;
 
   #next = 1;
 
@@ -45,7 +55,6 @@ export class InputsDigests {
       this.#table = table;
       this.#inputs = new Map();
       this.#bindings = new Map();
-      if (this.#numbers.size > HELD) this.#numbers = new Map();
     }
     return this.#number(JSON.stringify([this.#inputsOf(table, index), keys]));
   }
@@ -53,8 +62,14 @@ export class InputsDigests {
   #number(text: string): number {
     let number = this.#numbers.get(text);
     if (number === undefined) {
-      number = this.#next++;
+      number = this.#before.get(text) ?? this.#next++;
+      if (this.#held + text.length > HELD) {
+        this.#before = this.#numbers;
+        this.#numbers = new Map();
+        this.#held = 0;
+      }
       this.#numbers.set(text, number);
+      this.#held += text.length;
     }
     return number;
   }
@@ -63,7 +78,7 @@ export class InputsDigests {
     return Object.entries(slots).map(([slot, at]) => {
       let number = this.#bindings.get(at);
       if (number === undefined) {
-        number = this.#number(`b${JSON.stringify(table.bindings[at])}`);
+        number = this.#number(`b${table.bindingText(at)}`);
         this.#bindings.set(at, number);
       }
       return [slot, number];
