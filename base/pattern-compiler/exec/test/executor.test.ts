@@ -1,6 +1,7 @@
 import {
   type FabricValue,
   hashOf,
+  isDeepFrozen,
   toCompactDebugString,
   toIndentedDebugString,
 } from "@commonfabric/data-model";
@@ -6575,5 +6576,20 @@ describe("a state path declared as a handle or `undefined`", () => {
     expect(instance.send(0, {})).toMatchObject({ committed: true });
 
     expect(instance.result()).toMatchObject({ out: "a" });
+  });
+});
+
+describe("the schemas of an artifact", () => {
+  it("are frozen with all they hold once an instance was made of the artifact", async () => {
+    const artifact = await artifactOf("scale");
+    const instance = new Instance(artifact, { groups: [], rows: [] });
+
+    const schemas = artifact.schemas.filter(({ schema }) =>
+      schema !== undefined
+    );
+    expect(schemas.length).toBeGreaterThan(0);
+    for (const { id } of schemas) {
+      expect(isDeepFrozen(instance.schemaOf(id))).toBe(true);
+    }
   });
 });

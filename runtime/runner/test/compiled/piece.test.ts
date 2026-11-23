@@ -345,4 +345,28 @@ describe("startCompiledPiece()", () => {
     expect(now[0]).toBe(held[0]);
     expect(read(result, "log")).toEqual([{ text: "t" }, { text: "u" }]);
   });
+
+  it("hands the runtime a stored value with no link as the object the executor holds, and one with a link as one frozen value at each write", async () => {
+    const { piece, result } = await started(
+      "handler",
+      "default",
+      () => ({ secret: "s", note: "n" }),
+    );
+    const log = piece.instance.stateCells().find(({ name }) => name === "log")!;
+    result.key("record").send({ text: "t", extra: "e" } as never);
+    await settled();
+    const { store } = piece.instance;
+    const list = store.docs.get(log.id)?.value as {
+      $link: { doc: string };
+    }[];
+    const row = store.docs.get(list[0].$link.doc)?.value;
+
+    // The record of the row holds no link.
+    expect(piece.transactions.encode(row)).toBe(row);
+    // The list holds a link, which is written as the runtime's.
+    const first = piece.transactions.encode(list);
+    expect(first).not.toBe(list);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(piece.transactions.encode(list)).toBe(first);
+  });
 });

@@ -1408,7 +1408,10 @@ export class Store {
     if (!isPlainRecord(value)) return value;
     const names = Object.keys(value);
     let kept: Record<string, unknown> = value;
-    if (!inStorageOrder(names)) {
+    // A record with no prototype is held as one with the prototype of a
+    // record: what takes a stored value from the store takes it as a
+    // record like any other.
+    if (!inStorageOrder(names) || Object.getPrototypeOf(value) === null) {
       kept = {};
       for (const name of names.sort(utf8Compare)) kept[name] = value[name];
     }

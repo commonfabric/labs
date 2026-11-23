@@ -31,6 +31,7 @@
  * nothing but the executor reads these documents.
  */
 import {
+  cloneIfNecessary,
   debugStr,
   type FabricValue,
   isWalkableObjectNotArray,
@@ -1751,6 +1752,7 @@ export class RuntimeTransactions implements TransactionHooks {
     made?: { start: number; removed: number; inserted: number },
   ): void {
     const tx = this.#open();
+    this.#store = store;
     if (path.length === 0 && this.#heldWhole.delete(doc)) return;
     this.#counts.writes += 1;
     this.#stagedState += 1;
@@ -2061,6 +2063,7 @@ export class RuntimeTransactions implements TransactionHooks {
           ids: new Map(),
           links: new Map(),
         });
+        this.#rowArraysNamed += 1;
       }
     }
     return arrays;
@@ -3291,7 +3294,59 @@ export class RuntimeTransactions implements TransactionHooks {
    * a stream and an error state, which are records too.
    */
   #encode(value: unknown): FabricValue {
+    const store = this.#store;
+    if (store === undefined || !store.holds(value)) {
+      return this.#encodeOnce(value);
+    }
+    // A stored container that holds no link, no stream and no error state
+    // is frozen with all it holds, and is the value the runtime stores.
+    if (store.plain(value)) return value as FabricValue;
+    const known = this.#encoded.get(value as object);
+    if (known !== undefined && known.rowArrays === this.#rowArraysNamed) {
+      return known.value;
+    }
+    const streams = this.#streamsEncoded;
+    const made = this.#encodeOnce(value);
+    // The link of a stream is made with the transaction in progress, which
+    // writes the marker of a stream the storage has none of.
+    if (this.#streamsEncoded !== streams) return made;
+    const frozen = cloneIfNecessary(made);
+    this.#encoded.set(value as object, {
+      rowArrays: this.#rowArraysNamed,
+      value: frozen,
+    });
+    return frozen;
+  }
+
+  /**
+   * The store of the executor, from its first change on: it says which
+   * containers it holds, which are frozen with all they hold.
+   */
+  #store: Store | undefined;
+
+  /**
+   * What `#encode` gave for each stored container that holds a link, with
+   * how many arrays of row documents were named then: a link by key into
+   * such an array is written as a link to the document of the row. A
+   * stored container is never changed, so what it encodes to stays, and
+   * the value is frozen once and is the same object at each write, which
+   * the runtime compares and hashes by.
+   */
+  readonly #encoded = new WeakMap<
+    object,
+    { rowArrays: number; value: FabricValue }
+  >();
+
+  /** How many arrays of row documents `#rowArraysOf` has named. */
+  #rowArraysNamed = 0;
+
+  /** How many links of streams `#encodeOnce` has made. */
+  #streamsEncoded = 0;
+
+  /** `#encode`, for a value it keeps no encoded form of. */
+  #encodeOnce(value: unknown): FabricValue {
     if (this.#onStream !== undefined && isStream(value)) {
+      this.#streamsEncoded += 1;
       return createSigilLinkFromParsedLink({
         id: this.#streamEntity(value.$stream),
         space: this.#space,

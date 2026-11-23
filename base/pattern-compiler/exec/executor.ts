@@ -18,6 +18,7 @@
  */
 import {
   debugStr,
+  deepFreeze,
   type FabricValue,
   toCompactDebugString,
   toIndentedDebugString,
@@ -3908,7 +3909,13 @@ export class Instance {
     this.plan = artifact.plan;
     this.code = artifact.code;
     for (const { id, schema } of artifact.schemas) {
-      if (schema !== undefined) this.#schemas.set(id, linkedSchema(schema));
+      // A schema is frozen with all it holds: a link the instance stores
+      // carries a schema of the plan, and the runtime keeps what it makes
+      // of a link's schema for a schema that is frozen, where it would
+      // make it again for each link.
+      if (schema !== undefined) {
+        this.#schemas.set(id, deepFreeze(linkedSchema(schema)));
+      }
     }
     this.code.values.forEach((value, index) => {
       if (value.output !== undefined && value.function) {
