@@ -233,7 +233,16 @@ type RowArray = {
 type Handed = {
   unchanged: Map<string, Map<string, string>>;
   created: string[];
+  /** The documents of the executor the transaction wrote. */
+  written: string[];
 };
+
+/**
+ * What the storage holds for a document of the executor after a commit that
+ * wrote it was refused, as the executor holds a value: `undefined` where
+ * the storage holds nothing.
+ */
+export type Restored = { doc: string; value: unknown };
 
 /** Keeps the documents of one executor in one space of a runtime. */
 export class RuntimeTransactions implements TransactionHooks {
@@ -387,7 +396,9 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #onChanges: ((changes: ChangeByOther[]) => void) | undefined;
   readonly #onLabels: (() => void) | undefined;
   readonly #onApplied: (() => void) | undefined;
-  readonly #onRefused: ((reason: string) => void) | undefined;
+  readonly #onRefused:
+    | ((reason: string, restored?: Restored[]) => void)
+    | undefined;
 
   /**
    * Constructs an instance which keeps the documents in `space` of
@@ -452,9 +463,11 @@ export class RuntimeTransactions implements TransactionHooks {
       applied?: () => void;
       /**
        * Called with the reason when the storage refused the commit of a
-       * transaction the adapter was handed.
+       * transaction the adapter was handed, and with what the storage
+       * holds for each document of the executor that the transaction
+       * wrote, which the executor's store is then ahead of.
        */
-      refused?: (reason: string) => void;
+      refused?: (reason: string, restored?: Restored[]) => void;
     } = {},
   ) {
     this.#runtime = runtime;
@@ -534,9 +547,10 @@ export class RuntimeTransactions implements TransactionHooks {
             // Where the executor holds the change: for a row's document,
             // below the position of the row, and nowhere for a row that
             // left its array.
-            const place = row === undefined
+            const stored = row === undefined
               ? { doc, path: at }
               : this.#addressOfStored(doc, at);
+            const place = { doc: stored.doc, path: [...stored.path] };
             if (row !== undefined && !row.array.keys.includes(row.key)) {
               continue;
             }
@@ -860,23 +874,60 @@ export class RuntimeTransactions implements TransactionHooks {
     const handed: Handed = {
       unchanged: new Map(this.#unchanged),
       created: [...this.#created, ...this.#createdStreams],
+      written: [...this.#written.keys()],
     };
     this.#unchanged.clear();
     this.#own.set(tx.tx, handed);
     tx.addCommitCallback((_tx, { error }) => {
       if (error === undefined) return;
-      // The storage does not hold a document whose first write was
-      // refused.
-      for (const doc of handed.created) {
-        this.#documents.delete(doc);
-        this.#streams.delete(doc);
-      }
-      this.#onRefused?.(`${error.name}: ${error.message}`);
+      this.#onRefused?.(
+        `${error.name}: ${error.message}`,
+        this.#restored(handed),
+      );
     });
     this.#resetRecorded();
     this.#created = [];
     this.#createdStreams = [];
     return result;
+  }
+
+  /**
+   * What the storage holds for each document a refused transaction wrote,
+   * read from the replica when the refusal is known. The adapter keeps of
+   * each what the storage holds: a document the storage does not hold is
+   * written whole by its next change, and the keys of the rows of an array
+   * of row documents are those of the links the storage holds there.
+   */
+  #restored(handed: Handed): Restored[] {
+    const restored: Restored[] = [];
+    const tx = this.#runtime.edit();
+    try {
+      for (const doc of handed.created) this.#streams.delete(doc);
+      for (const doc of handed.written) {
+        const stored = tx.readValueOrThrow(this.#address(doc, []));
+        if (stored === undefined) this.#documents.delete(doc);
+        for (const array of this.#rowArrays.get(doc) ?? []) {
+          const links = valueAt(stored, array.path);
+          array.keys = (Array.isArray(links) ? links : []).flatMap((link) => {
+            const row = isPrimitiveCellLink(link)
+              ? this.#rowDocuments.get(
+                this.documentOf(parseLink(link).id ?? ""),
+              )
+              : undefined;
+            return row?.array === array ? [row.key] : [];
+          });
+          array.positions = undefined;
+        }
+        this.#metadata.delete(doc);
+        restored.push({
+          doc,
+          value: stored === undefined ? undefined : this.#decode(stored, tx),
+        });
+      }
+    } finally {
+      tx.abort();
+    }
+    return restored;
   }
 
   /** Forgets the documents the transaction in progress wrote first. */

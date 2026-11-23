@@ -619,7 +619,12 @@ describe("the rows of a `map` over an array declared as references", () => {
       const transactions = piece.instance.transactions.length;
       const audience = await scenarioAudience();
       const schema = {
-        ...await labeled("clause-two"),
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          done: { type: "boolean" },
+        },
         ifc: {
           confidentiality: [
             inputClause("clause-two", audience),

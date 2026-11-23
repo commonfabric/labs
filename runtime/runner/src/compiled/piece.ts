@@ -43,6 +43,7 @@ import type { URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
   type ChangeByOther,
+  type Restored,
   RuntimeTransactions,
   type StreamOfExecutor,
 } from "./transactions.ts";
@@ -141,7 +142,7 @@ export class CompiledPiece {
       applied: () => {
         if (this.#started && this.instance.relabelPending) this.#invalidate();
       },
-      refused: (reason) => this.#refusals.push(reason),
+      refused: (reason, restored) => this.#refused(reason, restored ?? []),
     });
     this.transactions = transactions;
     this.#derive = (given) => {
@@ -195,8 +196,8 @@ export class CompiledPiece {
   }
 
   /**
-   * The reason of each commit of the piece that the storage refused. The
-   * executor's documents are then ahead of what the storage holds.
+   * The reason of each commit of the piece that the storage refused, and
+   * of each write by another writer that the piece does not take.
    */
   get refusals(): readonly string[] {
     return this.#refusals;
@@ -260,6 +261,21 @@ export class CompiledPiece {
         scope: "space",
       }),
     );
+  }
+
+  /**
+   * Keeps the reason of a commit of the piece that was refused, and brings
+   * the executor's documents back to what the storage holds for those the
+   * transaction wrote (`Instance.restore`): the executor had gone on when
+   * the refusal became known. What read those documents is marked, and the
+   * derivation runs again. A handler that the scheduler runs again starts
+   * from what the storage holds.
+   */
+  #refused(reason: string, restored: Restored[]): void {
+    this.#refusals.push(reason);
+    if (!this.#started || this.#stopped) return;
+    for (const { doc, value } of restored) this.instance.restore(doc, value);
+    this.#invalidate();
   }
 
   /**

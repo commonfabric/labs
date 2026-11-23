@@ -2433,6 +2433,26 @@ const holdsErrorState = (value: unknown): ErrorState | undefined => {
 const RESULT_INPUTS = "result";
 
 /**
+ * A value with an empty array at `path` of it, where it holds something on
+ * the way there, and the value itself where it does not.
+ */
+const withNoRows = (held: unknown, path: readonly string[]): unknown => {
+  if (path.length === 0) return [];
+  const [first, ...rest] = path;
+  if (Array.isArray(held)) {
+    const index = Number(first);
+    if (!(index < held.length)) return held;
+    const members = [...held];
+    members[index] = withNoRows(members[index], rest);
+    return members;
+  }
+  if (isRecord(held) && Object.hasOwn(held, first)) {
+    return { ...held, [first]: withNoRows(held[first], rest) };
+  }
+  return held;
+};
+
+/**
  * What the key of the records of the rows a body wrote begins with, where
  * the key of the record of an output begins with its instance.
  */
@@ -12047,6 +12067,54 @@ export class Instance {
     }
     const at = this.#children.indexOf(replaced);
     if (at >= 0) this.#children.splice(at, 1);
+  }
+
+  /**
+   * On the root: takes what the storage holds for a document in place of
+   * what the store holds, after a commit that wrote the document was
+   * refused, and marks what read the document. `value` is what the storage
+   * holds, or `undefined` where it holds nothing.
+   *
+   * A document the storage does not hold is removed, and with the result
+   * document of an instance that a function body made, the instance: a
+   * handler that runs again makes them again. The result document of an
+   * instance that the storage holds is taken with the rows of each of its
+   * collections left out, and nothing of it counts as stored: the next
+   * derivation stores each path that differs and every row. The work
+   * follows the size of the result, which a refused commit is taken to
+   * allow.
+   */
+  restore(doc: string, value: unknown): void {
+    const { root, store } = this;
+    const owner = doc === root.id ? root : root.#instances.get(doc);
+    if (owner === undefined) {
+      if (value === undefined) {
+        if (store.docs.has(doc)) store.remove(doc);
+        return;
+      }
+      if (store.docs.has(doc)) store.write(new Ref(doc, []), value);
+      else store.create(doc, "external", value);
+      return;
+    }
+    const parent = owner.options.parent;
+    if (value === undefined && parent !== undefined) {
+      parent.#remove(owner);
+      parent.#nowDue();
+      return;
+    }
+    let held: unknown = value ?? {};
+    for (const unit of [...owner.#rootUnits.values()]) {
+      const path = owner.#pathOf(unit);
+      if (unit.keys.length > 0) {
+        owner.#spliceRows(unit, path, 0, [...unit.keys], [], [], () => []);
+      }
+      unit.seen = undefined;
+      owner.#dueUnits.add(unit);
+      held = withNoRows(held, path);
+    }
+    owner.#storedResult = undefined;
+    store.write(new Ref(doc, []), held);
+    owner.#nowDue();
   }
 
   /** The identifiers of the documents and declared places of the instance. */
