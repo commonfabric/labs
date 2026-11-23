@@ -1238,9 +1238,24 @@ holds the measurements and the conditions for revisiting.
   `runtime/runner/src/compiled/serving.ts` installed one. The loader
   compiles the source of a pattern that a client wrote, evaluates the value
   code its own compile gave in a compartment, and reads no artifact from
-  storage. Nothing installs it but `listenCompiledServingMemoryServer()`, a
-  helper for tests whose serving runtimes read their space from the store
-  unless its policy says otherwise, and `runCompiledPatterns()`. The option
+  storage. `listenCompiledServingMemoryServer()`, a helper for tests whose
+  serving runtimes read their space from the store unless its policy says
+  otherwise, installs it, and so does `runCompiledPatterns()`. A toolshed
+  installs it too: with the option on, `startServerExecutionHost()` of
+  `runtime/toolshed/lib/server-execution.ts` gives each serving runtime of
+  the main-thread serving loop the loader with one `PatternCompiler` for
+  the process (`runtime/toolshed/lib/compiled-patterns.ts`), which runs the
+  binary that `PATTERN_COMPILER_BINARY` names in a child process and keeps
+  what it emitted under `PATTERN_COMPILER_CACHE_DIR` where that is set. A
+  toolshed with the option on and no file at that path does not start. A
+  serving loop that runs in Workers, the default over a file store, gives
+  its runtimes no compiler and says so at startup. With the option off the
+  toolshed imports none of the executor's modules and creates its serving
+  runtimes as before. A runtime with the option on also answers a `wish`
+  of a compiled piece with its own `wish`, the built-ins a compiled piece
+  imports with its own functions, and the fetch effects of the reactive
+  tier with its own fetch built-ins (`compiled/wish.ts`,
+  `compiled/builtins.ts`). The option
   also gates the
   start of a pattern from its source: where
   `runCompiledPatterns()` of `runtime/runner/src/compiled/run.ts` gave the
