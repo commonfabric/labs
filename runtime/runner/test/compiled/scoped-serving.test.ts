@@ -243,4 +243,31 @@ describe("a compiled piece that two principals demand under the serving loop", (
     expect(ofBob).toContain("Robert reads 1");
     expect(ofBob).not.toContain("Annabel");
   });
+
+  it("holds the state of each principal when another serving loop takes the space over", async () => {
+    const { first, second, byAnn, byBob } = await started();
+    send(byAnn, "rename", { name: "Ann" });
+    send(byBob, "rename", { name: "Bob" });
+    await reads(first, byAnn, "summary", "Ann reads 1");
+    await reads(second, byBob, "summary", "Bob reads 1");
+    await serving.host.whenQuiescent();
+
+    await serving.restart();
+    // Clients that connect to the serving process that started again.
+    const [later, latest] = [clientOf(ann), clientOf(bob)];
+    const [againByAnn, againByBob] = [
+      readBy<Held>(later, "scoped"),
+      readBy<Held>(latest, "scoped"),
+    ];
+    await reads(later, againByAnn, "summary", "Ann reads 1");
+    await reads(latest, againByBob, "summary", "Bob reads 1");
+
+    send(againByBob, "post", { text: "two" });
+
+    await reads(later, againByAnn, "summary", "Ann reads 2");
+    await reads(latest, againByBob, "summary", "Bob reads 2");
+    await reads(later, againByAnn, "nickname", "Ann");
+    await reads(latest, againByBob, "nickname", "Bob");
+    expect(serving.pieces().flatMap((piece) => piece.refusals)).toEqual([]);
+  });
 });

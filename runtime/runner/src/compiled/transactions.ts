@@ -3549,6 +3549,13 @@ export class RuntimeTransactions implements TransactionHooks {
     return this.#scopes;
   }
 
+  /** The narrowest scope the piece has named a document of. */
+  get narrowestScope(): CellScope {
+    return this.#narrowest;
+  }
+
+  #narrowest: CellScope = "space";
+
   /**
    * The scope key that a document of `scope` stands for now, as the
    * storage forms it from the identity of the transaction in progress.
@@ -3586,10 +3593,14 @@ export class RuntimeTransactions implements TransactionHooks {
   /** The name of the instance that `doc` stands for now. */
   #instanceOf(doc: string): string {
     if (doc.indexOf("~") < 0) return doc;
-    if (!this.#scopes && scopeOfDocument(doc).scope !== undefined) {
+    const { scope } = scopeOfDocument(doc);
+    if (!this.#scopes && scope !== undefined) {
       this.#scopes = true;
       // What was encoded before holds links that say no scope.
       this.#encoded = new WeakMap();
+    }
+    if (scope === "session" || this.#narrowest === "space") {
+      this.#narrowest = scope ?? this.#narrowest;
     }
     return instanceNameOf(doc, (scope) => this.scopeKey(scope));
   }

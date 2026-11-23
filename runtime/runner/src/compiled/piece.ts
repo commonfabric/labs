@@ -48,6 +48,7 @@ import type { Cancel } from "../cancel.ts";
 import { type Cell, convertCellsToLinks, type MemorySpace } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
+import { scopeRank } from "../scope.ts";
 import { stampWaveRunContext, waveRunContextOf } from "../executor/wave.ts";
 import { deriveEventKey } from "../scheduler/event-identity.ts";
 import type { Action, EventHandler } from "../scheduler/types.ts";
@@ -316,6 +317,16 @@ export class CompiledPiece {
       this.#counts.derivations += 1;
       const began = performance.now();
       this.#stamp(given, "derivation");
+      // What the piece holds of documents of a scope, it holds in memory,
+      // and a run in which every entry is current reads none of them
+      // through its transaction. The run still gives the value of the
+      // principal and the session it is for, which the scheduler learns
+      // from the scope the transaction read: without it a principal that
+      // comes to demand the piece later is given no run.
+      const narrowest = transactions.narrowestScope;
+      if (scopeRank(given.getNarrowestReadScope()) < scopeRank(narrowest)) {
+        given.resetNarrowestReadScope(narrowest);
+      }
       for (const doc of this.#arrived) this.#take(doc);
       this.#arrived.clear();
       // The first derivation of the instances a handler made is a
