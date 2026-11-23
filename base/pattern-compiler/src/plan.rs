@@ -586,6 +586,9 @@ struct Emitter<'r, 'm, 'a> {
     /// Each call of a pattern compiled in, in source order: the `within`
     /// that the call is written under, as text, and the name of the call.
     site_steps: Vec<(String, String)>,
+    /// The scope of the modifier `asScope(scope)` of each call that is
+    /// being compiled in and has one, outermost first.
+    site_scopes: Vec<&'static str>,
     /// What the value-code emitter reads of this walk (`crate::emit`).
     facts: crate::emit::Facts,
 }
@@ -2855,6 +2858,22 @@ impl<'a> Emitter<'_, '_, 'a> {
 
     /// A state cell (`Plan.stateCells`), from a cell constructor.
     fn state_cell(&mut self, scope: &str, hint: &str) -> Place {
+        // At a site, a state cell has the narrowest of its own scope and
+        // the scope of each `asScope` on the chain of calls it is
+        // compiled in through (PL §8, question 161).
+        let rank = |scope: &str| match scope {
+            "session" => 2,
+            "user" => 1,
+            _ => 0,
+        };
+        let scope = self
+            .site_scopes
+            .iter()
+            .copied()
+            .fold(scope, |narrowest, at| match rank(at) > rank(narrowest) {
+                true => at,
+                false => narrowest,
+            });
         self.state_cells.push(json!({
             "name": written_at(hint),
             "scope": scope,
@@ -3297,6 +3316,18 @@ impl<'a> Emitter<'_, '_, 'a> {
                 let name = base_name(hint, &callee).to_string();
                 self.child_instance(home, start, &name, &arguments, at)
             }
+            Expression::CallExpression(inner) if self.as_scope(inner).is_some() => {
+                let (home, start, callee, scope) = self.as_scope(inner).expect("checked above");
+                let name = base_name(hint, &callee).to_string();
+                // The call is compiled in as one with no modifier is, and
+                // the state cells the callee declares take the scope.
+                self.site_scopes.push(scope);
+                self.ui_chain.push(None);
+                let result = self.inline_pattern(home, start, &name, &arguments, at);
+                self.ui_chain.pop();
+                self.site_scopes.pop();
+                result
+            }
             Expression::CallExpression(inner) if self.resolver.is_lift_call(self.module, inner) => {
                 match inner.arguments.first().and_then(FunctionLike::of_argument) {
                     Some(function) => {
@@ -3350,6 +3381,48 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 _ => return None,
             }
+        }
+    }
+
+    /// The pattern that the callee of a call names through the factory
+    /// modifier `asScope(scope)` alone, with the scope: where the pattern
+    /// is written, its name, and the scope the modifier names (PL §8,
+    /// question 161). `None` where the callee is another form, the scope
+    /// is no constant among `space`, `user` and `session`, or the modified
+    /// value is not a pattern the compiler can see.
+    fn as_scope(
+        &mut self,
+        modifier: &CallExpression<'a>,
+    ) -> Option<(usize, u32, String, &'static str)> {
+        let Expression::StaticMemberExpression(member) = unwrap(&modifier.callee) else {
+            return None;
+        };
+        if member.property.name.as_str() != "asScope" || modifier.arguments.len() != 1 {
+            return None;
+        }
+        let scope = match modifier.arguments[0]
+            .as_expression()
+            .map(|scope| unwrap(scope))
+        {
+            Some(Expression::StringLiteral(literal)) => match literal.value.as_str() {
+                "space" => "space",
+                "user" => "user",
+                "session" => "session",
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let Expression::Identifier(identifier) = unwrap(&member.object) else {
+            return None;
+        };
+        if self.env.contains_key(identifier.name.as_str()) {
+            return None;
+        }
+        match self.def_function(identifier) {
+            Some((home, start, DefKind::Pattern)) => {
+                Some((home, start, identifier.name.to_string(), scope))
+            }
+            _ => None,
         }
     }
 
@@ -8658,6 +8731,7 @@ pub fn emit_module<'a>(
             ui_bound: Vec::new(),
             pending_entries: None,
             site_steps: Vec::new(),
+            site_scopes: Vec::new(),
             facts: crate::emit::Facts::new(module, *start),
         };
         // The type the pattern declares for its result: the second type

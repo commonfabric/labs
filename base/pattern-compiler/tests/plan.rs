@@ -5292,3 +5292,66 @@ export const Table = pattern<
     assert!(paths.contains(&&json!(["0"])), "{paths:?}");
     assert!(paths.contains(&&json!(["1", "title"])), "{paths:?}");
 }
+
+/// `asScope(scope)` on a call that is compiled into the surrounding
+/// instance (PL §8, question 161, assumed): the scope of the modifier is
+/// the scope of each state cell the callee declares with a broader one, and
+/// a cell the callee declares with a narrower scope keeps its own. The same
+/// for a call in the body of a `map` over an array of plain values in
+/// place, which the plan does not tell apart from one over an array of
+/// references, and for a call outside every element body. A call with no
+/// modifier leaves the scopes as the callee declares them.
+#[test]
+fn as_scope_on_a_call_compiled_in_sets_the_scope_of_the_state_of_the_callee() {
+    let analysis = program(
+        r#"import { Writable, pattern } from "commonfabric";
+interface Item { title: string }
+const Row = pattern<{ item: Item }>(({ item }) => {
+  const open = Writable.of(false);
+  const draft = Writable.perSession.of("");
+  return { title: item.title, open, draft };
+});
+export const P = pattern<{ items: Item[]; first: Item }>(({ items, first }) => {
+  return {
+    rows: items.map((item) => Row.asScope("user")({ item })),
+    one: Row.asScope("user")({ item: first }),
+    plain: Row({ item: first }),
+  };
+});
+"#,
+    );
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the plan");
+    assert_eq!(found.unsupported, Vec::<(String, u32)>::new());
+    let cells: Vec<(String, String, bool)> = found.plan["stateCells"]
+        .as_array()
+        .expect("state cells")
+        .iter()
+        .map(|cell| {
+            (
+                cell["name"].to_string(),
+                cell["scope"].as_str().expect("a scope").to_string(),
+                cell["within"]
+                    .as_array()
+                    .expect("within")
+                    .iter()
+                    .any(|step| step.get("element").is_some()),
+            )
+        })
+        .collect();
+    let scopes = |name: &str, in_element: bool| -> Vec<String> {
+        cells
+            .iter()
+            .filter(|(cell, _, element)| cell.contains(name) && *element == in_element)
+            .map(|(_, scope, _)| scope.clone())
+            .collect()
+    };
+    assert_eq!(scopes("open", true), ["user"]);
+    assert_eq!(scopes("draft", true), ["session"]);
+    assert_eq!(scopes("open", false), ["user", "space"]);
+    assert_eq!(scopes("draft", false), ["session", "session"]);
+}

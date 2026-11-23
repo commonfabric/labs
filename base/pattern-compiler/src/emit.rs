@@ -1550,8 +1550,13 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             .iter()
             .filter_map(Argument::as_expression)
             .collect();
-        // A pattern compiled in at a call.
-        if matches!(unwrap(&call.callee), Expression::Identifier(_)) {
+        // A pattern compiled in at a call: the callee is its name, or its
+        // name under the modifier `asScope(scope)`, which is itself a call
+        // and begins where this one begins.
+        if matches!(
+            unwrap(&call.callee),
+            Expression::Identifier(_) | Expression::CallExpression(_)
+        ) {
             let inline = self
                 .generator
                 .finished

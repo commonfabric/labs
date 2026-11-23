@@ -275,3 +275,77 @@ describe("a per-element construct whose body reads state of the scope `user`", (
     );
   });
 });
+
+type Sites = {
+  rows: { title: string; open: boolean; label: string }[];
+  first: { title: string; open: boolean; label: string };
+};
+
+// `fixtures/scoped-site.tsx`: a pattern called through `asScope("user")`
+// in the body of a `map` over an array of plain values in place, and once
+// outside it. The call is compiled into the instance, and the state cell
+// the callee declares is of the scope `user`.
+describe("a pattern compiled in through `asScope(\"user\")`", () => {
+  let acting: string;
+  let instance: Instance;
+
+  const as = <T>(principal: string, run: () => T): T => {
+    acting = principal;
+    return run();
+  };
+
+  const resultOf = (principal: string): Sites =>
+    as(principal, () => {
+      instance.settle();
+      return instance.result() as Sites;
+    });
+
+  /** Sends to the stream the result holds at `path`, as `principal`. */
+  const toggle = (principal: string, path: string) =>
+    as(principal, () => {
+      const stream = instance.streams().find((held) =>
+        held.path.join("/") === path
+      )!;
+      return instance.send(stream.binding, {}, stream.elements ?? []);
+    });
+
+  beforeEach(async () => {
+    acting = "ann";
+    instance = new Instance(
+      await artifact("scoped-site"),
+      { items: [{ title: "one" }, { title: "two" }] },
+      {
+        scopes: {
+          keyOf: (scope: Scope) =>
+            scope === "user" ? `user:${acting}` : `session:${acting}:s`,
+        },
+      },
+    );
+    instance.settle();
+  });
+
+  it("keeps the state of the callee for each principal, in an element body", () => {
+    expect(toggle("ann", "rows/0/toggle").committed).toBe(true);
+
+    expect(resultOf("ann").rows.map((row) => row.label)).toEqual([
+      "one (open)",
+      "two",
+    ]);
+    expect(resultOf("bob").rows.map((row) => row.label)).toEqual([
+      "one",
+      "two",
+    ]);
+
+    expect(toggle("bob", "rows/1/toggle").committed).toBe(true);
+
+    expect(resultOf("bob").rows.map((row) => row.open)).toEqual([false, true]);
+    expect(resultOf("ann").rows.map((row) => row.open)).toEqual([true, false]);
+  });
+
+  it("keeps the state of the callee for each principal, outside an element body", () => {
+    expect(toggle("bob", "first/toggle").committed).toBe(true);
+
+    expect(resultOf("bob").first.label).toBe("first (open)");
+    expect(resultOf("ann").first.label).toBe("first");
+  });
+});
