@@ -30,9 +30,11 @@ import {
  * (`wish({ query: "#profile" })`). See `docs/specs/shared-profile-rosters.md`.
  *
  * This pattern demonstrates the **snapshot** (self-containment) variant: name +
- * picture are copied at join time, so the roster is fully self-describing
- * inside the shared space and never depends on other users' profile spaces
- * being reachable. Participants render from those snapshots via `<cf-avatar>`,
+ * picture are copied at join time, so the roster describes each participant
+ * from inside the shared space. A picture held as bytes is copied whole; one
+ * held as a blob is copied as its reference, so drawing it still fetches it
+ * from the blob's space, and it shows as initials while that space's host is
+ * unreachable. Participants render from those snapshots via `<cf-avatar>`,
  * and the current viewer's OWN live profile is shown with the trusted
  * `<cf-profile-badge>`.
  *

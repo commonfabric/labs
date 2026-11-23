@@ -100,7 +100,9 @@ participants.push({ name, ...profileFace(myProfile), joinedAt: Date.now() });
 
 - **Pros:** Self-contained — every other viewer renders from plain values
   already in the shared space, no cross-space resolution, no dependency on the
-  joiner's profile space being reachable later. Durable and trivially
+  joiner's profile space being reachable later, except that a picture held as
+  a blob is copied as its reference: drawing it fetches it from the blob's
+  space, and it shows as initials while that space's host is unreachable. Durable and trivially
   serializable. Renders identically and immediately for all viewers. Best when
   the roster must stay legible with remote profile spaces offline, or when you
   explicitly do not want a live cross-space dependency.

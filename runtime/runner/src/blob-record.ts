@@ -122,16 +122,20 @@ export function encodedBlobRecordBytes(record: BlobRecord): number {
  * does. While the session's connection is down, it waits for the connection,
  * and the commit is sent once it is back.
  *
- * @throws Error when `record` would take more than
- *   {@link MAX_BLOB_RECORD_BYTES} encoded, or when the commit is refused, which
- *   it is, unsent, when it is past what the space's connection takes in one
- *   request.
+ * @throws Error when `record` has a name that is not a file name a blob may
+ *   hold (see {@link isBlobFileName}), when it would take more than
+ *   {@link MAX_BLOB_RECORD_BYTES} encoded, or when the commit is refused. A
+ *   commit larger than the space's connection takes in one request is refused
+ *   without being sent.
  */
 export async function storeBlob(
   runtime: Runtime,
   space: DID,
   record: BlobRecord,
 ): Promise<string> {
+  if (record.name !== undefined && !isBlobFileName(record.name)) {
+    throw new Error("The name given is not one a blob may hold");
+  }
   const size = encodedBlobRecordBytes(record);
   if (size > MAX_BLOB_RECORD_BYTES) {
     throw new Error(

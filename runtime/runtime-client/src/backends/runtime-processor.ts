@@ -134,7 +134,6 @@ import {
 } from "@commonfabric/runner/cfc/custody-seal";
 import {
   blobSuffix,
-  isBlobFileName,
   storeBlob,
   storedBlobPath,
 } from "@commonfabric/runner/blob-record";
@@ -4456,11 +4455,6 @@ export class RuntimeProcessor {
     const bytes = request.body;
     if (!(bytes instanceof FabricBytes)) {
       throw new Error("uploadBlob requires bytes as its body");
-    }
-    if (request.name !== undefined && !isBlobFileName(request.name)) {
-      throw new Error(
-        "uploadBlob requires any name it is given to be one a blob may hold",
-      );
     }
     // A blob with no name has no `name` key at all, since its id is the hash
     // of exactly the record stored.

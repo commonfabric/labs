@@ -1161,11 +1161,12 @@ Untrusted avatar primitive — safe for any code to render, for any person.
 <cf-avatar name="Alan Turing" />                                    // initials "AT"
 ```
 
-- `bytes`: the bytes of a raster image, such as a profile's `picture`.
-  Non-empty bytes take precedence over `blob` and `src`.
 - `blob`: a blob holding a raster image, `{ space, id }`, such as a profile's
   `pictureBlob`, shown as the image its space's host serves (`cf-image`'s
-  `blob`). It takes precedence over `src`.
+  `blob`). A blob that names a space and an id takes precedence over `bytes`
+  and `src`.
+- `bytes`: the bytes of a raster image, such as a profile's `picture`.
+  Non-empty bytes take precedence over `src`.
 - `src`: a `data:` URI image, an emoji/glyph, or `""`. **Only `data:` URIs render
   as an image** — `http(s)`, `blob:`, and path URLs degrade to initials and are
   never fetched (no tracking/exfil beacon).

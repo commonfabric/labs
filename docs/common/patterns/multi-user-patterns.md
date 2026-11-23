@@ -320,7 +320,9 @@ profile cell you stored for them on join. Cross-space profile reads resolve for
 every authorized viewer (CT-1667/1687), so each badge stays current and carries the
 verified seal. Fall back to `<cf-avatar blob={p.pictureBlob} bytes={p.picture} src={p.avatar} name={p.name} />` only when
 you deliberately hold just a snapshot — a self-contained piece, or a participant
-whose remote profile space is offline.
+whose remote profile space is offline. A snapshot of a picture held as a blob is
+its reference, not its bytes, so it draws only while the blob's space's host is
+reachable, and shows initials otherwise.
 
 > ⚠️ **`$profile` must be at a STATIC `[UI]` position** — like every `$`-binding
 > (`$value` / `$checked`). Bind it where the JSX is built once; **never inside a
