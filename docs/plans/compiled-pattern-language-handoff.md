@@ -67,31 +67,60 @@ at a wake and a restore that dropped another principal's memo entry; a wake
 by units that left no row of a list stored in documents), so a merge is not
 finished when the conflicts are gone.
 
-**What blocks the last merge, and what it showed** (notes 982 onward on
-`merge-attempt/serving-m6`; a continuation of round seventeen is diagnosing
-all three):
+**What blocks the last merge, and what it showed** (notes 982 to 985 on
+`merge-attempt/serving-m6`, head `364a53722e`). The gates pass there except
+one case of `test/compiled/`, the first item below.
 
-- *The start commit of a piece over about 150 distinctly labeled items is
-  refused as too large.* Every document of the lists of readers (P271, 256
-  hashed parts) and of the basis parts is written by
-  `RuntimeTransactions.writeOwn` with no plan record, so each stores the
-  join of everything the transaction read. At 201 items under one clause
-  each, the commit stands for 1.44 million slots where the memory server
-  admits 1 million. The trunk head alone fails the same way when its own
-  `row-documents` case is run with 201 items. Open: why the label table of
-  the commit does not store that join once, whether today's path has the
-  same cost, and what label such a document owes (deferred question 1 of
-  round thirteen).
-- *A client that reads a list of 1,000 rows stored in chunks sees a rename
-  after 3.4 s and an add after 13 s,* while the piece spends 50 ms. Chunks
-  above 128 rows (P393) have no counterpart on today's path, where a `map`
-  keeps the links of all rows in one result cell. The layouts to compare
-  are links in place, one list document without chunks, and chunks.
-- *A FabriChat send at 100 messages gives 688 to 698 records on the merged
-  code where the serving branch gives 189.* `messageRights` is a `map` over
-  an array of references whose output is `PerSession`; the scopes code
-  stores a scoped output whole in its scope instance with a record for
-  every path, about 5 records per message held.
+- *A commit whose label table would expand past 16 MB is sent with its
+  labels inline and refused as too large. This is a defect of today's
+  runtime.* A document written with no plan record stores the join of what
+  the transaction read, once per written path. `compressLabelMetadata` in
+  `runtime/memory/v2/label-metadata-table.ts` stores an equal label once,
+  but returns the message uncompressed when the references would expand
+  past `MAX_LABEL_METADATA_EXPANSION_BYTES`, and the server then refuses
+  the inline message at `MAX_UNTRUSTED_MESSAGE_SLOTS`. A compiled piece
+  started over 201 items, each under its own clause, hits it: 1,177 of the
+  commit's 1,195 label entries are the same 30 KB join. On today's path a
+  transaction that reads 200 documents under distinct clauses commits 256
+  written documents and is refused at 600 (test kept outside the
+  repository, `work/r17-merge/today-wide-join.test.ts`). With the
+  experimental option `cfcContentAddressedLabels` on, every case passes on
+  both paths; the option waits on every deployed reader understanding
+  version-2 envelopes, which is the owner's decision. Separately, a start
+  writes one label entry per written path of its lists of readers (884 at
+  200 items), so its size follows rows times clauses read; what label such
+  a document owes is deferred question 1 of round thirteen.
+- *Chunks of a list are not to be the default* (recommendation by Z91; no
+  decision taken, the default is unchanged). With links in place, in one
+  list document, or in chunks at 128, the list fixture's second client
+  reads an add after 48, 57 and 5,023 ms at 1,000 rows and after 223, 408
+  and 67,732 ms at 10,000, against today's 189 and 2,747 ms. A client that
+  wants the rows of a chunked list in order has to watch the whole list.
+  One list document rewrites the list at every add, so the piece's time
+  follows the rows there (328 ms against 52 ms for 10 events at 10,000).
+  Five cases of `link-lists` assert the chunked layout and fail with the
+  whole-list limit unbounded.
+- *A client that watches a whole list of 1,000 rows pays seconds per
+  change in every layout,* and this is today's runtime code: the sink
+  action re-traverses every row at each callback (`Cell.sink`,
+  `subscribeToReferencedDocs`, `deepTraverse`), and 6.2 s of 8.8 s are the
+  CFC preparation of that read-only action (`prepareTxForCommit`,
+  `deriveFlowJoin`). Not measured on today's piece; a candidate for a pull
+  request against `main`.
+- *Fixed: a scoped array output was rewritten whole at an append.*
+  `Instance.#putScoped` now splices the run of positions that differs. A
+  FabriChat send at 100 messages gives 188 records (688 to 698 before, 189
+  on the serving branch). Open: a scoped output still holds all rows in one
+  document (about 175 KB more per send at 100 messages); the plan to store
+  it per row, as today's runtime does, is note 985.
+- *Not diagnosed: an edit of a Topics title follows the board on the
+  merged code.* The piece spends 120 to 134 ms at 1,000 topics and 239 to
+  285 ms at 2,000 for 8 evaluations and 4 records, where the serving
+  branch alone measured 17 to 68 ms for the second client; a create gives
+  20,000 to 46,000 records in its second run and is refused one to three
+  times. The agent's guess, not confirmed, is that the board's session
+  state makes the piece derive once per principal and session (the open
+  item of note 892). This is the first thing to diagnose.
 
 Provisional decisions were numbered per round to avoid collisions: P250 to
 P253 serving, P270 to P275 and P330 to P335 resume by units, P290 to P296
