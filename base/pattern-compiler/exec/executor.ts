@@ -7441,7 +7441,7 @@ export class Instance {
         ]);
       }
     } else if (isRecord(record)) {
-      pairs.push(...Object.entries(record));
+      for (const pair of Object.entries(record)) pairs.push(pair);
     }
     // The key of an entry is that of its name as a plain value: a name
     // stands once in a record.
