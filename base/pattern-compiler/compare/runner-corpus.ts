@@ -623,9 +623,15 @@ const runServed = async (
         woken = loaded.promise;
         await serving.restart();
       }
-      const stream = piece.instance.streams().find((held) =>
-        held.binding === binding && held.instance === undefined &&
-        held.elements !== undefined
+      // The result is read as the client reads it: a stream that stands in
+      // an output of a scope is in the instance of the client's identity.
+      const stream = piece.transactions.actingFor(
+        client.scopeKeyIdentity,
+        () =>
+          piece.instance.streams().find((held) =>
+            held.binding === binding && held.instance === undefined &&
+            held.elements !== undefined
+          ),
       );
       const entity = stream === undefined
         ? undefined
@@ -695,7 +701,12 @@ const runServed = async (
       else failures.push("the handler did not commit");
     }
     cancel();
-    const here = normalize(piece.instance.result());
+    const here = normalize(
+      piece.transactions.actingFor(
+        client.scopeKeyIdentity,
+        () => piece.instance.result(),
+      ),
+    );
     const there = normalize(alone.result());
     const difference = firstDifference(here, there);
     return {
