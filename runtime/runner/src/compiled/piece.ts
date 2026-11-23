@@ -545,6 +545,7 @@ export class CompiledPiece {
   #refused(reason: string, restored: Restored[]): void {
     this.#refusals.push(reason);
     if (!this.#started || this.#stopped) return;
+    this.instance.recordsRefused();
     for (const { doc, value } of restored) this.instance.restore(doc, value);
     this.#invalidate();
   }

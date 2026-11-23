@@ -66,6 +66,7 @@ import {
   withDefaults,
 } from "./store.ts";
 import type { PartsOptions, Sealed } from "./parts.ts";
+import { InputsDigests } from "./inputs-digest.ts";
 import {
   type Address,
   type FoldElements,
@@ -6205,6 +6206,17 @@ export class Instance {
     if (root.#givenNow.has(key)) return;
     if (!root.#placing) root.#namedIndex.clear();
     const write = this.#outputRecord(this.id, nearest.output, [...path]);
+    // The record last given for the place had these inputs, and no label
+    // one of them read changed since: the place holds the label the record
+    // would form.
+    if (
+      !root.#relabels.has(key) &&
+      root.#recordDigests.get(key) ===
+        root.#digests.of(root.#inputsTable, write.inputs, write.keys)
+    ) {
+      root.#ownReads.delete(key);
+      return;
+    }
     root.#noteRecord(key, this.id, write);
     hooks.unchanged(
       this.id,
@@ -9064,6 +9076,17 @@ export class Instance {
   /** On the root: the transaction hooks are ending a transaction. */
   #ending = false;
 
+  /** On the root: what names the content of the inputs of a record. */
+  readonly #digests = new InputsDigests();
+
+  /**
+   * On the root: the number `#digests` gave the inputs of the record last
+   * given under each key (`#noteRecord`). A record of a place that a
+   * comparison left as it was is not given again while its inputs have
+   * that number (`#unchangedOutput`).
+   */
+  readonly #recordDigests = new Map<string, number>();
+
   /** The key of the record of an output of this instance at a path. */
   #recordKey(output: number, at: readonly string[]): string {
     return JSON.stringify([this.id, output, at]);
@@ -9077,6 +9100,10 @@ export class Instance {
   #noteRecord(key: string, instance: string, write: PlanWrite): void {
     this.#givenNow.add(key);
     this.#relabels.delete(key);
+    this.#recordDigests.set(
+      key,
+      this.#digests.of(this.#inputsTable, write.inputs, write.keys),
+    );
     for (const { doc, path } of this.#recordReads.get(key) ?? []) {
       let node = this.#recordReaders.get(doc);
       for (const segment of path) node = node?.children.get(segment);
@@ -13746,6 +13773,16 @@ export class Instance {
   }
 
   /**
+   * On the root: a commit was refused, so the storage holds the label of no
+   * record given in its transaction. The record of each place that a
+   * comparison leaves as it was is given at that comparison, whatever
+   * inputs the record last given for it had (`#unchangedOutput`).
+   */
+  recordsRefused(): void {
+    this.root.#recordDigests.clear();
+  }
+
+  /**
    * On the root: takes what the storage holds for a document in place of
    * what the store holds, after a commit that wrote the document was
    * refused, and marks what read the document. `value` is what the storage
@@ -13762,6 +13799,7 @@ export class Instance {
    */
   restore(doc: string, value: unknown): void {
     const { root, store } = this;
+    root.recordsRefused();
     const owner = doc === root.id ? root : root.#instances.get(doc);
     if (owner === undefined) {
       if (value === undefined) {

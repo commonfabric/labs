@@ -1955,3 +1955,66 @@ describe("a slot of the reference at a position that a body named through a hand
     }
   });
 });
+
+// `fixtures/unchanged-place.tsx`: a change of `count` gives `parity`
+// another value, and the result is compared with its form whole, `chosen`
+// with it. The record of a place that holds what it held forms the label
+// of the place again, so it is given where the inputs of the place are
+// other ones than those the record last given for it had, and not
+// otherwise.
+describe("the record of a place of the result that a comparison left as it was", () => {
+  const started = async () => {
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("unchanged-place"),
+      { count: 1, useLeft: true, left: 5, right: 7 },
+      { transactions: recorder },
+    );
+    /** The targets of the records given for places left as they were. */
+    const leftBy = (event: { count?: number; useLeft?: boolean }) => {
+      const given = recorder.left.length;
+      instance.send(bindingOf(instance, "set"), event);
+      return recorder.left.slice(given).filter(({ cause }) =>
+        cause === "derivation"
+      ).flatMap(({ writes }) => writes).map(({ target }) =>
+        target.path.join("/")
+      );
+    };
+    return { instance, recorder, leftBy };
+  };
+
+  it("is not given again where the place has the inputs it had", async () => {
+    const { instance, leftBy } = await started();
+
+    const left = leftBy({ count: 2 });
+
+    expect(instance.result()).toMatchObject({ parity: 0, chosen: true });
+    expect(left).toEqual([]);
+  });
+
+  it("is not given again at any of three changes in a row", async () => {
+    const { leftBy } = await started();
+
+    const left = [2, 3, 4].flatMap((count) => leftBy({ count }));
+
+    expect(left).toEqual([]);
+  });
+
+  it("is given again where an evaluation bound a slot to another position", async () => {
+    const { instance, leftBy } = await started();
+
+    const left = leftBy({ count: 2, useLeft: false });
+
+    expect(instance.result()).toMatchObject({ parity: 0, chosen: true });
+    expect(left).toEqual(["chosen"]);
+  });
+
+  it("is given again where a label the record read changed", async () => {
+    const { instance, recorder, leftBy } = await started();
+
+    recorder.labelsChanged?.([{ doc: instance.argument, paths: [["left"]] }]);
+    const left = leftBy({ count: 2 });
+
+    expect(left).toEqual(["chosen"]);
+  });
+});
