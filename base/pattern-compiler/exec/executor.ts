@@ -26,6 +26,7 @@ import {
 import {
   argumentOf,
   canonical,
+  declaredMembers,
   type ElementPart,
   type ErrorState,
   errorState,
@@ -184,10 +185,23 @@ export type Plan = {
      * body of a pattern compiled in the default the callee declares for
      * the path the call bound to the slot (PL §1.1, `ReadInput`).
      */
-    /** `handle`: the body declares a handle at `at` (provisional
-     * decision P31). */
-    reads: { slot: number; at: string[]; default?: unknown; handle?: true }[];
-    computed: { at: string[]; observes: string }[];
+    /**
+     * `handle`: the body declares a handle at `at` (provisional decision
+     * P31). `schema`: the identifier of the schema of the type the body
+     * declares for that handle, under which a read through it is made.
+     */
+    reads: {
+      slot: number;
+      at: string[];
+      default?: unknown;
+      handle?: true;
+      schema?: string;
+    }[];
+    /**
+     * `schema`: for an `identity` entry where the body declares a handle,
+     * the identifier of the schema of the declared type, as on `reads`.
+     */
+    computed: { at: string[]; observes: string; schema?: string }[];
     writes: {
       target: { kind: string; slot?: number; cell?: number; path?: string[] };
       /** The label template of the write (PL §1.1, `WriteEdge.template`). */
@@ -648,6 +662,14 @@ const handleVariant = (schema: Schema | undefined): Schema | undefined => {
     : schema;
 };
 
+/**
+ * The schema of a container for a read that gives its children and reads
+ * none: each member of an array is typed as `unknown`, so a link there is
+ * given as a reference and not followed (`Store.read`, `bound`).
+ */
+const membersUnread = (schema: Schema | undefined): Schema =>
+  typeof schema === "object" ? { ...schema, items: {} } : { items: {} };
+
 /** Brings the instances of a side-writing cone up to date. */
 type Writer = (context: Context) => void;
 
@@ -1030,7 +1052,8 @@ export class Handle {
     if (!declaresHandle(schema, depth)) {
       return store.read(ref, reads, true, schema);
     }
-    const located = store.locate(ref, true, reads);
+    const declared = declaredMembers(schema);
+    const located = store.locate(ref, true, reads, false, declared);
     const member = (segment: string, at: Ref) => {
       const below = schemaBelow(schema, segment);
       return typeof below === "object" && below.asCell !== undefined
@@ -1044,12 +1067,12 @@ export class Handle {
       // The key fields that the schema of the read declares, and
       // otherwise those of the array schema that a link on the way to
       // the array holds (ruling Z52).
-      const declared = keyFieldsOf(schema);
+      const keyFields = keyFieldsOf(schema);
       const keys = store.keysOf(
         located.value,
         located.ref,
         undefined,
-        declared.length > 0 ? declared : keyFieldsOf(located.given),
+        keyFields.length > 0 ? keyFields : keyFieldsOf(located.given),
       );
       return located.value.map((held, index) =>
         member(
@@ -1061,8 +1084,12 @@ export class Handle {
       );
     }
     if (isRecord(located.value)) {
+      // A member the schema does not declare is left out, as a read under
+      // a schema that declares no handle leaves it out (`Store.read`).
       return Object.fromEntries(
-        Object.keys(located.value).map((
+        Object.keys(located.value).filter((name) =>
+          declared === undefined || declared.includes(name)
+        ).map((
           name,
         ) => [name, member(name, located.named.key(name))]),
       );
@@ -1459,9 +1486,58 @@ export class Host {
       instance.bindSlot(this, index, from, found);
       return found instanceof Ref ? found.withSchema(schema) : found;
     }
-    const value = withDefaults(this.v(found, schema), schema);
+    const value = withDefaults(
+      this.v(found, this.#handsHandles(index) ? membersUnread(schema) : schema),
+      schema,
+    );
     instance.bindSlot(this, index, from, found);
     return value;
+  }
+
+  /**
+   * Whether the read of an `enumeration` slot gives which children its
+   * container has and reads none of them. It does where no slot of the
+   * cone reads a child, or below one, as a value or a shape, and where
+   * every body of the cone that is handed the container is handed a handle
+   * at each child: the body declares a handle at `*` below the place the
+   * slot has in its argument (`Body.reads`, `handle`), and reaches a child
+   * through that handle alone. Otherwise a body is handed the children
+   * with the container, and the read follows them.
+   */
+  #handsHandles(index: number): boolean {
+    const { plan } = this.instance;
+    if (
+      this.cone === undefined || plan.slots[index].observes !== "enumeration"
+    ) {
+      return false;
+    }
+    const { root, path } = plan.slots[index];
+    const cone = plan.cones[this.cone];
+    // No slot of the cone reads a child, or below one, as anything but a
+    // reference.
+    if (
+      !cone.slots.some((other) => {
+        const slot = plan.slots[other];
+        return slot.observes !== "identity" && sameRoot(slot.root, root) &&
+          slot.path.length > path.length && slot.path[path.length] === "*" &&
+          path.every((segment, at) => segment === slot.path[at]);
+      })
+    ) return true;
+    let handed = false;
+    for (const body of cone.bodies) {
+      const { reads } = plan.bodies[body];
+      for (const { slot, at } of reads) {
+        if (slot !== index) continue;
+        const child = JSON.stringify([...at, "*"]);
+        if (
+          !reads.some((read) =>
+            read.handle === true && JSON.stringify(read.at) === child
+          )
+        ) return false;
+        handed = true;
+      }
+    }
+    return handed;
   }
 
   /**
@@ -1783,7 +1859,9 @@ export class Host {
     // An `identity` entry of `Body.computed` is a handle to the reference
     // the cone computed there (ES §2.4, "A handle or a reference from a
     // computed input").
-    for (const { at, observes } of instance.plan.bodies[body].computed) {
+    for (
+      const { at, observes, schema } of instance.plan.bodies[body].computed
+    ) {
       if (observes !== "identity" || at.includes("*")) continue;
       // A marker at such a path is handed to the body as the reference
       // to its stream (ES §2.2, assumed there under question 78).
@@ -1795,7 +1873,7 @@ export class Host {
         argument = instance.placed(
           argument,
           at,
-          instance.handleOf(reference, this),
+          instance.handleOf(reference, this, undefined, schema),
         );
         continue;
       }
@@ -1813,7 +1891,7 @@ export class Host {
         argument = instance.placed(
           argument,
           at,
-          instance.handleOf(output, this),
+          instance.handleOf(output, this, undefined, schema),
         );
       }
     }
@@ -1832,7 +1910,7 @@ export class Host {
         instance.plan.slots[slot].observes === "value"
       ).map(({ at }) => JSON.stringify(at)),
     );
-    for (const { slot, at, default: declared, handle } of layout) {
+    for (const { slot, at, default: declared, handle, schema } of layout) {
       const star = at.indexOf("*");
       // A slot at `*` stands for each element: the container is given
       // whole by the slot at its own path, where the body lists one.
@@ -1847,7 +1925,7 @@ export class Host {
         ? this.slot(slot)
         : this.withDefault(this.slot(slot), declared);
       const given = observes === "identity"
-        ? instance.handleOf(read, this, slot)
+        ? instance.handleOf(read, this, slot, handle && schema)
         : read;
       if (instance.gives(observes, argument, at)) continue;
       if (given === undefined) {
@@ -1870,7 +1948,7 @@ export class Host {
     // child the path reaches (ES §2.4): each element of a stored array,
     // and each member of a stored record, is a handle to its position,
     // over references and over plain values in place alike.
-    for (const { slot, at, handle } of layout) {
+    for (const { slot, at, handle, schema } of layout) {
       const { root, path } = instance.plan.slots[slot];
       if (
         handle === undefined || at.indexOf("*") !== at.length - 1 ||
@@ -1881,7 +1959,7 @@ export class Host {
       const held = this.at(argument, at.slice(0, -1));
       if (!(container instanceof Ref)) continue;
       const child = (key: string) =>
-        instance.handleOf(container.key(key), this, slot);
+        instance.handleOf(container.key(key), this, slot, schema);
       if (Array.isArray(held)) {
         argument = instance.placed(
           argument,
@@ -4527,9 +4605,21 @@ export class Instance {
    * and refuses a write (PL §3.11, "A write through a handle to a value
    * the instance computes").
    */
-  handleOf(value: unknown, host: Host | undefined, slot?: number): unknown {
+  handleOf(
+    value: unknown,
+    host: Host | undefined,
+    slot?: number,
+    /**
+     * The identifier of the schema of the type the body declares for the
+     * handle (`Body.reads`, `schema`), where the plan holds it. Without it
+     * the handle reads under the schema of the slot, the type of the place.
+     */
+    declaredBy?: string | false,
+  ): unknown {
     const declared = handleVariant(
-      slot === undefined
+      typeof declaredBy === "string"
+        ? this.schemaOf(declaredBy)
+        : slot === undefined
         ? undefined
         : this.schemaOf(this.plan.slots[slot].schema),
     );

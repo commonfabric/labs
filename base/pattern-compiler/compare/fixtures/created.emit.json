@@ -84,6 +84,7 @@
                     "value"
                   ],
                   "observes": "identity",
+                  "schema": "unhashed:schema/1",
                   "template": {
                     "op": "output",
                     "output": 0
@@ -256,6 +257,15 @@
                 "note"
               ],
               "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "string"
             }
           }
         ],

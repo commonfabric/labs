@@ -517,6 +517,7 @@
                     "pressed"
                   ],
                   "handle": true,
+                  "schema": "unhashed:schema/4",
                   "slot": 2
                 }
               ],

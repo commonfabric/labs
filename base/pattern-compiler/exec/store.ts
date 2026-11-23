@@ -136,6 +136,21 @@ const containerOf = (schema: Schema | undefined): Schema | undefined =>
     ) ?? schema
     : schema;
 
+/**
+ * The members a read under `schema` takes of a record: the properties the
+ * schema declares, where it declares some and admits no other. `undefined`
+ * where the read takes every member the record holds.
+ */
+export const declaredMembers = (
+  schema: Schema | undefined,
+): string[] | undefined => {
+  const outer = containerOf(schema);
+  return typeof outer === "object" && outer.properties !== undefined &&
+      !outer.additionalProperties
+    ? Object.keys(outer.properties)
+    : undefined;
+};
+
 /** The schema of a member of what a schema describes. */
 export const schemaBelow = (
   schema: Schema | undefined,
@@ -1868,6 +1883,16 @@ export class Store {
     reads?: Position[],
     /** Stop at a key: the reference is named and no key is resolved. */
     names = false,
+    /**
+     * The members a read under a schema takes of a record at the position
+     * (`declaredMembers`). Where the position holds a record with a member
+     * that is none of these, and the path crossed no key, the positions of
+     * these members are the ones read, and the position of the record is
+     * not: a change of another member of the record is no change of what
+     * the read gave. A change at the position or above it is one of every
+     * member.
+     */
+    members?: readonly string[],
   ): Located {
     let doc = ref.doc;
     this.#refresh(doc);
@@ -1997,8 +2022,19 @@ export class Store {
       at = [...at, segment];
       named_ = [...named_, segment];
     }
-    reads?.push({ doc, path: at });
-    this.#read(doc, at);
+    if (
+      members !== undefined && crossed.length === 0 && !missing &&
+      isRecord(value) && !isLink(value) && !isStream(value) &&
+      Object.keys(value).some((name) => !members.includes(name))
+    ) {
+      for (const name of members) {
+        reads?.push({ doc, path: [...at, name] });
+        this.#read(doc, [...at, name]);
+      }
+    } else {
+      reads?.push({ doc, path: at });
+      this.#read(doc, at);
+    }
     return {
       ref: new Ref(doc, at, schema),
       value,
@@ -2174,7 +2210,13 @@ export class Store {
     copies: boolean,
     bound?: Schema,
   ): unknown {
-    const located = this.locate(ref, true, reads);
+    const located = this.locate(
+      ref,
+      true,
+      reads,
+      false,
+      declaredMembers(bound),
+    );
     const id = this.addressText(located.ref);
     if (open.has(id)) return undefined;
     const reached = this.#reached?.get(bound);
@@ -2319,13 +2361,10 @@ export class Store {
     }
     if (isRecord(value)) {
       const outer = bounded ? containerOf(shape) : shape;
-      const declared = bounded && typeof outer === "object" &&
-          outer.properties !== undefined && !outer.additionalProperties
-        ? outer.properties
-        : undefined;
+      const declared = bounded ? declaredMembers(shape) : undefined;
       const copy = Object.fromEntries(
         Object.entries(value).filter(([name]) =>
-          declared === undefined || Object.hasOwn(declared, name)
+          declared === undefined || declared.includes(name)
         ).map((
           [name, member],
         ) => [

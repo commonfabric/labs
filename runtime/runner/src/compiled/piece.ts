@@ -84,6 +84,12 @@ export type CompiledPieceCounts = {
   derivations: number;
   /** Changes by other writers applied to the executor's documents. */
   changesByOthers: number;
+  /**
+   * The time the piece spent in its event handlers and in its derivation
+   * action, in milliseconds: the executor's work and the adapter's, without
+   * the commit that the scheduler makes afterwards.
+   */
+  ownMs: number;
 };
 
 /** A piece that runs from a compiled pattern. */
@@ -101,6 +107,7 @@ export class CompiledPiece {
     eventsRefused: 0,
     derivations: 0,
     changesByOthers: 0,
+    ownMs: 0,
   };
   /** The instance exists: a change by another writer can be applied. */
   #started = false;
@@ -138,10 +145,15 @@ export class CompiledPiece {
     this.transactions = transactions;
     this.#derive = (given) => {
       this.#counts.derivations += 1;
-      transactions.within(given, () => {
-        this.instance.settle();
-        this.instance.relabel();
-      });
+      const began = performance.now();
+      try {
+        transactions.within(given, () => {
+          this.instance.settle();
+          this.instance.relabel();
+        });
+      } finally {
+        this.#counts.ownMs += performance.now() - began;
+      }
     };
     this.instance = transactions.within(tx, () =>
       new Instance(
@@ -212,10 +224,16 @@ export class CompiledPiece {
     const { space } = transactions;
     const handler: EventHandler = (tx, event) => {
       this.#counts.events += 1;
-      const outcome = transactions.within(
-        tx,
-        () => this.instance.handleEvent(stream, transactions.decode(event)),
-      );
+      const began = performance.now();
+      let outcome: ReturnType<Instance["handleEvent"]>;
+      try {
+        outcome = transactions.within(
+          tx,
+          () => this.instance.handleEvent(stream, transactions.decode(event)),
+        );
+      } finally {
+        this.#counts.ownMs += performance.now() - began;
+      }
       if (!outcome.committed) this.#counts.eventsRefused += 1;
       // An event a handler sends to a stream of the piece is an event of
       // the scheduler's queue like one sent from outside.

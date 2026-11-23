@@ -75,6 +75,7 @@
                     "rows"
                   ],
                   "observes": "identity",
+                  "schema": "unhashed:schema/3",
                   "template": {
                     "op": "output",
                     "output": 0
@@ -280,6 +281,26 @@
             "id": "unhashed:schema/2",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "asCell": [
+                "readonly"
+              ],
+              "items": {
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              },
+              "type": "array"
             }
           }
         ],

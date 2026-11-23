@@ -72,7 +72,7 @@ pub struct PatternPlan {
 }
 
 /// Moves the schema documents of a plan beside it: `Slot.schema`,
-/// `Binding.eventSchema`,
+/// `ReadInput.schema`, `ComputedInput.schema`, `Binding.eventSchema`,
 /// `Plan.argumentSchema` and `Plan.resultSchema` hold the identifier of
 /// the document, and an output has no schema member (PL §1.1).
 fn name_schemas(
@@ -103,6 +103,15 @@ fn name_schemas(
     for slot in plan["slots"].as_array_mut().into_iter().flatten() {
         if let Some(document) = slot.get("schema").cloned() {
             slot["schema"] = name(&document);
+        }
+    }
+    for body in plan["bodies"].as_array_mut().into_iter().flatten() {
+        for input in ["reads", "computed"] {
+            for read in body[input].as_array_mut().into_iter().flatten() {
+                if let Some(document) = read.get("schema").cloned() {
+                    read["schema"] = name(&document);
+                }
+            }
         }
     }
     for output in plan["outputs"].as_array_mut().into_iter().flatten() {
@@ -481,6 +490,11 @@ struct Emitter<'r, 'm, 'a> {
     /// The declared type of each formal input of the body whose record
     /// is being written.
     formal_types: HashMap<String, TypeId>,
+    /// The type of each formal input the body being recorded declares
+    /// with a destructuring pattern, which `formal_types` does not hold:
+    /// the type a handle of such an input is declared with
+    /// (`ReadInput.schema`).
+    pattern_formal_types: HashMap<String, TypeId>,
     /// For each collection, the membership of what it iterates.
     iterated: Vec<Option<Value>>,
     /// Where each entry of `collections` is written.
@@ -4928,7 +4942,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut reads: Vec<(usize, Vec<String>)> = Vec::new();
         // The entries of `reads` at a position the body declares as a
         // handle (provisional decision P40).
-        let mut handle_reads: BTreeSet<(usize, Vec<String>)> = BTreeSet::new();
+        // `ReadInput.schema`: the schema of the type the body declares for
+        // each such handle, where the emitter knows the type.
+        let mut handle_reads: BTreeMap<(usize, Vec<String>), Option<Value>> = BTreeMap::new();
         let mut computed_inputs: Vec<Value> = Vec::new();
         let mut names: Names = HashMap::new();
         // The `value` entries, for an operand that names a space.
@@ -4993,7 +5009,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                                     *input == entry.input && *path == entry.path
                                 });
                         if handle {
-                            handle_reads.insert((slot, at_path.clone()));
+                            let declared = self
+                                .formal_types
+                                .get(&entry.input)
+                                .or_else(|| self.pattern_formal_types.get(&entry.input))
+                                .and_then(|ty| self.entry_type(*ty, &entry.path))
+                                .map(|ty| self.resolver.schema_of(ty));
+                            handle_reads
+                                .entry((slot, at_path.clone()))
+                                .or_insert(declared);
                         }
                         if !reads.contains(&(slot, at_path.clone())) {
                             reads.push((slot, at_path));
@@ -5074,6 +5098,25 @@ impl<'a> Emitter<'_, '_, 'a> {
                     };
                     if let Some(template) = template {
                         input.insert("template".to_string(), template);
+                    }
+                    // `ComputedInput.schema`: the schema of the type the
+                    // body declares for a handle at the entry, as
+                    // `ReadInput.schema` is.
+                    if matches!(entry.class, Class::Identity | Class::Resolved)
+                        && record
+                            .detail
+                            .handles_at
+                            .iter()
+                            .any(|(input, path)| *input == entry.input && *path == entry.path)
+                    {
+                        if let Some(ty) = self
+                            .formal_types
+                            .get(&entry.input)
+                            .or_else(|| self.pattern_formal_types.get(&entry.input))
+                            .and_then(|ty| self.entry_type(*ty, &entry.path))
+                        {
+                            input.insert("schema".to_string(), self.resolver.schema_of(ty));
+                        }
                     }
                     placed.push((entry.clone(), Err(computed_inputs.len())));
                     computed_inputs.push(Value::Object(input));
@@ -5401,8 +5444,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                     // `ReadInput.handle`: the body declares a handle at
                     // `at`, which the slot's schema, the type of the
                     // place, does not say (provisional decision P40).
-                    if handle_reads.contains(&(*slot, at.clone())) {
+                    // `ReadInput.schema`: the schema of the type the body
+                    // declares for the handle, under which a read through
+                    // the handle is made.
+                    if let Some(declared) = handle_reads.get(&(*slot, at.clone())) {
                         entry["handle"] = json!(true);
+                        if let Some(declared) = declared {
+                            entry["schema"] = declared.clone();
+                        }
                     }
                     entry
                 })
@@ -5547,6 +5596,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         // The type each formal input is declared with, where it is one
         // name.
         let mut types: HashMap<String, TypeId> = HashMap::new();
+        let mut pattern_types: HashMap<String, TypeId> = HashMap::new();
         for (formal, parameter) in formals.iter().zip(&function.params().items) {
             if let BindingPattern::BindingIdentifier(identifier) = &parameter.pattern {
                 if let Some(Ok(ty)) = identifier
@@ -5556,11 +5606,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                 {
                     types.insert(formal.clone(), ty);
                 }
+            } else if let Ok(ty) = self.resolver.formal_parameter_type(home, parameter) {
+                pattern_types.insert(formal.clone(), ty);
             }
         }
         let saved_types = std::mem::replace(&mut self.formal_types, types);
+        let saved_pattern_types = std::mem::replace(&mut self.pattern_formal_types, pattern_types);
         let body = self.body_record(plan_kind, &name, &record, &inputs, prefix, start, true);
         self.formal_types = saved_types;
+        self.pattern_formal_types = saved_pattern_types;
         if made {
             self.cone = None;
         }
@@ -8404,6 +8458,7 @@ pub fn emit_module<'a>(
             opaque: false,
             body_dynamic: Vec::new(),
             formal_types: HashMap::new(),
+            pattern_formal_types: HashMap::new(),
             iterated: Vec::new(),
             collection_starts: Vec::new(),
             hints: Vec::new(),

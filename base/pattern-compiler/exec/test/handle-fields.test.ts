@@ -50,10 +50,7 @@ describe("a read through a handle whose declared type names its fields", () => {
     expect(instance.counts.evaluations).toBeGreaterThan(before);
   });
 
-  // Not built (note 583 of `SPEC-NOTES.md`): the plan holds no schema for
-  // the type a body declares for a handle, so the executor reads a member
-  // under the type of the place, which names every field.
-  it.ignore("does not evaluate the body again when a field the type does not name changes", async () => {
+  it("does not evaluate the body again when a field the type does not name changes", async () => {
     const instance = await started();
     const before = instance.counts.evaluations;
 
@@ -77,8 +74,7 @@ describe("a read through a handle whose declared type names its fields", () => {
     expect(instance.result()).toEqual({ done: 2 });
   });
 
-  // Not built, as the case before.
-  it.ignore("reports to the transaction hooks the positions of the fields and not the root of a member", async () => {
+  it("reports to the transaction hooks the positions of the fields and not the root of a member", async () => {
     const read: string[] = [];
     const documents = [0, 1].map((index) => ({
       id: `item-${index}`,

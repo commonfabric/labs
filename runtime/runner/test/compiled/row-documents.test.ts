@@ -128,6 +128,7 @@ describe("the rows of a `map` over an array declared as references", () => {
   const started = async (
     name: string,
     options: CompiledPieceOptions = {},
+    fixture?: string,
   ) => {
     const cells = await Promise.all(
       ["one", "two", "three"].map(async (title, index) => ({
@@ -136,12 +137,12 @@ describe("the rows of a `map` over an array declared as references", () => {
           `item ${index}`,
           await labeled(`clause-${title}`),
         ),
-        value: { id: `i${index}`, title, done: false },
+        value: { id: `i${index}`, title, done: false, note: "" },
       })),
     );
     const items = runtime.getCell<unknown[]>(space, "items");
     const result = runtime.getCell<Record<string, unknown>>(space, "result");
-    const artifact = await artifactOf(name);
+    const artifact = await artifactOf(name, fixture);
     let piece: CompiledPiece | undefined;
     // The inputs are stored before the piece starts, so that the piece
     // reads the labels they store.
@@ -318,6 +319,113 @@ describe("the rows of a `map` over an array declared as references", () => {
     } finally {
       tx.abort();
     }
+  });
+
+  describe("over the fixture `handle-reads.tsx`", () => {
+    /** The path of the array of rows of `Viewed` in its result. */
+    const VIEW_ROWS = ["$UI", "children", "1", "children", "0"];
+
+    /** What the entity of the result holds at `path`, as stored. */
+    const storedAt = (
+      result: Cell<Record<string, unknown>>,
+      path: string[],
+    ): unknown => {
+      const tx = runtime.edit();
+      try {
+        return tx.readValueOrThrow({
+          ...result.getAsNormalizedFullLink(),
+          path,
+        });
+      } finally {
+        tx.abort();
+      }
+    };
+
+    it("stores a row that is a view node among the children of a view node in a document of its own", async () => {
+      const { piece, result } = await started("Viewed", {}, "handle-reads");
+
+      expect(piece.refusals).toEqual([]);
+      const stored = storedAt(result, VIEW_ROWS) as unknown[];
+      expect(stored.length).toBe(2);
+      expect(stored.every((row) => isPrimitiveCellLink(row))).toBe(true);
+    });
+
+    it("writes the document of one such row, and not the result, for an edit of one member", async () => {
+      const { piece, result, cells } = await started(
+        "Viewed",
+        {},
+        "handle-reads",
+      );
+      const stored = storedAt(result, VIEW_ROWS) as unknown[];
+      const row = parseLink(stored[1] as never).id!;
+      changed.clear();
+
+      await commit((tx) => cells[1].withTx(tx).key("title").set("second"));
+
+      expect(piece.refusals).toEqual([]);
+      expect(changed.has(row)).toBe(true);
+      expect(changed.has(result.getAsNormalizedFullLink().id)).toBe(false);
+      expect(JSON.stringify(storedAt({
+        getAsNormalizedFullLink: () => ({
+          ...result.getAsNormalizedFullLink(),
+          id: row,
+        }),
+      } as Cell<Record<string, unknown>>, []))).toContain("second");
+    });
+
+    it("evaluates nothing and writes nothing for an edit of a field of a member that no derivation reads", async () => {
+      const { piece, result, cells } = await started(
+        "Derived",
+        {},
+        "handle-reads",
+      );
+      const tx = runtime.edit();
+      try {
+        expect(result.withTx(tx).key("titles").get()).toBe("ONE,TWO");
+        expect(result.withTx(tx).key("count").get()).toBe(2);
+      } finally {
+        tx.abort();
+      }
+      const transactions = piece.instance.transactions.length;
+      changed.clear();
+
+      await commit((tx) => cells[1].withTx(tx).key("note").set("edited"));
+
+      expect(piece.refusals).toEqual([]);
+      expect(
+        piece.instance.transactions.slice(transactions).flatMap((
+          { evaluated },
+        ) => evaluated),
+      ).toEqual([]);
+      // The one entity written is the member's own: no document of the
+      // piece was written.
+      expect([...changed].filter((id) => id.startsWith("of:"))).toEqual([
+        cells[1].getAsNormalizedFullLink().id,
+      ]);
+    });
+
+    it("evaluates the `lift` over the members and not the count for an edit of a title", async () => {
+      const { piece, result, cells } = await started(
+        "Derived",
+        {},
+        "handle-reads",
+      );
+      const transactions = piece.instance.transactions.length;
+
+      await commit((tx) => cells[1].withTx(tx).key("title").set("second"));
+
+      expect(piece.refusals).toEqual([]);
+      const tx = runtime.edit();
+      try {
+        expect(result.withTx(tx).key("titles").get()).toBe("ONE,SECOND");
+      } finally {
+        tx.abort();
+      }
+      const evaluated = piece.instance.transactions.slice(transactions)
+        .flatMap(({ evaluated }) => evaluated);
+      expect(evaluated).toContain("rows");
+      expect(evaluated).not.toContain("count");
+    });
   });
 
   describe("over the fixture `ordered-rows.tsx`", () => {

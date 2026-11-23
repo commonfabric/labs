@@ -1194,9 +1194,15 @@ export class RuntimeTransactions implements TransactionHooks {
     const on = rows.filter((one) =>
       one.path.length > path.length && isPrefix(path, one.path)
     );
-    if (on.length === 0 || !isWalkableObjectNotArray(value)) {
-      return this.#encode(value);
+    if (on.length === 0) return this.#encode(value);
+    // An array of rows can stand below a member of an array, as the
+    // children of a view node do.
+    if (Array.isArray(value)) {
+      return value.map((member, index) =>
+        this.#encodeWithRows(tx, store, on, [...path, `${index}`], member)
+      );
     }
+    if (!isWalkableObjectNotArray(value)) return this.#encode(value);
     return Object.fromEntries(
       Object.entries(value).map(([name, member]) => [
         name,

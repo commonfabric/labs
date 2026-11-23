@@ -67,7 +67,7 @@
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
             {
-              "eventSchema": "unhashed:schema/3",
+              "eventSchema": "unhashed:schema/4",
               "handler": {
                 "body": 3
               },
@@ -239,6 +239,7 @@
                     "counts"
                   ],
                   "handle": true,
+                  "schema": "unhashed:schema/3",
                   "slot": 5
                 },
                 {
@@ -640,25 +641,25 @@
           "stateCells": [
             {
               "name": "value",
-              "schema": "unhashed:schema/4",
+              "schema": "unhashed:schema/5",
               "scope": "space",
               "within": []
             },
             {
               "name": "last",
-              "schema": "unhashed:schema/5",
+              "schema": "unhashed:schema/6",
               "scope": "space",
               "within": []
             },
             {
               "name": "seen",
-              "schema": "unhashed:schema/5",
+              "schema": "unhashed:schema/6",
               "scope": "space",
               "within": []
             },
             {
               "name": "counts",
-              "schema": "unhashed:schema/6",
+              "schema": "unhashed:schema/7",
               "scope": "space",
               "within": []
             }
@@ -716,6 +717,19 @@
           {
             "id": "unhashed:schema/3",
             "schema": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "asCell": [
+                "cell"
+              ],
+              "properties": {},
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
               "properties": {
                 "to": {
                   "type": "string"
@@ -728,19 +742,19 @@
             }
           },
           {
-            "id": "unhashed:schema/4",
+            "id": "unhashed:schema/5",
             "schema": {
               "default": "a"
             }
           },
           {
-            "id": "unhashed:schema/5",
+            "id": "unhashed:schema/6",
             "schema": {
               "default": ""
             }
           },
           {
-            "id": "unhashed:schema/6",
+            "id": "unhashed:schema/7",
             "schema": {
               "additionalProperties": {
                 "type": "number"

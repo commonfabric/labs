@@ -62,6 +62,7 @@
                     "*"
                   ],
                   "handle": true,
+                  "schema": "unhashed:schema/3",
                   "slot": 1
                 },
                 {
@@ -77,6 +78,7 @@
                     "a"
                   ],
                   "handle": true,
+                  "schema": "unhashed:schema/3",
                   "slot": 3
                 }
               ],
@@ -282,6 +284,23 @@
           {
             "id": "unhashed:schema/2",
             "schema": {
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "asCell": [
+                "readonly"
+              ],
               "properties": {
                 "name": {
                   "type": "string"

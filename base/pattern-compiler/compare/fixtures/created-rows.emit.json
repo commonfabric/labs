@@ -73,6 +73,7 @@
                     "*"
                   ],
                   "handle": true,
+                  "schema": "unhashed:schema/4",
                   "slot": 1
                 }
               ],
@@ -348,6 +349,23 @@
             "id": "unhashed:schema/3",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "asCell": [
+                "readonly"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "type": "object"
             }
           }
         ],

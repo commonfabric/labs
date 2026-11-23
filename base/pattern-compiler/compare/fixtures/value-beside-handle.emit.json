@@ -54,6 +54,7 @@
                     "author"
                   ],
                   "handle": true,
+                  "schema": "unhashed:schema/2",
                   "slot": 0
                 },
                 {
@@ -270,6 +271,34 @@
                 "name"
               ],
               "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "name"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "asCell": [
+                "cell"
+              ]
             }
           }
         ],

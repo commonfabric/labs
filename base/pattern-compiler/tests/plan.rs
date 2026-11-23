@@ -4980,3 +4980,74 @@ export const P = pattern<{ title: string; rows: string[] }>(({ title, rows }) =>
     );
     assert!(!plan.to_string().contains("$site"), "{plan}");
 }
+
+#[test]
+fn a_handle_entry_of_a_body_names_the_schema_of_the_type_the_body_declares() {
+    // `ReadInput.schema` and `ComputedInput.schema`: the slot's schema is
+    // the type of the place, which names every field of a member; the body
+    // declares a handle to a type that names one.
+    let analysis = program(
+        r#"import { type Default, lift, pattern, type ReadonlyCell, Writable } from "commonfabric";
+interface Item { title: string; note: string }
+interface Row { title: string }
+const rowsOf = lift(
+  ({ sources }: { sources: ReadonlyCell<{ title: string }>[] | Default<[]> }): Row[] =>
+    Array.from(sources).map((source) => ({ title: source.get().title })),
+);
+const titlesOf = lift(
+  ({ rows }: { rows: ReadonlyCell<Row[]> }): number => rows.get()?.length ?? 0,
+);
+export const P = pattern<{ items: Writable<Item[]> }, { rows: Row[]; titles: number }>(
+  ({ items }) => {
+    const rows = rowsOf({ sources: items });
+    return { rows, titles: titlesOf({ rows }) };
+  },
+);
+"#,
+    );
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the pattern");
+    let document = |name: &Value| -> Value {
+        found
+            .schemas
+            .iter()
+            .find(|(id, _)| json!(id) == *name)
+            .map(|(_, document)| document.clone())
+            .unwrap_or_else(|| panic!("no schema document named {name}"))
+    };
+    let bodies = found.plan["bodies"].as_array().expect("bodies");
+    let handle = bodies[0]["reads"]
+        .as_array()
+        .expect("reads")
+        .iter()
+        .find(|read| read["handle"] == json!(true))
+        .expect("a handle entry");
+    assert_eq!(handle["at"], json!(["sources", "*"]));
+    assert_eq!(
+        document(&handle["schema"])["properties"],
+        json!({ "title": { "type": "string" } })
+    );
+    // The slot of the same entry names the type of the place.
+    let slot = &found.plan["slots"][handle["slot"].as_u64().expect("a slot") as usize];
+    assert!(document(&slot["schema"])["properties"]["note"].is_object());
+    let computed = bodies[1]["computed"]
+        .as_array()
+        .expect("computed")
+        .iter()
+        .find(|input| input["observes"] == json!("identity"))
+        .expect("an identity entry");
+    assert_eq!(
+        document(&computed["schema"])["items"]["properties"],
+        json!({ "title": { "type": "string" } })
+    );
+    // An entry of another class names no schema.
+    assert!(bodies[0]["reads"]
+        .as_array()
+        .expect("reads")
+        .iter()
+        .all(|read| read["handle"] == json!(true) || read.get("schema").is_none()));
+}
