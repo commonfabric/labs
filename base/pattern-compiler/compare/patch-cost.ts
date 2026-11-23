@@ -142,10 +142,11 @@ const measure = async (size: number, labels: boolean) => {
     "append",
     (tx, turn) => list.withTx(tx).push(members[size + turn]),
   );
+  let order = members.slice(0, size + STEPS);
   await step("move", (tx) => {
-    const held = [...(list.withTx(tx).getRaw() as unknown[])];
-    const [moved] = held.splice(middle, 1);
-    list.withTx(tx).setRaw([moved, ...held]);
+    const [moved] = order.splice(middle, 1);
+    order = [moved, ...order];
+    list.withTx(tx).set(order);
   });
   await step(
     "add",

@@ -12995,6 +12995,435 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
     (`kept-index.test.ts`); a read of one position among the keys was not
     compared.
 
+## Milestone 3, seventh round: the documents that grow with the board
+
+Notes 646 on are about the seventh round of milestone 3 (2026-11-23). Whenever a
+note says `map`, it names the case. A function of a profile is named with its
+file. The numbers 657 to 699 are left to later rounds of milestone 3.
+
+646. **What the round did.** In order: the rows of `namesTable` as documents on
+     the two boards (note 647); each bucket of a kept index as a document of its
+     own, and no stored array of the occupied keys (note 648), with the labels
+     of a bucket document (note 649); what a change of one link of a document of
+     links costs in the runtime itself, measured apart from any piece (note
+     650); the move of one row of a sorted order (note 651); the argument of a
+     function body read once, which also has the `lift` `backlinksOf` of a new
+     topic read one bucket (note 652); the key of a stored plain value that
+     holds links (note 653); the load (note 654); and the boards measured (note
+     655). Stubbed with a plan: a move of one row that writes a bounded number
+     of positions (note 651), and the read of a stored value that is frozen and
+     not copied (note 652). Not done: the records of the rows of the pivot that
+     a create gives again (P69), which is CFC question 4 and now the largest
+     part of a create.
+647. **The rows of `namesTable` as documents on the boards (provisional decision
+     P87).** On the branch `claude/compiled-pattern-topics-runs`,
+     `board-filing-order.tsx` declares the input of both boards as `BoardInput`,
+     whose `names` is a record of `Writable<TopicDemand>` (`BoardNames`), where
+     `main.tsx` declares a record of unknown values (`NamesMap`).
+     `rowDocumentCollections` then takes the `map` over the entries of the
+     record, and the result document holds a link for each row. The label
+     entries of the result document below `namesTable` are 6 at every size,
+     where they were three for each topic.
+648. **Each bucket of a kept index is a document of its own (provisional
+     decision P88).**
+     - _The stored index._ `Instance.indexRecord` of `exec/executor.ts` gives
+       `{ kind, mode, buckets }` and no `keys`: the occupied keys are the names
+       of the members of `buckets`, in the order the buckets came to exist. The
+       array of the occupied keys was written whole when a key left the middle
+       of it (P83), which is a write as long as the index for a change of one
+       member.
+     - _Which indexes._ `bucketDocumentCollections` of `exec/row-documents.ts`:
+       a `groupBy` or a `keyBy` written in no element body that the result keeps
+       at a path through no element. `startCompiledPiece` gives the set to the
+       executor (the `Instance` option `bucketDocuments`) and to the adapter,
+       unless `rows` is `in-place`.
+     - _The executor_ writes the record `buckets` of such an index member by
+       member (`put` in `Instance.#place`): a bucket that emptied is removed
+       (`Store.put` of nothing at a member of a record removes the member), and
+       each other bucket is compared by itself. The record is written for none
+       of them.
+     - _The adapter_ (`RuntimeTransactions` of
+       `runtime/runner/src/compiled/transactions.ts`) stores the bucket of an
+       encoded key in the document
+       `identifierOf({ buckets: [doc, ...path], key })`, with a link to it at
+       the bucket's member of `buckets` in the result document (`BucketRecord`,
+       `#bucketDocument`, `#writeBucket`, `#placeOf`). A member that moves from
+       one bucket to another writes the two documents and nothing of the result
+       document. A bucket that comes to exist writes its document and one link,
+       and a bucket that emptied loses its document and its link. A read at or
+       above the record reads every bucket document.
+     - _A second piece that is handed the stored index_ reads the bucket through
+       the link, as it reads any stored link; nothing in `Host.lookup` changed.
+     - _Tests._ `runtime/runner/test/compiled/kept-index.test.ts`: the stored
+       shape; the link and the document of each bucket; a member that moves
+       between two buckets, with the stored result document compared as text
+       before and after; a bucket that comes to exist and one that empties; and
+       the number of label entries of the result document at the load for four
+       buckets as for two. Each was written first and failed for the stated
+       reason. The case of the occupied keys of P83 is replaced by the same
+       reads of the buckets after a key left and another entered.
+       `crossref.test.ts` reads the bucket's document for the link to the row.
+     - _Result._ The result document at 1,000 topics is 0.81 MB, from 2.0 to 2.3
+       MB, and holds 66 label entries at every size, from 4,094. An edit of the
+       `shortName` writes two bucket documents, two links of the result document
+       and the rows.
+649. **The labels of a bucket document (provisional decision P89).** Three facts
+     of the runtime decide them, each found by a test of this round.
+     - A read that follows a link consumes the label of the document the link
+       leads to and nothing of the entries above the link in the document that
+       holds it. With the buckets in place, a read of a bucket consumed the
+       entry of the index above it.
+     - The record of the index, instantiated for a write after the load, gives
+       the clause of the member that changed and not the fold over every member:
+       with four items under a clause each, the bucket a member entered had the
+       clause of that member alone. This is CFC question 8; with the buckets in
+       place the entry of the index above covered it.
+     - A record of the plan has to name a path the transaction wrote, so the
+       link of a bucket cannot be covered by a record at the record `buckets`.
+     - _What is built._ At a write at or above the record `buckets`, as the load
+       makes it, each bucket document has the record of the index, and stores
+       the fold. A bucket document written after that is written under no
+       record: it stores the join of what its transaction read, and the
+       transaction reads the index at its own position in the result document
+       (`kind`), so the join holds the entry of the index. For a read by the
+       executor of a bucket at its path in the result document, the adapter
+       names the position of the link as a position the read went through
+       (`#crossedBucketLink`, in `below` of a binding and among the dynamic
+       reads), and `labelOf` joins what the read consumes of the result document
+       at that position with what it consumes of the bucket document.
+     - _What it leaves._ A link to a bucket that comes to exist after the load
+       stores two label entries at its path in the result document, the stamps
+       of a write under no record, so the entries of the result document grow by
+       two for each bucket made after the load (CFC question 15). A bucket
+       document that no transaction writes keeps the label it has (CFC question
+       13).
+     - _An existing assertion changed._ `crossref.test.ts` read the record
+       `byName/buckets` and expected the clause of the four topics. The read
+       returns the title of the topic `tz` too, which is mentioned and is in no
+       array: with the buckets in place it consumed no clause of `tz`, and with
+       the buckets as documents it consumes it. The two assertions now expect
+       the five clauses (CFC question 19).
+650. **Scale, structural: in the runtime itself, a change of one link of a
+     document of links costs in proportion to the document.**
+     `compare/patch-cost.ts` starts no piece: one document holds N links, as an
+     array and as a record, and each step is one transaction with one write,
+     timed until the commit is settled and the scheduler is idle; the median of
+     9, emulated storage, in milliseconds.
+
+     | step, with labels stored or not              | 1,000 links, 88 KB | 2,000, 176 KB | 4,000, 352 KB | 8,000, 704 KB |
+     | -------------------------------------------- | -----------------: | ------------: | ------------: | ------------: |
+     | one link of the array replaced, no labels    |                4.8 |           6.3 |          12.7 |          23.0 |
+     | one link appended to the array, no labels    |                3.4 |           6.2 |          13.5 |          23.8 |
+     | one link moved, the array written, no labels |               18.4 |          34.7 |          64.0 |         126.2 |
+     | one member added to the record, no labels    |                4.7 |           8.4 |          20.8 |          39.1 |
+     | one link of the array replaced, labels       |               14.0 |          23.8 |          52.9 |         118.6 |
+     | one link appended to the array, labels       |               12.0 |          24.8 |          53.8 |         120.7 |
+     | one link moved, the array written, labels    |               39.5 |          81.3 |         172.3 |         429.2 |
+     | one member added to the record, labels       |               19.0 |          39.1 |          81.9 |         178.2 |
+
+     The machine had a load average of 5.2 from other work.
+
+     With labels stored, a replacement of one link takes 14 to 17 ms for each
+     100 KB of the document, and without them about 3 to 5 ms. A move of one
+     link, written as the array, takes five to six times a replacement without
+     labels and three times with them. The six longest timings of the logger for
+     the nine replacements at 8,000 links without labels are the refresh of the
+     watches of the storage (`storage.v2/watchRefresh`, 764 ms over the nine),
+     the client's decoding of what it receives
+     (`memory.v2.client/receive/decodeBoundary`, 167 ms) and the memory server's
+     refresh of the sessions the commit touched (`memory/memory/flush/refresh`,
+     67 ms). So a subscriber of a document receives and decodes the document for
+     a change of one path, and the server evaluates its subscriptions over the
+     document again. In the profile of a create at 2,000 topics,
+     `applyCommitTransaction` of `runtime/memory/v2/engine.ts` takes 132 ms and
+     `refreshTrackedGraph` of `runtime/memory/v2/query.ts` 137 ms.
+     - _What the compiled path still writes into documents that grow with the
+       board:_ the result document, which holds five lists of links (the three
+       arrays of rows, the cards and the record of buckets, 155 bytes for each
+       link, 0.81 MB at 1,000 topics); and, on a create, the array of topic
+       references (372 KB) and the record of names (369 KB) of the board's
+       input, which the handler appends to.
+     - _What storage would need,_ in no milestone: a change delivered to a
+       subscriber as the patch and not as the document; a subscription evaluated
+       again for the paths a patch touched; the preparation's work on the stored
+       labels of a document bounded by the paths written; and an array or a
+       record of links stored in chunks, so that a list of 2,000 links is no
+       single document (the part documents of P20).
+     - _On the compiled path,_ a link is written with the space of its target
+       (`createSigilLinkFromParsedLink` in `#writeRow` and `#writeBucket`),
+       which is 56 of its 155 bytes where the target is in the space of the
+       result. Not removed.
+651. **The move of one row of a sorted order: stubbed, with what was measured
+     (provisional decision P90).** A change of one sort key gives two splices of
+     the assembly, and `Instance.#storeUnit` gives each to the storage. The
+     adapter wrote every position behind each splice through the transaction: at
+     2,000 topics 3,000 writes of a link for a move from the middle to the
+     front, 34 ms of the step's 123 ms in `#spliceRows`. A splice that shifts
+     more than 16 positions is now written as one write of the array, under a
+     read of the array (`SPLICE_AS_POSITIONS`): 56 and 94 ms at 1,000 and 2,000
+     topics in the median of three runs, where one run before that change, with
+     the buckets as documents already, had 55 and 123. The storage still reports
+     one changed path for each position between the old place and the new, 501
+     at 1,000 topics, and the step follows the board.
+     - _Why no bounded representation was built._ The reader of the order is the
+       list of the children of a view node, which is an array. The transaction
+       of the runtime has no write of a splice: a commit sends the difference
+       between the document before and after, as splices where the server takes
+       marked splices and the transaction read the array
+       (`V2StorageTransaction.#arraySpliceGate`), and index by index otherwise.
+       Whether the commits of the harness sent splices was not read from the
+       wire.
+     - _Plan._ (1) Verify on the wire what a move sends with the read of the
+       array in place, and make the gate open for a compiled piece where it is
+       not. (2) Keep the links of a row array in the adapter, so that the array
+       written is built from links that are frozen and compared by identity. (3)
+       With chunks of an array as documents (note 650), a move writes the two
+       chunks it touches.
+652. **The argument of a function body is read once (provisional decision
+     P91).** `Host.invoke` of `exec/executor.ts` copied the computed part
+     (`Host.pass`), which reads each reference in it, and then read each entry
+     of `Body.reads` with `Host.slot` and put it at its path.
+     - _A `lift` over an array of plain values in place_ (`Whole` of
+       `fixtures/sandbox-cost.tsx`): the entry at `items` is an `enumeration`
+       entry, which gives way to what the argument holds, and its slot was read
+       before that was known. The slot is now read only where the entry does not
+       give way. One read of the array for a call, from two: an edit of one
+       title takes 0.56, 5.5 and 57 ms at 100, 1,000 and 10,000 rows on the
+       executor in memory, from 1.0, 10.2 and 99, and the load 0.85, 6.4 and 64
+       ms from 1.3, 10.9 and 112.
+     - _A `lift` that declares a record as a cell and reads one scalar of it as
+       a value,_ as `backlinksOf` of `topic.tsx` does with the stored index and
+       its `kind`: the `value` entry below the cell made `pass` read the whole
+       record with every link followed, before the entry of the cell put a
+       handle there. So the first derivation of a new topic read the index,
+       every row it links to and every topic those hold, and depended on all of
+       it. `pass` now gives nothing at a path that a `value` or an `identity`
+       entry of `Body.reads` fills (`filled`). This is step 1 of the plan of
+       note 704 carried out in the executor: the emitter still writes the
+       expression, and nothing is read from it.
+     - _On Topics_ a create reads 283, 2,083 and 4,083 positions at 100, 1,000
+       and 2,000 topics, from 801, 7,101 and 14,101, and `backlinksOf` reads the
+       one bucket of its topic. No pattern change was needed. The two positions
+       for each topic that remain were not traced.
+     - _Tests._ `exec/test/body-argument.test.ts` over the fixture
+       `compare/fixtures/body-argument.tsx`: one read of the array for a call;
+       no read of the record or of its rows whole; and no evaluation when
+       another member of the record changes. Each failed first: two reads, a
+       read of `board`, and an evaluation.
+     - _Stubbed: no copy of a read whose stored value is frozen_ (step 2 of the
+       plan of note 704). `Store.read` still copies what it reads, 46 of the 57
+       ms at 10,000 rows. It needs the corpus run both ways, as that note says,
+       and was not started.
+653. **The key of a stored plain value that holds links (provisional decision
+     P92; the plan of note 643).** `Store.#keysOf` of `exec/store.ts` formed the
+     key of each plain member of a stored array from the member read with every
+     link followed. A member that holds links is now keyed by its own content
+     with each link as the address of what it names (`Store.#linksNamed`,
+     `Store.addressOf` of the position the link is located at), and a member
+     that holds none keeps the key it has.
+     - _Scale._ `compare/fixtures/value-references.tsx`: a `lift` gives one pair
+       of references for each mention, plain values generated from scratch, and
+       a `map` over the pairs reads the title of the topic that mentions. With
+       each topic mentioning the two before it, the load took 15, 46 and 259 ms
+       at 16, 20 and 24 topics, five times as long for each four topics more. 64
+       topics now load in 49 ms.
+     - _Correctness, found by the test._ A write of the title of a topic that
+       the pairs lead to formed every key again from the changed content, and
+       every row of the `map` then held nothing: the result was 13 times
+       `undefined` at 8 topics. The keys now stay, and so do the rows.
+     - _What the keying no longer reads:_ the documents the links lead to, at
+       any depth. It registered a read of each whole (`KeyState.others`), so a
+       write to any of them formed the keys again; it now registers the reads
+       that find what each link names (`Position.own`), as it does for a member
+       that is a link. This is CFC question 10, which stays deferred.
+     - _Not changed:_ `Instance.#table` keys a plain value of an array that no
+       document holds by `this.store.partOf(this.stored(host.v(member.value)))`,
+       with every reference followed. No fixture reaches that line with a value
+       that holds a reference, so it was left as it is.
+     - _Test._ `exec/test/value-references.test.ts`. The second case failed
+       first on the rows that held nothing; the third does not finish without
+       the change, and was seen at 20 topics before it.
+654. **The load.** The load writes a document for each bucket and for each row
+     of `namesTable`: 5,011 documents at 1,000 topics, from 3,011.
+
+         | load, median of three runs, ms | 100 | 1,000 | 2,000 |
+     | ------------------------------ | --: | ----: | ----: | | `filing-order`,
+     round 6 | 431 | 3,420 | 7,993 | | `filing-order`, this round | 495 | 4,088
+     | 8,773 | | `sorted-references`, round 6 | 437 | 3,568 | 7,997 | |
+     `sorted-references`, this round | 503 | 4,031 | 8,424 |
+
+     The load is linear in the board: 5.0, 4.1 and 4.4 ms for each topic at 100,
+     1,000 and 2,000. Nothing in it is more than linear, and nothing was
+     removed. The profile of one load of `filing-order` at 2,000 topics (8.2 s,
+     26 commits, 10,011 documents, 46,016 records given and 8,129 recorded), by
+     the innermost of the components on each sampled stack: the runtime's
+     transaction and the client's storage 2.5 s (the writes through the
+     transaction, the commit, what is sent and received); the executor 2.2 s, of
+     which the keys and identifiers of rows are 0.9 s (`recordOfKey`,
+     `identifierOf`, `textOf` of `exec/store.ts`) and `canonical` 0.17 s; the
+     preparation and the encoding of labels 1.8 s; the adapter 0.54 s, of which
+     `#encode` 0.24 s; the memory server 0.37 s beside what it shares with the
+     hashing counted above, with `applyCommitTransaction` at 0.84 s by the
+     outermost frame; and garbage collection 0.56 s.
+655. **Topics measured.** The arm `runner` of `compare/topics/scale.ts`, rows
+     and buckets as documents, the load in bounded transactions, no pull,
+     `SCALE_TOPIC_SCHEMA=mentions-as-cells`, one process for each board and
+     size, three runs, on an 18-core machine at load averages of 4.3 to 7.1. A
+     cell is the median of the three runs of the time until the board is up to
+     date, in ms; a create is the median of three creates in each run. "Round 6"
+     is note 644.
+
+         | Board `filing-order`     | round 6 (note 644) | this round        | lowest to highest at 2,000 |
+     | ------------------------ | ------------------ | ----------------- |
+     -------------------------- | | load | 431, 3,420, 7,993 | 495, 4,088, 8,773
+     | 8,365 to 9,240 | | edit of a title, first | 16, 18, 23 | 17, 20, 22 | 20
+     to 25 | | edit of a title, middle | 11, 12, 18 | 12, 15, 19 | 18 to 21 | |
+     edit of a title, last | 11, 11, 12 | 11, 182, 14 | 11 to 15 | | edit of the
+     mentions | 13, 181, 17 | 13, 16, 29 | 19 to 30 | | edit of the `shortName`
+     | 42, 275, 969 | 20, 35, 389 | 350 to 426 | | edit of `lastActivityAt` | 8,
+     10, 11 | 9, 9, 9 | 9 to 11 | | create | 165, 1,109, 3,323 | 145, 792, 1,465
+     | 1,371 to 1,580 |
+
+     | Board `sorted-references` | round 6 (note 644) | this round        | lowest to highest at 2,000 |
+     | ------------------------- | ------------------ | ----------------- | -------------------------- |
+     | load                      | 437, 3,568, 7,997  | 503, 4,031, 8,424 | 8,276 to 8,600             |
+     | edit of a title, first    | 17, 18, 25         | 17, 20, 22        | 20 to 22                   |
+     | edit of a title, middle   | 13, 14, 14         | 13, 13, 19        | 18 to 19                   |
+     | edit of a title, last     | 10, 10, 16         | 11, 171, 12       | 11 to 14                   |
+     | edit of the mentions      | 14, 16, 16         | 13, 16, 48        | 20 to 315                  |
+     | edit of the `shortName`   | 47, 417, 1,037     | 20, 38, 349       | 52 to 358                  |
+     | edit of `lastActivityAt`  | 38, 232, 558       | 19, 56, 94        | 93 to 100                  |
+     | create                    | 178, 1,293, 3,096  | 150, 763, 1,501   | 1,471 to 1,590             |
+
+     Each cell holds the figures at 100, 1,000 and 2,000 topics. What one step
+     does on `filing-order` at the three sizes, from the first run, and the size
+     as JSON of the documents its last commit changed, from a fourth run with
+     the commits listed:
+
+     | step                     | evaluations | positions read    | records given     | piece's own ms | preparation ms | bytes of the last commit's documents |
+     | ------------------------ | ----------: | ----------------- | ----------------- | -------------- | -------------- | ------------------------------------ |
+     | edit of a title, middle  |           5 | 11, 11, 11        | 9, 9, 9           | 3, 3, 3        | 3, 3, 3        | 8,630, 8,636, 8,642                  |
+     | edit of the mentions     |          12 | 4, 4, 4           | 5, 5, 5           | 3, 4, 5        | 3, 3, 16       | 10,358 at every size                 |
+     | edit of the `shortName`  |           8 | 11, 11, 11        | 18, 18, 18        | 5, 12, 16      | 5, 8, 14       | 114,895, 819,607, 1,603,615          |
+     | edit of `lastActivityAt` |           3 | 10, 10, 10        | 7, 7, 7           | 2, 2, 2        | 2, 2, 2        | 5,877, 5,880, 5,883                  |
+     | create                   |          21 | 283, 2,083, 4,083 | 202, 1,102, 2,102 | 41, 227, 435   | 43, 225, 388   | 139,652, 844,375, 1,628,377          |
+
+     The bytes of the last commit of an edit of the `shortName` and of a create
+     are those of the result document, of which an edit of the `shortName`
+     changes two links and a create nine paths. On `sorted-references` an edit
+     of `lastActivityAt` evaluates 5 entries, reads 10 positions and gives 11
+     records at every size, with the piece's own time 4, 20 and 33 ms and the
+     preparation 4, 7 and 12 ms. Every table, with the lowest and the highest
+     run and the counters of both boards, is in `tables-final.md` of the round's
+     raw output.
+
+     - _Three cells are a pause in the harness's own write and not the piece:_
+       an edit of the `shortName` at 2,000 topics on both boards (389 and 349
+       ms, with the piece and the preparation at 30 and 25 ms together) and an
+       edit of the title of the last topic at 1,000 (182 and 171 ms, with 6 and
+       5 ms). See the last item of this note.
+
+     - _An edit of the `shortName`_ no longer follows the board in what it
+       writes. What of its time still does: the executor forms the record of the
+       index whole and compares each bucket (`Instance.indexRecord`, `put`), the
+       piece's own time; and the commit patches the result document at two links
+       (note 650).
+     - _A create_ is 145, 792 and 1,465 ms on `filing-order`, from 165, 1,109
+       and 3,323, and it still follows the board. From the profile of a create
+       at 2,000 topics (1,565 ms, the piece 478 ms, the preparation 463 ms): the
+       record of each row of the pivot is given again, which is
+       `Instance.#relabel` (149 ms), the adapter's keeping of the label entries
+       of each row document before and after (`#noteUnchanged` and
+       `#reportUnchanged`, 114 ms) and the instantiation of a label for each
+       record in the preparation (`planLabelsFor`, 125 ms); `canonical` of
+       `exec/store.ts` forms the text of the value of each assembly the create
+       evaluated, which is as long as the board (97 ms in `Instance.#ensure`);
+       the memory server applies the commits of three documents that grow with
+       the board (132 ms) and evaluates its subscriptions (137 ms); and 127 ms
+       are garbage collection. The first item is P69 and CFC question 4.
+     - _The create at 2,000 topics of the round before,_ 3,323 ms where round 5
+       had 2,174: the baseline run of this round, before any change, has 3,579
+       ms for the second create with the piece's own time at 1,303 ms, of which
+       the two whole reads of the index and the pivot by `backlinksOf` are the
+       part that note 652 removed. The reads were the same in round 5, so the
+       difference between those two rounds is not explained by them; a create at
+       2,000 topics allocates past the heap's limit and takes a major collection
+       in some runs and not in others (note 638), and the spread of the three
+       runs here is 1,371 to 1,580 ms.
+     - _A pause that is no work of the piece._ In the profile of an edit of the
+       `shortName` at 2,000 topics, 291 of the step's 353 ms are one call of
+       `deepFreeze` of `base/data-model/src/deep-freeze.ts` under the `Cell.set`
+       of the harness's own write, the weak table of note 638. The piece and the
+       preparation took 32 ms of that step. It falls on whichever step grows the
+       table past its size, in the median of three runs or not.
+656. **Provisional decisions of the round, and what was not done.** P87: the two
+     measured boards declare the members of the namespace as cells (note 647).
+     P88: each bucket of an index the result keeps at a path through no element
+     is a document of its own, the stored index holds no array of its occupied
+     keys, and the record of the buckets is written member by member (note 648).
+     P89: a bucket document has the record of the index at a write at or above
+     the record of the buckets and the join of what its transaction read after
+     that, with a read of the index at its position; a read of a bucket by the
+     executor names the position of the link as one it went through (note 649).
+     P90: a splice that shifts more than 16 positions of an array of row
+     documents is one write of the array under a read of the array (note 651).
+     P91: nothing is read of the computed part of a body's argument at a path
+     that a `value` or an `identity` entry of `Body.reads` fills, and an entry
+     that gives way reads no slot (note 652). P92: a stored plain value that
+     holds links is keyed by its content with each link as the address it names
+     (note 653). Not done: a move of one row that writes a bounded number of
+     positions (note 651); a read of a frozen stored value without a copy (note
+     652); the key of a plain value that no document holds (note 653); the index
+     formed in the executor for the buckets that changed alone; the records of
+     P69; a link written without the space of its target; the wire form of a
+     move; `keys()` and `keyEntries()`, which now read the names of the members
+     of `buckets`; today's runtime measured again; more than three runs for each
+     cell, and a machine with no other load.
+
+### CFC questions deferred
+
+Noted and not resolved, by the owner's instruction of 2026-11-22. The numbers go
+on from those of the sixth round.
+
+12. With the buckets of a kept index in place, as before this round and with
+    `rows` at `in-place` now: after an item under a clause of its own enters the
+    list in a bucket of its own, a read of another bucket consumes the clause of
+    that bucket's members and of the new item, and not the clauses of the
+    members of the other buckets, whose keys decide that they are not in it.
+    With four items `ia` to `id` in the buckets `even` and `odd` and a fifth
+    `ie` that enters under `fresh`, a read of `byTag/buckets/s:odd` consumes
+    `ib`, `id` and `ie`. Suspected under-label, of the kind of question 8.
+13. With the buckets as documents, the same read consumes `ia` to `id` and not
+    `ie`: the document of a bucket that the transaction does not write keeps the
+    label it has, and a read that follows the link to it consumes nothing of the
+    result document above the link. The two layouts each leave out what the
+    other holds. Whether a change of the label of the membership has to be
+    stored in every bucket document, which is a write for each bucket.
+14. A bucket document written after the load stores the join of what its
+    transaction read, which is more than the fold of the keys (note 649): an
+    over-label. Whether the record of the index should give the fold for a write
+    after the load, which is question 8.
+15. A link to a bucket that comes to exist after the load stores two entries at
+    its path in the result document. Whether the members of a record of links
+    may share one entry, as the positions of an array do (`*`).
+16. P91 (note 652): a transaction that runs a body no longer reads the computed
+    part of its argument at the paths that `Body.reads` fills. For `backlinksOf`
+    it read the stored index with every link followed and now reads the one
+    bucket. The join of what the transaction read, which a write under no record
+    stores, holds less; the records of the body's outputs name the same slots
+    and the same reads through the handle as before. Whether anything relied on
+    that join.
+17. P92 (note 653) is the plan of question 10, built: the keying of a stored
+    plain value that holds links reads no document a link leads to.
+18. P90 (note 651): a transaction that splices an array of row documents in the
+    middle now reads the array of links whole, so the join of what it read holds
+    the label of the array. An over-label of the writes under no record.
+19. A read of the record of the buckets of the fixture `crossref.tsx` returns
+    the title of a topic that is mentioned and is in no array. With the buckets
+    in place the runtime's own resolution consumed no clause of that topic for
+    it; with the buckets as documents it does (note 649). Whether the read in
+    place under-labels: it follows the same links to the same topic.
+
 ## Milestone 5: value code in a compartment, and compile on load
 
 Milestone 5 of `docs/plans/compiled-pattern-language-integration.md`, on the

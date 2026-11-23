@@ -1729,9 +1729,9 @@ export class RuntimeTransactions implements TransactionHooks {
       // The document of a bucket is written under no record of the plan,
       // and so is its link: each stores the join of what the transaction
       // read. The transaction reads the index at its own position in the
-      // result document, so that join holds what a read of the bucket in
-      // place consumed through the entry of the index, which a read that
-      // follows the link to the document does not consume.
+      // result document, so that join holds the entry of the index. A read
+      // of a bucket stored in place consumes that entry, which stands above
+      // it, and a read that follows the link to the document does not.
       tx.readValueOrThrow({
         ...this.#linkOfBucket(bucket, path),
         path: [...bucket.path.slice(0, -1), "kind"],
