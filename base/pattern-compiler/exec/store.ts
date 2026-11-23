@@ -1861,14 +1861,23 @@ export class Store {
    * and not by its whole value: a change of another member changes no
    * key (rulings Z44, Z45 and Z49). A position that holds a link is
    * keyed by its cell with or without declared fields.
+   *
+   * With `whole`, `copies` hold every member of what the positions hold:
+   * a read under no schema gave them, or one under a schema that left no
+   * member out. Where no position then is a link or holds one, the keys
+   * are those the store forms from the array alone, and from the second
+   * such read of an array on it keeps them and brings them up to date as
+   * it does those: a third read of the array forms no key. The keys of a
+   * read that left a member out are not kept.
    */
   keysOf(
     held: readonly unknown[],
     at: Ref,
     copies?: readonly unknown[],
     fields: readonly string[] = [],
+    whole = false,
   ): string[] {
-    return [...this.#keysOf(held, at, copies, fields)];
+    return [...this.#keysOf(held, at, copies, fields, whole)];
   }
 
   /**
@@ -1880,6 +1889,7 @@ export class Store {
     at: Ref,
     copies?: readonly unknown[],
     fields: readonly string[] = [],
+    whole = false,
   ): string[] {
     const id = this.addressText(at);
     // An element that holds a reference by key into its own array is
@@ -1934,7 +1944,19 @@ export class Store {
         );
       });
       const keys = keysOfParts(parts);
-      if (!reentered && copies === undefined && this.clock === clock) {
+      // Copies of a read under no schema, of positions that hold no link,
+      // are what the store reads at those positions itself.
+      // Kept keys are brought up to date at each write to the array, which
+      // reads the member written. That pays for an array that is read
+      // whole again and again, and costs for one that is read once and
+      // then written member by member, so the keys of copies are kept
+      // from the second such read of an array on.
+      let kept = copies === undefined;
+      if (!kept && whole && !reentered && !held.some(holdsLink)) {
+        kept = this.#readWhole.has(held);
+        this.#readWhole.add(held);
+      }
+      if (!reentered && kept && this.clock === clock) {
         // What was read beside the array: each other document whole. A
         // write to one of them forms the keys again.
         const texts = parts.map(textOf);
@@ -2372,6 +2394,15 @@ export class Store {
     return value;
   }
 
+  /** The stored arrays whose keys a whole read has formed from its copies. */
+  readonly #readWhole = new WeakSet<object>();
+
+  /**
+   * How many members the reads under a schema left out of their copies,
+   * in all: a read that leaves it as it was copied every member.
+   */
+  #leftOut = 0;
+
   /**
    * `copied`: the value is a plain value in place that a function body
    * reads, or below one, and carries no address.
@@ -2436,8 +2467,11 @@ export class Store {
         );
       const outer = bounded ? containerOf(shape) : shape;
       const items = typeof outer === "object" ? outer.items : undefined;
+      const leftOut = this.#leftOut;
+      // A member that is no container, no link and no stream is given as
+      // it is, and no reference to its position is made for it.
       const copy = value.map((member, index) =>
-        this.#copy(
+        typeof member !== "object" || member === null ? member : this.#copy(
           member,
           reads,
           open,
@@ -2456,6 +2490,9 @@ export class Store {
           here,
           copy,
           declared.length > 0 ? declared : keyFieldsOf(given),
+          // The copies hold every member of what is stored where the read
+          // is under no schema, or under one that left no member out.
+          !bounded || this.#leftOut === leftOut,
         );
         copy.forEach((member, index) => {
           if (isLink(value[index])) return;
@@ -2474,13 +2511,15 @@ export class Store {
       const outer = bounded ? containerOf(shape) : shape;
       const declared = bounded ? declaredMembers(shape) : undefined;
       const copy = Object.fromEntries(
-        Object.entries(value).filter(([name]) =>
-          declared === undefined || declared.includes(name)
-        ).map((
+        Object.entries(value).filter(([name]) => {
+          if (declared === undefined || declared.includes(name)) return true;
+          this.#leftOut += 1;
+          return false;
+        }).map((
           [name, member],
         ) => [
           name,
-          this.#copy(
+          typeof member !== "object" || member === null ? member : this.#copy(
             member,
             reads,
             open,
