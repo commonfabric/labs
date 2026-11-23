@@ -120,6 +120,9 @@ pub(crate) struct Facts {
     /// The pick of `Plan.picks` whose key the value code of a member read
     /// with a computed key reports, by the span of the read.
     picks: HashMap<(usize, u32, u32), usize>,
+    /// The calls of `lookup` whose key is a cell, by the span of the call:
+    /// the value code passes the key as the reference it is.
+    cell_keys: HashSet<(usize, u32, u32)>,
     pub uses: HashMap<usize, UseFact>,
     pub handlers: HashMap<usize, HandlerFact>,
 }
@@ -203,6 +206,11 @@ impl Facts {
     /// The pick whose key the code at `span` reports (PL §3.18).
     pub fn pick(&mut self, span: (u32, u32), pick: usize) {
         self.picks.insert((self.current, span.0, span.1), pick);
+    }
+
+    /// The call of `lookup` at `span` has a key that is a cell (PL §3.17).
+    pub fn cell_key(&mut self, span: (u32, u32)) {
+        self.cell_keys.insert((self.current, span.0, span.1));
     }
 }
 
@@ -1651,7 +1659,17 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     "lookup" if arguments.len() == 1 => {
                         self.place_of(&member.object)?;
                         let index = self.render(&member.object, Want::Pass);
-                        let key = self.render(arguments[0], Want::Use);
+                        let by_identity = self.context.is_some_and(|context| {
+                            self.generator.finished.facts.cell_keys.contains(&(
+                                context,
+                                call.span.start,
+                                call.span.end,
+                            ))
+                        });
+                        let key = self.render(
+                            arguments[0],
+                            if by_identity { Want::Pass } else { Want::Use },
+                        );
                         // For an index the instance is handed, the pick
                         // whose child the lookup chooses.
                         let pick = self.context.and_then(|context| {

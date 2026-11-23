@@ -5100,6 +5100,129 @@ export const Joined = pattern<
     }));
 }
 
+/// A key that is a cell is observed as the reference it is, in the key
+/// function of an index and in a `lookup` (PL §3.17): the bucket is that
+/// of the position the reference names, and nothing of what the cell
+/// holds is read for the key.
+#[test]
+fn a_cell_key_of_an_index_and_of_a_lookup_is_observed_as_a_reference() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { pattern, type Writable } from "commonfabric";
+interface Topic { title: string; mentions: Writable<Topic>[] }
+export const Inverse = pattern<
+  { topics: Writable<Topic[]> },
+  { rows: { title: string; mentionedBy: string[] }[] }
+>(({ topics }) => {
+  const pairs = topics.flatMap((from) => from.mentions.map((to) => ({ from, to })));
+  const byMentioned = pairs.groupBy((pair: { from: Topic; to: Writable<Topic> }) => pair.to);
+  const rows = topics.map((topic) => ({
+    title: topic.title,
+    mentionedBy: byMentioned.lookup(topic).map((pair) => pair.from.title),
+  }));
+  return { rows };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Inverse");
+    let index = plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .position(|collection| collection["construct"] == json!("groupBy"))
+        .expect("the index");
+    let fold = match &plan["collections"][index]["membership"] {
+        shared if shared["op"] == json!("shared") => {
+            plan["templates"][shared["template"].as_u64().unwrap() as usize].clone()
+        }
+        other => other.clone(),
+    };
+    assert_eq!(fold["op"], json!("fold"), "{fold}");
+    let key = fold["body"]["slot"].as_u64().expect("the slot of the key") as usize;
+    assert_eq!(plan["slots"][key]["path"], json!(["to"]));
+    assert_eq!(plan["slots"][key]["observes"], json!("identity"));
+    // The key of the lookup is the element of the `map` over the topics,
+    // as a reference: no slot reads that element as a value.
+    let rows = plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .position(|collection| collection["name"] == json!("rows"))
+        .expect("the rows");
+    for slot in plan["slots"].as_array().expect("slots") {
+        if slot["root"]["kind"] == json!("element")
+            && slot["root"]["collection"] == json!(rows)
+            && slot["path"] == json!([])
+        {
+            assert_eq!(slot["observes"], json!("identity"), "{slot}");
+        }
+    }
+}
+
+/// The key of an index whose type the crate does not resolve is observed
+/// in neither class: the plan lists it as a construct it does not support.
+#[test]
+fn a_key_of_an_index_whose_type_is_not_resolved_is_reported_as_unsupported() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { pattern, type Writable } from "commonfabric";
+interface Topic { title: string; mentions: Writable<Topic>[] }
+export const Inverse = pattern<
+  { topics: Writable<Topic[]> },
+  { count: number }
+>(({ topics }) => {
+  const pairs = topics.flatMap((from) => from.mentions.map((to) => ({ from, to })));
+  const byMentioned = pairs.groupBy((pair) => pair.to);
+  return { count: byMentioned.lookup(topics.get()[0]).length };
+});
+"#,
+    );
+    let found = analysis.modules[0]
+        .plans
+        .iter()
+        .find(|plan| plan.name.as_deref() == Some("Inverse"))
+        .expect("the pattern");
+    assert!(
+        found
+            .unsupported
+            .iter()
+            .any(|(kind, _)| kind == "the key of an index whose type is not resolved"),
+        "{:?}",
+        found.unsupported
+    );
+}
+
+/// A `lookup` by a cell in an index that the instance is handed is not
+/// supported: the buckets of a stored index are chosen by a value.
+#[test]
+fn a_lookup_by_a_cell_in_a_handed_index_is_reported_as_unsupported() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { type GroupIndex, pattern, type Writable } from "commonfabric";
+interface Topic { title: string }
+export const Reader = pattern<
+  { index: GroupIndex<Writable<Topic>, Topic>; self: Writable<Topic> },
+  { titles: string[] }
+>(({ index, self }) => ({
+  titles: index.lookup(self).map((topic) => topic.title),
+}));
+"#,
+    );
+    let found = analysis.modules[0]
+        .plans
+        .iter()
+        .find(|plan| plan.name.as_deref() == Some("Reader"))
+        .expect("the pattern");
+    assert!(
+        found
+            .unsupported
+            .iter()
+            .any(|(kind, _)| kind == "a `lookup` by a cell in an index the instance is handed"),
+        "{:?}",
+        found.unsupported
+    );
+}
+
 /// `Object.entries(record).map(f)` over a record that is an input is a
 /// collection over the record's slot, observed as an enumeration, whose
 /// elements are the entries.

@@ -1260,6 +1260,19 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
     }
 
+    /// The class the key of a collection index is observed in (PL §3.17):
+    /// `value` for a scalar and `identity` for a cell, and nothing where
+    /// the type of the key is not resolved, since the two classes file a
+    /// member under different keys.
+    fn key_class(&self, expression: &Expression<'a>) -> Option<&'static str> {
+        let ty = self.resolver.typed_at(self.module, expression, 0).ok()?;
+        let ty = self.resolver.present(ty);
+        match self.resolver.shape(ty) {
+            Shape::Unresolved(_) => None,
+            _ => Some(self.branch_class(expression)),
+        }
+    }
+
     /// The class of a branch of a `select` that passes an operand on
     /// (PL §3.5): "its `value` where it is a scalar, and the `slot` node
     /// of its reference where it is a container or a handle". A type
@@ -3443,15 +3456,43 @@ impl<'a> Emitter<'_, '_, 'a> {
             // chosen child of its `buckets` (PL §3.18). Its label is what
             // the store holds there, which is the index's one entry.
             "lookup" if arguments.len() == 1 && matches!(receiver, Place::Slot(..)) => {
+                // The buckets of a stored index are members of a record,
+                // which a `pick` chooses by a value. A key that is a cell
+                // names its bucket by the address of the cell, which no
+                // value at the key's position holds.
+                if self.key_class(arguments[0]) != Some("value") {
+                    self.unsupported(
+                        "a `lookup` by a cell in an index the instance is handed",
+                        at,
+                    );
+                    return Place::Unknown;
+                }
                 let key = self.eval(arguments[0], hint);
                 let buckets = Self::extend(receiver, "buckets");
                 self.reported_pick(call.span, |emitter| emitter.pick(&buckets, &key, hint, at))
             }
             "lookup" if arguments.len() == 1 && self.index_of_place(receiver).is_some() => {
                 let receiver = receiver.clone();
+                // A key that is a scalar is observed as a value, and a key
+                // that is a cell as the reference it is (PL §3.17): the
+                // bucket is that of the position the reference names.
+                let by_identity = match self.key_class(arguments[0]) {
+                    Some(class) => class == "identity",
+                    None => {
+                        self.unsupported("the key of an index whose type is not resolved", at);
+                        false
+                    }
+                };
+                if by_identity {
+                    self.facts.cell_key((call.span.start, call.span.end));
+                }
                 let key = self.eval(arguments[0], hint);
                 self.derived(hint, at, |emitter, _| {
-                    emitter.consume(&key);
+                    if by_identity {
+                        emitter.pass(&key);
+                    } else {
+                        emitter.consume(&key);
+                    }
                     emitter.pass(&receiver);
                 })
             }
@@ -3891,7 +3932,19 @@ impl<'a> Emitter<'_, '_, 'a> {
         let index = matches!(via, "groupBy" | "keyBy");
         let tests = scan || via == "filter";
         let class = match (tests, returned) {
-            // The key of an index is observed as a value (PL §3.17).
+            // The key of an index is observed as a value where it is a
+            // scalar, and as the reference it is where it is a cell (PL
+            // §3.17).
+            (_, Some(returned)) if index => match self.key_class(returned) {
+                Some(class) => class,
+                None => {
+                    self.unsupported(
+                        "the key of an index whose type is not resolved",
+                        function.span().start,
+                    );
+                    "value"
+                }
+            },
             _ if index => "value",
             (true, Some(returned)) => self.test_class(returned),
             (true, None) => "value",

@@ -316,6 +316,13 @@ const assembledElements = new WeakMap<
   { members: readonly Element[]; context: Context }
 >();
 
+/**
+ * The elements of a bucket that a `lookup` gave, by the array: the
+ * elements of the index's source that are in the bucket, each with the key
+ * it has there.
+ */
+const bucketElements = new WeakMap<object, readonly Element[]>();
+
 /** The value code of a plan, as the crate's `emit` command prints it. */
 export type Code = {
   modules: { module: number; path: string; source: string }[];
@@ -1899,10 +1906,16 @@ export class Host {
     if (instance.plan.collections[index.collection].within.length > 0) {
       this.dependEntry(lazy);
     }
-    const members = (held.buckets.get(encoded)?.keys ?? []).map((element) =>
+    const keys = held.buckets.get(encoded)?.keys ?? [];
+    const members = keys.map((element) =>
       instance.indexMember(held, element, this)
     );
-    return held.mode === "group" ? members : members[0];
+    if (held.mode !== "group") return members[0];
+    // The members of a bucket are elements of the index's source, with the
+    // keys they have there: a per-element construct over the bucket takes
+    // them as its elements and forms no key from what a member holds.
+    bucketElements.set(members, instance.indexElements(held, keys));
+    return members;
   }
 
   /**
@@ -6640,20 +6653,11 @@ export class Instance {
               return keyed([...results]);
             case "groupBy":
             case "keyBy": {
-              // The users of a bucket of the index this one replaces.
               const before = this.#memo.get(key)?.value;
-              if (before instanceof Index) {
-                for (const encoded of before.buckets.keys()) {
-                  this.#markUsers(bucketName(key, encoded));
-                }
-              }
               const index = new Index(
                 record.construct === "groupBy" ? "group" : "key",
                 key,
               );
-              // The counts of the buckets go on from those of the index
-              // before, so that a reader of a bucket finds another count.
-              if (before instanceof Index) index.serial = before.serial;
               elements.forEach((element, at) => {
                 const encoded = encodeIndexKey(this, results[at]);
                 if (encoded === undefined) return;
@@ -6661,11 +6665,36 @@ export class Instance {
                 const bucket = index.buckets.get(encoded) ??
                   { key: results[at], keys: [], version: 0 };
                 bucket.keys.push(element.key);
-                bucket.version = ++index.serial;
                 index.buckets.set(encoded, bucket);
               });
-              for (const encoded of index.buckets.keys()) {
-                this.#markUsers(bucketName(key, encoded));
+              // A bucket that holds the element keys it held in the index
+              // this one replaces keeps its count, and what looked it up
+              // is not marked. Every other bucket, one that emptied
+              // included, takes the next count, which goes on from that
+              // of the index before, and its users are marked. The work
+              // is the number of elements, with no evaluation for a
+              // bucket that stayed.
+              const was = before instanceof Index ? before : undefined;
+              if (was !== undefined) index.serial = was.serial;
+              const changed = (encoded: string) => {
+                const now = index.buckets.get(encoded)?.keys ?? [];
+                const then = was?.buckets.get(encoded)?.keys;
+                return then === undefined || then.length !== now.length ||
+                  then.some((element, at) => element !== now[at]);
+              };
+              for (const [encoded, held] of was?.buckets ?? []) {
+                if (!index.buckets.has(encoded)) {
+                  index.buckets.set(encoded, { ...held, keys: [] });
+                }
+              }
+              for (const [encoded, bucket] of index.buckets) {
+                if (changed(encoded)) {
+                  bucket.version = ++index.serial;
+                  this.#markUsers(bucketName(key, encoded));
+                  if (was !== undefined) this.counts.bucketsChanged += 1;
+                } else {
+                  bucket.version = was?.buckets.get(encoded)?.version ?? 0;
+                }
               }
               host.members = numbered(elements.map(({ key }) => ({
                 key,
@@ -6745,6 +6774,15 @@ export class Instance {
     return "entry" in source
       ? host.at(host.depend(source.entry, source.at), source.at)
       : source.value;
+  }
+
+  /** The elements of the source of an index under `keys`, in that order. */
+  indexElements(index: Index, keys: readonly string[]): Element[] {
+    const byKey = this.#tables.get(index.name)?.byKey;
+    return keys.flatMap((key, at) => {
+      const element = byKey?.get(key);
+      return element === undefined ? [] : [{ ...element, index: at }];
+    });
   }
 
   /**
@@ -7315,6 +7353,12 @@ export class Instance {
         }
       }
       if (held instanceof Ref) return this.#stored(held, host, keyFields);
+      // The bucket a `lookup` gave: its members are elements of the
+      // index's source, with their keys (`Host.lookup`).
+      const bucket = Array.isArray(held) ? bucketElements.get(held) : undefined;
+      if (bucket !== undefined) {
+        return bucket.map((member, index) => ({ ...member, index }));
+      }
       if (source.output !== undefined && Array.isArray(held)) {
         const place = this.#generated(source.output, held, host.context);
         if (place !== undefined) {

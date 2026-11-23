@@ -14,12 +14,23 @@ const declaresReferences = (schema: Schema | undefined): boolean =>
   (schema.asCell !== undefined ||
     (typeof schema.items === "object" && schema.items.asCell !== undefined));
 
+/** Whether a schema declares the values of a record's entries as cells. */
+const declaresReferenceEntries = (schema: Schema | undefined): boolean => {
+  if (typeof schema !== "object") return false;
+  const { additionalProperties } = schema as {
+    additionalProperties?: Schema;
+  };
+  return typeof additionalProperties === "object" &&
+    additionalProperties.asCell !== undefined;
+};
+
 /**
  * The collections of the plan of `artifact` whose rows are stored as
  * documents of their own:
  *
  * - the construct is `map`, and it is written in no element body;
  * - its source is a slot whose schema declares the array or its members as
+ *   cells, the entries of a record whose schema declares its values as
  *   cells, the result of a `lift` or a `computed` whose body gives a
  *   reference at each member (`Body.outputs` at `*`), or a `filter` over
  *   such a source, which gives the same references;
@@ -40,8 +51,12 @@ export const rowDocumentCollections = (artifact: Artifact): Set<number> => {
     const { source } = plan.collections[index];
     if (source.slot !== undefined) {
       const slot = plan.slots[source.slot];
-      return slot.schema !== undefined &&
-        declaresReferences(schemas.get(slot.schema));
+      if (slot.schema === undefined) return false;
+      // A collection over the entries of a record has a reference at each
+      // entry where the record declares its values as cells.
+      return source.entries === true
+        ? declaresReferenceEntries(schemas.get(slot.schema))
+        : declaresReferences(schemas.get(slot.schema));
     }
     if (source.output !== undefined) {
       const output = plan.outputs[source.output];
