@@ -105,6 +105,10 @@
  * a field of the same topic that the board does not read (`write alone`):
  * what the write itself costs, the memory server's handling included.
  *
+ * With `SCALE_LOAD_ROWS` set to a number, the arm `runner` loads the board
+ * with at most that many row documents in one transaction
+ * (`CompiledPieceOptions.loadRows`), and with `Infinity` in one transaction.
+ *
  * With `SCALE_FIELD_EDITS` set, the arms of the runtime's own calls time,
  * after the edits of a title, an edit of the mentions, of the `shortName`
  * and of the `lastActivityAt` of the middle topic.
@@ -1569,6 +1573,11 @@ const runToday = async (
             ...(Deno.env.get("SCALE_ROWS") === "in-place"
               ? { rows: "in-place" as const }
               : {}),
+            // `SCALE_LOAD_ROWS` is the most row documents one transaction
+            // of the load holds; `Infinity` loads in one transaction.
+            ...(Deno.env.get("SCALE_LOAD_ROWS") === undefined
+              ? {}
+              : { loadRows: Number(Deno.env.get("SCALE_LOAD_ROWS")) }),
           },
         );
       }));
