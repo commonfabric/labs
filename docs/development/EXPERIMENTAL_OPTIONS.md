@@ -1226,7 +1226,14 @@ holds the measurements and the conditions for revisiting.
   piece from a plan and its value code, with one event handler of the
   scheduler for each stream of the piece and one effect for its derivation,
   and throws with the option off. `Runtime` does not import that module, so
-  a runtime that starts no compiled piece loads none of it.
+  a runtime that starts no compiled piece loads none of it. Under server
+  execution it also gates where a serving runtime starts such a piece:
+  `ensurePieceRunningVerdict()` asks `Runtime.compiledPieceLoader` for a
+  result document that names no pattern, only with the option on and only
+  where `serveCompiledPieces()` of `runtime/runner/src/compiled/serving.ts`
+  installed one. The loader runs the value code of an artifact that a client
+  wrote, outside a sandbox, and nothing installs it but
+  `listenCompiledServingMemoryServer()`, a helper for tests.
 - **Current default and planned end state.** Off by default. A measurement
   only: the specification the template labels rest on is specs pull request
   #91, unmerged, and the deciding sites carry its `SPEC-PENDING` marker. The
@@ -1238,11 +1245,16 @@ holds the measurements and the conditions for revisiting.
   `runtime/runner/test/experimental-options.test.ts`; the template labels are
   pinned by `runtime/runner/test/cfc-plan-labels.test.ts`, and the runner
   path by `runtime/runner/test/compiled/piece.test.ts` and
-  `runtime/runner/test/compiled/row-documents.test.ts`.
+  `runtime/runner/test/compiled/row-documents.test.ts`. The start from
+  storage and the serving runtime's loader are pinned by
+  `runtime/runner/test/compiled/resume.test.ts` and
+  `runtime/runner/test/compiled/compiled-serving.test.ts`.
 - **Path to removal.** Delete the runtime option, its env, authority and
   shell-source entries, `CfcTxState.planLabels`, and either the `plan-write`
   and `plan-inputs` path or the gate on it, and either
-  `runtime/runner/src/compiled/` or the check in `startCompiledPiece()`.
+  `runtime/runner/src/compiled/` or the check in `startCompiledPiece()`,
+  and `Runtime.compiledPieceLoader` with the branch of
+  `ensure-piece-running.ts` that asks it.
 
 ## Category 2: Contextual Flow Control enforcement rollout dials
 

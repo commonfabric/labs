@@ -93,6 +93,13 @@ export type CompiledPieceOptions = {
    * stored, in the handed transaction.
    */
   resume?: boolean;
+  /**
+   * Whether the argument is the one the storage holds in the argument
+   * document of the result cell, which a client wrote
+   * (`setUpCompiledPiece`). The argument given to `startCompiledPiece()` is
+   * then not read.
+   */
+  storedArgument?: boolean;
 };
 
 /** What a compiled piece did, counted. */
@@ -197,7 +204,7 @@ export class CompiledPiece {
     this.instance = transactions.within(tx, () =>
       new Instance(
         artifact,
-        resumed
+        resumed || options.storedArgument === true
           ? transactions.heldArgument(argumentOf(result.id))
           : transactions.decode(convertCellsToLinks(argument as never)),
         {

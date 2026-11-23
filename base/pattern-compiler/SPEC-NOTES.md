@@ -12604,3 +12604,501 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
 7. The join of `SlotBinding.through` takes the integrity that the output and the
    read both carry, and the read's alone where the output has no label (note
    625).
+
+## Milestone 6: server execution and the network
+
+Milestone 6 of `docs/plans/compiled-pattern-language-integration.md`, in one
+round on the branch `claude/compiled-pattern-serving-m6`: a memory server
+reached over a socket, the resume of a piece from storage, a piece run by the
+serving loop, the measurement of one event under server execution, and what the
+crate refuses of FabriChat and Home. The notes are numbered from 800.
+
+800. **What the round built, by step.**
+     - _A memory server over a socket (step 1)._ The tests of
+       `runtime/runner/test/compiled/` open their storage through
+       `test/compiled/storage.ts`, which with `COMPILED_PIECE_STORAGE=socket`
+       starts a `StandaloneMemoryServer` on an ephemeral localhost port for each
+       test and connects with `StorageManager.open`. `compare/runner-path.ts`
+       takes `--server=socket` for the same. `refused-commit.test.ts` stays on
+       the emulated server, whose fan-out it withholds by hand.
+     - _Resume (step 2)._ `resumeCompiledPiece` of
+       `runtime/runner/src/compiled/resume.ts` (note 802).
+     - _The serving loop (step 3)._ `setUpCompiledPiece` of `compiled/setup.ts`
+       for the client, `serveCompiledPieces` of `compiled/serving.ts` for the
+       serving runtime, the member `Runtime.compiledPieceLoader`, which
+       `ensureVerdict` of `ensure-piece-running.ts` asks, and
+       `listenCompiledServingMemoryServer` of
+       `compiled/serving-memory-server.deno.ts` for tests and harnesses (notes
+       804 to 806).
+     - _The measurement (step 4)._ `compare/serving-path.ts`, and
+       `compare/runner-corpus.ts` with `--resume` and with `--serving` (notes
+       807 and 808).
+     - _FabriChat and Home (step 5)._ The crate run on the three programs, with
+       no construct built (note 809).
+     - _With the experimental option off._ `ensureVerdict` asks the loader only
+       where `Runtime.experimental.compiledPatterns` is on and a loader was
+       installed, and nothing installs one but
+       `listenCompiledServingMemoryServer`. The other changes are in
+       `runtime/runner/src/compiled/`, which a runtime that starts no compiled
+       piece does not load.
+801. **Step 1: what broke over a socket.** Nothing in the tests: the 129 steps
+     of the 13 files of milestone 3 pass on both storages, and so do those the
+     round added. `runner-path.ts` over a socket gives the values the emulated
+     storage gives. The one limit met is the one note 603 has: a load in one
+     transaction at 10,000 rows that are documents is one client message that
+     stands for more than 1,000,000 slots, and the server refuses it
+     (`MessageTooLargeError`). With `--inputs-first` the load is 42 commits and
+     is taken. The piece assumed nothing of a synchronous replica that a socket
+     breaks: its reads are of the replica, and it reads no document it was not
+     handed or did not make. That holds only while every document it reaches is
+     in the replica, which a second runtime has to arrange (note 802).
+     - _A caution for the tests._ The test task of the runner installs a clock
+       that advances by itself when the loop is idle (`test/clock-preload.ts`).
+       A round trip over a websocket is real I/O, which that clock reads as an
+       idle loop, so a suite on the socket can jump logical time. The suites of
+       milestone 3 pass under it. The suite of the serving loop is on the real
+       clock (`compiled-serving` in `realClockFiles`).
+802. **Step 2: resume, as built (provisional decisions P90 to P92).**
+     `resumeCompiledPiece(runtime, artifact, resultCell)` starts the piece in a
+     runtime that holds nothing of it.
+     - _What is read._ `syncCompiledPiece` brings into the replica the result
+       document, the argument document, the document of the counts (below), and
+       the document of each state cell of the pattern's own body, each under a
+       schema that declares no structure, so that the sync follows every link:
+       the rows that are documents, the entities of the streams, the inputs the
+       argument links to, and what the state links to. That is every document of
+       the piece and of its inputs, so the read is proportional to the board.
+       The state cell of an element body is named by the key of its element,
+       which is known when the derivation reaches it: where the replica holds
+       none, the derivation is made in a transaction that is aborted, the
+       document is brought, and the derivation is made again.
+     - _What is derived._ Everything, once. The executor keeps which cone
+       instances are current in memory alone, so the resumed instance evaluates
+       the first derivation again, against the stored argument
+       (`RuntimeTransactions.heldArgument`) and the stored state: a state cell
+       whose document the storage holds is given neither its first value nor its
+       default (`Instance` option `resume`, in `stateCell`). The brief asks that
+       nothing be derived again that the storage holds. That is not met: the
+       values are computed again and compared. What is met is that nothing is
+       written again. The basis index of `scheduler-and-serving-loop.md` §10.4
+       is what would let a resume skip the evaluation, and it is not built (note
+       803).
+     - _What is written (P90)._ The derivation of a resume is one transaction. A
+       change of it that writes what the storage holds is no write: the
+       runtime's transaction logs no attempt for it, and the adapter then gives
+       no record and does not count the path as written
+       (`RuntimeTransactions.change`, `#resuming`). A resume over inputs that
+       did not change commits nothing. A path whose value differs, because an
+       input changed while no runtime ran the piece, is written with no record
+       of the plan, so the runtime labels it with the join of what the
+       transaction read, which is every label the derivation read: an
+       over-label. The records were left out because a record names positions as
+       written or staged that a resume did not write, and the preparation
+       refuses those (`requireWritten` of `cfc/plan-labels.ts`). _Alternative:_
+       give the record of each path that was written, with bindings to stored
+       positions alone; it needs the adapter to tell, for each change, which of
+       its targets the transaction wrote.
+     - _Bounded per transaction, and what a reader observes._ The reads are not
+       bounded: one transaction reads every position the derivation reads. The
+       writes are none where nothing changed, so a reader observes nothing.
+       Where inputs changed, a reader observes the stored result of before until
+       the one transaction commits, and then all differences at once. The
+       transaction is as large as the difference, which after a long time
+       without a runtime can be the board.
+     - _The documents the executor made (P91)._ A link to a document the
+       executor made is stored as a link to the entity `of:<identifier>`, and a
+       link to an input is stored as a link to its entity. The process that made
+       a document knows which is which from a table in memory (`#byEntity`). A
+       second process read every link as one to an input, so a member that a
+       handler had pushed got another key, and with it another row document: the
+       first test wrote a row again at resume. Each document the executor makes
+       now carries the `result` link to the result document, as the runner
+       writes it onto the cells a piece owns (`setResultCell`): the adapter
+       writes it where it creates a document, a row document or the entity of a
+       stream (`#linkToResult`), and a resumed adapter reads it to tell the two
+       apart (`#heldDocumentOf`). The serving loop finds the piece of a document
+       by the same link (note 804).
+     - _The counts that names are formed from (P92), a soundness defect found
+       and closed._ The executor names the run of a handler by the number of
+       events the process handled, and a document a body makes with no cause of
+       its own by the number of such documents the process made (`#bindEvent`,
+       `#fresh`). Both began at zero in a second process, so a handler after a
+       resume gave a new member the name of a member an earlier run had made and
+       overwrote it: the test "gives, for an event sent after the resume, the
+       values the first runtime gives" read the title of the last item on two
+       rows. The counts are now kept in a document of the piece
+       (`Instance.minted`, `RuntimeTransactions.writeMinted`), written in the
+       transaction that advances them, and a resume goes on from them. That is
+       one more document written by each event. _Alternative:_ name the run of a
+       handler by the identity of its event in the stream, which the serving
+       loop has and the scheduler's handler is not given; it would also make the
+       names the same on a client that speculates.
+     - _Not resumed._ An instance a handler made of another artifact
+       (`fixtures/created-members.tsx`) is read as a document and is not started
+       again. The effect requests, the clock and the outbox are as in
+       milestone 3. A label that changed on an input while no runtime ran the
+       piece, with the value unchanged, forms no label again (CFC question 1
+       below).
+     - _Tests._ `runtime/runner/test/compiled/resume.test.ts`, four cases over
+       `fixtures/serving-list.tsx` and `fixtures/handler.tsx`, on a memory
+       server that two runtimes share, emulated or over a socket.
+       `fixtures/serving-list.tsx` is a `map` over an array that the type
+       declares as references, given as an array of references, with two
+       handlers that write the array and a state cell.
+     - _The corpus._ `compare/runner-corpus.ts run <file> --resume` hands each
+       module to a second runtime after half of its events. Of the 183 modules
+       that pass on the runner path (the piece starts, every event is handled,
+       no commit is refused, and the values are those of the executor in
+       memory), 172 pass with the resume. 131 modules were resumed, the others
+       have no event or do not start; the resume wrote no document for 102 of
+       them and 1 to 16 documents for 29. Of the 11 that no longer pass, 9 hold
+       another value than the executor in memory (`simple-list.tsx`,
+       `render-test.tsx` and `test-cell-equals.tsx` at a member of `items`,
+       `scoped-group-chat/main-with-writable-inputs.tsx` at a room,
+       `system/self/self.tsx` at a value of its model, and `expense-form.tsx`,
+       `test-idempotent-side-effects.tsx`, `test-record-key-set-56.tsx` and
+       `self-reference-test.tsx` in the rendered tree), one has a commit refused
+       for a clause that does not fit the writer
+       (`cfc-exchange-rules/witnessed-chain.tsx`), and one for a read at
+       sequence 0 of a document the sync did not bring (`wordsearch/play.tsx`).
+       None of the 11 was traced to its cause.
+803. **The basis index is not built: the plan.** A resume that evaluates nothing
+     the storage holds needs, per cone instance, what
+     `scheduler-and-serving-loop.md` §10.4 gives a row: the input documents and
+     their sequence numbers at the evaluation. The executor has the positions
+     each memo entry read (`#register`), and the adapter has the transaction
+     that stored the entry's writes. _Plan:_ (1) the adapter writes, with each
+     transaction, a row per cone instance evaluated in it, keyed by the instance
+     and the cone and its element keys, holding the documents read and their
+     sequence numbers; rows are in a document per instance at first, and in the
+     memory server's own tables once the serving loop owns them. (2) A resumed
+     instance marks a cone instance current where its rows match the heads and
+     registers a row entry at each document a row names, in place of the memo
+     entry; a change of such a document makes the cone instance stale, and its
+     first evaluation in the process replaces the row entries by the precise
+     ones. (3) The assembly of a collection and its element table are built for
+     the elements that are evaluated, and the rows of the others stay as stored.
+     The third item is the large one: the executor's assembly holds every row in
+     memory today.
+804. **Step 3: the piece under the serving loop, as built (provisional decisions
+     P93 to P96).** One piece of space scope, started by a client and run by the
+     serving runtime of its space.
+     - _The client sets the piece up and runs nothing (P93, P96)._
+       `setUpCompiledPiece(runtime, tx, artifact, argument, resultCell)` writes
+       three documents and no result: the compiled pattern, as the JSON text of
+       its artifact in an entity named by that text; a document named from the
+       result document (`compiledPointerOf`) that holds the entity of the
+       compiled pattern; and the argument document, with each cell as a link.
+       The module imports the identifiers of `exec/store.ts` and none of the
+       executor. A client with server execution on then commits only the append
+       of an event: `Cell.send` on a member of the result resolves the link to
+       the entity that holds the stream marker and appends, as for a stream of
+       today's piece. The pointer is a document and no meta field, because the
+       set of meta fields is closed (`META_FIELDS` of `meta-seam.ts`) and a new
+       one is a decision for the runtime.
+     - _The serving runtime starts the piece when the loop reaches it._ The
+       loop's structure load and the scheduler's handling of an event with no
+       handler both call `ensurePieceRunningVerdict`, which follows the `result`
+       links from the document it was given to the result document
+       (`followResultCellChain`). Every document the executor makes carries that
+       link (P91). Where the result document names no pattern, `ensureVerdict`
+       asks `Runtime.compiledPieceLoader`, under the experimental option alone.
+       `serveCompiledPieces` installs a loader that reads the pointer and the
+       compiled pattern, parses a compiled pattern once per process, brings the
+       documents of the piece (`syncCompiledPiece`), and starts the piece: with
+       `startCompiledPiece` from the stored argument where the result document
+       is empty, and with `resumeCompiledPiece` otherwise, which is what a
+       serving loop that takes a space over after another does.
+     - _The handlers and the derivation are the scheduler's, so the loop needs
+       no change._ The loop's event drain queues each durable event with the
+       scheduler for the entity of its stream, where the piece registered a
+       handler. The loop stamps the transaction of the handler and of the
+       derivation action with the context of the run and seals it into the wave,
+       as it does for an action of today's piece.
+     - _The load is one transaction of the wave (P94)._ A transaction that the
+       loop did not stamp is refused at the seal ("unstamped transaction sealed
+       into a wave"). The loader stamps the transaction of the load as a
+       derivation with no acting principal (`stampWaveRunContext`), and starts
+       the piece with `loadRows: Infinity`, since the transactions that a
+       bounded load commits by itself are ones the wave has no run for. The
+       loader does not wait for the outcome of the commit, which the wave
+       settles after the cycle the load runs in.
+     - _A rejected wave (P95), a soundness defect found and closed._ A
+       transaction sealed into a wave settles with no error before the wave
+       commits. Where the wave is then rejected, the replica takes the writes
+       back and the loop queues the event again. The piece heard of a refused
+       commit only through the outcome of the commit, so it was not told: the
+       executor stayed ahead of the storage, and the handler ran again on top of
+       its own first run. Seen as a count of 12 where 3 events had been sent,
+       after nine waves were rejected. The adapter now takes the replica's
+       `revert` of a transaction it handed, where that transaction had settled
+       without an error, as a refused commit (`RuntimeTransactions`, the
+       subscription; `Handed.settled`), and the piece restores the documents the
+       transaction wrote from the storage (`Instance.restore`) before the event
+       is handled again. A second defect was under it: `Instance.restore`
+       removed a state cell that the refused transaction had first written
+       together with what the place was declared as, so the handler read nothing
+       where the default of the cell's schema stands; the declaration is kept.
+       The cost of the restore is that of note 594: the result document is taken
+       with its rows left out, and the next derivation stores every row again.
+     - _Tests._ `runtime/runner/test/compiled/compiled-serving.test.ts`, five
+       cases against a memory server that listens on a websocket with the
+       serving loop on the same thread: a piece a client set up is derived and
+       read through sync; two clients take turns sending four events and both
+       converge on what the executor in memory gives for that order
+       (`Instance.send` over the same documents); a client that sends nothing
+       reads the result; a second serving loop that takes the space over goes on
+       from the storage; and an event whose wave is rejected is handled again
+       from what the storage holds.
+805. **Where the specification's wave and seal rules differ from what the
+     serving loop does, and what was followed.** Today's loop was followed in
+     each, and its behavior for a piece of today's runtime is unchanged.
+     1. _One derivation transaction behind the batch_
+        (`scheduler-and-serving-loop.md` §10.2). The derivation here is one
+        effect of the scheduler that the piece invalidates, and the loop runs it
+        as it runs any action of the cycle. Whether one cycle that drains
+        several events runs it once was not measured; `serving-path.ts` counts
+        15 derivations for 14 events sent one at a time.
+     2. _The basis index and the marking of stale cone instances at activation_
+        (§10.4, §10.6). There is none: a serving loop that takes a space over
+        evaluates the whole piece (note 802).
+     3. _Demand per path, and a read answered from the rows_ (§4.1 to §4.4).
+        Demand on any document of the piece loads the piece, and the piece
+        derives every output, demanded or not.
+     4. _Only the server compiles, and a compiled pattern carries the integrity
+        of compiled output_ (§10.5). The client writes the artifact that the
+        crate emitted outside the runtime, and the serving runtime runs it as it
+        finds it (note 806, the first finding).
+     5. _The stream documents, the stream watermarks and the stream index_
+        (§5.1). The events a client appends are those of today's stream entries.
+        An event that a handler sends to a stream of the piece is queued with
+        the scheduler in the process (`Instance.takeQueued`) and is appended to
+        nothing, so it is not durable.
+     6. _A conflict leaves out the derived write that conflicts and what used
+        it_ (§5.5). The piece restores every document the withdrawn transaction
+        wrote, the result document whole (P95).
+     7. _The context of an evaluation: the acting principal, the scope key and
+        the read ceiling per cone instance_ (§10.3). The piece is of space
+        scope, the load is a derivation with no acting principal, and a handler
+        runs under the context the loop stamps for its event.
+     8. _A setup transaction commits by itself, ahead of the wave_ (§10.8). The
+        client's setup is a commit of the client, and the first derivation is a
+        transaction of a wave.
+     9. _Client speculation_ (§11). A client runs nothing of a compiled piece.
+        Today's client tries to run the handler of each event it sends, finds
+        none, and logs "Event dropped: no handler registered" for each send; the
+        event is appended all the same.
+806. **Findings on structure, scale and soundness.**
+     - _The serving runtime evaluates value code that a client wrote, outside a
+       sandbox._ `setUpCompiledPiece` writes the artifact, and the loader parses
+       it and hands it to the executor, which evaluates its value code in the
+       serving process (milestone 5 builds the sandbox in another branch).
+       Nothing checks who wrote the document of the compiled pattern or that the
+       crate emitted it. This is acceptable only because nothing but
+       `listenCompiledServingMemoryServer`, a helper of tests and harnesses,
+       installs the loader; a toolshed must not, until the server compiles
+       (§10.5) or the artifact carries the integrity of compiled output, and
+       until the value code runs in the sandbox.
+     - _A rejected wave left the executor ahead of the storage_ (note 804, P95),
+       closed with a test. Not closed: the restore follows the size of the
+       result, and a wave that holds the transactions of two pieces restores
+       each.
+     - _The names of handler runs and of the documents handlers make restarted
+       from zero in a second process_ (note 802, P92), closed with a test.
+     - _A resume reads the whole board and evaluates the whole derivation_ (note
+       802), not closed: the plan is note 803. Every start of a serving loop
+       over a space pays it for every piece that is demanded.
+     - _The load under the serving loop is one transaction of one wave_ (P94),
+       not closed. It commits at 10,000 rows (note 807), since the wave's commit
+       is no client message and the limit of slots of note 603 does not apply to
+       it, but the bounded load of P65 is not in use there, and a reader sees
+       nothing of the piece until the whole load committed.
+     - _An append under server execution follows the length of the list outside
+       the piece_ (note 807): the piece's own work stays at a few milliseconds,
+       and the step grows from 34 ms at 100 rows to 897 ms at 10,000. Not
+       profiled. Both the array of the input and the array of the result are one
+       document of as many links as the list has members.
+     - _A state cell that nothing wrote has no document, so a reader outside the
+       executor reads nothing where the executor reads the default of the cell's
+       schema._ The result of `fixtures/serving-list.tsx` holds a link to the
+       state cell `events`; a client reads `undefined` there until the first
+       event, and the executor reads 0. The link carries no schema that would
+       give the default. Seen in `compiled-serving.test.ts`, which allows for
+       it. Not closed.
+     - _An instance a handler made is not resumed, and an event a handler sends
+       is not durable_ (notes 802 and 805).
+     - _The memory server keeps the sequence numbers of a session of the service
+       identity across serving loops in one process._ A second `ExecutorHost` on
+       the same memory server had its first nine waves rejected as replays
+       ("commit replay mismatch"). That is a property of the test's restart in
+       one process and was not followed further; the piece converged through the
+       rejections once P95 was in.
+807. **Step 4: one event under server execution, measured.**
+     `compare/serving-path.ts`, one process per run, a memory server that
+     listens on a websocket with the serving loop on the same thread, two
+     clients over the websocket with server execution on. The pattern is
+     `fixtures/serving-list.tsx` over an array of references, each to an item in
+     a document of its own. Each figure is the median of 7 events in one
+     process, in milliseconds, from the send on the first client until that
+     client (`sender`) and the second (`reader`) read the label of the one row
+     the event changes; `load` is one run, from the commit of the setup until
+     the second client reads the last row. Load averages of the machine over the
+     runs: 5.4 to 7.6 (1 minute). `Rows` is the length of the list at the start.
+
+     |   Rows | Arm      |   Load | `rename`, sender | `rename`, reader | `add`, sender | `add`, reader |
+     | -----: | -------- | -----: | ---------------: | ---------------: | ------------: | ------------: |
+     |    100 | compiled |    138 |             16.7 |             17.1 |          34.2 |          34.8 |
+     |    100 | today    |    774 |              4.5 |             21.7 |          13.6 |          56.2 |
+     |  1,000 | compiled |    717 |             18.0 |             18.3 |         101.0 |         102.2 |
+     |  1,000 | today    |  3,019 |              4.0 |             21.1 |          62.4 |         233.1 |
+     | 10,000 | compiled |  7,035 |             36.3 |             36.8 |         896.8 |         897.3 |
+     | 10,000 | today    | 96,049 |             11.2 |             44.0 |         692.2 |       3,292.6 |
+
+     - _What the columns compare._ The reader's column is the served path on
+       both arms. Today's sender runs the handler itself and shows the result
+       from its own speculation, which is why its figure is below the reader's;
+       the compiled piece has no speculation on a client (P96), so its two
+       columns are the same path.
+     - _A rename_ of one item is flat to within a factor of two from 100 to
+       10,000 rows on both arms, 17 to 37 ms compiled and 22 to 44 ms today. The
+       first rename of today's arm took 1.4 s at 1,000 rows and 33.8 s at
+       10,000, the maximum of the 7, which the median hides.
+     - _An append_ follows the list on both arms: 35, 102 and 897 ms compiled,
+       56, 233 and 3,293 ms today. The compiled piece's own time, its handlers
+       and its derivation without the commits, is 19 ms for all 14 events at 100
+       and at 1,000 rows and 54 ms at 10,000, so about 890 of the 897 ms are
+       outside the piece. They were not profiled. The handler's write of the
+       array of the input and the derivation's write of the array of the result
+       each change a document that holds one link per member.
+     - _The load_ of the compiled piece is one transaction of one wave (P94),
+       7.0 s at 10,000 rows against 96 s for today's piece.
+     - _Not comparable with note 585._ `runner-path.ts` runs with
+       `cfcFlowLabels` at `persist` and an input under a clause; the serving
+       runtimes here run with the default of the serving runtime factory and
+       inputs under no label, so today's load is far below that of note 585.
+     - _Topics._ Not run: the boards are on the measurement branch. What would
+       be run there is `compare/topics/scale.ts` with an arm that sets the board
+       up from a client with `setUpCompiledPiece` against
+       `listenCompiledServingMemoryServer`, sends the edit and the create of a
+       topic as events, and times them on two clients as `serving-path.ts` does,
+       beside the arm `runner`. The harness hands the boards what they read of
+       `wish`, which the loader of this round does not do, so the arm needs the
+       option `wishes` of the instance passed through
+       `ServeCompiledPiecesOptions.piece`. The load is one wave, which at 2,000
+       topics is about 8,000 documents in one commit.
+808. **Step 4: the corpus under the serving loop.**
+     `compare/runner-corpus.ts run <file> --serving` runs each module with a
+     memory server on a websocket, the serving loop on the same thread and one
+     client: the client sets the piece up and appends each event with a send to
+     the entity of its stream, and the harness waits for the loop
+     (`ExecutorHost.whenQuiescent`) and compares what the serving runtime's
+     piece holds with the executor in memory. All 183 modules that pass on the
+     runner path pass there. The counts of the report are those of the runner
+     path: 230 of 239 start, 200 have every event handled, 215 have no commit
+     refused, 209 are equal. What a client reads through sync is not compared:
+     the stored result holds the executor's forms, a link by key among them,
+     which the runtime's read does not resolve (note 580).
+     - _A defect found by the first module tried._ A load on the serving runtime
+       wrote the argument document again with the value the client had stored,
+       the transaction held no write of it, and a record bound to a path of it
+       as staged was refused. The adapter now gives the executor the stored
+       argument (`CompiledPieceOptions.storedArgument`,
+       `RuntimeTransactions.heldArgument`) and takes the executor's creation of
+       that document as no write.
+809. **Step 5: what the crate refuses of FabriChat and Home.** The crate was run
+     on each of `patterns/system/fabrichat/room.tsx`,
+     `patterns/system/fabrichat/manager.tsx` and `patterns/system/home/home.tsx`
+     with every module it imports by relative path, as one program: `check`,
+     `plan` and `emit` of the release binary. `room.tsx` and `manager.tsx`
+     import each other and are one program of 16 modules; the program of
+     `home.tsx` has 26 modules and holds that one. No construct was built.
+     - _The checker._ It refuses both programs. Errors in the program of
+       FabriChat, 33, by diagnostic and module: `subset-type:any` 11
+       (`profile-home.tsx` 8, `shared-space-catalog.ts` 3);
+       `subset-type:mismatch` 10 (`room.tsx` 4, `room-records.tsx` 3,
+       `shared-space-catalog.ts` 3); `subset-type:overload` 6 (`manager.tsx` 5,
+       `private-inbox.tsx` 1); `schema:unknown-type-access` 5
+       (`room-records.tsx`, the members of a file typed `unknown`);
+       `opaque-get:invalid-call` 1 (`manager.tsx`, `.get()` on a `Stream`). The
+       program of Home has those and 6 more, 39: `subset-type:any` 3 in
+       `agent-queue.tsx`, and `subset-type:mismatch` 1 each in
+       `favorites-manager.tsx` and `shared-space-interface.ts`, and `home.tsx`
+       itself has none. Warnings are not refusals; the most frequent is
+       `array-by-key:state-without-key`, 15 in the program of FabriChat and 27
+       in that of Home.
+     - _The emitter._ `plan` and `emit` give a plan for every pattern of both
+       programs, and name what they do not translate. 15 of the 23 patterns of
+       the program of FabriChat and 22 of the 31 of the program of Home have
+       nothing untranslated. By construct, in the program of Home, as `emit`
+       counts them: a dynamic read of kind `space` whose operand the emitter
+       cannot name, 10; a call form in the reactive tier, 9; a statement in the
+       reactive tier, 8, each counted once more as "a statement of the reactive
+       tier" by the value code; the method `resolveAsCell` in the reactive tier,
+       7; the method `elementById` in the reactive tier, 2; a call of a function
+       that has no footprint record, 2. By pattern: `FabriChatRoom` and
+       `FabriChatRoomCore` each have 3 statements in the reactive tier, 3
+       `resolveAsCell` and 1 `elementById`; `FabriChatManager` and
+       `FabriChatManagerCore` each have 3 call forms and 3 dynamic reads of a
+       space; `NoticeTold` has 1 call with no footprint record and 1 dynamic
+       read of a space; `RoomRoster` has 1 call with no footprint record; `Home`
+       has 3 call forms and 3 dynamic reads of a space.
+     - _Beyond the crate._ The plans hold operations the runner path does not
+       answer: `FabriChatRoom` 5 `wish`, `FabriChatRoomCore` 2,
+       `FabriChatManager` 2, `Home` 4 `wish` and 1 effect, and the
+       `favorites-manager` that Home instantiates 1 `wish`. A room reads the
+       documents of another space (the dynamic reads of kind `space`), which
+       neither the piece nor the serving loader of this round does. The tables
+       are in the folder of the round, `step5-*.txt` and `step5-*.json`.
+810. **Provisional decisions of the round.** P90: a resume evaluates the first
+     derivation again and writes the paths that differ, with no record of the
+     plan, so a path it writes takes the join of the transaction (note 802).
+     P91: each document the executor makes carries the `result` link to the
+     result document (note 802). P92: the counts that name the runs of handlers
+     and the documents handlers make are kept in a document of the piece (note
+     802). P93: a document named from the result document names the compiled
+     pattern of a piece, and the compiled pattern is a document that holds the
+     artifact as text, which a client writes (note 804). P94: the load of a
+     piece on a serving runtime is one transaction of a wave, stamped as a
+     derivation with no acting principal (note 804). P95: the replica's revert
+     of a transaction that had settled is a refused commit of the piece (note
+     804). P96: a client under server execution runs nothing of a compiled piece
+     (note 804). Not done: the basis index (note 803), a bounded load under the
+     serving loop, the resume of an instance a handler made, events a handler
+     sends as durable entries, the profile of an append under server execution,
+     the cause of the 11 modules that differ after a resume, Topics under the
+     serving loop, and every construct FabriChat and Home lack.
+
+### CFC questions deferred, milestone 6
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. A resume gives no record for a path whose value it finds stored (P90). An
+   input whose label changed while no runtime ran the piece, with its value
+   unchanged, leaves the labels of what was derived from it as they were stored.
+   Whether a resume has to form the labels again, and from what.
+2. A path a resume writes takes the join of everything the derivation read
+   (P90): an over-label that grows with the board.
+3. The document of the counts (P92) and the document that names the compiled
+   pattern (P93) are written with no record of a plan. The first holds how many
+   events the piece handled and how many documents its handlers made, under the
+   join of the transaction that wrote it. Which label each should have, and
+   whether a reader may read them.
+4. The `result` link (P91) is a meta field the adapter writes on each document
+   with the runtime's authorization for raw meta writes. Whether a compiled
+   piece may write it, and whether a resume may take it as proof that the
+   executor made the document.
+5. The load on a serving runtime is stamped as a derivation with no acting
+   principal (P94), though a client's setup caused it and the client chose the
+   argument. Whether the load is a derivation or the consequence of the client's
+   act, and under which principal its labels are formed.
+6. A client writes the argument document and the compiled pattern (P93), and the
+   serving runtime takes both as it finds them: the artifact has no integrity of
+   compiled output, and the argument has the label of the client's commit.
+   Beside the soundness finding of note 806, which integrity the derived values
+   of such a piece may claim: the atom `TransformedBy` names a compiled pattern
+   that nobody attested.
+7. The restore after a rejected wave (P95) reads the documents the withdrawn
+   transactions wrote outside any transaction of the piece, and the derivation
+   that follows gives every row its record again. Whether those rows may be
+   stored under labels formed in the later transaction when their values are
+   those of before.

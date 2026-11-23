@@ -18,7 +18,11 @@ import { servingRuntimeFactory } from "../executor/serving-runtime.ts";
 import type { SpaceServerPolicy } from "../executor/space-server.ts";
 import type { ExperimentalOptions, Runtime } from "../runtime.ts";
 import type { CompiledPiece } from "./piece.ts";
-import { compiledPiecesOf, serveCompiledPieces } from "./serving.ts";
+import {
+  compiledPiecesOf,
+  serveCompiledPieces,
+  type ServeCompiledPiecesOptions,
+} from "./serving.ts";
 
 /** A listening memory server whose serving loop runs compiled pieces. */
 export type CompiledServingMemoryServer = {
@@ -50,6 +54,8 @@ export const listenCompiledServingMemoryServer = async (
     /** Experimental options of the serving runtimes, beside the forced ones. */
     experimental?: ExperimentalOptions;
     policy?: SpaceServerPolicy;
+    /** What each serving runtime serves compiled pieces with. */
+    pieces?: ServeCompiledPiecesOptions;
   } = {},
 ): Promise<CompiledServingMemoryServer> => {
   const experimental = { ...options.experimental, compiledPatterns: true };
@@ -93,7 +99,7 @@ export const listenCompiledServingMemoryServer = async (
       serviceIdentity: serviceIdentity.did(),
       createRuntime: async (space, context) => {
         const made = await create(space, context);
-        serveCompiledPieces(made.runtime);
+        serveCompiledPieces(made.runtime, options.pieces);
         runtimes.push(made.runtime);
         return made;
       },

@@ -14,16 +14,19 @@
  * and its waves hold what they and the derivation write.
  */
 import type { Artifact } from "../../../../base/pattern-compiler/exec/executor.ts";
-import { argumentOf } from "../../../../base/pattern-compiler/exec/store.ts";
 import { getLogger } from "@commonfabric/logger";
 import { stampWaveRunContext } from "../executor/wave.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import type { Runtime } from "../runtime.ts";
 import type { URI } from "../sigil-types.ts";
-import { type CompiledPiece, startCompiledPiece } from "./piece.ts";
+import {
+  type CompiledPiece,
+  type CompiledPieceOptions,
+  startCompiledPiece,
+} from "./piece.ts";
 import { resumeCompiledPiece, syncCompiledPiece } from "./resume.ts";
-import { compiledPointerOf, entityOfDocument } from "./setup.ts";
+import { compiledPointerOf } from "./setup.ts";
 
 const logger = getLogger("compiled-serving");
 
@@ -40,6 +43,23 @@ const running = new WeakMap<Runtime, CompiledPiece[]>();
  * text: one parsed artifact serves every piece of it in every space.
  */
 const parsed = new Map<string, Artifact>();
+
+/** What `serveCompiledPieces()` takes. */
+export type ServeCompiledPiecesOptions = {
+  /**
+   * What each piece is started with beside the compiled pattern: the
+   * artifacts of the patterns its function bodies instantiate, and what its
+   * clock holds.
+   */
+  piece?: Pick<CompiledPieceOptions, "artifacts" | "now">;
+  /** Called with each piece the runtime started. */
+  started?: (piece: CompiledPiece) => void;
+  /**
+   * Called where a piece did not start, or where the commit of its load
+   * failed, with the result document and the error.
+   */
+  failed?: (result: string, error: unknown) => void;
+};
 
 /** The compiled pieces `runtime` runs through `serveCompiledPieces()`. */
 export const compiledPiecesOf = (runtime: Runtime): CompiledPiece[] => [
@@ -81,6 +101,7 @@ const start = async (
   runtime: Runtime,
   root: Pick<NormalizedFullLink, "space" | "id">,
   failed: (piece: CompiledPiece, error: Error) => void,
+  options: ServeCompiledPiecesOptions["piece"] = {},
 ): Promise<CompiledPiece | undefined> => {
   const { space, id } = root;
   const pointer = await brought(runtime, space, compiledPointerOf(id));
@@ -109,6 +130,7 @@ const start = async (
     });
   if (held(runtime, space, id) !== undefined) {
     return await resumeCompiledPiece(runtime, artifact, resultCell, {
+      ...options,
       opened,
       sealed: { failed },
     });
@@ -121,12 +143,12 @@ const start = async (
       runtime,
       tx,
       artifact,
-      held(runtime, space, entityOfDocument(argumentOf(id))),
+      undefined,
       resultCell.withTx(tx),
       // One transaction: the wave commits what the cycle sealed as one
       // commit, and a transaction the load would commit by itself is one
       // the wave has no run for.
-      { loadRows: Infinity },
+      { ...options, loadRows: Infinity, storedArgument: true },
     );
   } catch (error) {
     tx.abort(error);
@@ -148,7 +170,10 @@ const start = async (
  * (`Runtime.compiledPieceLoader`). The runtime needs the experimental
  * option `compiledPatterns`.
  */
-export const serveCompiledPieces = (runtime: Runtime): void => {
+export const serveCompiledPieces = (
+  runtime: Runtime,
+  options: ServeCompiledPiecesOptions = {},
+): void => {
   const pieces = new Map<string, Promise<CompiledPiece | undefined>>();
   loading.set(runtime, pieces);
   running.set(runtime, []);
@@ -164,13 +189,18 @@ export const serveCompiledPieces = (runtime: Runtime): void => {
           `The load of the compiled piece ${root.id} did not commit:`,
           error,
         ]);
+        options.failed?.(root.id, error);
       };
-      piece = start(runtime, root, failed).then((started) => {
+      piece = start(runtime, root, failed, options.piece).then((started) => {
         if (started === undefined) pieces.delete(root.id);
-        else running.get(runtime)?.push(started);
+        else {
+          running.get(runtime)?.push(started);
+          options.started?.(started);
+        }
         return started;
       }, (error) => {
         pieces.delete(root.id);
+        options.failed?.(root.id, error);
         throw error;
       });
       pieces.set(root.id, piece);

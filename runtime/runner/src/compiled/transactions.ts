@@ -270,6 +270,11 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #runtime: Runtime;
   readonly #space: MemorySpace;
   readonly #resume: boolean;
+  /**
+   * The documents whose creation by the executor is the value the storage
+   * holds, which the adapter gave it (`heldArgument`).
+   */
+  readonly #heldWhole = new Set<string>();
   /** The `result` link the documents the executor makes are given. */
   #resultLink: unknown;
   /**
@@ -1526,6 +1531,7 @@ export class RuntimeTransactions implements TransactionHooks {
     made?: { start: number; removed: number; inserted: number },
   ): void {
     const tx = this.#open();
+    if (path.length === 0 && this.#heldWhole.delete(doc)) return;
     this.#counts.writes += 1;
     this.#stagedState += 1;
     const written = this.#written.get(doc) ?? [];
@@ -2954,7 +2960,11 @@ export class RuntimeTransactions implements TransactionHooks {
    * result document is `owner`, as the executor holds a value.
    */
   heldArgument(argument: string): unknown {
-    return this.#held(argument)?.value;
+    const held = this.#held(argument);
+    // The executor creates the argument document with this value, which
+    // is no write: the storage holds it.
+    if (held !== undefined) this.#heldWhole.add(argument);
+    return held?.value;
   }
 
   /**

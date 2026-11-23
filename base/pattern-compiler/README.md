@@ -1149,6 +1149,67 @@ for an instance that a handler makes. They load the artifacts of
 `compare/fixtures/`, so they need no build of the crate. Notes 579 on of
 `SPEC-NOTES.md` have what is stubbed and the figures.
 
+## A compiled piece under server execution
+
+Milestone 6 of the same plan runs a compiled piece in the serving runtime of its
+space, and starts one from what the storage holds.
+
+- **Resume.** `resumeCompiledPiece(runtime, artifact, resultCell)` of
+  `runtime/runner/src/compiled/resume.ts` starts a piece in a runtime that holds
+  nothing of it. It brings the documents of the piece and of its inputs into the
+  replica, evaluates the first derivation again against the stored argument and
+  the stored state cells, and writes the paths whose value differs from what is
+  stored, in one transaction. Where no input changed it commits nothing. The
+  executor keeps which cone instances are current in memory alone, so the
+  evaluation is made whole.
+- **The documents of a piece.** Each document the executor makes carries the
+  `result` link to the result document. A resumed piece tells by it a document
+  the executor named from one that exists outside the piece, and the serving
+  loop finds the piece of a document by it. The counts that the names of handler
+  runs and of the documents handlers make are formed from are kept in a document
+  of the piece, and a resume goes on from them.
+- **Setup by a client.**
+  `setUpCompiledPiece(runtime, tx, artifact, argument,
+  resultCell)` of
+  `compiled/setup.ts` writes the compiled pattern, the document that names it
+  for the result document, and the argument document. A client with server
+  execution on then appends events with `Cell.send` and runs nothing of the
+  piece.
+- **The serving runtime.** `serveCompiledPieces(runtime)` of
+  `compiled/serving.ts` installs `Runtime.compiledPieceLoader`, which
+  `ensurePieceRunningVerdict` asks for a result document that names no pattern.
+  The loader starts the piece from the storage: a load where the result document
+  is empty, a resume otherwise. The handlers and the derivation are the
+  scheduler's, so the loop's event drain reaches the handlers and its waves hold
+  what they write. A wave that is rejected takes its writes back from the
+  replica, and the piece then restores the documents the withdrawn transactions
+  wrote from the storage. `listenCompiledServingMemoryServer()` of
+  `compiled/serving-memory-server.deno.ts` gives a test a memory server on a
+  websocket with such a serving loop.
+
+The serving runtime evaluates the value code of the artifact a client wrote,
+outside a sandbox, and nothing but the helper for tests installs the loader.
+
+```sh
+COMPILED_PIECE_STORAGE=socket deno test --no-check -A runtime/runner/test/compiled/
+deno run -A --no-check base/pattern-compiler/compare/runner-path.ts --server=socket --no-pull --inputs-first --case=declared 100 1000
+deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run resume.jsonl --resume
+deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run serving.jsonl --serving
+deno run -A --no-check base/pattern-compiler/compare/serving-path.ts --events=7 100 1000
+deno run -A --no-check base/pattern-compiler/compare/serving-path.ts --arms=compiled --events=7 10000
+```
+
+`COMPILED_PIECE_STORAGE=socket` runs the tests of a compiled piece against a
+memory server reached over a websocket of the process, and `--server=socket`
+does the same for `runner-path.ts`. `runner-corpus.ts --resume` hands each
+module to a second runtime after half of its events, and `--serving` runs each
+under the serving loop with one client. `serving-path.ts` times one event of
+`fixtures/serving-list.tsx` from the send on a client until that client and a
+second one read the result, for a compiled piece and for today's piece of the
+same pattern. The tests are `resume.test.ts` and `compiled-serving.test.ts` in
+`runtime/runner/test/compiled/`. Notes 800 on of `SPEC-NOTES.md` have what is
+stubbed, where the serving loop differs from the specification, and the figures.
+
 ## Topics
 
 Topics (`patterns/apps/topics/`) is the target both tracks of the integration
