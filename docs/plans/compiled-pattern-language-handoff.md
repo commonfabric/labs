@@ -333,6 +333,24 @@ extend the window over the result of a `map` before the general costs of a
 send are fixed (the registration of a record at every position, the deep
 comparison in the store).
 
+**`sortBy` is to be written as `toSorted`** (Z93, 2026-11-23; not built).
+The crate recognizes `xs.toSorted(compare)` on a collection and plans the
+sorted collection the trunk built for `sortBy(key)`, which is removed. The
+executor keeps order by a key today, so a comparator needs either an
+insertion by comparison or the recognition of comparators of the form
+"compare one key of each". `groupBy`, `keyBy` and `lookup` are methods of
+today's runtime and stay until the owner decides otherwise.
+
+**Authored `computed` bodies that are not promoted** (all branches).
+`language-subset.md` §6.1 promotes a `computed` whose body is
+expression-shaped and pure, and a per-element construct inside a promoted
+body is planned as one. The bodies of the FabriChat room that read every
+message are not promoted because of gaps of the crate, not of the
+specification: a guard in the block body of a collection callback, and
+`elementById` and `resolveAsCell` in a promoted body. Closing those gaps is
+a general fix for the send that grows with the room, and comes before any
+construct added for the room.
+
 **The owner's rule on optimizations** (Z91, 2026-11-23). A goal is to be
 met because the compiled approach is generally better, not by an
 optimization for the measured case that today's runtime has no counterpart

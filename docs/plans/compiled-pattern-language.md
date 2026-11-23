@@ -6619,6 +6619,17 @@ is relitigated.
   `api::is_handle_member`. Any other `slice` is evaluated as today. Not
   built: it follows the merge of the serving branch.
 
+- The constructs the build added under names regular JavaScript lacks move to
+  the well-known forms (2026-11-23, Z93). The owner's words: "agreed, move to
+  well-known variants instead". `sortBy(key)` is the one such method the
+  build added: the compiler is to recognize `xs.toSorted(compare)` and plan
+  the sorted collection for it. `groupBy`, `keyBy` and the reads `lookup`,
+  `keys` and `keyEntries` are methods of today's runtime
+  (`groupByWithPattern` and `keyByWithPattern` in
+  `runtime/runner/src/cell.ts`), so the build did not add them; whether they
+  also move, to `Object.groupBy` or `Map.groupBy` with a member read as the
+  lookup, is asked of the owner and not decided. Not built.
+
 ## Provisional decisions awaiting the owner's ratification
 
 The owner's standing instruction of 2026-11-17: "Don't block progress on
