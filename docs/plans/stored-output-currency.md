@@ -403,8 +403,24 @@ slice changed. So:
   recorded. A later write of the slot by another slice's run leaves the
   earlier rows behind, and a row behind the slot's head answers for
   nothing. It marks no slice: what else the slice answers for is as current
-  as it was. Slices recorded together can each hold a row at the head, since
-  a snapshot names every instance a run's declared surface reaches.
+  as it was.
+- **A snapshot names a slot for a slice only while the slot holds what the
+  slice's run left there.** A run's declared writes reach the slot whichever
+  run wrote it last, so the scheduler keeps, for each node that runs once
+  for each viewer, the latest change to each instance of a document the node
+  writes, and the run that made it, as its replica reports changes. The
+  slot holds a run's write where that run made the latest change, or where
+  nothing has changed the slot since that run handed its writes over: a run
+  that writes what the slot already held changes nothing, and the slot is
+  then as much its own as the earlier run's. Two viewers whose runs write
+  the slot alike both answer for it, and two whose runs write it differently
+  answer for it one at a time: the earlier slice's record names the slot as
+  one that holds a later write, and its row is stored behind the slot's
+  head until the slice's computation runs again. The row stays so that the
+  slot is not taken for one the slice's runs never wrote, which the slice at
+  the slot's own key could answer for. A change that is no run's, one the
+  store pushed or a write taken back, leaves the slot answered for by none
+  of them.
 - **A demander's view of a slot is decided by the slices of the demander's
   own chain that hold a row for it**: the session's, the user's, the
   space's. A root passes for a session that demands the slot when each such
@@ -425,9 +441,7 @@ Two things this leaves as they are. A slot that is rewritten each time the
 set of viewers changes costs the returning viewer a start, because a start
 is what writes the slot for them: the index is then right about such a
 piece and no faster for it. And the false-clean check reads the instances at
-a slice's own key alone. A snapshot names every instance a run's declared
-surface reaches, so two slices can both hold a row for a slot at its head,
-and the index cannot tell which of their runs wrote it.
+a slice's own key alone.
 
 ## Checking it before relying on it
 

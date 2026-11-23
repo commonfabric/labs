@@ -53,6 +53,13 @@ const sameDocument = (a: unknown, b: unknown): boolean => {
 /** What the id of a document some computation derives begins with. */
 const COMPUTED_ID_PREFIX = "computed:";
 
+/**
+ * The seq a row of `currency_decide` stands at for a slot that holds a
+ * write later than its slice's: below the head of every instance, one with
+ * no revision included.
+ */
+const SUPERSEDED_SEQ = -1;
+
 export { ANY_INSTANCE };
 
 /**
@@ -140,6 +147,16 @@ export type CurrencySliceRecord = {
    * wrote none.
    */
   decides?: readonly CurrencyInstance[];
+
+  /**
+   * The instances at another key that a run of the slice wrote and that
+   * something has changed since, as another viewer's run does that writes
+   * the slot differently. Such a slot holds that later write, so the slice
+   * answers for it no longer: its row is stored behind the slot's head,
+   * where a viewer of the slice who demands the slot is refused. Absent
+   * for a slice with none.
+   */
+  superseded?: readonly CurrencyInstance[];
 
   /**
    * The time, in milliseconds since the epoch, from which the slice is no
@@ -367,8 +384,8 @@ WHERE branch = :branch AND id = :id AND scope_key = :scope_key
   deleteUnder: engine.prepare(`
 DELETE FROM currency_under WHERE branch = :branch AND piece = :piece
 `),
-  // The pieces a root encloses. `currency_under` is keyed by the piece
-  // enclosed, and holds few rows for a root.
+  // The pieces a root encloses, read through the index that leads with the
+  // root: the table's own key leads with the piece enclosed.
   selectBeneath: engine.prepare(`
 SELECT piece FROM currency_under WHERE branch = :branch AND root = :root
 `),
@@ -1717,8 +1734,21 @@ export const storeCurrencyRecords = (
           });
         }
         // The broader slots the slice's runs wrote are answered for here,
-        // each at the seq it stands at. A record replaces them whole.
+        // each at the seq it stands at. A record replaces them whole. One
+        // that holds a later write is stored behind every head: the row
+        // answers for nothing, and keeps the slot from being taken for one
+        // the slice's runs never wrote.
         statements.deleteDecides.run({ branch, slice: slice.key, piece });
+        for (const { id, scopeKey } of slice.superseded ?? []) {
+          statements.insertDecide.run({
+            branch,
+            slice: slice.key,
+            piece,
+            id,
+            instance_key: scopeKey,
+            seq: SUPERSEDED_SEQ,
+          });
+        }
         for (const { id, scopeKey } of slice.decides ?? []) {
           const at = standingOf(id, scopeKey);
           unseen ||= at.unseen;

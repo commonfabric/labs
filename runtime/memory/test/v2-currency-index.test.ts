@@ -123,6 +123,7 @@ describe("currency-index", () => {
         reads: CurrencyRead[];
         vouches: string[];
         decides?: Array<{ id: string; scopeKey: string }>;
+        superseded?: Array<{ id: string; scopeKey: string }>;
         expiresAt?: number;
       }
     >();
@@ -151,6 +152,12 @@ describe("currency-index", () => {
       for (const id of given.vouches) merged.vouches.push(id);
       if (given.decides !== undefined) {
         merged.decides = [...(merged.decides ?? []), ...given.decides];
+      }
+      if (given.superseded !== undefined) {
+        merged.superseded = [
+          ...(merged.superseded ?? []),
+          ...given.superseded,
+        ];
       }
     }
     return {
@@ -2065,6 +2072,113 @@ describe("currency-index", () => {
         ]);
 
         expect(judge(["of:piece"], [ROOT_ROW, FOR_BOB])).toEqual(["of:piece"]);
+      });
+
+      describe("where a slice is recorded as holding a later write of the slot than its own", () => {
+        /**
+         * Stores a record of `of:piece` in which Alice's run wrote the slot
+         * and something changed it since. `produces` has the `space` slice
+         * vouch for the slot as well.
+         */
+        const storeSuperseded = (produces: boolean) => {
+          const asOf = storeForAlice();
+          store(asOf, [
+            record("of:piece", {
+              ...(produces
+                ? { produces: ["computed:out"] }
+                : { writes: ["computed:out"] }),
+              slices: [{
+                key: ALICE_USER,
+                vouched: true,
+                reads: [input("of:prefs", ALICE_USER)],
+                vouches: ["computed:out"],
+                superseded: [SLOT],
+              }],
+            }),
+          ]);
+          return asOf;
+        };
+
+        it("refuses the root for the slice's viewer, and leaves the slice clean", () => {
+          storeSuperseded(false);
+
+          expect(refusals(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual({
+            "of:piece": "unvouched-instance",
+          });
+          expect(markOf("of:piece", ALICE_USER)).toBe(0);
+        });
+
+        it("refuses the root for the slice's viewer where the `space` slice vouches for the slot as well", () => {
+          // A viewer whose runs never wrote the slot reads it as the `space`
+          // slice left it. This viewer's run wrote it, so a run for them
+          // may write it otherwise than it stands.
+
+          storeSuperseded(true);
+
+          expect(refusals(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual({
+            "of:piece": "unvouched-instance",
+          });
+          expect(judge(["of:piece"], [ROOT_ROW, FOR_BOB])).toEqual([
+            "of:piece",
+          ]);
+        });
+
+        it("stores marked `1` a slice of another piece that read the slot at the viewer's key", () => {
+          const asOf = storeSuperseded(false);
+          store(Math.max(asOf, write("of:reader")), [
+            record("of:reader", {
+              slices: [{
+                key: ALICE_USER,
+                vouched: true,
+                reads: [{ ...derived("computed:out"), scopeKey: "space" }],
+                vouches: [],
+              }],
+            }),
+          ]);
+
+          expect(markOf("of:reader", ALICE_USER)).toBe(1);
+        });
+
+        it("returns the root for the slice's viewer once a later record names the slot as one the slice decides", () => {
+          const asOf = storeSuperseded(false);
+          store(asOf, [
+            record("of:piece", {
+              writes: ["computed:out"],
+              slices: [{
+                key: ALICE_USER,
+                vouched: true,
+                reads: [input("of:prefs", ALICE_USER)],
+                vouches: ["computed:out"],
+                decides: [SLOT],
+              }],
+            }),
+          ]);
+
+          expect(judge(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual([
+            "of:piece",
+          ]);
+        });
+
+        it("counts the slot as one the slice decides where a record names it as both", () => {
+          const asOf = storeForAlice();
+          store(asOf, [
+            record("of:piece", {
+              writes: ["computed:out"],
+              slices: [{
+                key: ALICE_USER,
+                vouched: true,
+                reads: [input("of:prefs", ALICE_USER)],
+                vouches: ["computed:out"],
+                decides: [SLOT],
+                superseded: [SLOT],
+              }],
+            }),
+          ]);
+
+          expect(judge(["of:piece"], [ROOT_ROW, FOR_ALICE])).toEqual([
+            "of:piece",
+          ]);
+        });
       });
 
       it("stores clean a slice that read the slot it decides, and marks it alone once its own input changed", () => {

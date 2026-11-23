@@ -1402,11 +1402,21 @@ executing:
   instance at the run's own key as one the slice vouches for, and each
   instance at another key as a slot the slice decides, with the key it is
   at. What such a slot holds was decided by the run's reads, which are in
-  that slice. Another run's write of the slot leaves the row behind, and a
-  row behind the slot's head answers for nothing and marks no slice. A slice
-  of another piece that read the slot at a viewer's key is stale through the
-  slices of that viewer's chain that hold it, and one that read it at the
-  slot's own key through whichever slice holds it.
+  that slice. A record names such a slot only while it holds what the
+  slice's run left there. The scheduler keeps, for each node that runs once
+  for each viewer, the latest change to each instance of a document the node
+  writes, with the run that made it, as its replica reports changes. A slot
+  holds a run's write where that run made the latest change to it, or where
+  nothing has changed it since that run handed its writes over, as when the
+  run wrote what the slot already held. A slot another viewer's run changed
+  since is that run's: the earlier slice's records name it as one that holds
+  a later write, and its row is stored behind the slot's head until the
+  slice's computation runs again. Another run's write of the slot leaves the
+  row behind as well, and a row behind the slot's head answers for nothing,
+  marks no slice, and refuses a root to a viewer of its slice who demands
+  the slot. A slice of another piece that read the slot at a viewer's key is
+  stale through the slices of that viewer's chain that hold it, and one that
+  read it at the slot's own key through whichever slice holds it.
   The records of one quiescent point reach the memory server in requests of
   bounded size, and the last names the pieces the earlier ones stored, so
   pieces that read each other's writes are judged clean together. Each row

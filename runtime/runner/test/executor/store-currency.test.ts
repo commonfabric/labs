@@ -176,6 +176,15 @@ describe("StoreCurrency", () => {
       let changed: string[];
 
       /**
+       * The instances at another key the scheduler reports each piece's
+       * slice as deciding and as holding a later write of, by piece.
+       */
+      let slots: Map<string, {
+        decides: Array<{ id: string; scopeKey: "space" }>;
+        superseded: Array<{ id: string; scopeKey: "space" }>;
+      }>;
+
+      /**
        * A runtime whose scheduler reports `changed` as the pieces that
        * changed, each with one user's slice that read what `reads` holds
        * for it, and no piece that `reads` does not name.
@@ -199,7 +208,8 @@ describe("StoreCurrency", () => {
                   derived: false,
                 })),
                 vouches: [],
-                decides: [],
+                decides: slots.get(piece)?.decides ?? [],
+                superseded: slots.get(piece)?.superseded ?? [],
               }],
             };
           },
@@ -211,6 +221,47 @@ describe("StoreCurrency", () => {
       beforeEach(() => {
         reads = new Map();
         changed = [];
+        slots = new Map();
+      });
+
+      it("records the instances a slice decides and those it holds a later write of, and names neither list for a slice with none", () => {
+        reads.set("of:piece", []);
+        reads.set("of:plain", []);
+        slots.set("of:piece", {
+          decides: [{ id: "computed:held", scopeKey: "space" }],
+          superseded: [{ id: "computed:lost", scopeKey: "space" }],
+        });
+        changed = ["of:piece", "of:plain"];
+
+        const snapshot = currency.snapshot(runtime, 0, []);
+
+        expect(
+          snapshot?.records.map(({ piece, slices }) => ({
+            piece,
+            slices: slices.map(({ key, decides, superseded }) => ({
+              key,
+              decides,
+              superseded,
+            })),
+          })),
+        ).toEqual([
+          {
+            piece: "of:piece",
+            slices: [{
+              key: "user:alice",
+              decides: [{ id: "computed:held", scopeKey: "space" }],
+              superseded: [{ id: "computed:lost", scopeKey: "space" }],
+            }],
+          },
+          {
+            piece: "of:plain",
+            slices: [{
+              key: "user:alice",
+              decides: undefined,
+              superseded: undefined,
+            }],
+          },
+        ]);
       });
 
       it("keeps what a piece's runs read in another space, with the slice each run belongs to", () => {

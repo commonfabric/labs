@@ -66,6 +66,7 @@ import {
   fanOutInstancesToRun,
   type FanOutNodeState,
   fanOutRunFinished,
+  fanOutRunOpened,
   fanOutRunStarted,
   fanOutUnionLog,
   keyAtRatchet,
@@ -782,6 +783,9 @@ export async function runSchedulerAction(
     }
     (tx.tx as { debugActionId?: string }).debugActionId = actionId;
     tx.tx.sourceAction = action;
+    if (fanOut !== undefined && instance !== undefined) {
+      fanOutRunOpened(fanOut, instance, tx.tx);
+    }
     tx.tx.validateReactiveReads = true;
     // The mark's one effect is the local fold of a write the space refuses
     // (`IStorageTransaction.derivedWrites`), so the flag gating the fold
