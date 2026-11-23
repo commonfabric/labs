@@ -9,6 +9,10 @@ import {
   type CompiledPiece,
   startCompiledPiece,
 } from "../../src/compiled/piece.ts";
+import {
+  basisDocumentOf,
+  basisPartDocumentOf,
+} from "../../src/compiled/basis.ts";
 import { resumeCompiledPiece } from "../../src/compiled/resume.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { type SharedStorage, shareStorage } from "./storage.ts";
@@ -283,9 +287,18 @@ describe("resumeCompiledPiece()", () => {
         ) => row.label),
       ).toEqual(["t0!", "renamed!", "late!"]);
       expect(read(second, result, "events")).toBe(1);
-      // One commit, of the document of the one row and of the basis, which
-      // takes the number the item has now.
-      expect(heard.map((ids) => ids.length)).toEqual([2]);
+      // One commit, of the document of the one row and of documents of the
+      // basis, which takes the number the item has now.
+      expect(heard.length).toBe(1);
+      const { id } = result.getAsNormalizedFullLink();
+      const ofBasis = new Set([
+        `of:${basisDocumentOf(id)}`,
+        ...Array.from(
+          { length: 256 },
+          (_, part) => `of:${basisPartDocumentOf(id, part)}`,
+        ),
+      ]);
+      expect(heard[0].filter((entity) => !ofBasis.has(entity)).length).toBe(1);
     });
   });
 

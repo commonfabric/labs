@@ -48,7 +48,12 @@ import type { Action, EventHandler } from "../scheduler/types.ts";
 import type { URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import type { FabricValue } from "@commonfabric/data-model";
-import { basisDocumentOf, PieceBasis, storedBasisOf } from "./basis.ts";
+import {
+  basisDocumentOf,
+  basisPartDocumentOf,
+  PieceBasis,
+  storedBasisOf,
+} from "./basis.ts";
 import {
   type ChangeByOther,
   type Restored,
@@ -139,6 +144,8 @@ export class CompiledPiece {
   /** The store that keeps the executor's documents in the runtime. */
   readonly transactions: RuntimeTransactions;
   readonly #runtime: Runtime;
+  /** The identifier of the result document. */
+  readonly #result: string;
   /** The record of what the stored result was derived from. */
   readonly #basis: PieceBasis<IExtendedStorageTransaction>;
   readonly #cancels: Cancel[] = [];
@@ -172,6 +179,7 @@ export class CompiledPiece {
       throw new Error("The result cell of a compiled piece is a whole entity.");
     }
     const { space } = result;
+    this.#result = result.id;
     const rowDocuments = options.rows === "in-place"
       ? undefined
       : rowDocumentCollections(artifact);
@@ -213,10 +221,12 @@ export class CompiledPiece {
       artifact,
       {
         seqOf: (doc) => transactions.confirmedSeqOf(doc),
-        write: (handed, path, value) =>
+        write: (handed, part, path, value) =>
           transactions.writeOwn(
             handed,
-            basisDocument,
+            part === undefined
+              ? basisDocument
+              : basisPartDocumentOf(result.id, part),
             path,
             value as FabricValue,
           ),
@@ -331,7 +341,11 @@ export class CompiledPiece {
   ):
     | { stored: NonNullable<ReturnType<typeof storedBasisOf>>; seq: number }
     | undefined {
-    const stored = storedBasisOf(this.transactions.heldOwn(document));
+    const stored = storedBasisOf(
+      this.transactions.heldOwn(document),
+      (part) =>
+        this.transactions.heldOwn(basisPartDocumentOf(this.#result, part)),
+    );
     const seq = this.transactions.confirmedSeqOf(document);
     return stored === undefined || seq === undefined
       ? undefined

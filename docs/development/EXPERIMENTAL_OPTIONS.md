@@ -1253,9 +1253,10 @@ holds the measurements and the conditions for revisiting.
   path by `runtime/runner/test/compiled/piece.test.ts`,
   `runtime/runner/test/compiled/row-documents.test.ts`,
   `runtime/runner/test/compiled/value-code.test.ts` and
-  `runtime/runner/test/compiled/compile.test.ts`. The start from storage and
-  the serving runtime's loader are pinned by
-  `runtime/runner/test/compiled/resume.test.ts` and
+  `runtime/runner/test/compiled/compile.test.ts`. The start from storage, the
+  basis a piece keeps and the serving runtime's loader are pinned by
+  `runtime/runner/test/compiled/resume.test.ts`,
+  `runtime/runner/test/compiled/basis.test.ts` and
   `runtime/runner/test/compiled/compiled-serving.test.ts`.
 - **Path to removal.** Delete the runtime option, its env, authority and
   shell-source entries, `CfcTxState.planLabels`, and either the `plan-write`

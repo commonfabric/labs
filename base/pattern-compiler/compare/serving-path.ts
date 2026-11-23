@@ -36,6 +36,7 @@
  * With `--profile=<file>`, the sampling profile of the process over the
  * appends is written to the file, in the format of the V8 inspector.
  */
+// deno-lint-ignore no-external-import -- The sampling profiler is reached through this Node builtin alone.
 import inspector from "node:inspector";
 import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";

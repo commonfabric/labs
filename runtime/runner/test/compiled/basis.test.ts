@@ -8,6 +8,10 @@ import type {
 } from "../../../../base/pattern-compiler/exec/executor.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell, MemorySpace } from "../../src/cell.ts";
+import {
+  basisDocumentOf,
+  basisPartDocumentOf,
+} from "../../src/compiled/basis.ts";
 import { parseLink } from "../../src/link-utils.ts";
 import {
   type CompiledPiece,
@@ -217,6 +221,18 @@ describe("resumeCompiledPieceFromBasis()", () => {
     return heard;
   };
 
+  /** The entities of the documents that hold the basis of a piece. */
+  const ofBasis = (result: Cell<unknown>): Set<string> => {
+    const { id } = result.getAsNormalizedFullLink();
+    return new Set([
+      `of:${basisDocumentOf(id)}`,
+      ...Array.from(
+        { length: 256 },
+        (_, part) => `of:${basisPartDocumentOf(id, part)}`,
+      ),
+    ]);
+  };
+
   /** Resumes the piece of `result` in `runtime` from its basis. */
   const resume = async (
     runtime: Runtime,
@@ -265,9 +281,9 @@ describe("resumeCompiledPieceFromBasis()", () => {
       0,
       0,
     ]);
-    // The basis, the argument, the list, its four items, the state cell
-    // and the counts.
-    expect(resumed.checked).toBe(9);
+    // The argument, the list, its four items, the state cell and the
+    // counts.
+    expect(resumed.sources).toBe(8);
   });
 
   it("gives, for the events after a piece that was found current is woken, the values one runtime gives for all of them, and leaves the piece current", async () => {
@@ -330,9 +346,12 @@ describe("resumeCompiledPieceFromBasis()", () => {
       "late!",
       "added!",
     ]);
+    // One commit: the document of the one row, and documents of the basis.
     expect(heard.length).toBe(1);
-    expect(heard[0].length).toBe(2);
-    expect(heard[0]).toContain(rows[2]);
+    expect(heard[0].filter((id) => !ofBasis(result).has(id))).toEqual([
+      rows[2],
+    ]);
+    expect(heard[0].length).toBeGreaterThan(1);
     await dispose(second);
 
     const third = session();

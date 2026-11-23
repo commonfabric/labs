@@ -28,6 +28,9 @@ import {
 import {
   basisDocumentOf,
   basisMatches,
+  basisPartDocumentOf,
+  basisPartOf,
+  basisPartsOf,
   compiledIdentityOf,
   type StoredBasis,
   storedBasisOf,
@@ -96,7 +99,15 @@ const syncBasis = async (
     }, NOTHING_BELOW);
   const document = basisDocumentOf(id);
   await at(document).sync();
-  const basis = storedBasisOf(heldAt(runtime, space, entityOf(document)));
+  const root = heldAt(runtime, space, entityOf(document));
+  const parts = basisPartsOf(root);
+  await Promise.all(
+    parts.map((part) => at(basisPartDocumentOf(id, part)).sync()),
+  );
+  const basis = storedBasisOf(
+    root,
+    (part) => heldAt(runtime, space, entityOf(basisPartDocumentOf(id, part))),
+  );
   if (basis === undefined) return undefined;
   await Promise.all(
     [...new Set([...Object.keys(basis.inputs), ...basis.recent])].map((
@@ -272,8 +283,13 @@ export type ResumeFromBasisOptions = Parameters<typeof resumeCompiledPiece>[3];
 export class ResumedPiece {
   /** Whether the basis matched the storage when the piece was resumed. */
   readonly current: boolean;
-  /** How many documents the comparison brought into the replica. */
+  /**
+   * How many documents the comparison brought into the replica: the
+   * document of the basis, those of its parts, and the sources.
+   */
   readonly checked: number;
+  /** How many sources the basis names. */
+  readonly sources: number;
   /**
    * Resolves with the running piece once it was woken, by `wake()` or by a
    * change of a document its basis names, and rejects where the wake fails.
@@ -289,11 +305,13 @@ export class ResumedPiece {
   constructor(
     current: boolean,
     checked: number,
+    sources: number,
     wake: () => Promise<CompiledPiece>,
     watch: (changed: () => void) => () => void,
   ) {
     this.current = current;
     this.checked = checked;
+    this.sources = sources;
     this.#wake = wake;
     const { promise, resolve, reject } = Promise.withResolvers<CompiledPiece>();
     this.woken = promise;
@@ -418,7 +436,9 @@ export const resumeCompiledPieceFromBasis = async (
     );
   const resumed = new ResumedPiece(
     current,
-    basis === undefined ? 1 : sources.length + 1,
+    basis === undefined ? 1 : sources.length + 1 +
+      new Set(Object.keys(basis.inputs).map(basisPartOf)).size,
+    sources.length,
     () => resumeCompiledPiece(runtime, artifact, resultCell, options),
     (heard) => {
       changed = heard;
