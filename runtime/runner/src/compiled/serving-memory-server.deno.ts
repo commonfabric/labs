@@ -73,7 +73,13 @@ export const listenCompiledServingMemoryServer = async (
   } = {},
 ): Promise<CompiledServingMemoryServer> => {
   const experimental = { ...options.experimental, compiledPatterns: true };
-  const serviceIdentity = await Identity.generate();
+  // Each serving loop has an identity of its own, as each serving process
+  // has a session of its own: the memory server numbers the commits of a
+  // session, and takes the first commits of a second loop on the session
+  // of the first as replays.
+  const delegatingDids: string[] = [];
+  let serviceIdentity = await Identity.generate();
+  delegatingDids.push(serviceIdentity.did());
   let compile = options.compile;
   if (compile === undefined) {
     const compiler = new PatternCompiler(options.compiler);
@@ -81,7 +87,7 @@ export const listenCompiledServingMemoryServer = async (
   }
   const serve: ServeCompiledPiecesOptions = { ...options.pieces, compile };
   const standalone = StandaloneMemoryServer.start({
-    acl: { mode: "off", delegatingDids: [serviceIdentity.did()] },
+    acl: { mode: "off", delegatingDids },
     namesInstances: () => namesInstancesByDefault(experimental),
   });
   // A factory for each serving loop, as each serving process has one.
@@ -139,6 +145,8 @@ export const listenCompiledServingMemoryServer = async (
     restart: async () => {
       await host.close();
       runtimes = [];
+      serviceIdentity = await Identity.generate();
+      delegatingDids.push(serviceIdentity.did());
       host = attach();
     },
     pieces: () => runtimes.flatMap((runtime) => compiledPiecesOf(runtime)),

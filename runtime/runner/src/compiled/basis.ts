@@ -353,7 +353,7 @@ export class PieceBasis<Tx extends object> {
     ) return 0;
     // The basis is written: each source the list named for a resumed piece
     // is given its number, and leaves the list.
-    inputs.push(...numbered(carried));
+    for (const one of numbered(carried)) inputs.push(one);
     this.#carried.clear();
     const recent = unconfirmed;
     const sameRecent = same(recent);

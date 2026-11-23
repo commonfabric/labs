@@ -336,12 +336,11 @@ describe("a compiled piece under the serving loop", () => {
       );
     }
 
-    // The loop that took over started the piece from the storage. The
-    // memory server keeps the sequence numbers of the session of the loop
-    // before, so it rejects the first waves of this one as replays, and
-    // each event of a rejected wave is handled again.
+    // The loop that took over started the piece from the storage, for the
+    // first event it was handed.
     expect(serving.pieces().length).toBe(1);
-    expect(serving.pieces()[0].counts.events).toBeGreaterThanOrEqual(2);
+    expect(serving.pieces()[0].counts.events).toBe(2);
+    expect(serving.pieces()[0].refusals).toEqual([]);
   });
 
   it("evaluates nothing when another serving loop takes over a space whose piece is current, and starts the executor for the next event", async () => {

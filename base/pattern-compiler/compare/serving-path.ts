@@ -5,7 +5,7 @@
  * pattern (milestone 6 of
  * `docs/plans/compiled-pattern-language-integration.md`).
  *
- * `deno run -A --no-check base/pattern-compiler/compare/serving-path.ts [--arms=compiled,today] [--events=<n>] [--progress] [lengths]`
+ * `deno run -A --no-check base/pattern-compiler/compare/serving-path.ts [--arms=compiled,today] [--events=<n>] [--progress] [--profile=<file>] [lengths]`
  *
  * Each arm and length runs against a memory server of its own that listens
  * on a websocket of this process, with a serving loop on this thread whose
@@ -24,7 +24,19 @@
  *
  * `load` is the time from the commit of the setup on the sender until the
  * second client reads the label of the last row.
+ *
+ * After the events, another serving loop takes the space over. `resume`
+ * holds the time until a client that holds nothing reads the last row
+ * (`read`) and until the loop is quiescent, whether the piece was found
+ * current by its basis, how many documents that comparison read, how many
+ * evaluations the serving runtime had made by then, and the time of the
+ * first and of the second event after it: the first starts the executor of
+ * a compiled piece.
+ *
+ * With `--profile=<file>`, the sampling profile of the process over the
+ * appends is written to the file, in the format of the V8 inspector.
  */
+import inspector from "node:inspector";
 import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 
@@ -33,6 +45,7 @@ import {
   type CompiledServingMemoryServer,
   listenCompiledServingMemoryServer,
 } from "../../../runtime/runner/src/compiled/serving-memory-server.deno.ts";
+import type { ResumedPiece } from "../../../runtime/runner/src/compiled/resume.ts";
 import { setUpCompiledPiece } from "../../../runtime/runner/src/compiled/setup.ts";
 import { resolveLocalProgram } from "../../../runtime/runner/src/harness/local-program.deno.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
@@ -80,11 +93,17 @@ const measure = async (
   length: number,
   events: number,
   progress: (step: string) => void,
+  /** Where the profile of the appends is written, where one is taken. */
+  profile?: string,
 ) => {
   const signer = await Identity.fromPassphrase("pattern-compiler-serving");
   const space: MemorySpace = signer.did();
+  // The pieces a serving runtime resumed from their basis.
+  const resumed: ResumedPiece[] = [];
   const serving: CompiledServingMemoryServer =
-    await listenCompiledServingMemoryServer();
+    await listenCompiledServingMemoryServer({
+      pieces: { resumed: (_result, piece) => resumed.push(piece) },
+    });
   const client = () =>
     new Runtime({
       apiUrl: serving.url,
@@ -210,6 +229,9 @@ const measure = async (
       );
     }
     const adds: { sender: number; reader: number }[] = [];
+    const stopProfile = profile === undefined
+      ? undefined
+      : await startProfile(profile);
     for (let turn = 0; turn < events; turn++) {
       adds.push(
         await timed(
@@ -220,7 +242,50 @@ const measure = async (
         ),
       );
     }
+    await stopProfile?.();
     const [piece] = serving.pieces();
+    const counts = piece === undefined ? undefined : {
+      events: piece.counts.events,
+      derivations: piece.counts.derivations,
+      ownMs: round(piece.counts.ownMs),
+      refusals: piece.refusals.length,
+      sources: piece.sources,
+    };
+    // Another serving loop takes the space over. A client that holds
+    // nothing reads the last row, which is the demand that has the loop
+    // reach the piece, and the sender then sends one more event.
+    await serving.host.whenQuiescent();
+    const restarted = performance.now();
+    await serving.restart();
+    const late = client();
+    const last = length + events - 1;
+    const read = await visible(late, result, last, `added ${events - 1}!`);
+    await serving.host.whenQuiescent();
+    const quiescent = performance.now();
+    const afterRead = serving.pieces()[0];
+    const resume = {
+      read: round(read - restarted),
+      quiescent: round(quiescent - restarted),
+      current: resumed.map(({ current }) => current),
+      checked: resumed.map(({ checked }) => checked),
+      evaluations: afterRead?.instance.counts.evaluations ?? 0,
+    };
+    progress("another serving loop serves the piece");
+    const first = await timed(
+      "rename",
+      { at: 0, title: "after the resume" },
+      0,
+      "after the resume!",
+    );
+    await serving.host.whenQuiescent();
+    const woken = serving.pieces()[0];
+    const second = await timed(
+      "rename",
+      { at: 0, title: "second after the resume" },
+      0,
+      "second after the resume!",
+    );
+    await late.dispose();
     const summary = (runs: { sender: number; reader: number }[]) => ({
       runs: runs.length,
       sender: {
@@ -240,14 +305,20 @@ const measure = async (
       load,
       rename: summary(renames),
       add: summary(adds),
-      ...(piece === undefined ? {} : {
-        piece: {
-          events: piece.counts.events,
-          derivations: piece.counts.derivations,
-          ownMs: round(piece.counts.ownMs),
-          refusals: piece.refusals.length,
+      ...(counts === undefined ? {} : { piece: counts }),
+      resume: {
+        ...resume,
+        firstEvent: {
+          sender: round(first.sender),
+          reader: round(first.reader),
         },
-      }),
+        secondEvent: {
+          sender: round(second.sender),
+          reader: round(second.reader),
+        },
+        evaluationsOfTheWake: woken?.instance.counts.evaluations ?? 0,
+        refusals: woken?.refusals.length ?? 0,
+      },
     };
   } finally {
     await serving.host.close();
@@ -255,6 +326,31 @@ const measure = async (
     await reader.dispose();
     await serving.close();
   }
+};
+
+/**
+ * Starts the sampling profiler of the process and returns what stops it
+ * and writes the profile to `file`.
+ */
+const startProfile = async (file: string): Promise<() => Promise<void>> => {
+  const session = new inspector.Session();
+  session.connect();
+  const post = (method: string, params?: object) =>
+    new Promise<unknown>((resolve, reject) =>
+      session.post(
+        method,
+        params,
+        (error: Error | null, result?: unknown) =>
+          error === null ? resolve(result) : reject(error),
+      )
+    );
+  await post("Profiler.enable");
+  await post("Profiler.setSamplingInterval", { interval: 200 });
+  await post("Profiler.start");
+  return async () => {
+    const { profile } = await post("Profiler.stop") as { profile: unknown };
+    await Deno.writeTextFile(file, JSON.stringify(profile));
+  };
 };
 
 if (import.meta.main) {
@@ -274,7 +370,9 @@ if (import.meta.main) {
         }
       };
       console.log(
-        JSON.stringify(await measure(arm, length, events, progress)),
+        JSON.stringify(
+          await measure(arm, length, events, progress, flag("profile")),
+        ),
       );
     }
   }
