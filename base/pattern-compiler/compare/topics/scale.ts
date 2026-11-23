@@ -105,6 +105,10 @@
  * a field of the same topic that the board does not read (`write alone`):
  * what the write itself costs, the memory server's handling included.
  *
+ * With `SCALE_FIELD_EDITS` set, the arms of the runtime's own calls time,
+ * after the edits of a title, an edit of the mentions, of the `shortName`
+ * and of the `lastActivityAt` of the middle topic.
+ *
  * With `SCALE_CPU_PROFILE` set to the path of a file, the run is sampled
  * every half millisecond and the profile of the whole process is written
  * there when the arm has run, in the format of the V8 inspector.
@@ -1583,6 +1587,25 @@ const runToday = async (
       await measure(`edit topic ${at}`, () =>
         commit((tx) => {
           cells[at].withTx(tx).key("title").set(`Edited topic ${at}`);
+        }));
+    }
+    // With `SCALE_FIELD_EDITS` set, a writer outside the board then writes,
+    // on the middle topic, each field that a whole-list `lift` of the board
+    // reads: its mentions (to the first topic alone), its `shortName` and
+    // its `lastActivityAt`.
+    if (Deno.env.get("SCALE_FIELD_EDITS") !== undefined) {
+      const at = Math.floor(size / 2);
+      await measure(`edit mentions ${at}`, () =>
+        commit((tx) => {
+          cells[at].withTx(tx).key("mentions").set([cells[0]]);
+        }));
+      await measure(`edit shortName ${at}`, () =>
+        commit((tx) => {
+          cells[at].withTx(tx).key("shortName").set(`renamed-${at}`);
+        }));
+      await measure(`edit lastActivityAt ${at}`, () =>
+        commit((tx) => {
+          cells[at].withTx(tx).key("lastActivityAt").set(4_000_000_000_000);
         }));
     }
     for (let turn = 0; turn < 3; turn++) {
