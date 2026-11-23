@@ -11,6 +11,7 @@ import { spliceAll } from "@commonfabric/collections/splice";
 import {
   debugStr,
   type FabricHash,
+  FabricPrimitive,
   type FabricValue,
   hashOf,
   isValidFabricValue,
@@ -176,7 +177,7 @@ export const withDefaults = (
   if (value === undefined) {
     return schema.default === undefined
       ? undefined
-      : structuredClone(schema.default);
+      : copyOfData(schema.default);
   }
   if (isRecord(value) && schema.properties !== undefined) {
     let filled: Record<string, unknown> | undefined;
@@ -206,7 +207,38 @@ const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   (Object.getPrototypeOf(value) === Object.prototype ||
     Object.getPrototypeOf(value) === null);
 
-/** A value as a string, with the members of each record in one order. */
+/**
+ * Whether a value is a primitive of the data model, such as a
+ * `FabricEpochNsec`: an immutable object that the storage keeps whole. The
+ * executor stores one as it is, never copies it, and compares two by the
+ * text of the JSON codec of fabric values.
+ */
+export const isDataPrimitive = (value: unknown): value is FabricPrimitive =>
+  value instanceof FabricPrimitive;
+
+/**
+ * A copy of stored data: of each array and each plain record in it, with
+ * every primitive of the data model in it kept. `structuredClone` makes a
+ * plain record of such a primitive, which loses what it holds.
+ */
+export const copyOfData = <T>(value: T): T => {
+  if (typeof value !== "object" || value === null) return value;
+  if (isDataPrimitive(value)) return value;
+  if (Array.isArray(value)) return value.map(copyOfData) as T;
+  if (isPlainRecord(value)) {
+    const copy: Record<string, unknown> = {};
+    for (const name of Object.keys(value)) copy[name] = copyOfData(value[name]);
+    return copy as T;
+  }
+  return structuredClone(value);
+};
+
+/**
+ * A value as a string, with the members of each record in one order, and a
+ * primitive of the data model as the text the JSON codec of fabric values
+ * gives it: its text as plain JSON is `{}`, whatever it holds. A `bigint`,
+ * which plain JSON refuses, is its digits.
+ */
 export const canonical = (value: unknown): string =>
   JSON.stringify(
     value,
@@ -215,6 +247,10 @@ export const canonical = (value: unknown): string =>
         ? Object.fromEntries(
           Object.entries(member).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
         )
+        : isDataPrimitive(member)
+        ? { $primitive: jsonFromFabricValue(member) }
+        : typeof member === "bigint"
+        ? { $bigint: `${member}` }
         : member,
   ) ?? "undefined";
 
@@ -636,7 +672,8 @@ export type StreamPosition = {
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+  typeof value === "object" && value !== null && !Array.isArray(value) &&
+  !isDataPrimitive(value);
 
 export const isLink = (value: unknown): value is StoredLink =>
   isRecord(value) && isRecord(value.$link) &&
@@ -962,7 +999,7 @@ export class Store {
       const found: StreamPosition[] = [];
       const walk = (held: unknown, at: string[]) => {
         if (isStream(held)) {
-          found.push({ path: at, stream: structuredClone(held.$stream) });
+          found.push({ path: at, stream: copyOfData(held.$stream) });
         } else if (Array.isArray(held)) {
           held.forEach((member, index) => walk(member, [...at, `${index}`]));
         } else if (isRecord(held)) {
@@ -1240,7 +1277,7 @@ export class Store {
       }
     }
     let copy: { value: unknown } | undefined = {
-      value: structuredClone(
+      value: copyOfData(
         top.reduce(
           (value: unknown, segment) => child(value, segment),
           this.docs.get(doc)?.value,
@@ -1253,13 +1290,13 @@ export class Store {
       if ("whole" in undo) {
         copy = undo.old === undefined
           ? undefined
-          : { value: structuredClone(undo.old.value) };
+          : { value: copyOfData(undo.old.value) };
         continue;
       }
       if (copy === undefined || !isPrefix(top, undo.path)) continue;
       const rest = undo.path.slice(top.length);
       if (rest.length === 0 && !("splice" in undo)) {
-        copy.value = structuredClone(undo.old);
+        copy.value = copyOfData(undo.old);
         continue;
       }
       let holder = copy as unknown as Record<string, unknown>;
@@ -1277,13 +1314,13 @@ export class Store {
             array,
             undo.splice.start,
             undo.splice.inserted,
-            structuredClone(undo.splice.removed),
+            copyOfData(undo.splice.removed),
           );
         }
       } else if (undo.old === undefined && !Array.isArray(holder)) {
         delete holder[name];
       } else {
-        holder[name] = structuredClone(undo.old);
+        holder[name] = copyOfData(undo.old);
       }
     }
     if (copy === undefined) return { existed: false, value: undefined };
@@ -2335,7 +2372,7 @@ export class Store {
     // it was read from.
     const value = withDefaults(
       located.value === undefined && located.fallback !== undefined
-        ? structuredClone(located.fallback)
+        ? copyOfData(located.fallback)
         : this.#copy(
           located.value,
           reads,
@@ -2541,9 +2578,7 @@ export class Store {
       this.journal?.push({ doc, whole: true, old: undefined });
       document = {
         kind: declared.kind,
-        value: path.length === 0
-          ? undefined
-          : structuredClone(declared.default),
+        value: path.length === 0 ? undefined : copyOfData(declared.default),
       };
       this.docs.set(doc, document);
     } else if (JSON.stringify(located.value) === JSON.stringify(value)) {

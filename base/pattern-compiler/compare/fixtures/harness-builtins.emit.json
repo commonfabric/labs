@@ -1,0 +1,310 @@
+[
+  {
+    "module": "compare/fixtures/harness-builtins.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {
+            "0": {
+              "captures": [],
+              "named": true
+            }
+          },
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/harness-builtins.tsx",
+              "source": "const { \"currentPrincipal\": currentPrincipal, \"FabricEpochNsec\": FabricEpochNsec, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst stamp = handler(\n  (event, { held }) => {\n    held.set({\n      by: currentPrincipal(),\n      at: new FabricEpochNsec(BigInt(event.nsec)),\n    });\n  },\n);\nconst Stamped = pattern(\"sha256:9be9d2823f624d5e1cc8a5dfbb277b1c55951f22a7668dbdfa688c96bb3cfca7\");\nObject.defineProperty($exports, \"Stamped\", { enumerable: true, get: () => Stamped });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ held: $h.slot(3), stamp: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { held }) => {\n    held.set({\n      by: currentPrincipal(),\n      at: new FabricEpochNsec(BigInt(event.nsec)),\n    });\n  })($e, $s));"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [],
+          "valuesWithoutOutput": []
+        },
+        "line": 29,
+        "name": "Stamped",
+        "plan": {
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/3",
+              "handler": {
+                "body": 0
+              },
+              "name": "stamp",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "held"
+                  ],
+                  "place": {
+                    "slot": 3
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 3
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "stamp",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "principal"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "event",
+                    "nsec"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "binding",
+                    "held"
+                  ],
+                  "handle": true,
+                  "slot": 2
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 2
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 0
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 2
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/harness-builtins.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "held"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:9be9d2823f624d5e1cc8a5dfbb277b1c55951f22a7668dbdfa688c96bb3cfca7"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/0",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "principal"
+              ],
+              "root": {
+                "kind": "cause"
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "nsec"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "held"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "held",
+              "schema": "unhashed:schema/4",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "held": {
+                  "properties": {
+                    "at": {},
+                    "by": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "stamp": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "properties": {
+                    "nsec": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "nsec"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "held",
+                "stamp"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "properties": {
+                "at": {},
+                "by": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "properties": {
+                "nsec": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "nsec"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "default": {},
+              "properties": {
+                "at": {},
+                "by": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

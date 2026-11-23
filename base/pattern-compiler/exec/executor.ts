@@ -26,11 +26,13 @@ import {
 import {
   argumentOf,
   canonical,
+  copyOfData,
   declaredMembers,
   type ElementPart,
   type ErrorState,
   errorState,
   identifierOf,
+  isDataPrimitive,
   isErrorState,
   isKeySegment,
   isLink,
@@ -1468,7 +1470,7 @@ export class Handle {
     const held = Array.isArray(located.value)
       ? located.value
       : Array.isArray(declared)
-      ? structuredClone(declared)
+      ? copyOfData(declared)
       : [];
     const recorded = this.#instance.written(this.key("*"), decided);
     try {
@@ -1935,7 +1937,11 @@ export class Host {
       if (below !== undefined) {
         return this.at(this.value(below.value), below.path);
       }
-      throw new Unsupported("an output that no value function computes");
+      throw new Unsupported(
+        `an output that no value function computes: output ${index}, ${
+          JSON.stringify(output).slice(0, 300)
+        }`,
+      );
     }
     const held = this.value(value);
     if (Array.isArray(held)) {
@@ -2202,7 +2208,7 @@ export class Host {
    */
   withDefault(value: unknown, fallback: unknown): unknown {
     if (value instanceof Ref) return value.withDefault(fallback);
-    return value === undefined ? structuredClone(fallback) : value;
+    return value === undefined ? copyOfData(fallback) : value;
   }
 
   /**
@@ -3547,6 +3553,14 @@ export class Instance {
       /** What the clock holds when the executor starts. */
       now?: number;
       /**
+       * What a module of compiled code imports from `commonfabric` under
+       * each name here, for a built-in the executor does not have: a
+       * harness's stand-in for what the runtime answers, such as the
+       * acting principal or the access list of a space. A name the
+       * executor has is not replaced.
+       */
+      builtins?: Record<string, unknown>;
+      /**
        * What the value code reads under each name here in place of the
        * realm's global of that name, as `Date` and `crypto`: a caller
        * that needs two runs to hold the same values gives the sources of
@@ -4452,7 +4466,7 @@ export class Instance {
       ) {
         this.store.write(
           new Ref(id, [], schema),
-          structuredClone(schema.default),
+          copyOfData(schema.default),
         );
       }
     }
@@ -5060,7 +5074,14 @@ export class Instance {
       return members;
     }
     if (typeof value === "object" && value !== null) {
-      throw new Unsupported("a value that is no plain data");
+      // A primitive of the data model, such as a time, is stored as it
+      // is.
+      if (isDataPrimitive(value)) return value;
+      throw new Unsupported(
+        `a value that is no plain data: ${
+          Object.getPrototypeOf(value)?.constructor?.name ?? "an object"
+        } at ${path.join("/")}`,
+      );
     }
     return value;
   }
@@ -5273,7 +5294,7 @@ export class Instance {
         }
         const located = this.store.locate(named, true);
         return inside({ doc: located.ref.doc, path: [...located.ref.path] })
-          ? structuredClone(located.value)
+          ? copyOfData(located.value)
           : member;
       }
       if (Array.isArray(member)) return member.map((inner) => copy(inner));
@@ -5935,7 +5956,7 @@ export class Instance {
       inside: Map<string, Unit> | undefined,
     ): unknown => {
       if (inside === undefined || inside.size === 0) return value;
-      const copy = structuredClone(value);
+      const copy = copyOfData(value);
       const holder = { value: copy } as Record<string, unknown>;
       for (const [id, unit] of inside) {
         const at = JSON.parse(id) as string[];
@@ -13840,11 +13861,13 @@ const commonfabric = (instance: Instance): unknown => {
       "kind",
     ]),
   };
+  const given = instance.root.options.builtins ?? {};
   return new Proxy(known, {
     get: (target, name) => {
       if (typeof name !== "string" || name in target) {
         return target[name as string];
       }
+      if (name in given) return given[name];
       // At module scope a built-in the executor does not have gives a
       // value nothing of a run reads, such as a declaration of policy.
       return absent(instance, name);
