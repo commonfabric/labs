@@ -78,7 +78,9 @@ export const compiledPatternsForServing = (
   return async (runtime) => {
     installing ??= (async () => {
       const [{ PatternCompiler }, { serveCompiledPieces }] = await Promise.all([
+        // deno-lint-ignore cf-imports/no-inline-module-import -- a toolshed with the option off imports no module of the executor
         import("@commonfabric/runner/compiled/compile.deno"),
+        // deno-lint-ignore cf-imports/no-inline-module-import -- the same: the loader imports the executor
         import("@commonfabric/runner/compiled/serving"),
       ]);
       const compiler = new PatternCompiler({
