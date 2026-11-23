@@ -98,11 +98,11 @@ element body (867), the index, the sort and the `flatMap` (868), the
 entries of the pattern's own body (869), the table of a collection without a
 pass over every row (870). Topics therefore still evaluates its whole
 derivation at the first edit after such a start: 8.5 s at 2,000 topics. The
-owner's position of 2026-11-23: the time of a one-time step matters little,
-and memory is what to watch so that the process does not run out. Whether
-this step is one-time is a question to settle with the owner, because it
-happens at every server start; until then, measure peak memory of this step
-at 2,000 topics and at 10,000 rows before optimizing its time further.
+owner ruled on 2026-11-23 (Z90) that this step matters a lot: it is to be no
+slower than today's path for the same pattern, and tearing a worker down and
+bringing it back up is to be cheap. Peak memory of the step is to be
+measured too, so that a process does not run out at 2,000 topics or 10,000
+rows. This is the line of work with the largest gap to the owner's rule.
 
 **A step that changes a list as long as the collection** (serving branch;
 notes 851 to 866). Row links can be stored in chunked list documents

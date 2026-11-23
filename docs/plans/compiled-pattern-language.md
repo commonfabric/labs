@@ -6583,6 +6583,18 @@ is relitigated.
   runtime does on today's path, is found by a measurement of the compiled path,
   and does not wait for the stack.
 
+- A serving runtime that starts over a space which already holds a compiled
+  piece brings the piece up no slower than today's path does for the same
+  pattern (2026-11-23, Z90). The notes and tables call this a takeover: it
+  happens at every restart or deploy of the server and whenever a space
+  moves to another process. The owner's words: "ah, ok, then it matters a
+  lot! in fact ideally it's relatively cheap to tear down a worker and bring
+  it back up. this should be no worse than today." Before that the owner had
+  asked that memory be watched in this step, so that a process does not run
+  out of it; both stand. As measured on 2026-11-23, the first edit of a
+  Topics board of 2,000 topics after such a start takes 8.5 s on the
+  compiled path and 2.3 s on today's.
+
 ## Provisional decisions awaiting the owner's ratification
 
 The owner's standing instruction of 2026-11-17: "Don't block progress on
