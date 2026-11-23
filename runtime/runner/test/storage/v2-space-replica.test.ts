@@ -176,6 +176,86 @@ describe("SpaceReplica", () => {
     });
 
     describe("sync()", () => {
+      it("asks for a watch of its own for each session a `user`-scoped load names", async () => {
+        // One document under one selector, loaded for two of a user's
+        // sessions and for none.
+
+        const alice = "did:key:z6Mk-space-replica-alice";
+        const user = resolveScopeKey("user", { principal: alice });
+        const [first, second] = ["s1", "s2"].map((sessionId) =>
+          resolveScopeKey("session", { principal: alice, sessionId })
+        );
+        const asked: unknown[] = [];
+        const replica = replicaOver({
+          createSession: async () => {
+            const opened = await mount();
+            const watchAddSync = opened.session.watchAddSync.bind(
+              opened.session,
+            );
+            opened.session.watchAddSync = (watches, consume) => {
+              for (const watch of watches) {
+                if (watch.kind === "operation") continue;
+                for (const root of watch.query.roots) {
+                  asked.push(root.entityScopeKeys);
+                }
+              }
+              return watchAddSync(watches, consume);
+            };
+            return opened;
+          },
+        });
+        const selector = { path: [], schema: { type: "object" } } as const;
+
+        await replica.sync(doc, selector, "user", user, first);
+        await replica.sync(doc, selector, "user", user, second);
+        await replica.sync(doc, selector, "user", user);
+
+        expect(asked).toEqual([
+          { user, session: first },
+          { user, session: second },
+          { user },
+        ]);
+      });
+
+      it("names a `session` instance's principal as the `user` entry of its watch", async () => {
+        const alice = "did:key:z6Mk-space-replica-alice";
+        const session = resolveScopeKey("session", {
+          principal: alice,
+          sessionId: "s1",
+        });
+        const asked: unknown[] = [];
+        const replica = replicaOver({
+          createSession: async () => {
+            const opened = await mount();
+            const watchAddSync = opened.session.watchAddSync.bind(
+              opened.session,
+            );
+            opened.session.watchAddSync = (watches, consume) => {
+              for (const watch of watches) {
+                if (watch.kind === "operation") continue;
+                for (const root of watch.query.roots) {
+                  asked.push(root.entityScopeKeys);
+                }
+              }
+              return watchAddSync(watches, consume);
+            };
+            return opened;
+          },
+        });
+
+        await replica.sync(
+          doc,
+          { path: [], schema: false },
+          "session",
+          session,
+        );
+
+        expect(asked).toEqual([{
+          user: resolveScopeKey("user", { principal: alice }),
+          session,
+        }]);
+      });
+
       it("refuses an actor's scoped instance fail-closed when the read authority probe throws", async () => {
         using logs = captureLogs("storage.v2");
         const asked: string[] = [];

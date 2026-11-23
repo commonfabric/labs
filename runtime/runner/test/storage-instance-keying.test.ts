@@ -641,6 +641,70 @@ describe("stage A: instance keying — unit pins", () => {
     expect(calls[1]).toBeUndefined();
   });
 
+  it("names the reading run's session beside a `user` instance in the load `syncCell()` issues, and none beside a `session` instance", async () => {
+    const userCell = runtime.getCell<{ value: number }>(
+      space,
+      "stagea-reader-session-user",
+      undefined,
+      undefined,
+      "user",
+    );
+    const sessionCell = runtime.getCell<{ value: number }>(
+      space,
+      "stagea-reader-session-session",
+      undefined,
+      undefined,
+      "session",
+    );
+    const ids = new Set([
+      userCell.getAsNormalizedFullLink().id,
+      sessionCell.getAsNormalizedFullLink().id,
+    ]);
+    const provider = storageManager.open(space);
+    const original = provider.sync.bind(provider);
+    const loads: Array<
+      { scope?: string; instance?: string; session?: string }
+    > = [];
+    (provider as { sync: typeof provider.sync }).sync = (
+      uri,
+      selector,
+      scope,
+      instance,
+      session,
+    ) => {
+      if (ids.has(uri)) loads.push({ scope, instance, session });
+      return original(uri, selector, scope, instance, session);
+    };
+
+    await storageManager.syncCell(userCell, { scopeKeyIdentity: alice })
+      .catch(() => undefined);
+    await storageManager.syncCell(userCell, {
+      scopeKeyIdentity: { principal: alice.principal },
+    }).catch(() => undefined);
+    await storageManager.syncCell(sessionCell, { scopeKeyIdentity: alice })
+      .catch(() => undefined);
+    await storageManager.syncCell(userCell).catch(() => undefined);
+
+    expect(loads).toEqual([
+      {
+        scope: "user",
+        instance: resolveScopeKey("user", alice),
+        session: resolveScopeKey("session", alice),
+      },
+      {
+        scope: "user",
+        instance: resolveScopeKey("user", alice),
+        session: undefined,
+      },
+      {
+        scope: "session",
+        instance: resolveScopeKey("session", alice),
+        session: undefined,
+      },
+      { scope: "user", instance: undefined, session: undefined },
+    ]);
+  });
+
   it("seam pin (M23): the traversal's absent-target kick names the RUN identity — a read inside a run stamped as Alice that meets a link to a never-loaded scoped doc kicks the load AS Alice (mutation: identity dropped → the runtime's own)", async () => {
     // A doc holding a link to a user-scoped target the replica has never
     // seen; a schema-driven read follows the link, finds the target

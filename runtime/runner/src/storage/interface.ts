@@ -1245,6 +1245,15 @@ export interface IStorageProvider {
      * keys the arriving doc under that instance. Absent = the manager's
      * own instance, exactly as before. */
     instance?: ScopeKey,
+    /**
+     * The `session` instance of the reading run, for an instance-named load
+     * of a `user`-scoped document by a run that names a session. The watch
+     * root carries it as its `session` entry (protocol.md §2's read row), so
+     * a session-scoped link the memory server follows from the document
+     * resolves to it. The load is a watch of its own, apart from the same
+     * load for another session or for none.
+     */
+    session?: ScopeKey,
   ): Promise<Result<Unit, Error>>;
 
   /**

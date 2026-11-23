@@ -95,6 +95,36 @@ describe("v2-watch", () => {
       );
     });
 
+    it("returns ids that differ for an address naming a session beside its scope key and one naming none", () => {
+      const named = { ...address, scopeKey: "user:did:key:z6Mk" as const };
+
+      expect(watchIdForEntry(named, selector, "")).not.toBe(
+        watchIdForEntry(
+          { ...named, sessionKey: "session:did:key:z6Mk:s1" },
+          selector,
+          "",
+        ),
+      );
+    });
+
+    it("returns ids that differ for addresses naming sessions that differ", () => {
+      const named = { ...address, scopeKey: "user:did:key:z6Mk" as const };
+
+      expect(
+        watchIdForEntry(
+          { ...named, sessionKey: "session:did:key:z6Mk:s1" },
+          selector,
+          "",
+        ),
+      ).not.toBe(
+        watchIdForEntry(
+          { ...named, sessionKey: "session:did:key:z6Mk:s2" },
+          selector,
+          "",
+        ),
+      );
+    });
+
     it("returns ids that differ for branches that differ", () => {
       expect(watchIdForEntry(address, selector, "")).not.toBe(
         watchIdForEntry(address, selector, "feature"),
@@ -124,6 +154,21 @@ describe("v2-watch", () => {
       path: ["title"],
       schema: internSchema({ type: "string" }),
     };
+
+    it("keeps an entry naming a session beside one of the same document naming another, or none", () => {
+      const named = {
+        ...address("of:note"),
+        scope: "user" as const,
+        scopeKey: "user:did:key:z6Mk" as const,
+      };
+      const entries: Parameters<typeof compactWatchEntries>[0] = [
+        [named, whole],
+        [{ ...named, sessionKey: "session:did:key:z6Mk:s1" }, whole],
+        [{ ...named, sessionKey: "session:did:key:z6Mk:s2" }, whole],
+      ];
+
+      expect(compactWatchEntries(entries, {})).toEqual(entries);
+    });
 
     it("drops an entry an earlier entry's selector already covers", () => {
       expect(
