@@ -18011,3 +18011,452 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    document of today's board under the serving loop and 68 on the compiled
    board's (note 845). Whether the two arms store labels of the same strength
    for the same derived values was not compared under the serving loop.
+
+## Round thirteen: the runtime's own `wish`, built-ins and fetch, and a toolshed that compiles
+
+The round of 2026-11-23 on the branch `claude/compiled-pattern-sandbox-m5`, from
+the commit `5f45021c1d`. It replaces stand-ins of the harnesses by the runtime's
+own code. Its tables are in the folder of the round, `r13-wish/`.
+
+742. **What the round did, by step.**
+     - _A `wish` answered by the runtime (step 1), done._ Note 743.
+     - _The built-ins answered by the runtime (step 2), done for those of note
+       744, with the dependency of a derivation on an answer._ Note 744.
+     - _The run's actor on an event (step 3), withdrawn by the coordinating
+       session while the round ran,_ after its test and the frame of a handler
+       were committed. Note 746.
+     - _A document of another space (step 4), done but for the basis._ Note 747.
+     - _Effects (step 5), done for the four fetch effects of the reactive tier,
+       with a replaced `fetch` in the place of a local server._ Note 748.
+     - _A toolshed's serving runtimes get a compiler (step 6), done for the
+       serving loop on the main thread. Not done: the loop in Workers, and a
+       compile outside the serving loop's wait._ Note 749.
+     - _Tables (step 7)._ Note 750.
+743. **Step 1: the request and the answer of a `wish`, in the plan's terms.**
+     The plan has one `Operation` of kind `wish` for each call, and the executor
+     one state document for each operation and each key of the elements it is
+     in. The cone that holds the write edge with the target `request` stores the
+     operands of the call at `request` of that document, a reference among them
+     as a link. That is the request.
+     - _What answers._ `RuntimeWishes` of `runtime/runner/src/compiled/wish.ts`
+       registers, for each state document, the action that the runtime's `wish`
+       (`runtime/runner/src/builtins/wish.ts`) returns for a node whose inputs
+       are the position `request`. It is one action of the scheduler, an effect,
+       with the piece's result document as the root it is demanded through
+       (`observationIdentity`). Nothing of the resolution is written again: the
+       parse of the target, the space and the home targets, the search by tag,
+       the readiness of documents, the sidecar surfaces and the shared search
+       all run as for a pattern of today's path.
+     - _What is read, and from which space._ The action reads the request in the
+       space of the piece; the root of the space of the piece for a space
+       target; the root of the home space of the principal the run acts for
+       (`Runtime.homeSpacePrincipalFor`), the home it links, and the profile
+       spaces the home lists, for a home target; and the favorites, the
+       mentionable pieces and the elements of the profile for a search. Each
+       read is through the transaction the scheduler gives the action, so the
+       scheduler runs the action again when one of them changes.
+     - _The answer._ What the action sends (`sendResult`): the cell of the state
+       of the wish, or the cell of a sidecar or of a shared search.
+       `RuntimeWishes.#store` writes it at `outcome` of the operation's state
+       document, in the transaction of the action: a link to the cell where the
+       cell is of the scope `space`, and otherwise the value the cell holds in
+       that transaction, with each link in it written with its document and its
+       space (P291). The piece holds the state document, so the commit reaches
+       the executor as a change by another writer
+       (`CompiledPiece.#changedByOthers`), which marks what read the outcome. A
+       change of the document a wish resolved to marks its readers through the
+       link, with no run of the action.
+     - _A resume._ The outcome is stored in the state document, which a resumed
+       executor loads with the rest of the piece. The first evaluation of the
+       operation registers the action again, which resolves again and writes the
+       outcome only where it differs.
+     - _The executor._ `Instance.options.wishes` is given the identifier of the
+       state document, and an `outcome` with no member writes nothing.
+       `RuntimeTransactions.entityOf` and `load` take an entity named `data:`:
+       the candidates of a wish are a link to one.
+     - _A serving runtime with no serving loop._ The runtime's `wish` resolves
+       the home of the principal the run acts for and refuses a run with none.
+       Every harness of the compiled path runs a runtime in the serving posture
+       with no serving loop, where nothing stamps a run.
+       `CompiledPieceOptions.actsFor` names the principal there (P292), and the
+       piece stamps the transaction of a wish, of the answers action and of a
+       derivation with it where no stamp is there. A stamped transaction writes
+       no splice (`isServedWaveRunTx`), as under a serving loop, so the records
+       of a run with `actsFor` are those of the per-index form.
+     - _Tests._ `runtime/runner/test/compiled/wish.test.ts`, five cases on the
+       home `seedHome()` writes: a home target, a space target and a search with
+       no match, a change of the document resolved to, the home listing another
+       profile, and a resume in a second runtime. All were seen to fail with
+       `hello nobody`.
+     - _The corpus without the table._ `compare/runner-corpus.ts` runs a module
+       with a `wish` with the runtime's own, also under `--resume`, and
+       `--wishes=table` is the run of the rounds before. Of the 44 modules with
+       a `wish`, 34 are run (10 request an effect), 29 start and 20 handle every
+       event with the runtime's `wish` alone, and 32 and 22 with the built-ins
+       of step 2 (note 750).
+744. **Step 2: the built-ins, one by one.** The value code of a piece is given
+     the runtime's own functions (`runtimeBuiltins` of
+     `runtime/runner/src/compiled/builtins.ts`), each called with a cell handle
+     or a reference of the executor written as the runtime's cell of the same
+     position. The piece runs a handler under a frame of the kind `handler` that
+     holds the runtime, the transaction and the key of the event, and a
+     derivation under a frame of the kind `lift`, which is what those functions
+     read the run from.
+
+     | Built-in                                                                                                                           | What today's runtime does                                                                                  | What it reads                                                              | On the compiled path                                                 |
+     | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+     | `currentPrincipal`                                                                                                                 | The actor of the event (`Runtime.actingPrincipalFor`), in a handler alone                                  | The stamp of the transaction                                               | The runtime's function                                               |
+     | `eventKey`                                                                                                                         | The key of the frame, derived from the event's identifier, the actor and the stream (`deriveEventKey`)     | The frame                                                                  | The runtime's function; the piece derives the key as the runner does |
+     | `profileOwnerOf`                                                                                                                   | Whose own profile the target is (`profileOwnerAt`)                                                         | The label of the profile and whether its name was written                  | The runtime's function, recorded as an answer in a derivation        |
+     | `principalOf`, `principalsOf`, `writtenPrincipalOf`                                                                                | The principal a claim of the label attests                                                                 | The label of the target, resolved or as written                            | The same                                                             |
+     | `resultOwnerOf`                                                                                                                    | The result a document belongs to, by its `result` link                                                     | The meta link of the document, and the field of the owner                  | The same                                                             |
+     | `spaceAccess`, `spaceAccessOf`, `spaceMembers`, `spaceDeleted`                                                                     | The level the access list of the target's space grants, its members, whether the server says it is deleted | The access list document of the space, and what the memory server answered | The same; the answers action is registered for a change of admission |
+     | `spaceOfLink`, `linksOf`                                                                                                           | The space a link names; the links a list holds, as cells                                                   | The position, without following                                            | The same; a cell returned is a handle with no host                   |
+     | `getEntityId`, `entityRefToString`                                                                                                 | The entity of a cell                                                                                       | Nothing stored                                                             | The runtime's function                                               |
+     | `grantSpaceAccess`, `revokeSpaceAccess`, `nameBlob`                                                                                | Stage a change with the handler's transaction                                                              | The frame                                                                  | The runtime's function, in a handler                                 |
+     | `getPatternEnvironment`, `isWellFormedDID`, `parseDID`, `joinSpaceMembers`, `FabricBytes`, `FabricEpochNsec`, `FabricDurationNsec` | Computed from the arguments or the process                                                                 | Nothing stored                                                             | The runtime's own                                                    |
+     | `SELF`                                                                                                                             | A symbol the builder binds to the result cell                                                              | Nothing                                                                    | Not answered: the harness keeps the key `$SELF` (note 728)           |
+     | `cellFromUrl`, `anchorsOf`, `indexedCollections`, `renderCellReference`, `assert`, `inspectConfLabel`                              | Node factories or helpers of the builder                                                                   |                                                                            | Not answered: a call in a function body throws as before             |
+
+     No function here decides a label or an access level: each calls the
+     runtime's.
+     - _A derivation depends on an answer._ An answer is no read of the
+       executor's store, and a memo entry is current where its reads and
+       dependencies compare equal. `RuntimeAnswers` keeps, for each question a
+       derivation asked (the built-in and its operands), the answer and the memo
+       entries that used it (`Instance.evaluationInProgress`). One action of the
+       scheduler asks every question again under a frame of the kind `lift`; the
+       scheduler runs it again when something an answer read changes, a change
+       of admission to a space included (`spaceAccessWatch`). An answer that is
+       now another marks its users (`Instance.markStale`, which sets
+       `Entry.stale`, and `#current` gives false for such an entry), and the
+       derivation of the piece runs. The first derivation of a piece is in the
+       caller's transaction, which has no stamp and may not hold the access list
+       yet: its answers are then `undefined`, and the action corrects them.
+     - _The crate._ In the reactive tier the emitter wrote
+       `spaceAccess($h.v($h.slot(0)))`: the value of the operand, where the
+       runtime's function takes a cell. The first operand of `principalOf`,
+       `principalsOf`, `writtenPrincipalOf`, `profileOwnerOf`, `resultOwnerOf`,
+       `linksOf`, `spaceAccess`, `spaceAccessOf`, `spaceMembers`, `spaceDeleted`
+       and `spaceOfLink` is now passed as the reference it is (`src/emit.rs`,
+       the arm beside `equals`; `tests/emit.rs`,
+       `a_context_read_is_given_its_first_operand_as_a_reference`). In an
+       authored function called from the reactive tier, the operand is what the
+       caller passed, and a value there still fails with "takes a cell": Home
+       has one such call of `linksOf`.
+     - _Tests._ `runtime/runner/test/compiled/runtime-builtins.test.ts`, five
+       cases over the new fixture `compare/fixtures/runtime-builtins.tsx`, with
+       an access list written through `ACLManager`.
+745. **Structure, found by step 2: a refused derivation ran again without end.**
+     `CompiledPiece.#refused` restores the executor's documents and has the
+     derivation run again. A derivation from the same documents writes the same,
+     so a refusal that does not depend on timing was repeated without bound, one
+     commit each time, and the runtime never became idle. The room of FabriChat
+     did this on the home `seedHome()` writes: the profile declares a user atom
+     as its confidentiality, the derivation that reads the profile through the
+     outcome of `#profile` also writes the marker of a stream (FabriChat round
+     two, deferred question 4), and the write is refused as a writer-fit misfit.
+     The stand-ins had hidden it: their profile declared no confidentiality. Now
+     a derivation whose commit was refused for the reason of the refusal before,
+     with no event handled and no change of another writer taken between the
+     two, is not run again until one of those happens (P290). The harness of
+     FabriChat seeds the profile with no confidentiality
+     (`seedHome(..., { confidential: false
+     })`,
+     `SCALE_PROFILE=confidential` for the other), so its figures say nothing of
+     that refusal: with the confidential profile the room starts, every send
+     reports a commit, and the room holds no message.
+746. **Step 3: the actor of an event, withdrawn.** The coordinating session took
+     the step out of the round while it ran: another session does the actor with
+     the write policies. What was committed before stays. The scheduler stamps
+     the transaction of a handler with the actor of the event for a compiled
+     piece as for any piece; the piece's frame of a handler held neither the
+     runtime nor the transaction, so nothing in a compiled handler could ask for
+     the actor. The frame holds both since step 2, which the built-ins need.
+     `runtime/runner/test/compiled/compiled-serving-actor.test.ts` shows, under
+     the serving loop, that `currentPrincipal()` in a compiled handler is the
+     principal of the client's session, and that a handler which appends an
+     element declared `AuthoredByCurrentUser` commits. With `actsFor` the piece
+     also stamps the transaction of a handler where nothing did
+     (`kind: "event-handler"`, `acting`), for the harnesses. Not looked into
+     further; see the deferred questions 3 and 4.
+747. **Step 4: a document of another space.**
+     - _The name (3)._ `compiled/names.ts`: a document of another space than the
+       piece's is named for the executor by its entity and the space,
+       `<entity>@<space>`. `RuntimeTransactions.entityOf`, `#spaceOf` and
+       `documentAt` read the name, and the subscription and the document reader
+       find a document by the space of the commit (`#keyOf`). A document a
+       harness hands with `external(doc, space)` under its entity alone keeps
+       that name. The scope of a document is in no name: note 751.
+     - _A link with no space (2)._ `#decode` takes the space of the document the
+       value is of, which `load` and the changes of another writer give.
+     - _The sync (1)._ `RuntimeTransactions.wanted` holds the documents `load`
+       was asked for and the replica held none of. `CompiledPiece.#bring` asks
+       the storage for each once (`Cell.sync`), behind the first derivation and
+       each later one, counted by the scheduler as work under way. When the
+       storage answered with a document, or another writer created it
+       (`arrived`), the executor takes it (`Instance.restore`), what read the
+       place is marked, and the derivation runs. A handler that reads such a
+       document does not wait for it as a handler of today's path does
+       (`withdrawHandlerWhileLoading`): it runs with nothing at the place.
+     - _The basis (4), not built._ `confirmedSeqOf` still gives nothing for a
+       document of another space, so the basis records no number for such a
+       source and a resume of a piece that has one always wakes it, which is
+       correct and costs the wake. The name now says which replica holds the
+       source. What is left is in `compiled/resume.ts`, which another session is
+       rebuilding: `syncBasis` brings each source in the space its name gives
+       (`placeOfDocument`) and not in the piece's; the comparison of
+       `resumeCompiledPieceFromBasis` asks that space's replica for the number;
+       the watch takes the commits of those spaces; and `confirmedSeqOf` asks
+       the replica of `#spaceOf(doc)`. Until then `syncBasis` asks the piece's
+       space for an entity named with `@`, which no space holds.
+     - _Tests._ `runtime/runner/test/compiled/foreign-space-sync.test.ts`, three
+       cases over two sessions of one memory server, on the emulated server and
+       on one over a socket: a document the replica does not hold, a link with
+       no space inside a document of another space, and two documents of one
+       entity in two spaces with a change of one. They were seen to fail with
+       `hello undefined` twice and `Grace and Grace`.
+748. **Step 5: effects.** The plan has one `Operation` of kind `effect` for a
+     call in the reactive tier, with the built-in under `implementation`, and
+     the executor stages its request in the state document as for a `wish`, then
+     writes a hash and a pending mark and puts the request in `outbox`, for a
+     harness to complete (`Instance.complete`). On the runner path nothing
+     completed. For `fetchJson`, `fetchJsonUnchecked`, `fetchText` and
+     `fetchBinary` the piece now registers the runtime's own built-in
+     (`runtime/runner/src/builtins/fetch.ts`) as it registers the runtime's
+     `wish`: `Instance.options.effects` says that something outside the executor
+     answers, the executor then stages the request and no more, and the cells
+     the built-in sends for `pending`, `result` and `error` are written as links
+     at `outcome`. The claim of a request, its memo by the hash of the inputs,
+     an abandoned request and the outbox under server execution are the
+     built-in's.
+     - _Not answered:_ `fetchProgram`, `generateText`, `generateObject`,
+       `sqliteQuery`, `compileAndRun`, `llmDialog`, `agent`, `navigateTo`, and
+       every effect a handler requests (`Instance.requestEffect`), whose state
+       document is named by the handling and which leaves with the handler's
+       commit.
+     - _`Runtime.run`_ falls back for a plan that requests another effect than
+       those four (P176, narrowed).
+     - _The corpus_ still leaves out a module that requests an effect: the
+       generated inputs hold addresses, and the built-in would request them.
+     - _Test._ `runtime/runner/test/compiled/effect.test.ts`, two cases over the
+       new fixture `compare/fixtures/fetched.tsx`. The request goes to a
+       replaced `globalThis.fetch`, as in the tests of the runtime's fetch
+       built-ins, and not to a server on a socket as the brief of the round
+       said: a suite that waits on a socket has to be on the real clock.
+749. **Step 6: a toolshed compiles.**
+     `runtime/toolshed/lib/compiled-patterns.ts`: with the option on,
+     `startServerExecutionHost` gives each serving runtime of the main-thread
+     serving loop the loader (`serveCompiledPieces`) with one `PatternCompiler`
+     for the process, over the binary `PATTERN_COMPILER_BINARY` names and the
+     cache directory `PATTERN_COMPILER_CACHE_DIR` names. A toolshed with the
+     option on and no file there does not start. With the option off nothing is
+     installed and no module of the executor is imported.
+     `EXPERIMENTAL_OPTIONS.md` says what the option reaches.
+     - _Not built: the serving loop in Workers,_ which is the default over a
+       file store. The runtimes are created in the worker
+       (`runtime/runner/src/executor/serving-worker-main.ts`), so the path of
+       the binary and of the cache directory have to cross to the worker with
+       its other options, and the worker has to call `serveCompiledPieces` with
+       a compiler of its own or ask the host's. The toolshed says at startup
+       that no compiled piece is served there.
+     - _Not built: the compile outside the serving loop's wait._ The loader
+       (`compiledFor` of `serving.ts`) awaits the compile, and the serving loop
+       awaits the loader. The plan: the loader starts the compile and answers
+       that the piece is not served yet; the callers that take that answer as a
+       failure (`Runner.start` rejects with "no pattern identity", and an event
+       with no handler is dropped) have to take it as "not yet"; and when the
+       artifact is there the loader asks the serving loop to take the piece up,
+       by the demand or the stream entry that first reached it. The second part
+       changes what an event to a piece that is compiling means, which is why it
+       was not done in passing.
+     - _Not verified:_ no toolshed was started. The test is of
+       `compiledPatternsForServing` alone.
+750. **Step 7: measured.** One run of each cell, on an Apple M5 Max with 18
+     cores at a load average of 6 to 8 from other work, at the commit
+     `bf5fe1ed98`. Three sends each. Milliseconds. "The runtime's" is the arm
+     `runner` of `compare/fabrichat/scale.ts` with the runtime's `wish` and
+     built-ins and `actsFor`; "stand-ins" is the same commit with
+     `SCALE_STAND_INS=table`; "round ten" is note 740.
+
+     | Step            | Messages held | Executor in memory | The runtime's | In the piece | Stand-ins     | Round ten  |
+     | --------------- | ------------- | ------------------ | ------------- | ------------ | ------------- | ---------- |
+     | Room, start     | 0             | 39, 11             | 246, 101      |              | 182, 68       |            |
+     | Room, send      | 10            | 8.6 to 10.0        | 65 to 67      | 26 to 28     | 75 to 81      | 72 to 74   |
+     | Room, send      | 100           | 41 to 43           | 276 to 297    | 130 to 135   | 244, 246, 549 | 236 to 244 |
+     | Room, fill      | 100           | 1,953              | 15,119        |              | 17,040        | 15,174     |
+     | Manager, start  |               |                    | 210           |              | 133           | 129        |
+     | Home, start     |               |                    | 343           |              | 210           | 221        |
+     | Home, one event |               |                    | 53            | 15           | 74            | 83         |
+
+     A send with the runtime's answers reads 110 positions at 10 messages and
+     650 at 100, where the stand-ins read 96 and 546: about one position more
+     for each message held, from the read of the rights of each row through the
+     runtime's `principalOf` and `spaceAccess`. It stages the same 10 to 14
+     writes, gives the same records but two (139 and 501), and is 5 commits in
+     both. So a send costs about a sixth more at 100 messages with the real
+     answers, and still grows with the room as note 740 says. The starts are
+     slower by the registration and the first run of the wish actions and of the
+     answers action: the manager evaluates 53 cones where it evaluated 38, and
+     Home 119 where it evaluated 101, since the answers that were `undefined` in
+     the first derivation mark their users once. The room was not run at 1,000.
+     With the runtime's `principalOf` the rights of a row say that the reader
+     may not edit a message: the harness removes `addIntegrity` from the schemas
+     (P196), so no message has an author. Home keeps two cones in an error state
+     on both arms, now with a third message: "`linksOf(target)` takes a cell as
+     its target" (note 744).
+
+     The corpus on the runner path (`compare/runner-corpus.ts`, `corpus.jsonl`
+     of the folder), against the run of the merge of round twelve:
+
+     | Count                                   | Round twelve | With the runtime's `wish` (step 1) | With the built-ins and the rest |
+     | --------------------------------------- | -----------: | ---------------------------------: | ------------------------------: |
+     | Modules run                             |          272 |                                273 |                             273 |
+     | Started                                 |          258 |                                259 |                             264 |
+     | Every event handled                     |          219 |                                220 |                             221 |
+     | No commit refused                       |          248 |                                248 |                             251 |
+     | Equal to the executor in memory         |          228 |                                235 |                             231 |
+     | With a `wish`: run of 44                |           34 |                                 34 |                              34 |
+     | With a `wish`: started                  |           28 |                                 29 |                              32 |
+     | With a `wish`: every event handled      |              |                                 20 |                              22 |
+     | With a `wish`: equal, of those compared |           11 |                           23 of 28 |                        20 of 31 |
+
+     The brief counted 40 modules with a `wish`; the corpus has 44, of which 10
+     request an effect and are not run. No module fails to start for a built-in
+     but one, for `indexedCollections`. Four modules that were equal to the
+     executor in memory with the table are not with the built-ins: the executor
+     in memory has no built-in and no access list, so the two sides no longer
+     answer alike, and which side is right was not looked into module by module.
+     Under `--resume`, which the modules with a `wish` now run under: 264 start,
+     221 handle every event, 230 are equal, 154 are resumed by a second runtime,
+     145 with a basis that matched and 99 with no document written by the
+     resume; one does not resume, for a writer-fit refusal.
+
+     Through `Runtime.run` (`compare/runtime-run-corpus.ts`, one run), against
+     note 675:
+
+     | Outcome                                                      | Note 675 | This round |
+     | ------------------------------------------------------------ | -------: | ---------: |
+     | A compiled piece that started                                |      199 |        229 |
+     | of those, every event handled                                |      184 |        206 |
+     | of those, the values of the executor in memory               |      181 |        203 |
+     | A compiled piece whose first commit was refused              |        3 |          3 |
+     | The start threw                                              |        2 |          3 |
+     | Today's path                                                 |      103 |         72 |
+     | of those, the result holds what it holds with the option off |      102 |         72 |
+     | Today's path, the first commit refused                       |        7 |          6 |
+
+     So 31 of the 103 that fell back now run compiled: those that fell back for
+     a `wish`, and one that requests a fetch. Of the 72 left, 20 request an
+     effect the runtime does not answer for a compiled piece and 52 have a
+     module the check refuses or no value code.
+751. **Findings on structure, scale and soundness.**
+     - _Structure, closed:_ a derivation whose commit is refused for a reason
+       that does not depend on timing ran again without end (note 745).
+     - _Structure and soundness, open: a compiled piece has one instance for
+       every principal._ The plan gives an operation and a state cell a scope
+       (`user` for a `wish` of the home), and neither the executor nor the
+       adapter reads it: every document of a piece is written at the scope
+       `space`, and `RuntimeTransactions.#decode` drops the scope of a link. The
+       runtime's `wish` writes its state per principal, and under a serving loop
+       its action runs once for each principal that demands the piece. The
+       outcome of each run is written to the one state document of the
+       operation, so with two principals the last run wins and each reads the
+       other's profile. The same holds of an answer of a built-in in a
+       derivation: `RuntimeAnswers` keeps one answer for a question, whoever the
+       run acts for. With one user, which is every harness of this round, the
+       values are right. This is the per-user instance of a cone, which no round
+       has built.
+     - _Structure, open: a resume does not hear of what a wish or a built-in
+       read._ The basis of a piece names the documents the executor read. A
+       piece resumed from a basis that matches runs nothing, so the action of a
+       wish and the answers action are not registered, and a change of the
+       home's list of profiles, of an access list or of a label does not wake
+       the piece: its stored result stays as it was until something else wakes
+       it. The plan: the piece records with the basis the documents the
+       transaction of each wish action and of the answers action read, by space,
+       and a resume watches them.
+     - _Structure, open: a handler does not wait for a document that is being
+       brought_ (note 747).
+     - _Structure, open: a built-in in an authored function is handed what the
+       caller passed,_ a value where the caller read one (note 744).
+     - _Soundness, open: a handle a built-in returns has no host._ A read
+       through a cell that `linksOf` returned is recorded for no cone, so it is
+       no dependency and enters no write record.
+     - _Scale:_ the answers action asks every recorded question again at each
+       change of anything one of them read. The work follows the number of
+       distinct questions of the piece, which for a room is the number of
+       messages (one `principalOf` each). A question should be asked again when
+       what its own answer read changes, which needs an action or a read set for
+       each.
+     - _Scale:_ each `wish` operation of a piece is one action of the scheduler
+       and one or more documents the runtime's `wish` keeps, in addition to the
+       state document of the operation.
+752. **Provisional decisions of the round, and what was not verified.** P290: a
+     derivation whose commit was refused for the reason of the refusal before,
+     with no event and no change of another writer between, is not run again
+     (note 745). P291: the outcome of a `wish` is a link to the cell the
+     runtime's `wish` sent where that is of the scope `space`, and a copy of
+     what it holds otherwise (note 743). P292: a harness names the principal a
+     run acts for with `actsFor`, on a serving runtime with no serving loop, and
+     a stamp of a serving loop wins (note 743). P293: an answer of a built-in in
+     a derivation is a dependency kept outside the store, and an answer that
+     changes marks the memo entries that used it (note 744). P294: a document of
+     another space is named `<entity>@<space>` for the executor (note 747).
+     P295: the executor writes nothing of an effect that something outside it
+     answers (note 748). P296: a toolshed with the option on and no compiler
+     binary does not start (note 749). _Not verified:_ nothing ran under a
+     serving loop but the two cases of note 746 and the serving suites that
+     existed; the corpus was not run with `--serving`, where a module with a
+     `wish` is still left out; no toolshed was started; the room at 1,000
+     messages; today's runtime beside the harness in this round; a piece with
+     two principals; a wish whose answer is a sidecar or a shared search; a
+     resume of a piece with a fetch effect; the cost of the frames and of the
+     stamp apart from the rest; each table is one run.
+
+### CFC questions deferred, round thirteen
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. The outcome of a `wish` is written by the transaction of the runtime's `wish`
+   action, under the flow label of that transaction, and not under the record
+   the plan has for the operation (its operand slots and the entry of
+   `dynamicReads` of kind `search`). Whether the two give the same label was not
+   compared. The same holds of the links an effect's outcome is.
+2. Where the cell the runtime's `wish` sent is of the scope `user`, its value is
+   copied into the state document of the operation, which is of the scope
+   `space` (P291, note 751). The copy holds links and the view node of the wish,
+   with the label of the transaction that copied it. Which scope the state
+   document of an operation the plan gives the scope `user` has, and what a
+   second principal may read of it.
+3. A state cell whose schema adds integrity of the current principal and that
+   has a first value is refused at the start of the piece: "current-principal
+   integrity requires the run's actor at /". Today's runner records the seed of
+   a cell as an initialization on nobody's behalf, and the adapter records none.
+   Found with the first form of `fixtures/authored.tsx`.
+4. A suspected missing claim. A handler that appends an element declared
+   `AuthoredByCurrentUser` to an array of plain values in place commits, with an
+   actor and without one, and the stored label of the element holds no
+   `authored-by` claim (`fixtures/authored.tsx`). A reader that asks
+   `principalOf(element, "authored-by")` gets nothing, which fails closed.
+   Whether the template label of a compiled write mints the integrity its schema
+   adds, and at which paths.
+5. An answer of a built-in that reads a label or an access list
+   (`profileOwnerOf`, `principalOf`, `spaceAccess` and the others) enters a
+   value of a derivation through the runtime's function. The reads the function
+   makes are in the transaction of the derivation, so its commit depends on them
+   and its flow label holds them; the plan's record for the output names the
+   operand's slot and an entry of `dynamicReads`, which the executor does not
+   fill for these reads. Crate round, question 6, asked what each observes; it
+   is still open, now with the runtime's reads beside it.
+6. The derivation of a piece that reads a profile whose label declares a user
+   atom is refused where the same transaction writes the marker of a stream or
+   another document under no record (note 745; FabriChat round two, question 4).
+   The harness avoids it with a profile that declares none.
+7. A handle a built-in returns (`linksOf`) reads with no host (note 751), so
+   what a body reads through it is in no write record.
+8. `CompiledPieceOptions.actsFor` stamps a handler's transaction as acting for
+   the principal and a derivation's with the principal's scope identity. It is a
+   harness's stand-in, and a runtime that is given it by mistake under a real
+   identity would attribute every run to that principal. It is read only where
+   no serving loop stamped the run.
