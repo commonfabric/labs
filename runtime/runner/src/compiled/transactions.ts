@@ -987,9 +987,12 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   #commitOfLoad(tx: IExtendedStorageTransaction): void {
     this.#runtime.prepareTxForCommit(tx);
-    if (tx.getCfcState().prepare.status === "invalidated" && this.#given) {
+    const { prepare } = tx.getCfcState();
+    if (prepare.status === "invalidated" && this.#given !== undefined) {
       this.#given.failed ??=
-        "The preparation refused a transaction of the load.";
+        `The preparation refused a transaction of the load: ${
+          prepare.reasons.join("; ")
+        }`;
     }
     tx.commit();
   }
@@ -1038,8 +1041,8 @@ export class RuntimeTransactions implements TransactionHooks {
   /**
    * For a change of `doc` during a load in bounded transactions: the row
    * documents among its records that go into a transaction of rows, each
-   * with its records. A row goes there where the handed transaction has
-   * not written its document, one of its records is of the row whole, and
+   * with its records. A row goes there where no transaction of the load
+   * has written its document, one of its records is of the row whole, and
    * no record of it names an input the load wrote (`#namesStoredAlone`).
    */
   #rowsToStoreApart(
@@ -1075,7 +1078,7 @@ export class RuntimeTransactions implements TransactionHooks {
     const apart = new Map<string, PlanWrite[]>();
     for (const [id, { records, whole }] of found) {
       if (
-        whole && !this.#rowsHanded.has(id) &&
+        whole && !this.#rowsHanded.has(id) && !this.#rowsStored.has(id) &&
         records.every((write) =>
           this.#namesStoredAlone(inputs, write.inputs, clean) &&
           (write.decided ?? []).every(({ address }) => !this.#wrote(address)) &&
@@ -1699,17 +1702,25 @@ export class RuntimeTransactions implements TransactionHooks {
       : this.#rowsApart?.records.get(id);
     if (load !== undefined && apart !== undefined) {
       tx = load.tx ??= this.#runtime.edit();
-    } else if (load !== undefined) {
-      this.#rowsStored.delete(id);
-      this.#rowsHanded.add(id);
     }
     const attempts = tx.getWriteAttemptLog?.().length;
     tx.writeValueOrThrow(address, this.#encode(value));
-    // A write of what the document holds is no write of the transaction.
+    // A write of what the document holds is no write of the transaction:
+    // the log gains no attempt at the row's document. The first write of a
+    // transaction can log an attempt at another document.
     if (
-      attempts !== undefined && tx.getWriteAttemptLog?.().length === attempts
+      attempts !== undefined &&
+      !tx.getWriteAttemptLog?.().slice(attempts).some((attempt) =>
+        attempt.id === address.id
+      )
     ) this.#rowsHeld.add(id);
     else this.#rowsHeld.delete(id);
+    // A row that the handed transaction of a load writes is one of its
+    // own from then on.
+    if (load !== undefined && apart === undefined && !this.#rowsHeld.has(id)) {
+      this.#rowsStored.delete(id);
+      this.#rowsHanded.add(id);
+    }
     this.#enroll(tx, id);
     // The write policy of the write, as `change` records it for a path.
     recordRelevantSchemaWritePolicyInput(tx, address, undefined);
