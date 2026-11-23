@@ -658,7 +658,31 @@ type Rows = {
   flags?: boolean[];
   /** For a collection index: the index, which the results are the keys of. */
   index?: Index;
+  /**
+   * For a `flatMap` whose body returned, for every element, the assembled
+   * result of another per-element construct: how many members the segment
+   * of each element has, in the order of the table, and the key of the
+   * element that each name of an inner assembly is the segment of. The
+   * dependency on the inner assembly of the element at a position of the
+   * table stands behind those of the elements, at the same position.
+   */
+  segments?: { lengths: number[]; of: Map<string, string> };
 };
+
+/**
+ * The source of a member of a segment of a `flatMap` that is an element of
+ * the assembled result of an inner per-element construct: the result of
+ * the inner construct's body, for the element keys `inner` that the
+ * callback was evaluated under.
+ */
+const segmentSource = (
+  source: Element["source"],
+  inner: Context,
+): Element["source"] =>
+  source instanceof Ref || !("entry" in source) ? source : {
+    entry: () => source.entry(inner),
+    at: source.at,
+  };
 
 /** Stands for the source of an element that is not found yet. */
 const PENDING = new Ref("", []);
@@ -1047,6 +1071,12 @@ export type Counts = {
   elementEvaluations: number;
   /** Of those, the assemblies of a collection, which no cone computes. */
   assemblies: number;
+  /**
+   * Segments of a `flatMap` formed: one for each element of the source
+   * where the assembly is formed whole, and one for each element whose
+   * segment changed where it is brought up to date.
+   */
+  segmentsFormed: number;
   /** Reads of a slot that the cone of the reading code does not list. */
   slotsNotListed: number;
   /** Reads by root and path, where the value code names no slot. */
@@ -2759,6 +2789,7 @@ export class Instance {
   readonly code: Code;
   readonly counts: Counts = {
     bucketsChanged: 0,
+    segmentsFormed: 0,
     evaluations: 0,
     elementEvaluations: 0,
     assemblies: 0,
@@ -6620,11 +6651,13 @@ export class Instance {
             construct: "map" | "filter" | "flatMap",
             members: Element[],
             flags?: boolean[],
+            segmentDependencies = 0,
           ) => {
             const { found, from } = host;
             if (
               host.writers.length > 0 ||
-              host.dependencies.length !== first + elements.length ||
+              host.dependencies.length !==
+                first + elements.length + segmentDependencies ||
               keyOf.size !== elements.length ||
               !this.#mayRefresh
             ) return;
@@ -6756,6 +6789,10 @@ export class Instance {
               // §1.3, "The key of an element that a `flatMap`
               // contributes"; ruling Z22).
               const members: Omit<Element, "index">[] = [];
+              const lengths: number[] = [];
+              // The inner assembly that the body returned for each
+              // element, by its name, while every body returned one.
+              const segmentOf = new Map<string, string>();
               const flat = results.flatMap((result, index) => {
                 const { key } = elements[index];
                 const entry = this.#perElement(collection, key);
@@ -6765,16 +6802,41 @@ export class Instance {
                     index
                   ],
                 ]]);
-                const segment = this.#segment(result, entry, inner, host);
+                this.counts.segmentsFormed += 1;
+                let resolved: { value: unknown } | undefined;
+                if (result instanceof Assembled && !host.done) {
+                  const used = host.dependEntry(this.#assemblyOf(result));
+                  resolved = { value: used.value };
+                  if (used.key !== undefined && used.owner === this) {
+                    segmentOf.set(used.key, key);
+                  }
+                }
+                const segment = this.#segment(
+                  result,
+                  entry,
+                  inner,
+                  host,
+                  resolved,
+                );
                 for (const { part, source } of segment.members) {
                   members.push({ key: memberKey(key, part), source });
                 }
+                lengths.push(segment.members.length);
                 return segment.values;
               });
               host.members = numbered(members);
               // A later mark that names no element whose segment changed
-              // leaves the assembly as it is (`#reassemble`).
-              rows("flatMap", host.members);
+              // leaves the assembly as it is, and one that names an
+              // element or the inner assembly of one splices the segment
+              // of that element (`#reassemble`).
+              if (segmentOf.size === elements.length && elements.length > 0) {
+                rows("flatMap", host.members, undefined, elements.length);
+                if (host.rows !== undefined) {
+                  host.rows.segments = { lengths, of: segmentOf };
+                }
+              } else {
+                rows("flatMap", host.members);
+              }
               return keyed(flat);
             }
             case "some":
@@ -6925,7 +6987,7 @@ export class Instance {
     }
     const changed = new Set<string>();
     for (const used of slot.suspects) {
-      const key = rows.keyOf.get(used);
+      const key = rows.keyOf.get(used) ?? rows.segments?.of.get(used);
       if (key !== undefined) changed.add(key);
       else if (used !== rows.upstream?.name) return undefined;
     }
@@ -7015,14 +7077,16 @@ export class Instance {
     } else {
       return undefined;
     }
-    // The segments of a `flatMap` are not kept apart, so a change of the
-    // source or of what an element's body returned forms the assembly
-    // whole. What is left for this path is a mark that changes neither: a
-    // write to a document an element refers to, at a path that no body of
-    // the collection read.
-    if (rows.construct === "flatMap" && (ops.length > 0 || changed.size > 0)) {
-      return undefined;
-    }
+    // A change of the source of a `flatMap` forms the assembly whole, and
+    // so does a change of what an element's body returned where the
+    // segments are not kept apart (`Rows.segments`). What is left for this
+    // path is a mark that changes neither, as a write to a document an
+    // element refers to at a path that no body of the collection read, and
+    // a change of the segments of some elements, which are spliced.
+    if (
+      rows.construct === "flatMap" &&
+      (ops.length > 0 || (changed.size > 0 && rows.segments === undefined))
+    ) return undefined;
     const { elements, byKey } = table;
     const { results, members, flags } = rows;
     const left = new Set<string>();
@@ -7206,6 +7270,85 @@ export class Instance {
         value = [...results];
         delta = { ops, rows: dirty.filter((key) => byKey.has(key)) };
       }
+    } else if (rows.construct === "flatMap") {
+      const { segments } = rows;
+      if (changed.size > 0) {
+        if (segments === undefined || !Array.isArray(held.value)) {
+          return undefined;
+        }
+        // The segment of each element that changed, in the order of the
+        // table, is put in the place of the one it had: one splice of the
+        // members and of the values for each. The members behind the
+        // first splice are numbered again, and no other work is done for
+        // an element whose segment stayed.
+        const positions = [...changed].flatMap((key) => {
+          const element = byKey.get(key);
+          return element === undefined ? [] : [element.index];
+        }).sort((a, b) => a - b);
+        rowsNow = [...members];
+        const flat = [...held.value];
+        const spliced: KeyOp[] = [];
+        let start = 0;
+        let from = 0;
+        for (const position of positions) {
+          while (from < position) start += segments.lengths[from++];
+          const element = elements[position];
+          const result = results[position];
+          if (!(result instanceof Assembled)) return undefined;
+          const lazy = this.#assemblyOf(result);
+          const inner = lazy(context);
+          if (
+            inner.key === undefined || inner.owner !== this ||
+            inner.members === undefined || !Array.isArray(inner.value)
+          ) return undefined;
+          this.counts.segmentsFormed += 1;
+          const at = rows.first + elements.length + position;
+          const before = dependencies[at]?.on;
+          if (before !== undefined && before !== inner.key) {
+            this.#users.get(before)?.delete(name);
+            slot.uses.delete(before);
+            segments.of.delete(before);
+          }
+          dependencies[at] = {
+            stamp: (now) => lazy(now).changedAt,
+            seen: inner.changedAt,
+            on: inner.key,
+          };
+          this.uses(name, inner.key);
+          segments.of.set(inner.key, element.key);
+          const within = new Map([...context, [collection, element]]);
+          const fresh = inner.members.map(({ key: part, source }): Element => ({
+            key: memberKey(element.key, part),
+            index: -1,
+            source: segmentSource(source, within),
+          }));
+          const gone = spliceIn(
+            rowsNow,
+            start,
+            segments.lengths[position],
+            fresh,
+          );
+          spliceIn(flat, start, segments.lengths[position], inner.value);
+          spliced.push({
+            start,
+            removed: gone.map(({ key }) => key),
+            inserted: fresh.map(({ key }) => key),
+          });
+          segments.lengths[position] = fresh.length;
+        }
+        const first = spliced[0]?.start ?? rowsNow.length;
+        for (let index = first; index < rowsNow.length; index++) {
+          if (rowsNow[index].index !== index) {
+            rowsNow[index] = { ...rowsNow[index], index };
+          }
+        }
+        rows.members = rowsNow;
+        value = flat;
+        delta = { ops: spliced, rows: [] };
+        differs = true;
+      } else {
+        differs = false;
+      }
     } else if (moved || flagged) {
       differs = true;
       rowsNow = [];
@@ -7289,11 +7432,14 @@ export class Instance {
     entry: Lazy,
     inner: Context,
     host: Host,
+    resolved?: { value: unknown },
   ): {
     values: unknown[];
     members: { part: string; source: Element["source"] }[];
   } {
-    const result = Array.isArray(returned)
+    const result = resolved !== undefined
+      ? resolved.value
+      : Array.isArray(returned)
       ? returned.map((member) => host.settled(member))
       : host.settled(returned);
     if (Array.isArray(returned) && Array.isArray(result)) {
@@ -7325,12 +7471,7 @@ export class Instance {
         values: result as unknown[],
         members: assembled.members.map(({ key, source }) => ({
           part: key,
-          // The result of the inner construct's body, for the element
-          // keys the callback was evaluated under.
-          source: source instanceof Ref || !("entry" in source) ? source : {
-            entry: () => source.entry(inner),
-            at: source.at,
-          },
+          source: segmentSource(source, inner),
         })),
       };
     }
@@ -7360,6 +7501,15 @@ export class Instance {
         };
       }),
     };
+  }
+
+  /**
+   * The entry of the assembly that a body returned as the handle
+   * `assembled`, for the element keys the body was evaluated under.
+   */
+  #assemblyOf(assembled: Assembled): Lazy {
+    const entry = this.assembled(assembled.collection);
+    return () => entry(this.freshContext(assembled.context));
   }
 
   /**

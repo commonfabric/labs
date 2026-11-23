@@ -159,6 +159,56 @@ describe("the inverse of a relation each member holds as a list of references: a
     );
   });
 
+  it("forms the segment of the one topic whose mentions changed, among 1,000 topics as among 10, and moves the topic between the rows", async () => {
+    for (const count of [10, 1_000]) {
+      const { instance, mentionedBy } = await started(count);
+      const before = instance.counts.segmentsFormed;
+
+      instance.store.write(new Ref("topic-5", ["mentions"]), [
+        link("topic-0"),
+        link("topic-1"),
+      ]);
+      instance.settle();
+
+      expect(instance.counts.segmentsFormed - before).toBe(1);
+      // The result is read whole, every link followed, for the small
+      // board alone: the topics of the large one mention each other in a
+      // chain as long as the board.
+      if (count > 10) continue;
+      const rows = mentionedBy();
+      expect(rows.t0).toEqual(["t1", "t2", "t5"]);
+      expect(rows.t1).toEqual(["t2", "t3", "t5"]);
+      expect(rows.t3).toEqual(["t4"]);
+      expect(rows.t4).toEqual(["t6"]);
+    }
+  });
+
+  it("splices the segments of two topics whose mentions change in one transaction, and of a topic whose mentions empty", async () => {
+    const { instance, mentionedBy } = await started(6);
+
+    instance.store.write(new Ref("topic-2", ["mentions"]), []);
+    instance.store.write(new Ref("topic-4", ["mentions"]), [
+      link("topic-0"),
+      link("topic-1"),
+      link("topic-5"),
+    ]);
+    instance.settle();
+
+    expect(mentionedBy()).toEqual({
+      t0: ["t1", "t4"],
+      t1: ["t3", "t4"],
+      t2: ["t3"],
+      t3: ["t5"],
+      t4: ["t5"],
+      t5: ["t4"],
+    });
+
+    instance.store.write(new Ref("topic-2", ["mentions"]), [link("topic-5")]);
+    instance.settle();
+
+    expect(mentionedBy().t5).toEqual(["t2", "t4"]);
+  });
+
   it("evaluates as much for a topic appended to 1,000 topics as to 10", async () => {
     const counts: unknown[] = [];
     for (const count of [10, 1_000]) {
