@@ -5100,6 +5100,38 @@ export const Joined = pattern<
     }));
 }
 
+/// A sort by a key (note 614 of `SPEC-NOTES.md`): `sortBy` is a collection
+/// whose body cone is the key function, observed as a value; its order has
+/// the template of a `filter`'s membership, a `fold` of the key's template
+/// over every element; and a `map` over the result is a collection over it.
+#[test]
+fn a_sort_by_a_key_has_the_fold_of_its_key_and_a_map_over_it_is_a_collection_over_it() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { pattern, type Writable } from "commonfabric";
+interface Item { title: string; rank: number }
+export const Sorted = pattern<
+  { items: Writable<Item[]> },
+  { titles: string[] }
+>(({ items }) => {
+  const ordered = items.sortBy((item) => item.rank);
+  return { titles: ordered.map((item) => item.title) };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Sorted");
+    let sort = &plan["collections"][0];
+    assert_eq!(sort["construct"], json!("sortBy"));
+    let fold = &sort["membership"];
+    assert_eq!(fold["op"], json!("fold"), "{fold}");
+    assert_eq!(fold["collection"], json!(0));
+    let key = fold["body"]["slot"].as_u64().expect("the slot of the key") as usize;
+    assert_eq!(plan["slots"][key]["path"], json!(["rank"]));
+    assert_eq!(plan["slots"][key]["observes"], json!("value"));
+    assert_eq!(plan["collections"][1]["construct"], json!("map"));
+    assert_eq!(plan["collections"][1]["source"]["collection"], json!(0));
+}
+
 /// A key that is a cell is observed as the reference it is, in the key
 /// function of an index and in a `lookup` (PL §3.17): the bucket is that
 /// of the position the reference names, and nothing of what the cell

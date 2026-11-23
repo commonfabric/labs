@@ -490,7 +490,38 @@ const encodeIndexKey = (
 
 /** Whether a construct assembles an array of rows. */
 const assemblesRows = (construct: string): boolean =>
-  construct === "map" || construct === "filter" || construct === "flatMap";
+  construct === "map" || construct === "filter" || construct === "flatMap" ||
+  construct === "sortBy";
+
+/**
+ * The order of two keys of a sort (note 614 of `SPEC-NOTES.md`): numbers
+ * by their value, texts by their code units, `false` before `true`; a key
+ * of one kind before a key of another in the order number, text, boolean;
+ * and `null`, `undefined` and `NaN` behind every other key. Zero for two
+ * keys that the sort keeps in the order of the source.
+ */
+const compareSortKeys = (a: unknown, b: unknown): number => {
+  const rank = (key: unknown) =>
+    typeof key === "number"
+      ? (Number.isNaN(key) ? 3 : 0)
+      : typeof key === "string"
+      ? 1
+      : typeof key === "boolean"
+      ? 2
+      : 3;
+  const [left, right] = [rank(a), rank(b)];
+  if (left !== right) return left - right;
+  if (left === 3) return 0;
+  return (a as number) < (b as number)
+    ? -1
+    : (a as number) > (b as number)
+    ? 1
+    : 0;
+};
+
+/** Whether a value is one a sort orders by: no container and no reference. */
+const isSortKey = (key: unknown): boolean =>
+  key === null || typeof key !== "object";
 
 /** A value of the reactive tier held for a later host. */
 class Thunk {
@@ -623,7 +654,7 @@ const tableName = (assembly: string): string => `${TABLE_PREFIX}${assembly}`;
  * formed again (`#reassemble`).
  */
 type Rows = {
-  construct: "map" | "filter" | "flatMap";
+  construct: "map" | "filter" | "flatMap" | "sortBy";
   /**
    * For a collection over a stored array: the reference that the array
    * was found through, its name, and of the keys of the array the
@@ -667,6 +698,11 @@ type Rows = {
    * table stands behind those of the elements, at the same position.
    */
   segments?: { lengths: number[]; of: Map<string, string> };
+  /**
+   * For a sort by a key: the key each element was placed by, by the key of
+   * the element. `members` holds the elements in the sorted order.
+   */
+  sortKeys?: Map<string, unknown>;
 };
 
 /**
@@ -6648,7 +6684,7 @@ export class Instance {
           });
           // What a later change of the array or of one row is applied to.
           const rows = (
-            construct: "map" | "filter" | "flatMap",
+            construct: "map" | "filter" | "flatMap" | "sortBy",
             members: Element[],
             flags?: boolean[],
             segmentDependencies = 0,
@@ -6782,6 +6818,30 @@ export class Instance {
                 )
               ) rows("filter", host.members, flags);
               return keyed(kept.map(given));
+            }
+            case "sortBy": {
+              // The elements of the source in the order of their keys,
+              // and in the order of the source among equal keys (note 614
+              // of `SPEC-NOTES.md`). An element of the result is the
+              // source element, passed through, with its key.
+              const sortKeys = results.map((result) => host.v(result));
+              const order = elements.map((_, index) => index).sort((a, b) =>
+                compareSortKeys(sortKeys[a], sortKeys[b]) || a - b
+              );
+              const sorted = order.map((index) => elements[index]);
+              host.members = numbered(sorted);
+              // A later change of one key moves one element
+              // (`#reassemble`), where every key is a scalar the body
+              // gave as the value it is.
+              if (results.every(isSortKey)) {
+                rows("sortBy", host.members);
+                if (host.rows !== undefined) {
+                  host.rows.sortKeys = new Map(
+                    elements.map(({ key }, index) => [key, sortKeys[index]]),
+                  );
+                }
+              }
+              return keyed(sorted.map(given));
             }
             case "flatMap": {
               // An element of the result has the key of its source
@@ -7269,6 +7329,96 @@ export class Instance {
       if (differs) {
         value = [...results];
         delta = { ops, rows: dirty.filter((key) => byKey.has(key)) };
+      }
+    } else if (rows.construct === "sortBy") {
+      // Each element that left is taken out of the order, and each that
+      // entered or whose key changed is put at the place of its key, found
+      // by binary search: behind the elements with a smaller key and behind
+      // those with an equal key that stand before it in the source. No
+      // other element is looked at. An element that only moved in the
+      // source could have changed places with one of an equal key, so the
+      // assembly is then formed whole.
+      const { sortKeys } = rows;
+      if (sortKeys === undefined || !Array.isArray(held.value)) {
+        return undefined;
+      }
+      const entered = new Set(ops.flatMap(({ inserted }) => inserted));
+      if (ops.some(({ removed }) => removed.some((key) => byKey.has(key)))) {
+        return undefined;
+      }
+      rowsNow = [...members];
+      const sorted = [...held.value];
+      const spliced: KeyOp[] = [];
+      // The position of an element in the order, found from the key it
+      // was placed by.
+      const placeOf = (key: string): number => {
+        const placed = sortKeys.get(key);
+        let low = 0;
+        let high = rowsNow.length;
+        while (low < high) {
+          const middle = (low + high) >> 1;
+          const other = sortKeys.get(rowsNow[middle].key);
+          if (compareSortKeys(other, placed) < 0) low = middle + 1;
+          else high = middle;
+        }
+        for (
+          let at = low;
+          at < rowsNow.length &&
+          compareSortKeys(sortKeys.get(rowsNow[at].key), placed) === 0;
+          at++
+        ) {
+          if (rowsNow[at].key === key) return at;
+        }
+        return rowsNow.findIndex((member) => member.key === key);
+      };
+      const take = (key: string) => {
+        const at = placeOf(key);
+        sortKeys.delete(key);
+        if (at < 0) return;
+        rowsNow.splice(at, 1);
+        sorted.splice(at, 1);
+        spliced.push({ start: at, removed: [key], inserted: [] });
+      };
+      for (const key of left) take(key);
+      for (const key of changed) {
+        const element = byKey.get(key);
+        if (element === undefined) continue;
+        const now = results[element.index];
+        if (!isSortKey(now) || !(element.source instanceof Ref)) {
+          return undefined;
+        }
+        const known = sortKeys.has(key) && !entered.has(key);
+        if (known && compareSortKeys(sortKeys.get(key), now) === 0) {
+          sortKeys.set(key, now);
+          continue;
+        }
+        if (known) take(key);
+        let low = 0;
+        let high = rowsNow.length;
+        while (low < high) {
+          const middle = (low + high) >> 1;
+          const other = rowsNow[middle];
+          const order = compareSortKeys(sortKeys.get(other.key), now) ||
+            (byKey.get(other.key)?.index ?? -1) - element.index;
+          if (order < 0) low = middle + 1;
+          else high = middle;
+        }
+        sortKeys.set(key, now);
+        rowsNow.splice(low, 0, element);
+        sorted.splice(low, 0, element.source);
+        spliced.push({ start: low, removed: [], inserted: [key] });
+      }
+      differs = spliced.length > 0;
+      if (differs) {
+        const first = Math.min(...spliced.map(({ start }) => start));
+        for (let index = first; index < rowsNow.length; index++) {
+          if (rowsNow[index].index !== index) {
+            rowsNow[index] = { ...rowsNow[index], index };
+          }
+        }
+        rows.members = rowsNow;
+        value = sorted;
+        delta = { ops: spliced, rows: [] };
       }
     } else if (rows.construct === "flatMap") {
       const { segments } = rows;
