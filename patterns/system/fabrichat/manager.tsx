@@ -95,6 +95,7 @@ import {
   type SharedSpaceEntry,
   type SharedSpaceNoticeMark,
 } from "../shared-space/shared-space-catalog.ts";
+import { listProfile } from "../loom/participants.tsx";
 import { shortDid } from "../social-space/short-did.ts";
 import { sameNameMarks } from "./logic.ts";
 import { listsRoomIn } from "./room-records.tsx";
@@ -1113,9 +1114,7 @@ const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
     // so isn't on the room's roster, and is shown among its participants only
     // as an author, once they write. Add each member once their manager lists
     // the room without a step of their own.
-    const profile = event?.profile?.resolveAsCell();
-    if (profile === undefined || profile.get() === undefined) return;
-    joinStreamOf(event.room).key("addParticipant").send({ profile });
+    listProfile(joinStreamOf(event.room).key("addParticipant"), event?.profile);
   },
 );
 

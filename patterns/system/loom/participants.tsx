@@ -65,13 +65,15 @@ export const addParticipant = handler<
 export type ParticipantJoin = Stream<{ profile: ParticipantProfile }>;
 
 /**
- * Sends `profile` to the roster writer `join`, once the profile resolves. An
- * unresolved profile arrives as an empty cell, and linking it would record no
- * profile at all, so it is listed nowhere.
+ * Sends `profile` to a roster's writer, `join` (a root's `addParticipant`),
+ * once the profile resolves. An unresolved profile arrives as an empty cell,
+ * and linking it would record no profile at all, so it is listed nowhere.
+ * Generic over the profile's shape, so every social space's roster (a Loom's,
+ * a room's) is joined by the one rule.
  */
-export function listProfile(
-  join: ParticipantJoin,
-  profile: ParticipantProfile | undefined,
+export function listProfile<P>(
+  join: { send(event: { profile: Cell<P> }): void },
+  profile: Cell<P> | undefined,
 ): void {
   const target = profile?.resolveAsCell();
   if (target === undefined || target.get() === undefined) return;
@@ -81,9 +83,11 @@ export function listProfile(
 /**
  * Lists the viewer in a social space: bound to its root's `addParticipant`
  * and the viewer's `#profile`, it adds the viewer's own profile to the roster.
- * The event carries nothing, so no sender chooses whose profile is listed.
+ * The event carries no profile: the one it lists is always the sender's own.
  * A host that admits its user to the space sends it, on joining and on each
- * open; the roster adds a profile once, so a repeat changes nothing.
+ * open; the roster adds a profile once, so a repeat changes nothing. A send
+ * that arrives before the viewer's profile resolves lists nothing, and the
+ * next open lists them.
  *
  * `void`, not an empty object: a rendered click arrives as the serialized
  * DOM event, which a closed empty object would refuse.
