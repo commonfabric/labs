@@ -373,6 +373,47 @@ export class RuntimeTransactions implements TransactionHooks {
   /** The transaction the adapter was handed, while `within` runs. */
   #given: Given | undefined;
   /**
+   * While `within` runs a load in bounded transactions: the most row
+   * documents one transaction holds, the transaction that holds the row
+   * documents written since the last one was committed, and those
+   * documents.
+   */
+  #load:
+    | {
+      rows: number;
+      tx: IExtendedStorageTransaction | undefined;
+      documents: string[];
+    }
+    | undefined;
+  /**
+   * What the transaction of `#load` recorded, by compiled pattern, as
+   * `#contexts` holds it for the transaction in progress.
+   */
+  readonly #rowContexts = new Map<string, Context>();
+  /** Whether a record being converted is one of the transaction of `#load`. */
+  #recordingRows = false;
+  /**
+   * While `change` writes during such a load: the write records of each row
+   * document that goes into a transaction of rows, with the table they
+   * name, and the records recorded there.
+   */
+  #rowsApart:
+    | {
+      records: Map<string, PlanWrite[]>;
+      inputs: InputsTable;
+      recorded: Set<PlanWrite>;
+    }
+    | undefined;
+  /**
+   * The row documents that a transaction of rows of the load in progress
+   * stored and that the handed transaction has not written since. A
+   * position of one holds a stored label, and none the handed transaction
+   * stages.
+   */
+  readonly #rowsStored = new Set<string>();
+  /** The row documents the handed transaction of such a load wrote. */
+  readonly #rowsHanded = new Set<string>();
+  /**
    * The storage transactions this adapter writes through, each with what
    * it leaves for when its commit is applied where it was handed.
    */
@@ -658,14 +699,15 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /** Makes the records of `pattern` the ones being converted. */
   #use(pattern: string): void {
-    let context = this.#contexts.get(pattern);
+    const contexts = this.#recordingRows ? this.#rowContexts : this.#contexts;
+    let context = contexts.get(pattern);
     if (context === undefined) {
       context = {
         pattern,
         recorded: { writes: [], interner: new PlanInputsInterner() },
         converted: undefined,
       };
-      this.#contexts.set(pattern, context);
+      contexts.set(pattern, context);
     }
     this.#context = context;
   }
@@ -819,9 +861,12 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     if (this.#given !== undefined) {
       // Every transaction the executor opens while the adapter holds a
-      // handed transaction is written into that one.
+      // handed transaction is written into that one, but the creation of a
+      // load in bounded transactions, which is committed here.
       this.#cause = cause;
-      this.#tx = this.#given.tx;
+      this.#tx = this.#load !== undefined && cause === "creation"
+        ? this.#runtime.edit()
+        : this.#given.tx;
       return;
     }
     this.#reportLabels();
@@ -853,7 +898,29 @@ export class RuntimeTransactions implements TransactionHooks {
    * aborted. The executor is told of the labels the commit stored when the
    * replica applies it.
    */
-  within<T>(tx: IExtendedStorageTransaction, run: () => T): T {
+  within<T>(
+    tx: IExtendedStorageTransaction,
+    run: () => T,
+    /**
+     * With `loadRows`, `run` is the load of an instance, in bounded
+     * transactions. The adapter commits, before it returns:
+     *
+     * 1. The creation: the documents the instance makes for itself, so that
+     *    a record of a later transaction whose input passes through one of
+     *    them finds its label stored.
+     * 2. The row documents, in transactions of at most `loadRows`: each row
+     *    whose records name no position the load itself wrote and include
+     *    one for the row whole. Such a transaction stores a row under the
+     *    labels its records give, which name stored positions alone, so the
+     *    row has the label it has when the load is done.
+     *
+     * Everything else, the links to the rows among it, is written into
+     * `tx`. Until the caller commits `tx`, the storage holds row documents
+     * that no document links to. Where one of the adapter's commits is
+     * refused, `tx` is aborted.
+     */
+    options: { loadRows?: number } = {},
+  ): T {
     if (this.#tx !== undefined || this.#given !== undefined) {
       throw new Error("A transaction was handed while another was open.");
     }
@@ -861,16 +928,22 @@ export class RuntimeTransactions implements TransactionHooks {
     const given: Given = { tx, failed: undefined };
     this.#given = given;
     this.#resetTransaction();
+    this.#load = options.loadRows === undefined ||
+        !Number.isFinite(options.loadRows) || options.loadRows < 1
+      ? undefined
+      : { rows: options.loadRows, tx: undefined, documents: [] };
     let result: T;
     try {
       result = run();
     } catch (error) {
       this.#given = undefined;
       this.#tx = undefined;
+      this.#endLoad(false);
       this.#dropCreated();
       this.#unchanged.clear();
       throw error;
     }
+    this.#endLoad(given.failed === undefined);
     this.#given = undefined;
     if (given.failed !== undefined) {
       this.#dropCreated();
@@ -878,6 +951,16 @@ export class RuntimeTransactions implements TransactionHooks {
       tx.abort(new Error(given.failed));
       return result;
     }
+    this.#handOver(tx);
+    return result;
+  }
+
+  /**
+   * Records with `tx` what the transaction in progress recorded, and keeps
+   * for it what its commit leaves to do: `tx` is one whose commit the
+   * adapter hears of, and a refusal of it restores the documents it wrote.
+   */
+  #handOver(tx: IExtendedStorageTransaction): void {
     this.#recordWrites(tx);
     const handed: Handed = {
       unchanged: new Map(this.#unchanged),
@@ -896,6 +979,154 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#resetRecorded();
     this.#created = [];
     this.#createdStreams = [];
+  }
+
+  /**
+   * Prepares and commits a transaction of a load in bounded transactions,
+   * and has the handed transaction fail where the preparation refuses it.
+   */
+  #commitOfLoad(tx: IExtendedStorageTransaction): void {
+    this.#runtime.prepareTxForCommit(tx);
+    if (tx.getCfcState().prepare.status === "invalidated" && this.#given) {
+      this.#given.failed ??=
+        "The preparation refused a transaction of the load.";
+    }
+    tx.commit();
+  }
+
+  /**
+   * Commits the row documents written since the last transaction of rows,
+   * with their records.
+   */
+  #commitRows(): void {
+    const load = this.#load;
+    if (load?.tx === undefined) return;
+    const { tx, documents } = load;
+    load.tx = undefined;
+    load.documents = [];
+    this.#recordWrites(tx, this.#rowContexts);
+    this.#rowContexts.clear();
+    const handed: Handed = {
+      unchanged: new Map(),
+      created: documents,
+      written: documents,
+    };
+    this.#own.set(tx.tx, handed);
+    tx.addCommitCallback((_tx, { error }) => {
+      if (error === undefined) return;
+      this.#onRefused?.(
+        `${error.name}: ${error.message}`,
+        this.#restored(handed),
+      );
+    });
+    this.#commitOfLoad(tx);
+  }
+
+  /** Ends a load in bounded transactions: `kept` where it did not fail. */
+  #endLoad(kept: boolean): void {
+    const load = this.#load;
+    if (load === undefined) return;
+    if (kept) this.#commitRows();
+    else load.tx?.abort();
+    this.#load = undefined;
+    this.#rowContexts.clear();
+    this.#rowsApart = undefined;
+    this.#rowsStored.clear();
+    this.#rowsHanded.clear();
+  }
+
+  /**
+   * For a change of `doc` during a load in bounded transactions: the row
+   * documents among its records that go into a transaction of rows, each
+   * with its records. A row goes there where the handed transaction has
+   * not written its document, one of its records is of the row whole, and
+   * no record of it names an input the load wrote (`#namesStoredAlone`).
+   */
+  #rowsToStoreApart(
+    doc: string,
+    store: Store,
+    rows: readonly RowArray[],
+    writes: readonly PlanWrite[],
+    inputs: InputsTable,
+  ): Map<string, PlanWrite[]> {
+    const found = new Map<string, { records: PlanWrite[]; whole: boolean }>();
+    for (const write of writes) {
+      const { target } = write;
+      if (target.doc !== doc) continue;
+      const array = rows.find(({ path }) =>
+        target.path.length > path.length && isPrefix(path, target.path)
+      );
+      if (array === undefined) continue;
+      const { length } = array.path;
+      const key = /^\d+$/.test(target.path[length])
+        ? store.rowKeys.get(array.text)?.()[Number(target.path[length])]
+        : undefined;
+      if (key === undefined) continue;
+      const id = this.#rowDocument(array, key);
+      let row = found.get(id);
+      if (row === undefined) {
+        row = { records: [], whole: false };
+        found.set(id, row);
+      }
+      row.records.push(write);
+      if (target.path.length === length + 1) row.whole = true;
+    }
+    const clean = new Map<number, boolean>();
+    const apart = new Map<string, PlanWrite[]>();
+    for (const [id, { records, whole }] of found) {
+      if (
+        whole && !this.#rowsHanded.has(id) &&
+        records.every((write) =>
+          this.#namesStoredAlone(inputs, write.inputs, clean) &&
+          (write.decided ?? []).every(({ address }) => !this.#wrote(address)) &&
+          (write.observed ?? []).every(({ address }) => !this.#wrote(address))
+        )
+      ) apart.set(id, records);
+    }
+    return apart;
+  }
+
+  /**
+   * Whether the entry `index` of the executor's table of inputs names
+   * nothing but positions the storage holds: no position the transaction
+   * in progress wrote, and no label of an output or of a staged position,
+   * which only the transaction that writes them can give.
+   */
+  #namesStoredAlone(
+    table: InputsTable,
+    index: number,
+    known: Map<number, boolean>,
+  ): boolean {
+    const held = known.get(index);
+    if (held !== undefined) return held;
+    // An entry that names itself through another is not taken apart.
+    known.set(index, false);
+    const place = table.inputs[index];
+    const stored = (address: Address) => !this.#wrote(address);
+    const slots = (bindings: SlotBindings) =>
+      Object.values(bindings).every((at) => {
+        const binding = table.bindings[at];
+        if ("constant" in binding) return true;
+        if (!("chain" in binding)) return false;
+        return binding.chain.every(stored) &&
+          (binding.below ?? []).every((chain) => chain.every(stored)) &&
+          (binding.members ?? []).every(({ container }) => stored(container));
+      });
+    const nested = (at: number) => this.#namesStoredAlone(table, at, known);
+    const result = slots(place.slots) &&
+      Object.values(place.picks ?? {}).every((chosen) =>
+        chosen === null || slots(chosen.slots)
+      ) &&
+      Object.values(place.elements ?? {}).every((elements) =>
+        "uniform" in elements
+          ? nested(elements.uniform)
+          : elements.groups.every(({ inputs }) => nested(inputs))
+      ) &&
+      Object.values(place.dynamic ?? {}).every((addresses) =>
+        addresses.every(stored)
+      ) &&
+      Object.values(place.outputs ?? {}).every(nested);
+    known.set(index, result);
     return result;
   }
 
@@ -1210,6 +1441,28 @@ export class RuntimeTransactions implements TransactionHooks {
     // The address the storage holds a path of the document at: that of a
     // row document for a path below a row that is one.
     const at = (below: readonly string[]) => this.#address(doc, below);
+    // During a load in bounded transactions, the rows of this change that
+    // are stored by a transaction of rows (`#writeRow`).
+    if (
+      this.#load !== undefined && this.#given !== undefined &&
+      tx === this.#given.tx && rows.length > 0 && writes !== undefined &&
+      inputs !== undefined && this.#compiledPattern !== undefined
+    ) {
+      this.#rowsApart = {
+        records: this.#rowsToStoreApart(doc, store, rows, writes, inputs),
+        inputs,
+        recorded: new Set(),
+      };
+    }
+    // A write below a row that a transaction of rows stored makes the row
+    // one the handed transaction writes.
+    const below = this.#rowsStored.size === 0
+      ? undefined
+      : this.#placeOf(doc, path);
+    if (below !== undefined && below.doc !== doc) {
+      this.#rowsStored.delete(below.doc);
+      this.#rowsHanded.add(below.doc);
+    }
     // Whether the change was written as the positions of a splice, which
     // are then the paths written, and the path of the change is not.
     let spliced = false;
@@ -1301,6 +1554,16 @@ export class RuntimeTransactions implements TransactionHooks {
         tx.writeValueOrThrow(at(path), undefined, { delete: true });
       } else {
         tx.writeValueOrThrow(at(path), this.#encode(store.peek(doc, path)));
+      }
+    }
+    if (this.#rowsApart !== undefined) {
+      // No transaction of rows stays open behind the change: a later read
+      // or write of a row through the handed transaction finds it stored.
+      this.#commitRows();
+      const { recorded } = this.#rowsApart;
+      this.#rowsApart = undefined;
+      if (recorded.size > 0) {
+        writes = writes?.filter((write) => !recorded.has(write));
       }
     }
     if (!spliced) written.push([...path]);
@@ -1427,6 +1690,19 @@ export class RuntimeTransactions implements TransactionHooks {
   ): FabricValue {
     const id = this.#rowDocument(array, key);
     const address = this.#address(id, []);
+    // During a load in bounded transactions, a row whose records name
+    // stored positions alone is written into a transaction of rows, with
+    // those records.
+    const load = this.#load;
+    const apart = load === undefined
+      ? undefined
+      : this.#rowsApart?.records.get(id);
+    if (load !== undefined && apart !== undefined) {
+      tx = load.tx ??= this.#runtime.edit();
+    } else if (load !== undefined) {
+      this.#rowsStored.delete(id);
+      this.#rowsHanded.add(id);
+    }
     const attempts = tx.getWriteAttemptLog?.().length;
     tx.writeValueOrThrow(address, this.#encode(value));
     // A write of what the document holds is no write of the transaction.
@@ -1437,6 +1713,18 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#enroll(tx, id);
     // The write policy of the write, as `change` records it for a path.
     recordRelevantSchemaWritePolicyInput(tx, address, undefined);
+    if (load !== undefined && apart !== undefined && this.#rowsApart) {
+      this.#recordingRows = true;
+      try {
+        this.#record(apart, false, this.#rowsApart.inputs);
+      } finally {
+        this.#recordingRows = false;
+      }
+      for (const write of apart) this.#rowsApart.recorded.add(write);
+      this.#rowsStored.add(id);
+      load.documents.push(id);
+      if (load.documents.length >= load.rows) this.#commitRows();
+    }
     return createSigilLinkFromParsedLink({
       id: address.id,
       space: address.space,
@@ -1817,7 +2105,10 @@ export class RuntimeTransactions implements TransactionHooks {
    * one record of the plan and one entry of the table and differ only in
    * a member of one container or in the document (`mergedPlanWrites`).
    */
-  #recordWrites(tx: IExtendedStorageTransaction): void {
+  #recordWrites(
+    tx: IExtendedStorageTransaction,
+    contexts: ReadonlyMap<string, Context> = this.#contexts,
+  ): void {
     if (this.#compiledPattern === undefined) return;
     // The runtime's mark: this adapter stands in for the runner, which
     // records what its own code computed.
@@ -1831,7 +2122,7 @@ export class RuntimeTransactions implements TransactionHooks {
       }
       tx.recordCfcWritePolicyInput(input, runtimeWritePolicyAuthorization);
     };
-    for (const { pattern, recorded } of this.#contexts.values()) {
+    for (const { pattern, recorded } of contexts.values()) {
       const { writes, interner } = recorded;
       if (writes.length === 0) continue;
       const part = interner.take();
@@ -2044,6 +2335,12 @@ export class RuntimeTransactions implements TransactionHooks {
    * above it.
    */
   #wrote({ doc, path }: Address): boolean {
+    // A row that a transaction of rows of the load in progress stored is
+    // no write of the handed transaction, though the array above it is.
+    if (
+      this.#rowsStored.size > 0 &&
+      this.#rowsStored.has(this.#placeOf(doc, path).doc)
+    ) return false;
     return (this.#written.get(doc) ?? []).some((written) =>
       written.length <= path.length &&
       written.every((segment, index) => segment === path[index])
@@ -2066,6 +2363,18 @@ export class RuntimeTransactions implements TransactionHooks {
     const tx = this.#open();
     this.#tx = undefined;
     if (this.#given !== undefined) {
+      if (tx !== this.#given.tx) {
+        // The creation of a load in bounded transactions.
+        if (committed) {
+          this.#handOver(tx);
+          this.#commitOfLoad(tx);
+          // What it wrote is stored: no later record takes a label staged
+          // there.
+          this.#resetTransaction();
+        } else {
+          tx.abort();
+        }
+      }
       if (committed) {
         this.#counts.committed += 1;
         this.#counts.byCause[this.#cause] =

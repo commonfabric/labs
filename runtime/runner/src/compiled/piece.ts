@@ -74,6 +74,14 @@ export type CompiledPieceOptions = {
    * array. The rows of every other collection are stored in place.
    */
   rows?: "documents" | "in-place";
+  /**
+   * The most row documents that one transaction of the load holds. The
+   * load commits the documents the instance makes for itself, and then the
+   * row documents in transactions of at most this many, before the caller
+   * commits the transaction it handed, which holds the rest. `Infinity`
+   * writes the whole load into the handed transaction. The default is 250.
+   */
+  loadRows?: number;
 };
 
 /** What a compiled piece did, counted. */
@@ -183,7 +191,7 @@ export class CompiledPiece {
           transactions,
           load: (id) => transactions.load(id),
         },
-      ));
+      ), { loadRows: options.loadRows ?? 250 });
     this.#started = true;
     this.#cancels.push(
       runtime.scheduler.subscribe(

@@ -133,6 +133,10 @@ describe("a commit of a compiled piece that is refused", () => {
           started,
           { secret, last, items },
           result.withTx(tx),
+          // The load is one transaction: the server tells a session of a
+          // commit only when the test asks, and a commit that the piece
+          // makes itself would keep `synced()` waiting for that.
+          { loadRows: Infinity },
         );
         pieces.push(piece);
       }),

@@ -237,6 +237,104 @@ describe("the rows of a `map` over an array declared as references", () => {
     );
   });
 
+  describe("the load in bounded transactions", () => {
+    const titles = ["one", "two", "three", "four", "five", "six"];
+
+    /** The documents each commit changed, in the order of the commits. */
+    const commitsOf = () => {
+      const commits: string[][] = [];
+      storageManager.subscribe({
+        next(notification) {
+          if (notification.type === "commit") {
+            commits.push(
+              [...new Set([...notification.changes].map((c) => c.address.id))],
+            );
+          }
+          return undefined;
+        },
+      });
+      return commits;
+    };
+
+    it("commits the row documents in transactions of at most the given number of rows, before the result", async () => {
+      const commits = commitsOf();
+      const { piece, result } = await started(
+        "Cells",
+        { loadRows: 2 },
+        undefined,
+        titles,
+      );
+
+      expect(piece.refusals).toEqual([]);
+      const rows = storedRows(result).map((row) => parseLink(row as never).id!);
+      expect(rows.length).toBe(5);
+      const resultId = result.getAsNormalizedFullLink().id;
+      const holding = (id: string) =>
+        commits.findIndex((changed) => changed.includes(id));
+      // No commit holds more than two rows, and each row is stored by a
+      // commit before the one that stores the links to the rows.
+      for (const changed of commits) {
+        expect(changed.filter((id) => rows.includes(id)).length)
+          .toBeLessThanOrEqual(2);
+      }
+      const linked = commits.findLastIndex((changed) =>
+        changed.includes(resultId)
+      );
+      for (const row of rows) {
+        expect(holding(row)).toBeGreaterThanOrEqual(0);
+        expect(holding(row)).toBeLessThan(linked);
+      }
+      expect(rowsOf(result)).toEqual(
+        titles.slice(0, -1).map((title) => ({
+          label: `${title}!`,
+          done: false,
+        })),
+      );
+    });
+
+    it("stores each row under the labels a load in one transaction stores", async () => {
+      const bounded = await started(
+        "Cells",
+        { loadRows: 2 },
+        undefined,
+        titles,
+        "bounded ",
+      );
+      const whole = await started(
+        "Cells",
+        { loadRows: Infinity },
+        undefined,
+        titles,
+        "whole ",
+      );
+      expect(bounded.piece.refusals).toEqual([]);
+      expect(whole.piece.refusals).toEqual([]);
+      const labels = (result: Cell<Record<string, unknown>>) =>
+        storedRows(result).map((row) =>
+          // The two pieces read items of their own, whose entities differ.
+          JSON.parse(labelsOf(parseLink(row as never).id!)).labelMap
+        );
+      const strip = (text: string) => text.replaceAll(/(bounded|whole) /g, "");
+      expect(labels(bounded.result).length).toBe(5);
+      expect(strip(JSON.stringify(labels(bounded.result)))).toEqual(
+        strip(JSON.stringify(labels(whole.result))),
+      );
+    });
+
+    it("takes a change of a member after such a load", async () => {
+      const { piece, result, cells } = await started(
+        "Cells",
+        { loadRows: 2 },
+        undefined,
+        titles,
+      );
+      await commit((tx) => cells[3].withTx(tx).key("title").set("fourth"));
+      expect(piece.refusals).toEqual([]);
+      expect((rowsOf(result) as { label: string }[]).map(({ label }) => label))
+        .toEqual(["one!", "two!", "three!", "fourth!", "five!"]);
+    });
+  });
+
   it("writes the document of one row, and not the result, for an edit of one member", async () => {
     const { piece, result, cells } = await started("Cells");
     const row = parseLink(storedRows(result)[1] as never).id!;
