@@ -18771,16 +18771,16 @@ the commit `1aa060a02b`. Its tables are in the folder of the round,
 887. **Step 5: what a resume hears of.** A piece that has a `wish` is never
      resumed without its executor: the runtime's `wish` keeps its state in a
      cell of the scope `user`, the outcome links to it, and a piece that has
-     named a document of a scope has a basis that names that document, which has
-     no number, so the basis never matches (P354). Its wake registers every
-     action again. What was left is a piece with no document of a scope whose
-     derivations asked a built-in: `compiled/outside-reads.ts` keeps, for each
-     question and principal, the documents of the space scope the run of its
-     action read, by the position that read them, the derivation stores them in
-     a document of the piece (`OutsideReads.flush`), and `wakeOnOutsideReads`
-     brings those documents into the replica of a piece that was resumed from a
-     matching basis and wakes it at a commit that changes one. `serving.ts`
-     (`start`) calls it. The same record is kept for a `wish`
+     named a document of a scope has a basis that names a source with no number,
+     so the basis never matches (P354). Its wake registers every action again.
+     What was left is a piece with no document of a scope whose derivations
+     asked a built-in: `compiled/outside-reads.ts` keeps, for each question and
+     principal, the documents of the space scope the run of its action read, by
+     the position that read them, the derivation stores them in a document of
+     the piece (`OutsideReads.flush`), and `wakeOnOutsideReads` brings those
+     documents into the replica of a piece that was resumed from a matching
+     basis and wakes it at a commit that changes one. `serving.ts` (`start`)
+     calls it. The same record is kept for a `wish`
      (`RuntimeWishesOptions.read`), by the identifier of its state document, and
      is written for no piece today, since every piece with a `wish` has a
      document of a scope. Test: `outside-reads.test.ts` over
@@ -18820,8 +18820,8 @@ the commit `1aa060a02b`. Its tables are in the folder of the round,
        later than today, the commit of what the handler wrote, and no refusal.
 889. **Step 8: measured.** One run of each cell, on an Apple M5 Max with 18
      cores at a load average of 13 to 14 from other work, at the commit
-     `234e56fca4`; round thirteen measured at a load of 6 to 8 (note 750). Three
-     sends each. Milliseconds.
+     `234e56fca4`, and the corpus after a resume at `f9053a1a11`; round thirteen
+     measured at a load of 6 to 8 (note 750). Three sends each. Milliseconds.
      - _FabriChat and Home with one user, on the runner path_ (the arm `runner`
        of `compare/fabrichat/scale.ts`, with the runtime's `wish` and built-ins
        and `actsFor`). The state of the scope `session` and `user` of the room
@@ -18868,7 +18868,7 @@ the commit `1aa060a02b`. Its tables are in the folder of the round,
        | Equal to the executor in memory         |         232 |            231 |           209 |    212 |            230 |            230 |
        | With a `wish`: equal, of those compared |    21 of 31 |       20 of 31 |       not run |        |       21 of 31 |       20 of 31 |
        | Resumed by a second runtime             |             |                |               |        |            154 |            154 |
-       | The basis matched, nothing evaluated    |             |                |               |        |            137 |            145 |
+       | The basis matched, nothing evaluated    |             |                |               |        |            127 |            145 |
        | The resume wrote no document            |             |                |               |        |             89 |             99 |
 
        On the runner path three modules changed, none for the worse. Under the
@@ -18881,7 +18881,7 @@ the commit `1aa060a02b`. Its tables are in the folder of the round,
        `topic-workbench` differs as well, at a value of a state cell of the
        scope `session`: the second runtime is another session, which reads its
        own instance, where the executor in memory has one for all. The other two
-       were not looked into. Fourteen modules with state of a scope are no
+       were not looked into. Eighteen modules with documents of a scope are no
        longer found current by a resume (P354). A module with a `wish` is still
        left out under the serving loop, where no client of the harness seeds the
        home. The first run of the corpus in this round showed three modules
@@ -18960,28 +18960,29 @@ the commit `1aa060a02b`. Its tables are in the folder of the round,
      the assembly of a collection of a scope is formed again and not set aside
      (note 882). P353: an evaluation of a scope that stored what it derived in a
      document of the space takes an error state (note 882). P354: the basis of a
-     piece that has named a document of a scope names that document with no
-     number, so a resume starts its executor, and such a piece records its basis
-     in a run that made a document alone (note 883). P355: the derivation names
-     its piece from the run on in which the piece named a document of a scope,
-     and a run then counts as one of the narrowest scope the piece has named a
-     document of (note 882). P356: `asScope` on a call that is compiled in sets
-     the scope of the state cells of the callee (note 885). P357: an answer of a
-     built-in is kept for each principal, and `spaceAccess` alone makes its user
-     an entry of the scope `user` (note 886). P358: a piece stores what its
-     built-ins read outside the executor by position, for a resume from a
-     matching basis (note 887). P359: in a piece that has documents of a scope,
-     a stored link says the scope of its target, `space` included (note 882).
-     P360: the stamp a harness gives a derivation holds the session of the
-     runtime (note 883). _Not verified:_ a principal that comes to demand a
-     piece after it narrowed, or after the others left; two sessions of one
-     principal; a write of a client to a document of a scope, as through a
-     member bound both ways; a per-element construct of a scope under the
-     serving loop (the executor suite alone covers it); FabriChat or Home with
-     two users, on any path; a `wish` that resolves a profile under the serving
-     loop; a resume of a piece with state of a scope on a memory server over a
-     socket; the refusal of note 890 with its second run; today's runtime beside
-     any figure; each table is one run, at a load average of 15 to 20.
+     piece that has named a document of a scope names a source that has no
+     number (`#sourceOfNoNumber`), so a resume starts its executor, and such a
+     piece records its basis in a run that made a document alone (note 883).
+     P355: the derivation names its piece from the run on in which the piece
+     named a document of a scope, and a run then counts as one of the narrowest
+     scope the piece has named a document of (note 882). P356: `asScope` on a
+     call that is compiled in sets the scope of the state cells of the callee
+     (note 885). P357: an answer of a built-in is kept for each principal, and
+     `spaceAccess` alone makes its user an entry of the scope `user` (note 886).
+     P358: a piece stores what its built-ins read outside the executor by
+     position, for a resume from a matching basis (note 887). P359: in a piece
+     that has documents of a scope, a stored link says the scope of its target,
+     `space` included (note 882). P360: the stamp a harness gives a derivation
+     holds the session of the runtime (note 883). _Not verified:_ a principal
+     that comes to demand a piece after it narrowed, or after the others left;
+     two sessions of one principal; a write of a client to a document of a
+     scope, as through a member bound both ways; a per-element construct of a
+     scope under the serving loop (the executor suite alone covers it);
+     FabriChat or Home with two users, on any path; a `wish` that resolves a
+     profile under the serving loop; a resume of a piece with state of a scope
+     on a memory server over a socket; the refusal of note 890 with its second
+     run; today's runtime beside any figure; each table is one run, at a load
+     average of 15 to 20.
 
 ### CFC questions deferred, round fourteen
 
