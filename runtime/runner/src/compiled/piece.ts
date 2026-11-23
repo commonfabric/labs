@@ -54,9 +54,11 @@ import type { FabricValue } from "@commonfabric/data-model";
 import {
   basisDocumentOf,
   basisPartDocumentOf,
+  compiledIdentityOf,
   PieceBasis,
   storedBasisOf,
 } from "./basis.ts";
+import { PieceUnits } from "./units.ts";
 import {
   type ChangeByOther,
   type Restored,
@@ -109,6 +111,15 @@ export type CompiledPieceOptions = {
    * stored, in the handed transaction.
    */
   resume?: boolean;
+  /**
+   * With `resume`, on a runtime whose replica reads from the store: the
+   * sources of the piece that changed since the stored result was derived.
+   * The executor then leaves the rows it can as the storage holds them,
+   * and evaluates the body of an element when a document it read changes
+   * (`resumeCompiledPieceByUnits()`). Without it a resumed piece evaluates
+   * its whole derivation.
+   */
+  stale?: readonly string[];
   /**
    * Whether the argument is the one the storage holds in the argument
    * document of the result cell, which a client wrote
@@ -166,6 +177,8 @@ export class CompiledPiece {
   readonly #result: string;
   /** The record of what the stored result was derived from. */
   readonly #basis: PieceBasis<IExtendedStorageTransaction>;
+  /** The lists of what the body of each element read. */
+  readonly #units: PieceUnits<IExtendedStorageTransaction>;
   readonly #cancels: Cancel[] = [];
   readonly #derive: Action;
   readonly #refusals: string[] = [];
@@ -237,7 +250,10 @@ export class CompiledPiece {
         handed: (handed, written, sources) => {
           this.#basis.wrote(handed, written, sources);
         },
-        refused: (handed) => this.#basis.refused(handed),
+        refused: (handed) => {
+          this.#basis.refused(handed);
+          this.#units.refused(handed);
+        },
         made: (doc) => this.#basis.made(doc),
       },
     });
@@ -268,6 +284,18 @@ export class CompiledPiece {
     );
     this.#basis.source(argumentOf(result.id));
     this.#basis.source(transactions.mintedDocument);
+    this.#units = new PieceUnits(
+      result.id,
+      compiledIdentityOf(artifact),
+      {
+        held: (doc) => transactions.heldOwn(doc),
+        write: (handed, doc, path, value) =>
+          transactions.writeOwn(handed, doc, path, value as FabricValue),
+        result: (rows) => transactions.heldResult(rows),
+        rowsHeld: (path, keys) => transactions.rowsHeld(path, keys),
+      },
+      options.resume === true ? options.stale : undefined,
+    );
     this.#derive = (given) => {
       this.#counts.derivations += 1;
       const began = performance.now();
@@ -291,6 +319,7 @@ export class CompiledPiece {
       // The basis is of a derivation that brought everything up to date.
       if (first) this.#invalidate();
       else {
+        this.#units.record(given);
         this.#basis.record(
           given,
           (given.getWriteAttemptLog?.().length ?? 0) > 0,
@@ -323,6 +352,7 @@ export class CompiledPiece {
           : transactions.decode(convertCellsToLinks(argument as never)),
         {
           resume: resumed,
+          units: this.#units,
           ...(minted === undefined ? {} : { minted }),
           ...(made.length === 0 ? {} : { made }),
           space,
@@ -349,6 +379,7 @@ export class CompiledPiece {
     // next resume then brings it before it starts the executor.
     for (const doc of transactions.absent) this.#basis.source(doc);
     this.#keepMinted(tx);
+    this.#units.record(tx);
     this.#basis.record(tx, true);
     this.#started = true;
     this.#cancels.push(

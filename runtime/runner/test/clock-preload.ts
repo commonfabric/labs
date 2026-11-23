@@ -205,6 +205,8 @@ installFakeClock({
     // under the same flush deadline and the same round trips over real I/O
     // as the two classes above. It waits on the values a client reads.
     "compiled-serving",
+    // The same serving memory server, taken over by a second serving loop.
+    "compiled-serving-takeover",
   ],
 });
 

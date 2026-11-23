@@ -1803,6 +1803,7 @@ export class RuntimeTransactions implements TransactionHooks {
     // owns. A runtime that resumed the instance enrolls it with its first
     // write of it.
     if (this.#heldBefore.delete(doc)) this.#enroll(tx, doc);
+    this.#enrollKeptRow(tx, doc, path);
     const written = this.#written.get(doc) ?? [];
     this.#written.set(doc, written);
     const document = store.docs.get(doc);
@@ -2447,6 +2448,10 @@ export class RuntimeTransactions implements TransactionHooks {
   ): void {
     for (const key of keys) {
       const id = this.#rowDocument(array, key);
+      if (this.#keptArrays.has(array) && !this.#keptEnrolled.has(id)) {
+        this.#keptEnrolled.add(id);
+        this.#enroll(tx, id);
+      }
       tx.writeValueOrThrow(this.#address(id, []), undefined, { delete: true });
       array.ids.delete(key);
       array.links.delete(key);
@@ -3635,6 +3640,128 @@ export class RuntimeTransactions implements TransactionHooks {
       this.#heldBefore.add(doc);
     }
     return value;
+  }
+
+  /**
+   * The arrays of row documents whose rows the executor holds as the
+   * storage does, with no row evaluated (`rowsHeld`).
+   */
+  readonly #keptArrays = new Set<RowArray>();
+
+  /** The row documents of `#keptArrays` that this runtime enrolled. */
+  readonly #keptEnrolled = new Set<string>();
+
+  /**
+   * What the replica holds of the result document of the instance, for an
+   * executor that leaves rows as stored: the value as the executor holds
+   * one, with no member at each path of `rows`, and for each of those
+   * paths the entity that each position of the stored array links to, or
+   * nothing where the storage holds no array of links to whole documents
+   * there. Nothing where the replica holds no result document. The
+   * document counts as one the storage holds, and the executor's creation
+   * of it with this value is no write.
+   */
+  heldResult(
+    rows: readonly (readonly string[])[],
+  ): { value: unknown; rows: (readonly string[] | undefined)[] } | undefined {
+    if (this.#owner === undefined) return undefined;
+    const read = this.#runtime.edit();
+    let stored: FabricValue | undefined;
+    try {
+      stored = read.readValueOrThrow(this.#address(this.#owner, []));
+    } finally {
+      read.abort();
+    }
+    if (!isWalkableObjectNotArray(stored)) return undefined;
+    const entities = rows.map((path) => {
+      const held = valueAt(stored, path);
+      if (!Array.isArray(held)) return undefined;
+      const ids: string[] = [];
+      for (const member of held) {
+        if (!isPrimitiveCellLink(member)) return undefined;
+        const link = parseLink(member);
+        if (
+          link.id === undefined || link.path.length > 0 ||
+          (link.space !== undefined && link.space !== this.#space)
+        ) return undefined;
+        ids.push(link.id);
+      }
+      return ids;
+    });
+    // The value without the members at the paths of `rows`: none of the
+    // links there is decoded, which for each reads the entity it names.
+    const without = (value: unknown, at: readonly string[]): unknown => {
+      const inside = rows.filter((path) =>
+        path.length > at.length && isPrefix(at, path)
+      );
+      if (inside.length === 0 || !isWalkableObjectNotArray(value)) {
+        return this.#decode(value);
+      }
+      const members: Record<string, unknown> = {};
+      for (const [name, member] of Object.entries(value)) {
+        const below = [...at, name];
+        if (rows.some((path) => samePath(path, below))) continue;
+        members[name] = without(member, below);
+      }
+      return members;
+    };
+    this.#documents.add(this.#owner);
+    this.#heldBefore.add(this.#owner);
+    this.#heldWhole.add(this.#owner);
+    return { value: without(stored, []), rows: entities };
+  }
+
+  /**
+   * The executor holds the rows of `keys`, in that order, at `path` of the
+   * result document as the storage holds them: the array of row documents
+   * there has those keys, and no row of it is written until the executor
+   * stores one.
+   */
+  rowsHeld(path: readonly string[], keys: readonly string[]): void {
+    if (this.#owner === undefined) return;
+    const doc = this.#owner;
+    const text = JSON.stringify([doc, path]);
+    let arrays = this.#rowArrays.get(doc);
+    if (arrays === undefined) {
+      arrays = [];
+      this.#rowArrays.set(doc, arrays);
+    }
+    let array = arrays.find((one) => one.text === text);
+    if (array === undefined) {
+      array = {
+        doc,
+        path: [...path],
+        text,
+        keys: [],
+        ids: new Map(),
+        links: new Map(),
+      };
+      arrays.push(array);
+      this.#rowArraysNamed += 1;
+    }
+    array.keys = [...keys];
+    array.positions = undefined;
+    this.#keptArrays.add(array);
+  }
+
+  /**
+   * Enrolls the document of a row of an array of `#keptArrays` as a store
+   * the instance owns, with the first write of this runtime at or below
+   * the row: the runtime that made the document enrolled it, and this one
+   * has not written it whole.
+   */
+  #enrollKeptRow(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+    path: readonly string[],
+  ): void {
+    if (this.#keptArrays.size === 0 || doc !== this.#owner) return;
+    const place = this.#placeOf(doc, path);
+    if (place.doc === doc || this.#keptEnrolled.has(place.doc)) return;
+    const row = this.#rowDocuments.get(place.doc);
+    if (row === undefined || !this.#keptArrays.has(row.array)) return;
+    this.#keptEnrolled.add(place.doc);
+    this.#enroll(tx, place.doc);
   }
 
   /** Reads a document whole in `tx`, so that its commit depends on it. */
