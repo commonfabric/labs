@@ -2171,6 +2171,28 @@ export class Host {
     // `value` entry of `Body.reads` is at or below is read as a value too,
     // since an `enumeration` or a `shape` entry of the slot part gives way
     // to what the argument holds at its path (`Instance.gives`).
+    //
+    // A path that an entry of `Body.reads` fills below is not read here:
+    // the entry reads its slot once and puts the value or the handle
+    // there, in the place of whatever the computed part held.
+    const filled = new Set<string>();
+    {
+      const { reads } = instance.plan.bodies[body];
+      const valuedAt = new Set(
+        reads.filter(({ slot }) =>
+          instance.plan.slots[slot].observes === "value"
+        ).map(({ at }) => JSON.stringify(at)),
+      );
+      for (const { slot, at, handle } of reads) {
+        if (at.includes("*")) continue;
+        const { observes } = instance.plan.slots[slot];
+        if (
+          observes === "value" ||
+          (observes === "identity" &&
+            (handle !== undefined || !valuedAt.has(JSON.stringify(at))))
+        ) filled.add(JSON.stringify(at));
+      }
+    }
     let argument = this.pass(computed, {
       entries: [
         ...instance.plan.bodies[body].computed,
@@ -2179,6 +2201,7 @@ export class Host {
           observes: instance.plan.slots[slot].observes,
         })),
       ],
+      filled,
     });
     // An `identity` entry of `Body.computed` is a handle to the reference
     // the cone computed there (ES §2.4, "A handle or a reference from a
@@ -2244,6 +2267,9 @@ export class Host {
         observes === "identity" && handle === undefined &&
         valued.has(JSON.stringify(at))
       ) continue;
+      // An entry that gives way to what the argument holds at its path
+      // reads nothing.
+      if (instance.gives(observes, argument, at)) continue;
       // The slot reads the default of its own place first.
       const read = declared === undefined
         ? this.slot(slot)
@@ -2251,7 +2277,6 @@ export class Host {
       const given = observes === "identity"
         ? instance.handleOf(read, this, slot, handle && schema)
         : read;
-      if (instance.gives(observes, argument, at)) continue;
       if (given === undefined) {
         // The result of an operation is a record that is there while
         // its members hold nothing: a body that names `fetched.result`
@@ -2368,9 +2393,21 @@ export class Host {
      * it as stand-ins and not followed (ES §2.4: the computed part is
      * "narrowed to the entries of `Body.computed`").
      */
-    narrowed?: { entries: readonly { at: string[]; observes: string }[] },
+    narrowed?: {
+      entries: readonly { at: string[]; observes: string }[];
+      /**
+       * The paths, as text, that the caller fills itself whatever the
+       * value holds there: nothing is read or copied at one, and nothing
+       * is given.
+       */
+      filled?: ReadonlySet<string>;
+    },
     path: readonly string[] = [],
   ): unknown {
+    if (
+      narrowed?.filled !== undefined && path.length > 0 &&
+      narrowed.filled.has(JSON.stringify(path))
+    ) return undefined;
     if (value instanceof Assembled) {
       return this.pass(this.settled(value), narrowed, path);
     }

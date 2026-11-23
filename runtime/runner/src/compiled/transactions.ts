@@ -1768,20 +1768,22 @@ export class RuntimeTransactions implements TransactionHooks {
     // of each bucket's document too, which then stores the label of the
     // index and not the join of what the transaction read.
     if (document !== undefined && writes !== undefined) {
+      const given: readonly PlanWrite[] = writes;
+      const ofBuckets: PlanWrite[] = [];
       for (const record of buckets) {
         if (!isPrefix(path, record.path)) continue;
-        const given = writes.findLast(({ target }) =>
+        const ofIndex = given.findLast(({ target }) =>
           target.doc === doc && isPrefix(target.path, record.path)
         );
-        if (given === undefined) continue;
-        writes = [
-          ...writes,
-          ...[...record.keys].map((key) => ({
-            ...given,
+        if (ofIndex === undefined) continue;
+        for (const key of record.keys) {
+          ofBuckets.push({
+            ...ofIndex,
             target: { doc, path: [...record.path, key] },
-          })),
-        ];
+          });
+        }
       }
+      if (ofBuckets.length > 0) writes = [...given, ...ofBuckets];
     }
     if (this.#rowsApart !== undefined) {
       // No transaction of rows stays open behind the change: a later read
