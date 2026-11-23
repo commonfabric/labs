@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 import {
+  commandLine,
   EVERY_FLAG_TAKES_A_VALUE,
   parseReadSection,
   readSectionAsksVerbHelp,
@@ -422,6 +423,23 @@ describe("verb-section", () => {
           ),
         ).toMatchObject({ showHelp: true, showHelpJson: true });
       }
+    });
+  });
+
+  describe("commandLine()", () => {
+    it("leaves a token bare where a shell would keep it whole", () => {
+      expect(commandLine("piece call", ["--space", "home", "a=b,c:d/e"]))
+        .toBe("cf piece call --space home a=b,c:d/e");
+    });
+
+    it("quotes a token a shell would split, and one it would drop", () => {
+      expect(commandLine("piece call", ['{"note": "it\'s"}', ""])).toBe(
+        `cf piece call '{"note": "it'\\''s"}' ''`,
+      );
+    });
+
+    it("ends at the spelling when there are no tokens", () => {
+      expect(commandLine("piece ls", [])).toBe("cf piece ls");
     });
   });
 

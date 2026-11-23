@@ -13,9 +13,13 @@ independent lexical state for each record. JSON also covers the surveyed names
 that no `.json` suffix announces: web manifests, TLDraw documents, Deno lock
 files, editor workspace files, Swift package resolutions, and the `.cfg` files
 whose source opens a JSON object. Python has syntax highlighting and a structure
-tree of its classes and functions. Swift has syntax highlighting and a structure
-tree of its types, functions, initializers, and type-level properties, and its
-package manifests select it through their `.swift` extension. Kotlin, which
+tree of its classes and functions. Go has syntax highlighting and a structure
+tree of its package clause, types, functions, methods, package-level names, and
+the fields and methods each type declares; `go.mod` and `go.work`, and `go.sum`
+and `go.work.sum`, are two data syntaxes of their own. Swift has syntax
+highlighting and a structure tree of its types, functions, initializers, and
+type-level properties, and its package manifests select it through their
+`.swift` extension. Kotlin, which
 covers Gradle's Kotlin build scripts, has syntax highlighting and a structure
 tree of its types, objects, functions, constructors, and type-level properties.
 Rust has syntax highlighting and a structure tree of its items and members.
@@ -71,18 +75,20 @@ output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Python, Swift, Kotlin, Rust, TOML, HCL, shell, C, and C++ run on Tree-sitter
-through a shared, language-neutral adapter, which Go and HTML will use as well.
-Java properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org mode,
-Lean, and ignore files use focused scanners.
+Python, Go, Swift, Kotlin, Rust, TOML, HCL, shell, C, and C++ run on
+Tree-sitter through a shared, language-neutral adapter, which HTML will use as
+well. Java properties, INI, ProGuard rules, Git attributes, XML, makefiles, Org
+mode, Lean, ignore files, and Go's module and checksum files use focused
+scanners.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
-JSON, JSONC, JSON Lines, YAML, Python, Swift, Kotlin, Rust, TOML, HCL, Lean,
-shell, C, C++, CUDA, makefile, Java properties, INI, ProGuard, Git attributes,
-XML, Org mode, directive configuration, ignore-file, and diff support to honest
-handling of every textual syntax in the active `commonfabric` repositories.
+JSON, JSONC, JSON Lines, YAML, Python, Go, Go module file, Go checksum file,
+Swift, Kotlin, Rust, TOML, HCL, Lean, shell, C, C++, CUDA, makefile, Java
+properties, INI, ProGuard, Git attributes, XML, Org mode, directive
+configuration, ignore-file, and diff support to honest handling of every
+textual syntax in the active `commonfabric` repositories.
 
 The frozen evidence is in the
 [July 2026 coverage survey](../history/packages/cli/cf-view-language-coverage-2026-07.md).
@@ -188,16 +194,16 @@ and a warm dependency cache. Initialization starts at the first statement in a
 fresh Deno process and includes dynamic imports, runtime initialization, the
 selected grammar and query, and one empty highlight.
 
-| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Shipped C++ / C | Accepted maximum |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 75 ms |
-| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 50 ms |
-| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 50 ms |
-| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 25 ms |
-| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
-| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 650 shipped lines; 200 for a later grammar |
-| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Dimension | Shipped Python | Shipped Swift | Shipped Kotlin | Shipped TOML | Shipped shell | Shipped HCL | Shipped Rust | Shipped C++ / C | Shipped Go | Accepted maximum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 65.31 ms | 23.42 ms | 56.6 ms, estimated | 26.1 ms, estimated | 59.3 ms, estimated | 84.7 / 39.3 ms, estimated | 41.4 ms, estimated | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 44.66 ms | 19.79 ms | 32.7 ms, estimated | 47.0 ms, estimated | 38.4 ms, estimated | 35.3 / 34.2 ms, estimated | 30.4 ms, estimated | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 54.36 ms | 29.61 ms | 39.7 ms, estimated | 47.5 ms, estimated | 48.7 ms, estimated | 38.5 / 34.3 ms, estimated | 31.9 ms, estimated | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 32.76 ms | 11.96 ms | 23.9 ms, estimated | 21.4 ms, estimated | 23.4 to 29.5 ms, estimated | 22.5 / 19.8 ms, estimated | 21.5 ms, estimated | 25 ms |
+| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 4.09 MiB, with TOML | with Kotlin | 1.32 MiB | 0.19 MiB | 1.07 MiB | 4.03 MiB, both | 0.38 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 3.30 MiB | 0.72 MiB | 19.34 MiB | 1.91 MiB | 14.35 MiB | 48.98 MiB, both | 3.66 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Owned source | 584 lines | 200 lines | 200 lines | 75 lines | 91 lines | 146 lines | 200 lines | 532 lines, both | 192 lines | 650 shipped lines; 200 for a later grammar |
+| Parser-specific build and deployment steps | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 The Python column is the
 [September 2026 Python measurement](../history/packages/cli/cf-view-python-treesitter-2026-09.md),
@@ -273,6 +279,19 @@ and is over the maximum even for two later grammars, for the reason under "C and
 C++ over their owned-source maximum". C++ and C are over the unpacked-dependency
 maximum, for the reason under "C and C++ over their unpacked-dependency
 maximum".
+
+The Go column is the
+[November 2026 Go measurement](../history/packages/cli/cf-view-go-2026-11.md),
+made in six rounds, each between two TOML control runs, on a machine whose load
+average stood between 125 and 278. Wall-clock time there measured the wait for
+a processor, so the probe also recorded each sample's processor time, and the
+TOML controls' processor-time medians stayed between 1.65 and 2.58 times TOML's
+recorded medians. Its timings are estimates in the way the shell and HCL
+columns' are, from processor time: TOML's recorded 95th percentiles multiplied
+by the largest ratio of Go to TOML seen in any round. Like HCL, the Go grammar
+names the node types a structure entry can be found inside. Go is over the
+cumulative owned-source maximum, for the reason under "Go over the cumulative
+owned-source maximum".
 
 The binary build leaves out every directory of a grammar package except the
 one holding its WebAssembly grammar, such as generated C source and native
@@ -438,9 +457,33 @@ implementation for structure. The comparison therefore keeps the dependency. A p
 WebAssembly build, as Swift and Kotlin use, would bring shell inside the
 maximum.
 
-Python and shell take 31.29 MiB of the 40 MiB that the runtime and the four
-host grammars may occupy unpacked, and 675 of their 1,000 owned source lines.
-The official Go and HTML packages unpack to 3.66 and 0.70 MiB.
+Python, shell, and Go take 34.95 MiB of the 40 MiB that the runtime and the
+four host grammars may occupy unpacked. The official HTML package unpacks to
+0.70 MiB.
+
+#### Go over the cumulative owned-source maximum
+
+The common runtime and the Python, Go, Bash, and HTML host grammars may occupy
+1,000 owned source lines together. Without Go, they measure 1,189: the
+adapter's `treesitter/adapter.ts` 678 lines and the `classes.ts` split out of it
+115, `python/python.ts` 126, and `shell/shell.ts` 270. The adapter was 457
+lines when Python was measured; it has since gained the line-break, structure
+parent, and short-comment rules that Kotlin, HCL, and shell use, and the
+tracking of grammar loads that Org mode's source blocks use. Shell's module was
+91 lines when it was measured, and its short-comment rule brought it to 270.
+Go's `go/go.ts` adds 192 lines, inside the 200 a later host grammar may add,
+which brings the total to 1,381.
+
+Go is the first language measured since the total passed its maximum, so it
+starts the comparison under "Reconsidering the dependency". The marginal costs
+a switch would remove are Go's 192 lines of highlight query and structure rule
+and its 0.21 MiB WebAssembly grammar. No focused Go implementation exists. The
+focused Python scanner that the adapter replaced was 863 lines and colored
+without a structure tree, and a focused implementation needs a second
+implementation for structure, as the parser decision records. The comparison
+therefore keeps the dependency, and the maximums stay where they are. The
+cumulative overrun is in the shared adapter and in shell's module rather than
+in Go.
 
 #### Rust over its unpacked-dependency maximum
 
@@ -638,18 +681,58 @@ now carry more than one.
 
 ## Stage 3: Go and Go manifests
 
-- [ ] Highlight `.go`.
-- [ ] Add package, type, function, and method structure.
-- [ ] Recognize `go.mod` and `go.sum` as separate data syntaxes.
-- [ ] Add Common Cluster, Bay, Run Orchestrator, Raia, and gVisor fixtures.
+A November 13, 2026 read of the local checkouts of the organization's
+repositories, at the tip of each default branch and of gVisor's active
+`cfc_v2` branch, found 2,954 Go files in 7 repositories: gVisor (2,345), Common
+Cluster (304), Bay (143), Loom Scripts (112), Raia (43), Run Orchestrator (6),
+and Infra (1). The six months before the read hold 1,524 path-change events on
+them, most in Common Cluster (615), Loom Scripts (305), gVisor (295), and Bay
+(230). The same checkouts hold 9 `go.mod` and 8 `go.sum` files, with 25
+path-change events, and no `go.work` or `go.work.sum` file.
+
+- [x] Highlight `.go`.
+- [x] Add package, type, function, and method structure.
+- [x] Recognize `go.mod` and `go.sum` as separate data syntaxes.
+- [x] Add Common Cluster, Bay, Run Orchestrator, Raia, and gVisor fixtures.
+
+Go runs on the Tree-sitter adapter with the official
+[`tree-sitter/tree-sitter-go`](https://github.com/tree-sitter/tree-sitter-go)
+grammar, whose npm package ships its WebAssembly build. `.go` selects it.
+Structure lists the package clause, types, functions, methods, constants and
+variables declared at package level, and the fields and methods each type
+declares. A declaration that binds several names lists them all and declares
+the first that is not blank, and an embedded field is listed under its type. A
+method's label names its receiver's type, as in `func (*Item) Render`.
+Declarations inside a function body are not structure. A comment that Go's
+tools read as a directive, such as a `//go:build` constraint, is colored as a
+directive rather than a comment.
+
+A coverage check over the 2,954 files found every file reconstructed exactly,
+and fewer than one in a million characters other than white space without a
+token class. The grammar could not parse part of 2 files, 3 of their 1,125
+lines. Both declare a function of their own named `new` or `make`, which Go
+allows, and the grammar reads a call's first argument as the type that the
+built-in function of that name takes. Coloring continues inside those regions.
+
+`go.mod` and `go.work` select a Go module file language, and `go.sum` and
+`go.work.sum` a Go checksum file language. Both use focused scanners: the npm
+packages of the `go.mod` and `go.sum` Tree-sitter grammars ship no WebAssembly
+build and were last published in 2023, and both syntaxes are line-oriented. The
+module file scanner reads the tokens the Go command's `modfile` package reads,
+colors the directives that package knows as keywords, the declared module path
+as a declared name, and versions as numbers, and lists each directive with the
+lines of its block under it. The checksum scanner colors each line's module
+path, version, and hash, and lists each module once. Every one of the 17 files
+reconstructed exactly, with every character other than white space classed.
 
 Completion gate: Go source and both manifest formats select correctly in
-direct and diff views.
+direct and diff views. The gate passes: the shared fixture contract runs Go
+fixtures from gVisor, Common Cluster, Bay, Run Orchestrator, and Raia, and
+module and checksum fixtures from gVisor, directly and in diffs.
 
 ## Stage 4: shell
 
-Shell is implemented ahead of Stage 3, and Go remains the next stage. A
-September 29, 2026 read of the local checkouts of the organization's
+A September 29, 2026 read of the local checkouts of the organization's
 repositories found 391 files that select shell, in 20 repositories, and 1,839
 path-change events on them in the six months before the read. The July survey
 found Go in 2,568 files in 6 repositories, with 2,129 path-change events. Go
@@ -1066,7 +1149,7 @@ Swift runs on the Tree-sitter adapter with the
 grammar, which is not an official Tree-sitter grammar. Its own npm package
 ships no WebAssembly grammar, so the CLI depends on a package holding the
 upstream release's WebAssembly build, whose digest matches the release asset;
-`docs/development/DEPENDENCIES.md` gives the procedure for rolling it. A
+`runtime/cli/lib/view/DEPENDENCIES.md` gives the procedure for rolling it. A
 coverage check over 1,039 Swift files from those five repositories found every
 file reconstructed exactly and 0.071 percent of non-whitespace characters
 without a token class. The grammar could not parse part of 112 of those files,
@@ -1337,7 +1420,7 @@ none holds Java source or Groovy Gradle scripts.
 Kotlin runs on the Tree-sitter adapter with the
 [`tree-sitter-grammars/tree-sitter-kotlin`](https://github.com/tree-sitter-grammars/tree-sitter-kotlin)
 grammar, through a package holding only its WebAssembly build;
-`docs/development/DEPENDENCIES.md` gives the procedure for rolling it. The
+`runtime/cli/lib/view/DEPENDENCIES.md` gives the procedure for rolling it. The
 grammar ends a statement at a line break between a catch block and a `catch` or
 `finally` clause after it, and then misreads the clause or leaves the whole
 declaration holding it unparsed. The adapter hands the parser each such line

@@ -1139,8 +1139,13 @@ describe("diffcounts", () => {
             before: ["# Build output", "dist/"],
             after: ["# Build output", "# from the bundler", "dist/"],
           },
+          {
+            path: "main.go",
+            before: ["// a", "package main"],
+            after: ["// b", "// c", "package main"],
+          },
         ),
-      ).toEqual([true, true, true, true, true, true, true, true, true]);
+      ).toEqual([true, true, true, true, true, true, true, true, true, true]);
     });
 
     it("returns false for Rust doc comments, which are attributes, and true for a TypeScript doc comment", async () => {
@@ -1171,6 +1176,16 @@ describe("diffcounts", () => {
           path: "text.rs",
           before: ['const T: &str = r#"a " // b"#;'],
           after: ['const T: &str = r#"a " // c"#;'],
+        }),
+      ).toEqual([false]);
+    });
+
+    it("returns false for a change to a Go directive, which is not a comment", async () => {
+      expect(
+        await commentOnly({
+          path: "main.go",
+          before: ["//go:build linux", "", "package main"],
+          after: ["//go:build darwin", "", "package main"],
         }),
       ).toEqual([false]);
     });
@@ -1356,7 +1371,7 @@ describe("diffcounts", () => {
       expect(
         await commentOnly(
           { path: "README.md", before: ["<!-- a -->"], after: ["<!-- b -->"] },
-          { path: "main.go", before: ["// a"], after: ["// b"] },
+          { path: "notes.txt", before: ["// a"], after: ["// b"] },
         ),
       ).toEqual([false, false]);
     });

@@ -40,6 +40,7 @@ import {
   gitignoreLanguage,
 } from "./ignore/language.ts";
 import { pythonLanguage } from "./python/language.ts";
+import { goLanguage, goModLanguage, goSumLanguage } from "./go/language.ts";
 import { swiftLanguage } from "./swift/language.ts";
 import { kotlinLanguage } from "./kotlin/language.ts";
 import { rustLanguage } from "./rust/language.ts";
@@ -511,6 +512,9 @@ function allLanguages(): readonly Language[] {
     dockerignoreLanguage,
     bazelignoreLanguage,
     pythonLanguage,
+    goLanguage,
+    goModLanguage,
+    goSumLanguage,
     swiftLanguage,
     kotlinLanguage,
     rustLanguage,

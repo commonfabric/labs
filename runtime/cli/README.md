@@ -663,6 +663,14 @@ expressions follow Go's rules, where only `^` negates one. `.bazelignore` lists
 directories for Bazel to leave out, one literal path to a line, so `*` and `!`
 have no meaning there. In all of them, a line that starts with `#` is a comment.
 
+Go source named `.go` has syntax highlighting as well, and a structure tree of
+the package clause, types, functions, methods, package-level constants and
+variables, and the fields and methods each type declares. Go module and
+workspace files, `go.mod` and `go.work`, have a language of their own, whose
+structure tree lists each directive and the lines of its block. So do Go
+checksum files, `go.sum` and `go.work.sum`, whose structure tree lists each
+module once.
+
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each
