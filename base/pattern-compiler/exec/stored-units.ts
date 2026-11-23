@@ -103,7 +103,10 @@ export type StoredUnits = {
  * - nothing is declared inside its element body: no handler binding, no
  *   state cell, no instance, no operation and no other collection, and no
  *   cone of the body has side-writes. A row then holds no stream and names
- *   no document that exists only once the body ran.
+ *   no document that exists only once the body ran;
+ * - no label template of the plan folds over it: the label of a fold is
+ *   formed from the labels of the members, which the executor holds for
+ *   the members it evaluated.
  */
 export const storedRowCollections = (
   artifact: Artifact,
@@ -129,8 +132,23 @@ export const storedRowCollections = (
     if (cone.sideWrites === undefined) continue;
     for (const collection of inside(cone.within)) declaredIn.add(collection);
   }
+  const folded = new Set<number>();
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const member of value) walk(member);
+    } else if (typeof value === "object" && value !== null) {
+      const node = value as Record<string, unknown>;
+      if (node.op === "fold" && typeof node.collection === "number") {
+        folded.add(node.collection);
+      }
+      for (const member of Object.values(node)) walk(member);
+    }
+  };
+  walk(plan);
   plan.collections.forEach((collection, index) => {
-    if (!rows.has(index) || declaredIn.has(index)) return;
+    if (!rows.has(index) || declaredIn.has(index) || folded.has(index)) {
+      return;
+    }
     if (collection.construct !== "map" || collection.within.length > 0) return;
     if (collection.source.slot === undefined) return;
     if (collection.source.entries === true) return;

@@ -5919,7 +5919,9 @@ export class Instance {
         const units = this.#units.get(unit.name) ?? new Set();
         units.add(unit);
         this.#units.set(unit.name, units);
-        return this.#rowsOf(unit);
+        const rows = this.#rowsOf(unit);
+        if (owner === undefined) this.#unitPlaced(unit);
+        return rows;
       },
       [],
       (array) => bucketPlaces.get(array),
@@ -5928,7 +5930,7 @@ export class Instance {
 
   /** The rows of a unit in stored form, from its assembly as it is now. */
   #rowsOf(unit: Unit): unknown[] {
-    const entry = this.assembled(unit.collection, "path" in unit.place)(
+    const entry = this.assembled(unit.collection, this.#leftStored(unit))(
       this.freshContext(unit.context),
     );
     const values = Array.isArray(entry.value) ? entry.value : [];
@@ -6528,7 +6530,7 @@ export class Instance {
    * array.
    */
   #storeUnit(unit: Unit): void {
-    const entry = this.assembled(unit.collection, "path" in unit.place)(
+    const entry = this.assembled(unit.collection, this.#leftStored(unit))(
       this.freshContext(unit.context),
     );
     if (entry === unit.seen) return;
@@ -6767,10 +6769,45 @@ export class Instance {
     string,
     {
       collection: number;
+      /** The path of the result at which the rows are left as stored. */
+      path: readonly string[];
       on: string;
       targets: Map<string, { path: readonly string[]; key: string }[]>;
     }
   >();
+
+  /**
+   * Whether the result document was created with what the storage holds
+   * (`#heldResult`), and not empty.
+   */
+  #resultHeld = false;
+
+  /**
+   * Whether a unit stores the rows of its collection where the executor
+   * left them as stored: at the path of the result that keeps the
+   * collection. A unit that stands anywhere else holds a row of its own
+   * for each element.
+   */
+  #leftStored(unit: Unit): boolean {
+    const seed = this.#seeds.get(unit.name);
+    return seed !== undefined && "path" in unit.place &&
+      unit.place.path.length === seed.path.length &&
+      unit.place.path.every((segment, index) => segment === seed.path[index]);
+  }
+
+  /**
+   * A unit was made at a place of the result document itself. Where the
+   * document was created with what the storage holds and the rows of the
+   * unit are not left as stored, the place is emptied, with nothing told of
+   * it as a change: what the storage holds there is the links of an array
+   * of row documents, which the comparison of the place with its rows
+   * would take for rows in place. The array is then stored whole.
+   */
+  #unitPlaced(unit: Unit): void {
+    if (!this.#resultHeld || !("path" in unit.place)) return;
+    if (this.#leftStored(unit)) return;
+    this.store.adopt(this.id, unit.place.path, undefined);
+  }
 
   /** The documents whose stored readers `#hydrate` has registered. */
   readonly #hydrated = new Set<string>();
@@ -6821,6 +6858,7 @@ export class Instance {
       ) return;
       this.#storedRows.set(collection, { path: paths[index], entities });
     });
+    this.#resultHeld = true;
     return held.value;
   }
 
@@ -6961,7 +6999,7 @@ export class Instance {
       rows.map(({ doc }) => ({ $link: { doc, path: [] } })),
     );
     units.held(held.path, keys);
-    this.#seeds.set(name, { collection, on, targets });
+    this.#seeds.set(name, { collection, path: held.path, on, targets });
     return value;
   }
 
