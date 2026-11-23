@@ -76,7 +76,6 @@ import {
   OFFER_ID_MAX_LENGTH,
   OFFER_TITLE_MAX_LENGTH,
   type OfferEvent,
-  type PrivateInboxOutput,
 } from "../private-inbox/private-inbox.tsx";
 import type { ShareInboxPiece } from "../profile-home/profile-home.tsx";
 import {
@@ -396,7 +395,7 @@ export interface ManagerActState {
   /** A rendered control's room, as the entry it was rendered from holds it. */
   // `Cell<…>` is written out rather than reached through an alias: a schema
   // marks a reference position only where the wrapper is written in the type.
-  room?: Cell<unknown>;
+  room?: Cell<ChatRoomLink>;
 
   /** The container whose explicit `chatRoom` declaration names the room. */
   container?: Cell<ChatContainer>;
@@ -534,18 +533,6 @@ const listRoom = (
     });
   }
 };
-
-/**
- * A share inbox a profile's pointer reaches, as the cell of its result, whose
- * `receive` takes an offer. The pointer is typed as a link naming the piece
- * alone, and a link's target is reached as a cell.
- */
-function inboxOf(
-  pointer: Cell<ShareInboxPiece>,
-): Cell<Pick<PrivateInboxOutput, "receive">>;
-function inboxOf(pointer: Cell<ShareInboxPiece>): unknown {
-  return pointer;
-}
 
 /**
  * The notice telling `recipient` of `room`, which the request `requestId`
@@ -845,7 +832,7 @@ const deliverOffers = handler<
     const offer = event?.offer;
     if (offer === undefined) return;
     for (const { pointer } of distinctInboxes(event.profiles ?? [])) {
-      inboxOf(pointer.resolveAsCell()).key("receive").send(offer);
+      pointer.resolveAsCell().key("receive").send(offer);
     }
   },
 );
@@ -878,14 +865,6 @@ export interface JoinRoomsEvent {
   profile: Cell<ChatProfile>;
 }
 
-/** The room's stream that adds a profile to its participants. */
-function joinStreamOf(
-  room: Cell<ChatRoomLink>,
-): Cell<{ addParticipant: Stream<{ profile: Cell<ChatProfile> }> }>;
-function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
-  return room;
-}
-
 /**
  * Adds the event's profile to the room's participants, through the room's own
  * `addParticipant`, the one writer its roster admits, so that whoever creates
@@ -903,7 +882,7 @@ const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
     // the room without a step of their own.
     const profile = event?.profile?.resolveAsCell();
     if (profile === undefined || profile.get() === undefined) return;
-    joinStreamOf(event.room).key("addParticipant").send({ profile });
+    event.room.key("addParticipant").send({ profile });
   },
 );
 
@@ -971,25 +950,6 @@ const listRooms = handler<
 });
 
 /**
- * A room's result, as the link an index entry holds. The room is created
- * where the link can't be typed as a cell, and stored as a link to it.
- */
-function roomLinkOf(room: unknown): Cell<ChatRoomLink>;
-function roomLinkOf(room: unknown): unknown {
-  return room;
-}
-
-/**
- * `handle`, a room as a manager record holds it, as the link an event naming
- * a room carries. The event's own schema decides what its handler reads of
- * the room, so this re-types the handle and reads nothing.
- */
-function linkedRoom(handle: Cell<unknown>): Cell<ChatRoomLink>;
-function linkedRoom(handle: unknown): unknown {
-  return handle;
-}
-
-/**
  * Whether `a` and `b` link the same room, by the links themselves: neither is
  * resolved, so no room is read. A membership holds the room's link as its
  * handler resolved it, and so does every record and event it is compared with.
@@ -1002,8 +962,7 @@ const sameRoom = (a: object | undefined, b: object | undefined): boolean =>
  * cell: what `principalOf()` reads the creator from, and what reads without
  * the room running. It holds nothing for a space's own chat.
  */
-function aboutRecordOf(room: Cell<ChatRoomLink>): Cell<AboutRecord>;
-function aboutRecordOf(room: Cell<ChatRoomLink>): unknown {
+function aboutRecordOf(room: Cell<ChatRoomLink>): Cell<AboutRecord> {
   return room.key("about").key("record");
 }
 
@@ -1070,19 +1029,17 @@ const createRoom = (
     ...members.map((member) => [member, "OWNER"]),
     ...(joinableByLink ? [["*", "WRITE"]] : []),
   ]) as InSpaceGrants;
-  const room = roomLinkOf(
-    FabriChatRoom.inSpace(undefined, {
-      grants,
-      root: true,
-      spaceKind: CHAT_ROOM_OFFER_KIND,
-    })({
-      about: {
-        kind,
-        createdAt,
-        ...(title === undefined ? {} : { title }),
-      },
-    }),
-  );
+  const room: Cell<ChatRoomLink> = FabriChatRoom.inSpace(undefined, {
+    grants,
+    root: true,
+    spaceKind: CHAT_ROOM_OFFER_KIND,
+  })({
+    about: {
+      kind,
+      createdAt,
+      ...(title === undefined ? {} : { title }),
+    },
+  });
   // A member named by principal alone has no profile to offer the room
   // through, so `offerRooms` queues a notice for them.
   const offered = offerTo.map(({ recipient }) => recipient);
@@ -1138,7 +1095,7 @@ const createRoom = (
 const reofferDirect = (
   state: ManagerActState,
   requestId: string,
-  room: Cell<unknown>,
+  room: Cell<ChatRoomLink>,
   counterpart: string,
   profile: Cell<ChatManagerProfile> | undefined,
 ): void => {
@@ -1149,7 +1106,7 @@ const reofferDirect = (
   if (profile === undefined) return;
   if (!isWellFormedDID(spaceOf(room))) return;
   state.offerRooms.send({
-    room: linkedRoom(room),
+    room: room,
     id: requestId,
     title: "",
     members: [{ recipient: counterpart, profiles: [profile] }],
@@ -1400,7 +1357,7 @@ const performManagerAct = (
   }
 
   const named = event?.room ??
-    (state.room === undefined ? undefined : linkedRoom(state.room));
+    (state.room === undefined ? undefined : state.room);
   const room = named?.resolveAsCell();
   if (room === undefined) {
     recordOutcome(state, requestId, {
@@ -2058,7 +2015,7 @@ interface ShownEntry {
   /** The room, as its entry holds it. */
   // `Cell<…>` is written out rather than reached through an alias: a schema
   // marks a reference position only where the wrapper is written in the type.
-  room: Cell<unknown>;
+  room: Cell<ChatRoomLink>;
 
   /** The revision of the room's entry, which forgetting it names. */
   revision?: string;
@@ -2139,7 +2096,7 @@ const forgottenCounterpart = (
  */
 const roomDeleted = (
   entries: Record<string, RoomCatalogEntry>,
-  room: Cell<unknown> | Cell<ChatRoomLink>,
+  room: Cell<ChatRoomLink> | Cell<ChatRoomLink>,
 ): boolean => entries[spaceOfLink(room) ?? ""]?.state === "deleted";
 
 /**
@@ -2232,7 +2189,7 @@ interface RoomRosterInput {
   /** The room, as its entry holds it. */
   // `Cell<…>` is written out rather than reached through an alias: a schema
   // marks a reference position only where the wrapper is written in the type.
-  room: Cell<unknown>;
+  room: Cell<ChatRoomLink>;
 }
 
 /** One room's roster, once it is read. */
@@ -2249,7 +2206,7 @@ interface RoomRosterOutput {
 const RoomRoster = pattern<RoomRosterInput, RoomRosterOutput>(({ room }) => {
   // Re-typed here rather than in a list stored for it: a stored list of
   // links typed as the room is walked into every room by whoever syncs it.
-  const linked = linkedRoom(room);
+  const linked = room;
   return {
     roster: computed((): ManagerProfileCell[] | undefined => {
       const roster = linked.key("roster").get();
@@ -2295,7 +2252,7 @@ interface NoticeToldInput {
   /** The room the recipient was admitted to, as the notice holds it. */
   // `Cell<…>` is written out rather than reached through an alias: a schema
   // marks a reference position only where the wrapper is written in the type.
-  room: Cell<unknown>;
+  room: Cell<ChatRoomLink>;
 
   /** The DID of the person admitted. */
   recipient: string;
@@ -2323,7 +2280,7 @@ interface NoticeToldOutput {
  */
 const NoticeTold = pattern<NoticeToldInput, NoticeToldOutput>(
   ({ id, room, recipient }) => {
-    const linked = linkedRoom(room);
+    const linked = room;
     return {
       id,
       told: computed((): boolean =>

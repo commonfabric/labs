@@ -19,6 +19,7 @@ import {
   FabricDurationNsec,
   FabricEpochNsec,
   isWellFormedDID,
+  type Stream,
 } from "commonfabric";
 import type { FileEntry } from "../fabrifile/schemas.tsx";
 import type { FileStoreRecord } from "../fabrifile/store.tsx";
@@ -480,6 +481,9 @@ export interface ChatRoomLink {
    * manager reads them: each a link, whose profile is read only through it.
    */
   roster?: ManagerProfileCell[];
+
+  /** The room's stream that adds a profile to its participants. */
+  addParticipant?: Stream<{ profile: Cell<ChatProfile> }>;
 }
 
 /**
@@ -512,7 +516,7 @@ export interface ChatIndexEntry {
    */
   // `Cell<…>` is written out rather than reached through an alias: a schema
   // marks a reference position only where the wrapper is written in the type.
-  room: Cell<unknown>;
+  room: Cell<ChatRoomLink>;
 
   /** The room's kind, as its `about.kind` said when the entry was recorded. */
   kind: ChatRoomKind;
@@ -718,7 +722,7 @@ export interface ChatManagerNotice {
    */
   // `Cell<…>` is written out rather than reached through an alias: a schema
   // marks a reference position only where the wrapper is written in the type.
-  room: Cell<unknown>;
+  room: Cell<ChatRoomLink>;
 
   /** The DID of the person admitted. */
   recipient: string;

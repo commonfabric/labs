@@ -478,15 +478,6 @@ const PrivateInbox = pattern<PrivateInboxInput, PrivateInboxOutput>((
 }));
 
 /**
- * An inbox's result, as the link Home and a profile hold. The inbox is
- * created where the link can't be typed as a cell, and stored as a link to it.
- */
-function inboxLinkOf(inbox: unknown): Cell<PrivateInboxPiece>;
-function inboxLinkOf(inbox: unknown): unknown {
-  return inbox;
-}
-
-/**
  * Creates Home's own private inbox, in the space named
  * {@link PRIVATE_INBOX_SPACE_NAME} in Home's space, and returns the link Home
  * holds it by. `createOwnIfNone()` is its one caller. The space grants every
@@ -494,11 +485,9 @@ function inboxLinkOf(inbox: unknown): unknown {
  * runtime makes it or the space's server does.
  */
 function createPrivateInbox(): Cell<PrivateInboxPiece> {
-  return inboxLinkOf(
-    PrivateInbox.inSpace(PRIVATE_INBOX_SPACE_NAME, {
-      grants: { "*": "WRITE" },
-    })({ offers: [] }),
-  );
+  return PrivateInbox.inSpace(PRIVATE_INBOX_SPACE_NAME, {
+    grants: { "*": "WRITE" },
+  })({ offers: [] });
 }
 
 /**

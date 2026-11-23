@@ -184,6 +184,8 @@ export type VerifiedExternalIdentityCell = Cell<VerifiedExternalIdentity>;
 /** What the profile knows of its share inbox piece: its name, at most. */
 export type ShareInboxPiece = {
   [NAME]?: string;
+  /** The stream a sender's offer goes to, where the piece has one. */
+  receive?: Stream<unknown>;
 };
 
 /**
