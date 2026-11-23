@@ -16369,3 +16369,491 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    session, as before. Nothing of the labels changed, and the question is
    recorded only because the set of documents the session is subscribed to is
    now every document the result reaches.
+
+## Milestone 6, fourth round: why an edit followed the board under the serving loop, and what a takeover still costs
+
+The fourth round of milestone 6 of
+`docs/plans/compiled-pattern-language-integration.md` (2026-11-23), on the
+branch `claude/compiled-pattern-serving-m6` from the commit `233996ca69`. The
+notes are numbered from 838. The provisional decisions are numbered from P210.
+Whenever a note says `map`, it names the case.
+
+838. **What the round did, by step.**
+     - _Why an edit follows the board under the serving loop (step 1), done for
+       the edit of a title, measured and left for the edits that write a long
+       document._ The cause was the posture of the memory server of the harness
+       and not the piece (notes 839 and 840). The edits that still follow the
+       board are in note 841.
+     - _The first event after a takeover (step 2), stubbed._ Nothing of the
+       executor changed. Note 842 says what the first event costs now and what a
+       reader observes, and note 843 has the plan, which this round makes more
+       specific.
+     - _The load under the serving loop in bounded transactions (step 3),
+       stubbed._ Note 844.
+     - _Labels under the serving loop (step 4), done as a measurement._ The
+       serving arms stored labels all along. What they lacked was a label on the
+       inputs (note 845).
+     - _The tables (step 5)._ Notes 846 to 848.
+     - _With the experimental option off._ The one change of the runtime is in
+       `runtime/runner/src/compiled/serving-memory-server.deno.ts`, a helper for
+       tests that nothing loads without the option. The other changes are in
+       `base/pattern-compiler/compare/topics/`.
+839. **Step 1: an edit of a title followed the board because the serving runtime
+     of the harness read its space over a session.** The profile of the edit of
+     the title of the last of 2,000 topics on `filing-order`
+     (`SCALE_PROFILE_STEP`, one step of 95 ms): 69 ms are the memory server
+     evaluating the queries of a session again (`refreshTrackedGraph`,
+     `evaluateTrackedDocument` of `memory/v2/query.ts`, and the traversal below
+     them in `runner/src/traverse.ts`), 3 ms the piece
+     (`RuntimeTransactions.within`), 2 ms the commit of the wave.
+     - _Whose query._ The serving runtime's. `start` of `compiled/serving.ts`
+       brings the argument document with a sync under a schema that declares no
+       structure, which follows every link and stays a query of the session of
+       the serving runtime. Each topic of the generated board links to the two
+       before it, so from the last topic the query reaches every topic, and the
+       memory server walks that again when the topic changes. The first edit of
+       the first, the middle and the last topic took 35, 66 and 95 ms at 2,000
+       topics in that run.
+     - _A second edit of the same topic did not follow the board._ Twenty edits
+       of the title of the middle topic, one after the other
+       (`SCALE_PROFILE_EDITS=title`), took 19 ms at 1,000 topics and 22 ms at
+       2,000, each the median. The server keeps what a walk found, and a second
+       change of the same document walks less. The tables of the rounds before
+       timed the first edit of each topic.
+     - _Why the harness had it and a toolshed does not._ A serving runtime reads
+       its home space straight from the store where the policy of its loop says
+       so (`SpaceServerPolicy.storeReadThrough`): a document its replica does
+       not hold is read from the store when it is first read, a sync is answered
+       from the store with no query of a session, and the loop brings the
+       documents the replica holds up to date from the commits the store takes.
+       The bootstrap of a toolshed turns that on unless
+       `SERVER_EXECUTION_STORE_READ_THROUGH` is `false`.
+       `listenCompiledServingMemoryServer` passed no policy, so the serving
+       runtimes of every test and of every measurement of milestone 6 read over
+       a session, which is not what a toolshed runs.
+840. **Step 1, built: the compiled serving memory server reads from the store
+     (provisional decision P210).** `listenCompiledServingMemoryServer` gives
+     its serving loop `storeReadThrough: true` where the caller's policy leaves
+     it unset.
+     - _What it removes._ The serving runtime holds no query over the inputs of
+       a piece and none over what the piece wrote. An edit of a title takes 16
+       to 20 ms at 2,000 topics at any place of the board.
+     - _What it makes of the plan of note 836._ That plan was to bring the
+       inputs under the argument schema of the plan and to have
+       `RuntimeTransactions.load` wait for a document the replica lacks. With
+       the read-through neither is needed: `load` reads through a transaction of
+       the runtime, the replica reads a document it does not hold from the store
+       in that read, and the store says whether the document exists. A member
+       that another writer adds to an input is read the same way when the
+       executor first follows the reference. Nothing was built for a serving
+       runtime that reads over a session: there the query that follows every
+       link is still how the documents of the inputs arrive, and `load` still
+       takes a document the replica does not hold as empty.
+     - _Test._ `runtime/runner/test/compiled/compiled-serving.test.ts`, "has the
+       serving runtime read the documents of the piece from the store, where no
+       policy says otherwise": the loop counts reads from the store
+       (`ServingLoopStats.storeReads`). It read 0 before the change.
+     - _The reader of the harness._ The second client of
+       `compare/topics/serving.ts` now holds, beside the sink of each step, a
+       sink on the caption of each of the first 20 cards, which is what a reader
+       that shows the first screen of the board holds: the result document and
+       20 documents of cards. It holds no topic. The sinks of the steps were on
+       one path each before, so the clients held no query that follows the links
+       of the board in the rounds before either.
+     - _A defect of the harness, closed._ `emit` prints no artifact for a module
+       the check refuses unless `--unchecked` asks for it (since the merge of
+       the sandbox round). The serving arm compiled with `emit`, so the serving
+       runtime started no board and the run waited without end for the value of
+       the load, with nothing printed. The arm passes `--unchecked`, and a
+       failure of the serving runtime now rejects the step that waits. The run
+       of note 833 that did not start may have been of this kind, a refusal with
+       nothing that ends the wait. That was not shown.
+841. **Step 1, measured and left: an edit that changes a long document follows
+     the board on every holder.** After note 840 an edit of the `shortName`
+     takes 39, 118 and 198 ms at 100, 1,000 and 2,000 topics on `filing-order`,
+     the first edit of the mentions 38, 109 and 198 ms, and a create 79, 185 and
+     348 ms, with 3, 3 and 48 ms in the piece at 2,000.
+     - _Which document._ With `SCALE_COMMITS` the harness lists the documents a
+       change of which the reader was delivered in a step. Each of those three
+       steps delivers the result document, 1.1 MB as JSON text at 1,000 topics
+       and 2.2 MB at 2,000. An edit of a title delivers one row document of 300
+       bytes. The result document holds, in place, six members that have one
+       link for each topic: the children of the board in `$UI` (187 bytes for a
+       topic), the arrays `mentionable`, `crossrefs` and `namesTable` (163
+       each), and the records of the buckets of `crossrefIndex` (171) and of
+       `mentionIndex` (324). An edit of the `shortName` removes one member of
+       the record of the buckets of `crossrefIndex` and adds one, which is a
+       change of the result document.
+     - _Where the time goes._ Twenty edits of the `shortName` of the middle
+       topic at 2,000 topics, 165 ms each (`SCALE_PROFILE_EDITS=shortName`, 4.0
+       s sampled, of which 0.4 s is the profiler's own): the two clients parse
+       and freeze the document they are delivered, 1.1 s
+       (`SpaceSession.#onMessage`, `parseWireText`, `deepFreeze`); the server
+       encodes it, 0.43 s (`encodePlainObject`), and compresses it for the
+       websocket, 0.39 s; the comparison of the document before and after, 0.24
+       s; the table of the link schemas of the document, 0.28 s
+       (`mapRecordChildren`, `mapLinkSchemas` of
+       `memory/v2/schema-table-links.ts`); the piece 0.06 s; the commit of the
+       wave 0.11 s. The queries of the sessions are 0.15 s.
+     - _Edits of the mentions that change no bucket do not follow the board:_
+       twenty of them at 1,000 and at 2,000 topics take 41 and 43 ms each. The
+       first edit of the mentions of the tables empties one bucket and so
+       changes the record of the buckets.
+     - _Why it is left._ A holder is delivered a changed document whole, and the
+       server walks it whole. That is the memory server's and the protocol's
+       cost for a change of one link in a long document, which another branch
+       works on. A reader of the board holds the result document, since `$UI` is
+       a member of it, so a reader that shows the first screen pays it as the
+       reader of the harness does.
+     - _What the compiled path could do about it, not built:_ keep each array of
+       row links and each record of bucket links of the result in a document of
+       its own, with a link at its member of the result, as the rows and the
+       buckets themselves are kept. A reader of the first screen then holds the
+       result document and the document of the children of the board and is
+       delivered neither the record of the buckets of an index nor the arrays it
+       does not read. The write of a changed record would still follow the
+       board, at a sixth of the bytes on this board. It changes the places of
+       `RuntimeTransactions` (`#rowArraysOf`, `#bucketRecordsOf`, `#placeOf`)
+       and the targets of the write records, so it was not started beside the
+       branch that changes the store.
+842. **Step 2, not built: the first event after a takeover is still the whole
+     derivation. What it costs now, and what a reader observes.**
+     - _What it costs._ The first edit after a takeover takes 545, 4,451 and
+       8,543 ms at 100, 1,000 and 2,000 topics on `filing-order` (note 846),
+       from 748, 5,485 and 12,258, and 24,032 evaluations at 2,000. Today's
+       board takes 132, 1,066 and 2,296 ms. In the profile of that step at 1,000
+       topics (4.6 s sampled): 2.4 s are the derivation (`startCompiledPiece`,
+       of which `Instance.#ensure` with the value code 1.0 s, the adapter's
+       `change` with the write records 0.6 s, and the comparison of each value
+       with its stored text, `stored` and `canonical`, 0.7 s), 0.4 s the read of
+       every document the result reaches (`bringReached`, which the store
+       answers), 0.5 s the commit of the wave and 0.35 s its preparation. The
+       derivation ran once: the second derivation of note 830 was not seen.
+     - _What a reader observes._ After the takeover a reader reads the stored
+       result, which the basis found current, in 37, 140 and 229 ms. When an
+       input changes or an event arrives, the serving loop wakes the piece: its
+       thread runs the whole derivation in one cycle, and until that cycle's
+       wave commits the reader sees the result of before the change. Every other
+       piece that the same thread serves waits for that cycle. A reader sees no
+       partial result: the wake writes the paths that differ in one transaction
+       of one wave.
+843. **Step 2, the plan, made specific by what the executor holds.** The plan of
+     notes 817 and 831 stands. This round read the memo of the executor for what
+     a basis per unit has to hold, and adds:
+     1. _The dependencies of an entry are data, by name._ `Entry.reads` is a
+        list of positions, each a document with a path, and `Entry.dependencies`
+        names the entries it used (`Dependency.on`). `Instance.#register` forms
+        the index from them: `#watch` for each position and `uses` for each
+        entry named. So the skeleton of the memo can be stored as it is: for an
+        entry, by its name, the positions it read and the names it used. What
+        cannot be stored is the value as the value code returned it, the
+        closures of `Dependency.stamp` and of `Entry.writers`, and the tables of
+        an assembly (`Entry.members`, `Entry.rows`).
+     2. _The basis has to be by position and kept in reverse._ A basis that
+        names a document and its sequence number makes every unit stale that
+        read any path of the document: the index over the mentions and a sort by
+        `lastActivityAt` read one path of every topic, so an edit of a title
+        would make them stale and their evaluation reads every row. And a basis
+        kept with each unit has to be read for every unit before the stale ones
+        are known, which follows the board. So: for each source document, a
+        document named from it that lists the entries that read it, each with
+        the paths it read (the stored form of `#watch`), and with each stored
+        unit the names of the entries that used it (the stored form of `uses`).
+        A wake that a change of a source caused then reads the list of that one
+        source, marks the entries whose paths the change touches, and follows
+        the users upward, which reads a number of documents that follows what
+        the change reaches.
+     3. _When the lists are written._ An evaluation whose positions and whose
+        used entries are those of the evaluation before writes nothing. The load
+        writes one list for each source document: at 2,000 topics that is 2,000
+        more documents, or fewer where the lists are spread over parts as the
+        numbers of the basis are (P120). A piece that was found stale at a
+        resume, because a source changed while no loop served it, knows the
+        documents that changed and not the paths, and marks every entry the
+        lists of those documents name.
+     4. _What the executor needs, in the order it can be built._ (a) An entry
+        that stands for a stored unit: `Instance.#ensure` returns, for a name
+        the memo does not hold and the lists did not mark, an entry whose value
+        is the stored one, decoded as `RuntimeTransactions.load` decodes a held
+        document, with no reads and no dependencies of its own, and registers
+        nothing. That is sound only for a value that the stored form gives back:
+        a record or a view node of plain values and references. A value that
+        holds a handle, a stream or an index is evaluated. (b) The table of a
+        collection from the stored array and the keys of its rows
+        (`Instance.#stored` does this for an input array), with no body run, and
+        an assembly whose entry holds the keys and leaves the rows it did not
+        evaluate as stored (`Instance.#reassemble` writes each row it holds
+        today). (c) The marks from the lists: a marked name is evaluated when
+        the result demands it, and the entries that used it are marked by the
+        stored users where its value changed. (d) A fold, a sort and an index
+        are entries over every row. Each is one unit whose stored value is the
+        bucket or the array, and it is evaluated only where a path it read
+        changed, which then reads every row it reads. An edit of a title marks
+        none of them on Topics.
+     5. _The write records._ A unit that is not evaluated gives no record, and
+        none is needed while nothing is written for it. The groups a fold label
+        is formed from (`Instance.#regroup`) need the labels of the members,
+        which the storage holds (item 4 of the plan of note 817).
+     6. _The instances a handler made_ are started at a wake, each a root of
+        such units (note 829). They are started the same way: no derivation
+        until a list marks one of their entries or an event names one of their
+        streams.
+     - _Why it was not built in this round._ Items (a) to (d) change
+       `Instance.#ensure`, `#table`, `#reassemble`, the assembly of an index and
+       the adapter's write path, in `exec/executor.ts` and `exec/store.ts`,
+       which two other branches change in this round and where this round was to
+       stay small and local. The reverse lists alone, with nothing that reads
+       them, would add writes to every load and nothing else.
+     - _What would shorten the wake before that, not built:_ under the store
+       read-through the read of every document the result reaches before the
+       derivation (`bringReached`, 0.4 s of 4.6 s at 1,000 topics) is not
+       needed, since the replica reads from the store what the derivation reads.
+       The storage manager says nowhere that a read-through is installed, so the
+       resume cannot tell.
+844. **Step 3, not built: the load under the serving loop in bounded
+     transactions. The ruling it needs.** The load is one transaction of one
+     wave, 3.2 and 6.0 s at 1,000 and 2,000 topics, in which a reader sees
+     nothing of the board. The two ways of note 820 stand, and neither was
+     taken:
+     - _A transaction of the load that commits ahead of the wave._
+       `SpaceServer.#stampRun` refuses `ServerRunInfo.directCommit` for a run
+       that is no `bookkeeping` run, and a bookkeeping run carries no acting
+       principal and no record of a plan. _The ruling needed:_ whether a
+       derivation may commit the rows of a first load directly, each transaction
+       with the write records of its rows, under the basis `#commitDirect`
+       takes, and what a reader may conclude from a board that holds some of its
+       rows. Without it the rows of a load would be stored by a run of the kind
+       the loop uses for its own bookkeeping.
+     - _A first derivation that stops and goes on in the next cycle._ It is the
+       executor change of note 843, item 4 (b): an assembly that holds the rows
+       it evaluated and leaves the others. Not built, for the same reason.
+845. **Step 4: labels under the serving loop. The serving arms stored labels all
+     along, and their inputs had none.**
+     - _What was there._ `servingRuntimeFactory` passes no dial of Contextual
+       Flow Control, and the default of a runtime stores flow labels
+       (`RUNTIME_CFC_DIAL_DEFAULTS` of `cfc/posture-report.ts`: `cfcFlowLabels`
+       at `persist`, enforcement at `enforce-strict`). The harness now reads the
+       stored labels after the load (`readStoredCfcMetadata` on the serving
+       runtime): with the inputs under no label, as in the rounds before, the
+       result document of the compiled board holds 53 label entries and the
+       first row of `mentionable` 10, and a topic none. So the sentence of note
+       826, "no label is stored", was wrong: labels of the templates were
+       stored, over inputs that had no label. No option was added to the
+       factory.
+     - _What is built._ With `SCALE_SERVING_LABELS` the serving arms write each
+       topic and each input under the schema the arm `runner` writes it under
+       (`topicSchemaOf`, `inputClause`), in the space of the identity the arm
+       `runner` uses, whose audience the clauses name. The dials are the
+       defaults on the serving runtime and on both clients. Each step reports
+       the preparations of the process in it, the clients' and the serving
+       runtime's together, with their time
+       (`extended-storage-transaction/prepareCfc`).
+     - _The schema of a topic matters to the time._ A topic written under a
+       schema that declares a label and no structure has the memory server
+       follow every link of the topic when it is written: the first labeled run
+       had an edit of the title of the middle topic at 22, 43 and 75 ms and of
+       the last at 21, 56 and 121 ms. With the mentions declared as references
+       (`SCALE_TOPIC_SCHEMA=mentions-as-cells`, as note 667 ran the arm
+       `runner`) they are 20, 22 and 24 ms and 16, 17 and 23 ms. The table below
+       is of that second run.
+     - _The compiled board, labeled, one run_ (`filing-order`; the reader's time
+       in milliseconds at 100, 1,000 and 2,000 topics, and the time of the
+       preparations in the step): load 494, 3,268, 6,729 with 85, 726 and 1,483
+       in five preparations; edit of a title, middle topic 20, 22, 24 with 3 in
+       eight preparations; first edit of the mentions 41, 97, 190 with 9 to 10;
+       edit of the `shortName` 50, 114, 198 with 9 to 11; edit of
+       `lastActivityAt` 8, 11, 10 with 4 to 6; a create 132, 359, 761 with 21,
+       40 and 79; the first edit after a takeover 672, 4,576, 9,584 with 83, 663
+       and 1,212; the second 31, 437 (one run, not repeated), 37. The result
+       document holds 68 label entries, a row 10 and a topic 1.
+       `sorted-references` is within an eighth of these but for the result
+       document, 70 entries. Nothing was refused on either board: the piece
+       lists no refused commit and the serving runtime reported no failure.
+     - _Against the same boards with no label on the inputs_ (note 846): the
+       load is 0.7 s longer at 2,000 topics, an edit of a title 4 ms, and a
+       create twice as long, 761 against 348 ms, of which the preparations are
+       79 ms. Where the rest of the create goes was not profiled.
+     - _Today's board, labeled, one run_ (`main.tsx`): load 2,850, 16,164,
+       40,819 with 295, 7,388 and 25,832 in 219, 2,020 and 4,019 preparations;
+       edit of a title, middle topic 218, 2,498, 5,004 with 60, 751 and 2,003;
+       edit of the `shortName` 428, 3,783, 7,192; a create 1,019, 8,788, 15,372
+       with 452, 4,180 and 9,392; the first edit after a takeover 349, 3,362,
+       8,204. The harness read no label entry on the result document of today's
+       board and one on a topic. Where today's runtime keeps the labels of what
+       it derives under the serving loop was not looked for, so that zero says
+       nothing of whether it stores them. Nothing was refused.
+     - _So with labels stored the first edit after a takeover is the one step of
+       the compiled board that is not below today's by a wide margin:_ 9.6 s
+       against 8.2 s at 2,000 topics.
+846. **Step 5: Topics under the serving loop, measured.** As in note 833: the
+     arms `serving` and `serving-today` with `SCALE_TAKEOVER`, one process for
+     each board, size and run, one at a time, on the 18-core machine at load
+     averages of 6.1 to 8.4 (1 minute) from other sessions. Each cell is the
+     time in milliseconds until the second client reads the value, at 100, 1,000
+     and 2,000 topics. The compiled boards have the median of three runs, with a
+     create as the median of three creates in each run. Today's board has one
+     run. The inputs are under no label. The serving runtimes read from the
+     store (note 840), today's as well, and the reader holds the first screen of
+     cards.
+
+     | Step                                  | `filing-order`, compiled | `sorted-references`, compiled | `main.tsx`, today, one run |
+     | ------------------------------------- | ------------------------ | ----------------------------- | -------------------------- |
+     | load                                  | 546, 3,204, 6,047        | 549, 3,090, 5,956             | 2,320, 6,929, 13,266       |
+     | edit of a title, first topic          | 34, 39, 39               | 34, 35, 38                    | 106, 737, 1,475            |
+     | edit of a title, middle topic         | 17, 18, 20               | 18, 17, 18                    | 82, 1,005, 1,429           |
+     | edit of a title, last topic           | 16, 17, 16               | 15, 20, 15                    | 84, 754, 1,550             |
+     | edit of the mentions                  | 38, 109, 198             | 42, 106, 193                  | 87, 696, 1,393             |
+     | edit of the `shortName`               | 39, 118, 198             | 40, 111, 209                  | 146, 1,242, 2,573          |
+     | edit of `lastActivityAt`              | 8, 11, 9                 | 12, 26, 39 (the sender)       | 397, 2,685, 5,958          |
+     | create                                | 79, 185, 348             | 80, 194, 339                  | 521, 2,460, 8,967          |
+     | takeover: a client reads `topicCount` | 37, 140, 229             | 39, 123, 223                  | 123, 724, 1,536            |
+     | takeover: the loop is quiescent       | 38, 140, 230             | 44, 128, 224                  | 636, 4,115, 12,612         |
+     | first edit after the takeover         | 545, 4,451, 8,543        | 548, 4,191, 8,316             | 132, 1,066, 2,296          |
+     | second edit after the takeover        | 18, 20, 21               | 17, 18, 18                    | 125, 1,671, 2,991          |
+
+     The lowest and the highest of the three runs at 2,000 topics on
+     `filing-order`: load 5,910 to 6,318, the edit of the middle title 20 to 21,
+     the edit of the `shortName` 196 to 204, a create 344 to 356, the first edit
+     after the takeover 8,361 to 8,730. The basis found the compiled board
+     current in every run, after the comparison of 223, 1,280 and 2,284
+     documents, and the serving runtime evaluated nothing before the first edit.
+     The piece's own time is 2 ms for an edit of a title, 3 for an edit of the
+     `shortName` and 18, 33 and 48 ms for a create, as before. The tables with
+     every row are `tables-after.md` of the round's raw output.
+
+     - _Against note 833._ An edit of a title no longer follows the board or the
+       place of the topic: 20 and 16 ms at 2,000 topics for the middle and the
+       last topic, from 55 and 83. The first edit of a board is 34 to 39 ms at
+       every size and was not taken apart. The edits that change the result
+       document are lower and still follow the board (note 841): the `shortName`
+       198 ms from 307, the mentions 198 from 250, a create 348 from 523. The
+       takeover is read in 229 ms from 509. The first edit after it is 8.5 s
+       from 12.3 s, still the whole derivation (note 842).
+     - _Today's board changed too,_ since its serving runtime also reads from
+       the store now: its load is 13.3 s from 18.7 s and the loop is quiescent
+       after a takeover in 12.6 s from 20.4 s, in one run each.
+     - _A cell that is not the reader's._ On `sorted-references` the reader's
+       sink for the edit of `lastActivityAt` resolved before the edit in every
+       run, so the cell holds the sender's time. The step reads the caption of
+       the first card, which the reader also holds in its first screen. Why the
+       reader's value differed from the caption the sender read before the edit
+       was not found. It is a defect of the harness or a stale read of one of
+       the two clients, not followed.
+847. **Step 5: the list of `compare/serving-path.ts` again.** One process for
+     each run, the compiled arm three times and today's once, 7 events for each
+     figure, load averages 6.3 to 11.1. The pattern and the columns are those of
+     note 818, the cells the median of the runs, in milliseconds.
+
+     |   Rows | Arm      | Runs |   Load | `rename`, sender | `rename`, reader | `add`, sender | `add`, reader |
+     | -----: | -------- | ---: | -----: | ---------------: | ---------------: | ------------: | ------------: |
+     |    100 | compiled |    3 |    127 |             15.9 |             16.3 |          26.9 |          27.2 |
+     |    100 | today    |    1 |    811 |              4.1 |             17.8 |          11.8 |          40.2 |
+     |  1,000 | compiled |    3 |    352 |             15.4 |             15.7 |          39.9 |          40.7 |
+     |  1,000 | today    |    1 |  2,003 |              4.0 |             20.3 |          59.5 |           189 |
+     | 10,000 | compiled |    3 |  3,153 |             26.4 |             26.9 |           226 |           227 |
+     | 10,000 | today    |    1 | 53,228 |              5.7 |             29.1 |           654 |         2,344 |
+
+     After another serving loop takes the space over, from the restart:
+
+     |   Rows | Arm      | A client reads the last row | The loop is quiescent | Documents the comparison read | Evaluations before an event | First event, reader | Evaluations by then | Second event, reader |
+     | -----: | -------- | --------------------------: | --------------------: | ----------------------------: | --------------------------: | ------------------: | ------------------: | -------------------: |
+     |    100 | compiled |                        25.6 |                  29.2 |                           199 |                           0 |                48.2 |                 113 |                 12.0 |
+     |    100 | today    |                         122 |                   158 |                             – |                           – |                14.5 |                   – |                 15.3 |
+     |  1,000 | compiled |                        79.3 |                  81.2 |                         1,263 |                           0 |                 223 |               1,013 |                 13.1 |
+     |  1,000 | today    |                       1,093 |                 1,551 |                             – |                           – |                18.1 |                   – |                 17.7 |
+     | 10,000 | compiled |                         658 |                   662 |                        10,268 |                           0 |               2,134 |              10,013 |                 14.9 |
+     | 10,000 | today    |                      33,162 |                69,899 |                             – |                           – |                25.7 |                   – |                 26.2 |
+
+     The three runs of the compiled arm: load 123 to 140, 336 to 356 and 3,073
+     to 3,306; `add` at the reader 26.8 to 29.0, 37.6 to 42.0 and 220 to 234;
+     the first event after the takeover 42.5 to 49.9, 218 to 226 and 2,131 to
+     2,291. Against note 834, with the serving runtime reading from the store:
+     the load at 10,000 rows is 3.2 s from 4.7 s, an append 227 ms from 525, the
+     read of the sources at a takeover 0.66 s from 1.67 s, and the first event
+     after it 2.1 s from 3.7 s.
+848. **Step 5: the corpus on the runner path, under the serving loop and after a
+     resume.** `compare/runner-corpus.ts`, one run of each over the 376 modules
+     the crate emits on the measurement branch, of which 239 are run. On the
+     runner path 183 pass, with 230 that start, 200 that handle every event, 215
+     with no commit refused and 210 equal to the executor in memory. Under the
+     serving loop (`--serving`), whose runtimes now read from the store, the
+     same 183 pass. After a resume (`--resume`) 182 of the 183 pass: 131 modules
+     were resumed, the basis of all 131 matched, and the wake wrote no document
+     for 93 of them. The one that does not pass is
+     `dev/gideon-tests/test-idempotent-side-effects.tsx`, as in note 835. No
+     module changed against the round before.
+849. **Findings on structure, scale and soundness.**
+     - _Structure, found and closed: the serving memory server of every test and
+       measurement of milestone 6 ran its serving runtimes without the store
+       read-through that a toolshed has on by default_ (notes 839 and 840). The
+       edit of a title that followed the board, the query that the wake kept
+       (note 830) and the plan of note 836 were all consequences of a posture a
+       toolshed does not run.
+     - _Scale, closed: under the serving loop an edit of one title of a board
+       followed the board and the place of the topic_ (note 840). It is 16 to 20
+       ms at 2,000 topics.
+     - _Scale, not closed: a step that changes a member of the result document
+       follows the board on every holder_ (note 841): an edit of the
+       `shortName`, an edit of the mentions that empties or makes a bucket, and
+       a create are 198, 198 and 348 ms at 2,000 topics. The cost is the
+       delivery and the walk of a long document for a change of one link.
+     - _Structure, not closed: the unit of the basis is the piece_ (notes 842
+       and 843). The first event after a takeover is the whole derivation, 8.5 s
+       at 2,000 topics, and with labels on the inputs it is longer than today's
+       first edit after a takeover.
+     - _Structure, not closed: the load on a serving runtime is one transaction
+       of one wave_ (note 844), 6.0 s at 2,000 topics.
+     - _Scale, an observation: a topic written under a schema that declares a
+       label and no structure makes each write of it follow the links of the
+       topic_ (note 845). An input a user writes may be under such a schema.
+       That is the memory server's.
+     - _Soundness, not closed, for a serving runtime that reads over a session:_
+       `RuntimeTransactions.load` takes a document the replica does not hold as
+       empty (note 840). Under the store read-through the replica reads it from
+       the store.
+     - _A defect of the harness, closed: a serving runtime that started no piece
+       left the run waiting without end_ (note 840).
+     - _A defect of the harness or of a client, not closed: the reader's sink on
+       the caption of the first card of `sorted-references` resolves before the
+       edit_ (note 846).
+     - _Not in the gate of the type check:_ `compare/topics/scale.ts` has a type
+       error at the member `at` of a document of a commit, from before this
+       round. `deno task check` does not check the file, and the harness is run
+       with `--no-check`.
+850. **Provisional decisions of the round, and what was not done.** P210: the
+     serving loop of `listenCompiledServingMemoryServer` reads the space of its
+     runtimes from the store where the caller's policy leaves `storeReadThrough`
+     unset, as a toolshed does (note 840). Not done: a basis per unit and a wake
+     that evaluates what an event reaches (notes 842 and 843); the bounded load
+     under the serving loop (note 844); the arrays of row links and the records
+     of bucket links of the result in documents of their own (note 841); the
+     inputs brought under the argument schema of the plan, and a `load` that
+     waits, for a serving runtime that reads over a session (note 840); the read
+     of every reached document before a wake left out under the read-through
+     (note 843); the profile of a create with labels on the inputs (note 845);
+     where today's board keeps its labels under the serving loop (note 845); the
+     reader's sink of note 846; more than one run of today's arms and of the
+     labeled arms; a machine with no other load.
+
+### CFC questions deferred, milestone 6, fourth round
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. A serving runtime that reads from the store reads every document of its space
+   with no query of a session (note 840). The reads are still those of the
+   serving identity. Whether the read ceiling of a session, which bounds what a
+   query delivers, bounds a read from the store in the same way was not examined
+   for a compiled piece.
+2. The plan of note 843 stores, for each source document, the names of the
+   entries that read it and the paths they read, and with each unit the names of
+   the entries that used it. Those lists say which positions of an input a
+   derivation depends on. Which label such a list has, and whether a reader of
+   the piece may read it, is of the kind of CFC question 3 of the second round
+   on the document of the basis.
+3. The ruling of note 844: whether a derivation may commit the rows of a first
+   load ahead of its wave, each transaction under the write records of its rows,
+   and what a reader may conclude from a board that holds some of its rows.
+4. With labels on the inputs, the harness read no label entry on the result
+   document of today's board under the serving loop and 68 on the compiled
+   board's (note 845). Whether the two arms store labels of the same strength
+   for the same derived values was not compared under the serving loop.
