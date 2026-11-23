@@ -16369,3 +16369,544 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    session, as before. Nothing of the labels changed, and the question is
    recorded only because the set of documents the session is subscribed to is
    now every document the result reaches.
+
+## Round 11: stored values never changed in place, and what an edit and the load still do
+
+The round of 2026-11-23 on the branch `claude/compiled-pattern-runner-m3`, from
+the commit `233996ca69`, which holds the first build of all six milestones. Its
+subject is `exec/store.ts` and the read and write paths of `exec/executor.ts`,
+with the adapter's encoding of a stored value (`RuntimeTransactions.#encode`).
+
+681. **What the round did, by step.**
+     - _Step 1, done:_ the store changes no stored value in place and holds
+       every value frozen (note 682), and a read that is not made through a
+       handle gives a stored container that holds no link as the object the
+       store holds (note 683). A read through a handle still copies; the plan is
+       in note 683.
+     - _Step 2, done:_ the adapter hands the runtime the stored container, or
+       one frozen encoded form of it, at each write, and the schemas of a plan
+       are frozen so that the runtime keeps what it makes of a link's schema.
+       What is still done more than once for a value is listed, with what each
+       costs (note 685).
+     - _Step 3, done in part, the larger part stubbed with a plan:_ an edit of
+       one member of an array of plain values in place still writes the array as
+       one value, because the runtime refuses a record that names the array in a
+       transaction that wrote only one position of it (note 686).
+     - _Step 4, done:_ the load on the runner path was profiled at 10,000 rows
+       for rows as documents and for plain values in place, and what the
+       executor did per row beyond its evaluation and its write record was
+       removed: the text of a key was read by the codec at every use (note 687).
+     - _Step 5:_ the tables are in notes 684 and 688, and the corpus in note
+       689.
+682. **Step 1: the store changes no stored value in place (provisional decisions
+     P230 and P231).**
+     - _The writes._ `Store.write`, `Store.splice`, `Store.put`,
+       `Store.spliceAt`, `Store.undo` and `Store.revert` replace each container
+       on the way to what they change with a copy that holds the new member
+       (`Store.#setAt`, `Store.#spliced`). Every other container stays the
+       object it was, so a value that was read before a write is what it was
+       read as, and two versions of a document share what the write did not
+       change. A value that enters the store is frozen with every container in
+       it (`Store.#keep`), and the store keeps for each container how many of
+       its members are a link, a stream or an error state, or hold one, so that
+       whether a container is plain is a lookup.
+     - _The order of the members of a record (P230)._ The store holds each
+       record with its members in the order of the storage, the names by their
+       UTF-8 bytes behind the names that are array indexes. A read gave that
+       order already (P150), by building each record again; with the record held
+       in that order a read can give the record itself. A write of a value that
+       differs from what a path holds in the order of its members alone is no
+       change: `Store.write` and `Store.put` compare with `sameStored`, which
+       takes two values that are one object as the same without a look at what
+       they hold. Three places compared the JSON text of a stored record with
+       that of a record a computation made, in the order each happened to have:
+       `Instance.#place`, which then wrote a whole record where one member
+       differed; the comparison of `compare/integrated.ts`; and the order of
+       `Instance.streams()`, which a test of the executor and the harness of
+       `compare/runner-corpus.ts` read.
+     - _What stands for an array through its changes (P231)._ The executor
+       registers a reader of a key of a stored array under the array, by the
+       identity of the object. A write below an array now replaces the array, so
+       the store gives each stored array an object that stands for it
+       (`Store.lineageOf`) and that the copy that replaces it has too. A
+       `Position` of a read by key holds that object and no version of the
+       array, so a memo entry keeps no old version alive.
+     - _Tests._ `exec/test/store-writes.test.ts`, nine cases, each failed before
+       the change: a write of one member among 10 and among 1,000 copies three
+       containers (the root record, the array and the member), a splice two; the
+       array a write replaced is as it was and shares every member the write did
+       not change; what the store holds is frozen after a create, a write, a
+       splice and a put; `undo` puts a member a splice took out back as the
+       object it was.
+     - _Scale, found: V8 takes a slow path for a frozen array._ On Deno 2.9.8,
+       at 10,000 members: `slice()` of a frozen array takes 165 us where a
+       spread takes 1.4 us and `slice()` of an array that is not frozen 1.1 us;
+       `forEach`, `every`, `some` and `filter` take 160 to 185 us where they
+       take 16 to 60 us on one that is not frozen; a loop by position 29 us
+       where it takes 7. In a realm that is locked down, as the realm of a
+       compartment is, a spread of a frozen array takes 110 us as well.
+       `Object.values` takes 7 us in both realms, so the store copies a frozen
+       array with it (`copyOfArray`) and walks one by position. Value code that
+       is handed a frozen array is slower to walk it: the body of `Whole`, a
+       `filter` over 10,000 members, takes 0.19 ms of the 0.21 ms an edit now
+       costs.
+683. **Step 1: a read gives the stored container (provisional decisions P232 and
+     P233).**
+     - _When._ `Store.read` without `copies` returns the stored container itself
+       where it holds no link, no stream and no error state, the schema of the
+       read leaves no member of it out (`Store.#nothingLeftOut`) and fills in no
+       default (`Store.#noDefaults`). Any other read copies as before. The two
+       checks are kept for a stored array by the schema of its elements, and the
+       copy that replaces the array after a change gets the entries that hold
+       for the members the change put in (`Store.#checkedStill`), so a read
+       after a write of one member examines no member again: `membersExamined`
+       is 0 for such a read among 10 and among 1,000 members.
+     - _The address of what a read gave._ A copy carried the address it was read
+       from, registered container by container as the read made it
+       (`Store.addresses`). A stored container can be given by two reads at two
+       addresses, so it carries none by itself. `Store.handed` holds, for the
+       container a read returned, where the last such read was made and under
+       which schema; the addresses of the containers below it are what
+       `Store.addressesBelow` gives, a member of an array by the key the read
+       would have formed, and they are found when one is first asked for. A read
+       forms no key now: the keys of an array are formed, and kept from the
+       second time on (P179), when an address below the array is asked for.
+     - _A body (P232)._ A body is handed a stored container with its address
+       where a `value` entry of its argument holds it, and each stored container
+       inside a copy such an entry holds, as a document a link led to
+       (`HandedValues`, filled in `Host.#invoke` and `Instance.#attempt`).
+       `Instance.returned`, `Instance.equalsKey` and `Instance.placed` ask
+       `Instance.addressRead`, which finds the addresses below the handed
+       containers the first time a body passes one on. A body that passes none
+       on costs nothing for them. A stored container that the computed part of
+       the argument holds is handed with no address, as the copy `Host.pass`
+       made of it had none, and what the body returns of it is stored as a
+       value. A handler that a body bound keeps what that body was handed with
+       an address.
+     - _The reactive tier (P233)._ Value code outside a body is given the
+       container with the address of its last read (`Store.handed`), which
+       `Host.equals` and `Instance.#segment` read, and `Host.at` names the
+       member it steps to by the key the member has (`Store.handMember`). So the
+       value a slot gave and a member of it that value code reaches through
+       `$h.at` carry what a copy carried. A container below a stored container
+       that value code reaches in another way has no address outside a body. No
+       module of the corpus has another outcome for it.
+     - _Which internal readers relied on a private copy._ None changed what it
+       read: with every stored value frozen, the tests of the executor, of the
+       comparison and of the runner pass with no reader throwing. Three copied
+       what they were given to hand it on, and give a stored container as it is
+       now: `Host.v`, `Host.pass` and `Host.whole`. `Host.slot` applied the
+       defaults of its schema a second time to what the store had read under
+       that schema, a pass over the value, and does not for a container the
+       store gave as it holds it.
+     - _What a body can do to what it is handed._ A write into a frozen
+       container throws in strict code, and a body that sorts the array it was
+       handed throws. Before, the body changed its own copy, and the change was
+       dropped where the body returned the container it changed, since that
+       container carried its address (note 704). The corpus was run with the
+       compartment and with `--evaluate=function`: no module fails for it.
+     - _Stubbed: a read through a handle still copies_ (`copies` of
+       `Store.read`, ruling Z25). A copy is what tells a plain value in place
+       that a body read through a handle from one it was handed with an address:
+       it carries no address, and a record of it that is written into an array
+       stays in place (`Instance.anchored`). _Plan:_ give the stored container,
+       and have the body's `HandedValues` hold it as read through a handle,
+       which `Instance.returned` then gives as a value and `Instance.stored`
+       marks as `#copied`; the mark has to be per body and per container, since
+       one container can be handed both ways in one call. A handler of Topics
+       that reads a list through `handle.get()` copies the list until then.
+     - _Tests._ `exec/test/store-read.test.ts`: a read of an array of plain
+       records gives the frozen array the store holds and copies no container
+       among 10 and among 1,000; under a schema that declares every member it
+       examines no member again after a write of one; a value read before a
+       write is as it was read; the keys are formed by the first two askings of
+       the addresses below; a read under a schema that leaves a member out, one
+       that fills a default, and one through a handle copy; a read of an array
+       of links copies the array and gives each document as the store holds it.
+       Seven of them failed before the change. The test of `Store.handMember`
+       was written with the code and did not fail first.
+684. **Step 1 measured.** `compare/sandbox-cost.ts executor`, the patterns of
+     `fixtures/sandbox-cost.tsx` on the executor with its documents in memory,
+     each over an array of plain values in place: `PerRow` a `map` whose element
+     body is an expression, `BodyPerRow` a `map` whose element body calls a
+     `lift`, `Whole` a `lift` that is handed the whole array. Three runs before
+     the round and three after it, the median, in milliseconds, with
+     `new Function` and with a compartment for each instance; an Apple M5 Max
+     with 18 cores, at a load average of 6 to 10 from other work before and
+     under 4 after.
+
+     | pattern      |   rows | measure                 | before, no compartment |  after | before, compartment |  after |
+     | ------------ | -----: | ----------------------- | ---------------------: | -----: | ------------------: | -----: |
+     | `PerRow`     |    100 | load                    |                   9.50 |   5.81 |                6.67 |   3.36 |
+     | `PerRow`     |    100 | edit of one title       |                  0.132 |  0.104 |               0.075 |  0.054 |
+     | `PerRow`     |  1,000 | load                    |                   66.2 |   33.1 |                61.7 |   33.2 |
+     | `PerRow`     |  1,000 | edit of one title       |                  0.085 |  0.067 |               0.105 |  0.086 |
+     | `PerRow`     | 10,000 | load                    |                  611.5 |  315.0 |               662.9 |  345.0 |
+     | `PerRow`     | 10,000 | edit of one title       |                  0.085 |  0.077 |               0.325 |  0.297 |
+     | `BodyPerRow` |    100 | load                    |                   6.53 |   2.29 |                7.08 |   2.63 |
+     | `BodyPerRow` |    100 | edit of one title       |                  0.092 |  0.059 |               0.094 |  0.050 |
+     | `BodyPerRow` |  1,000 | load                    |                   61.8 |   22.5 |                69.0 |   26.3 |
+     | `BodyPerRow` |  1,000 | edit of one title       |                  0.093 |  0.053 |               0.134 |  0.078 |
+     | `BodyPerRow` | 10,000 | load                    |                  635.3 |  230.9 |               727.1 |  271.9 |
+     | `BodyPerRow` | 10,000 | edit of one title       |                  0.104 |  0.082 |               0.475 |  0.289 |
+     | `Whole`      |    100 | load                    |                  0.879 |  0.179 |                1.18 |  0.245 |
+     | `Whole`      |    100 | edit of one title       |                  0.228 |  0.020 |               0.278 |  0.012 |
+     | `Whole`      |    100 | in store reads per edit |                  0.136 | 0.0022 |               0.199 | 0.0008 |
+     | `Whole`      |    100 | one read of the array   |                  0.067 | 0.0010 |               0.102 | 0.0006 |
+     | `Whole`      |  1,000 | load                    |                   8.21 |  0.858 |                11.7 |   1.02 |
+     | `Whole`      |  1,000 | edit of one title       |                   1.74 |  0.034 |                2.48 |  0.035 |
+     | `Whole`      |  1,000 | in store reads per edit |                   1.13 | 0.0011 |                1.68 | 0.0008 |
+     | `Whole`      |  1,000 | one read of the array   |                  0.585 | 0.0008 |               0.912 | 0.0006 |
+     | `Whole`      | 10,000 | load                    |                   70.7 |   8.90 |                90.1 |   10.8 |
+     | `Whole`      | 10,000 | edit of one title       |                   22.8 |  0.213 |                31.7 |  0.217 |
+     | `Whole`      | 10,000 | in store reads per edit |                   12.7 | 0.0013 |                17.1 | 0.0009 |
+     | `Whole`      | 10,000 | one read of the array   |                   10.1 | 0.0008 |                14.5 | 0.0006 |
+
+     The edit under `Whole` no longer follows the array in the executor: what is
+     left at 10,000 rows is the body's own `filter`. The loads of `PerRow` and
+     `BodyPerRow` are faster by the key texts of note 687, and not by the store.
+685. **Step 2: one freeze and one encoded form (provisional decisions P234 and
+     P235).**
+     - _What a stored value went through on its way to the storage._ The
+       executor built the stored form (`Instance.stored`), the store kept it,
+       the adapter built a copy with each link as the runtime's
+       (`RuntimeTransactions.#encode`), and the transaction of the runtime
+       cloned that copy and froze the clone (`cloneIfNecessary`), compared it
+       with what the path held by a hash of both, and checked that it is a
+       fabric value. A value that was written again, as a row is with every
+       write of its array, went through the last three again.
+     - _Now (P234)._ `#encode` returns a stored container that holds no link, no
+       stream and no error state as it is: it is frozen with all it holds, and
+       it is a fabric value where the copy was one. For a stored container that
+       holds a link it keeps the encoded form by the container (`#encoded`),
+       frozen once with `cloneIfNecessary`, with the number of arrays of row
+       documents named when it was made, since a link by key into such an array
+       is written as a link to the document of the row. The encoded form of a
+       container that holds the link of a stream is made at each write: making
+       it writes the marker of a stream the storage has none of, in the
+       transaction in progress. The runtime then takes the value with no clone
+       and no freeze.
+     - _The schemas of a plan (P235)._ `Instance` freezes each schema of its
+       artifact with all it holds. A link the instance stores carries a schema
+       of the plan, and `externalizeLinkSchema` of
+       `runtime/runner/src/link-utils.ts` keeps what it makes of a link's schema
+       only for a schema that is frozen. At 10,000 rows as documents the adapter
+       spent 290 ms of a load decomposing and hashing the one schema of the
+       rows' links 10,000 times.
+     - _What is still done more than once per value._ (1) The executor forms the
+       stored form of each evaluated value and its canonical text
+       (`Instance.#ensure`), and `Instance.#place` forms the stored form again,
+       compares it with what the result holds and measures both in bytes: three
+       passes over a row at the load. Measured at 10,000 rows as documents the
+       canonical texts are 27 ms of the 277 ms the evaluations take, so they
+       were left. (2) The runtime checks that a value is a fabric value by a
+       walk of all of it at each write of a new root, with no memo below the
+       root: 17 ms for an array of 10,000 rows. (3) The runtime hashes a written
+       array by feeding every row again, though each row is an object it has
+       hashed: 39 ms at 10,000 rows. (4) The adapter forms the text of every
+       label entry of a document a transaction writes (`entriesOf`, from
+       `#noteUnchanged`), to find a label that changed under a value that did
+       not: 35 ms at 10,000 rows of plain values in place, where each row has
+       entries of its own. The storage gives new entry objects after each
+       commit, so a text kept by the entry is never found again; that was tried
+       and taken out.
+     - _Tests._ `runtime/runner/test/compiled/piece.test.ts`: the adapter gives
+       the stored record of a row as the object the executor holds, and the same
+       frozen value for a list of links at two calls; it failed before the
+       change. `exec/test/executor.test.ts`: the schemas of an artifact are
+       frozen once an instance was made of it; failed before.
+686. **Step 3: an edit of one member of an array of plain values in place.**
+     - _What it does._ The key of a plain value is formed from the value, so the
+       edited row is a new element at the same position. The executor makes it a
+       splice of one position of the stored result (`Instance.#spliceRows`) and
+       gives the adapter four records: one for the array, with `membersChanged`,
+       and one each for the position and its two members. `Instance.#changed`
+       hands the splice to the adapter only where a record of it is one of
+       positions, so the adapter writes the array at its path as one value.
+     - _Profile at 1,000 rows, before, the mean of five edits:_ the step took
+       187 ms, of which the executor's evaluations and its store under 1 ms, the
+       adapter's encoding of the array 5 ms, the runtime's write of it 12 ms
+       (the clone, the freeze and the two hashes), the label entry texts 4 ms,
+       and the rest the commit of a value of 270 KB with a label entry for each
+       row: label compression 39 ms, the transaction of the store 24 ms, the
+       preparation 12 ms, and the client's and the server's encoding and
+       decoding.
+     - _Removed:_ the encoding, the clone and the freeze of the rows that did
+       not change (note 685).
+     - _What is left, at 10,000 rows:_ 1.7 s for one edit, of which the executor
+       takes 1 ms and the adapter with the runtime's write 100 ms (the hash of
+       the array 39, the membership check 17, the label entry texts 35). The
+       other nine tenths are the runtime's cost for the commit of an array of
+       10,000 rows written as one value in a document that holds a label entry
+       for each row. The harness's own write of one field of one row of the
+       input, a path write, costs 1.3 to 4 ms at 1,000 rows.
+     - _Stubbed: writing the position alone._ The adapter writes the positions
+       of a splice where the executor hands it one
+       (`RuntimeTransactions.change`, "A splice of a stored array writes the
+       number of members and the positions it changed"). Doing the same for a
+       splice that puts as many members as it takes out, with the records as
+       they are, is refused by the runtime at the commit: "a plan-write names
+       /rows ..., which the transaction did not write". The record of the array
+       stores, once for every position, the label of what decides which member
+       stands where (`membersChanged`, `prepare.ts`), and the runtime holds a
+       record to a path the transaction wrote. _Plan:_ (1) decide what the
+       record of the membership is for a splice that leaves every other member
+       where it stood: given again as a record of a value that stayed
+       (`relabel`), or left out, with the relabel of a changed label reaching it
+       another way; (2) have `Instance.#changed` hand the splice for it; (3)
+       compare the stored label entries of the result after each step of
+       `compare/runner-path.ts` with those of today, on inputs whose rows have
+       labels of their own, which the harness does not make now. Step (1)
+       decides a label, so it is CFC question 1 of this round and was not taken.
+687. **Step 4: the load, per row.**
+     - _Rows as documents, 10,000 rows_ (`references, declared` of
+       `compare/runner-path.ts`): the load takes 4.6 s, of which the piece 2.2
+       s. Of those: the commits of the row documents in bounded transactions
+       0.97 s, which is the runtime's preparation and commit of 10,000
+       documents; the adapter's encoding 0.33 s, of which the schema of each
+       link 0.29 s (note 685, removed); the write records 0.33 s, 33 us a row;
+       the evaluations 0.28 s, 28 us a row. What the executor does per row there
+       is one evaluation and one write record.
+     - _Plain values in place, 10,000 rows:_ the load took 5.3 s, of which the
+       piece 2.7 s, and of that the write records 1.77 s, 177 us a row. Three
+       things made a record cost that much, and none is part of it. (1) The
+       codec read the text of the key at each use: `isKeySegment` for each
+       segment of a path that begins like one, and `fieldsOfKey` again for the
+       key fields, 25 us each. `recordOfKey` and `keyOfSegment` now keep what
+       the codec read of a text (provisional decision P236). (2) `Store.locate`
+       read the element a key names and formed its canonical text, to keep what
+       the read by key saw; `Instance.#addressesOf` took nothing of that read.
+       It asks `Store.locateCrossed`, which gives the positions before the key
+       and the position found. (3) `Store.#deep` and `Store.#keysOf` formed the
+       address of a position with the codec to hold the position under a text;
+       they use the document and the path. The load of this case is 3.5 s at
+       10,000 rows, from 4.9, and the tests of the executor run in 16 s,
+       from 29.
+     - _What remains per row beyond one evaluation, one record and one stored
+       document._ On the executor: the stored form and canonical text of the
+       value three times (note 685). In the adapter: nothing per row for rows in
+       place; for rows as documents the bounded transactions, whose cost is the
+       runtime's.
+     - _Tests._ `exec/test/store-read.test.ts`: `recordOfKey` gives one frozen
+       record for a text at each call; `locateCrossed` gives the position a
+       reference by key names and the links before the key, and no read by key.
+       Both failed before the change.
+688. **The runner path measured.**
+     `compare/runner-path.ts --arms=compiled
+     --no-pull --inputs-first --later=5`,
+     the three cases of a `map`, the one over an array of references twice: with
+     the type declaring the array as references, where the rows of the result
+     are documents of their own, and with the type declaring plain values and
+     the input given as references, where the rows are held in the result. Three
+     runs before the round and three after the commit of note 687, the median,
+     in milliseconds, on emulated storage with labels at `persist`. The load
+     average was 6 to 10 before and 4 to 6 after, so a difference of a tenth is
+     no finding.
+
+     | the `map` is over                                   |   rows | step                                   | before | after |
+     | --------------------------------------------------- | -----: | -------------------------------------- | -----: | ----: |
+     | an array of references, rows as documents           |    100 | load                                   |    132 |   111 |
+     |                                                     |    100 | append, the first                      |   29.4 |  27.0 |
+     |                                                     |    100 | append, the mean of 5 later            |   20.4 |  18.2 |
+     |                                                     |    100 | edit of one field, the first           |    8.1 |   6.7 |
+     |                                                     |    100 | edit of one field, the mean of 5 later |    4.9 |   4.3 |
+     | an array of references, rows as documents           |  1,000 | load                                   |    493 |   426 |
+     |                                                     |  1,000 | append, the first                      |   81.1 |  73.0 |
+     |                                                     |  1,000 | append, the mean of 5 later            |   96.4 |  80.8 |
+     |                                                     |  1,000 | edit of one field, the first           |    6.4 |   5.2 |
+     |                                                     |  1,000 | edit of one field, the mean of 5 later |    4.5 |   3.5 |
+     | an array of references, rows as documents           | 10,000 | load                                   |  4,607 | 4,095 |
+     |                                                     | 10,000 | append, the first                      |    895 |   816 |
+     |                                                     | 10,000 | append, the mean of 5 later            |    818 |   770 |
+     |                                                     | 10,000 | edit of one field, the first           |    141 |  10.5 |
+     |                                                     | 10,000 | edit of one field, the mean of 5 later |    6.3 |   4.8 |
+     | an array of references, rows in the result          |    100 | load                                   |   53.9 |  49.2 |
+     |                                                     |    100 | append, the first                      |   32.3 |  30.0 |
+     |                                                     |    100 | append, the mean of 5 later            |   30.7 |  31.8 |
+     |                                                     |    100 | edit of one field, the first           |   23.1 |  20.8 |
+     |                                                     |    100 | edit of one field, the mean of 5 later |   21.3 |  18.6 |
+     | an array of references, rows in the result          |  1,000 | load                                   |    396 |   361 |
+     |                                                     |  1,000 | append, the first                      |    243 |   210 |
+     |                                                     |  1,000 | append, the mean of 5 later            |    245 |   211 |
+     |                                                     |  1,000 | edit of one field, the first           |    144 |   130 |
+     |                                                     |  1,000 | edit of one field, the mean of 5 later |    145 |   137 |
+     | an array of references, rows in the result          | 10,000 | load                                   |  3,438 | 3,763 |
+     |                                                     | 10,000 | append, the first                      |  2,328 | 1,975 |
+     |                                                     | 10,000 | append, the mean of 5 later            |  2,390 | 2,133 |
+     |                                                     | 10,000 | edit of one field, the first           |  1,421 | 1,290 |
+     |                                                     | 10,000 | edit of one field, the mean of 5 later |  1,512 | 1,366 |
+     | an array of plain values in place                   |    100 | load                                   |   58.7 |  39.3 |
+     |                                                     |    100 | append, the first                      |   23.1 |  21.1 |
+     |                                                     |    100 | append, the mean of 5 later            |   19.2 |  16.5 |
+     |                                                     |    100 | edit of one field, the first           |   14.1 |  11.6 |
+     |                                                     |    100 | edit of one field, the mean of 5 later |   23.5 |  20.0 |
+     | an array of plain values in place                   |  1,000 | load                                   |    655 |   309 |
+     |                                                     |  1,000 | append, the first                      |    168 |   148 |
+     |                                                     |  1,000 | append, the mean of 5 later            |    143 |   123 |
+     |                                                     |  1,000 | edit of one field, the first           |   85.0 |  72.9 |
+     |                                                     |  1,000 | edit of one field, the mean of 5 later |    198 |   156 |
+     | an array of plain values in place                   | 10,000 | load                                   |  4,930 | 3,468 |
+     |                                                     | 10,000 | append, the first                      |  1,914 | 1,423 |
+     |                                                     | 10,000 | append, the mean of 5 later            |  1,464 | 1,288 |
+     |                                                     | 10,000 | edit of one field, the first           |    846 |   709 |
+     |                                                     | 10,000 | edit of one field, the mean of 5 later |  1,975 | 1,667 |
+     | the result of a `filter` over plain values in place |    100 | load                                   |   72.1 |  43.3 |
+     |                                                     |    100 | append, the first                      |   26.0 |  22.3 |
+     |                                                     |    100 | append, the mean of 5 later            |   24.4 |  16.5 |
+     |                                                     |    100 | edit of one field, the first           |   16.0 |  11.3 |
+     |                                                     |    100 | edit of one field, the mean of 5 later |   25.6 |  20.1 |
+     | the result of a `filter` over plain values in place |  1,000 | load                                   |    577 |   325 |
+     |                                                     |  1,000 | append, the first                      |    174 |   142 |
+     |                                                     |  1,000 | append, the mean of 5 later            |    150 |   122 |
+     |                                                     |  1,000 | edit of one field, the first           |   97.4 |  71.8 |
+     |                                                     |  1,000 | edit of one field, the mean of 5 later |    199 |   162 |
+     | the result of a `filter` over plain values in place | 10,000 | load                                   |  6,325 | 3,708 |
+     |                                                     | 10,000 | append, the first                      |  1,617 | 1,330 |
+     |                                                     | 10,000 | append, the mean of 5 later            |  1,620 | 1,342 |
+     |                                                     | 10,000 | edit of one field, the first           |    888 |   711 |
+     |                                                     | 10,000 | edit of one field, the mean of 5 later |  1,950 | 1,780 |
+
+     The loads over plain values in place and over the result of a `filter` are
+     faster by 30 to 50%, which is the key texts and the address chains of
+     note 687. No edit and no append changed beyond what the load of the machine
+     explains, but for the first edit of 10,000 rows as documents, 141 ms before
+     in each of three runs and 10 ms after, which was not looked into. Every
+     step but the edit over rows as documents follows the array, before and
+     after: an edit of one field of an array of plain values in place takes 156
+     ms at 1,000 rows and 1.7 s at 10,000 (note 686).
+689. **The corpus on the runner path.** `compare/runner-corpus.ts`, one run
+     before the round, one after step 1 with each evaluator and one at the end,
+     over the 373 modules the crate emits, of which 239 are run. The report is
+     the same text before and after: 230 start, 200 handle every event, 215 have
+     no commit refused and 210 hold the values of the executor in memory. A run
+     with `--evaluate=function` gives the same lines as one with the
+     compartment, but for `apps/reward-spinner/reward-spinner.tsx`, which draws
+     at random and differs from the executor in memory at another path in each
+     run.
+     - _One module has another line:_
+       `apps/lunch-poll/participant-identity-card.tsx` handles 2 of its 4 events
+       where it handled 3. After the event that claims the host, the pattern
+       compares the profile the host record links to with the viewer's profile
+       (`equals(current, mine)` in `isAdmin`), in the reactive tier. Before the
+       round the left operand, a value read through the link, was in the
+       evaluation that decided a copy that carried no address, and a value with
+       no address is not equal to one with an address (`Instance.same`); the
+       check of the entry before it, on the copy an earlier evaluation had read,
+       found the two equal. Which step dropped the address was not found. Now
+       the operand is the stored container, with the address of its last read,
+       and the comparison gives `true`. `isAdmin` is then `true`, the button
+       that claims the host is not rendered, and the harness finds no stream for
+       the last event, which it sent before to a button that should not have
+       been there.
+     - _One module varies from run to run with no change of the code:_
+       `apps/redactor/vault.tsx` had 4, 4, 3, 3, 1, 1, 1 and 5 refused commits
+       in eight runs.
+690. **Structural, scaling and soundness findings of the round.**
+     - _Scale, closed: a `lift` that is handed a whole array cost a copy of the
+       array at each call_ (notes 704 and 678): 23 ms for an edit of one title
+       at 10,000 rows, 0.2 ms now, which is the body's own pass over the array.
+     - _Scale, closed: the text of a key was read by the codec at each use_
+       (note 687), 1.5 s of a load of 10,000 plain values in place on the runner
+       path.
+     - _Scale, open: an edit of one member of an array of plain values in place
+       on the runner path follows the array,_ 156 ms at 1,000 rows and 1.7 s at
+       10,000, because the array is written as one value (note 686). The
+       executor's share is 1 ms. The plan needs a decision on a label.
+     - _Scale, open, not looked into: the case `references` of
+       `compare/runner-path.ts`,_ a `map` over an array of references with no
+       declared type of references, follows the array at an edit of one field
+       too, 137 ms at 1,000 rows and 1.4 s at 10,000, where the pattern whose
+       type declares the references takes 4 to 5 ms at both.
+     - _Scale, open, not explained: on the runner path the later edits of an
+       array of plain values in place cost twice the first,_ 1.67 s against 0.71
+       s at 10,000 rows, and as much before the round.
+     - _Scale, found: V8 takes a slow path for `slice`, `forEach`, `every`,
+       `some` and `filter` of a frozen array_ (note 682). Value code that walks
+       an array it was handed takes three to ten times as long as over a copy,
+       which is still far less than the copy took.
+     - _Structure, open: a stored array is one flat frozen array._ A write of
+       one member copies the pointers of the array, 7 us at 10,000 members, so N
+       additions of one member each copy N squared over two pointers. No
+       measured load does that: the rows of a load enter as one splice. A tree
+       of chunks would bound it.
+     - _Structure: a stored container can be held at two positions._ The store
+       keeps a container it holds already as it is, so `Store.undo` and a write
+       of a value that was taken from the store put one object at a second
+       position. No address is kept with a container for that reason (note 683).
+       Outside a body the address of a container is that of its last read, which
+       for a container at two positions is the later one.
+     - _Soundness, held by the freeze: value code is handed the object the store
+       holds._ A change through it would change the document for every reader
+       and bypass the journal. `Store.#keep` freezes every container that enters
+       the store, and the tests assert it after each kind of change. A value
+       that is no array and no plain record is left as it is and counted as if
+       it held a link, so no read gives a container that holds one without a
+       copy.
+     - _Soundness, changed outcome: `equals` of a value read through a link_
+       (note 689). The result of the old executor depended on which of two
+       evaluations ran last.
+     - _Structure: the table of decoded key texts is one for the process_
+       (`decodedKeys`), at most 100,000 texts, emptied when full. What it holds
+       is a function of the text alone.
+691. **Provisional decisions of the round, and what was not verified.** P230:
+     the store holds each record with its members in the order of the storage,
+     and a write that differs from what a path holds in that order alone is no
+     change (note 682). P231: a reader of a key of a stored array is registered
+     under what stands for the array through its changes, and not under a
+     version of it (note 682). P232: a read that is not made through a handle
+     gives a stored container that holds no link, no stream and no error state
+     as the frozen object the store holds, and a body is handed it with its
+     address where a `value` entry of its argument holds it (note 683). P233:
+     outside a body a stored container has the address of its last read, and a
+     member that `Host.at` steps to the address by its key (note 683). P234: the
+     adapter hands the runtime a stored container with no link as it is, and
+     keeps one frozen encoded form of a container that holds a link and no
+     stream (note 685). P235: the schemas of an artifact are frozen when an
+     instance is made of it (note 685). P236: what the codec read of the text of
+     a key is kept, for at most 100,000 texts in a process (note 687). _Not
+     done:_ a read through a handle without a copy (note 683); the write of one
+     position of an array of plain values in place (note 686); the three passes
+     over a value at its evaluation (note 685). _Not verified:_ Topics was not
+     run, since the harness of this branch has no board it can run; the serving
+     loop and a resume were run by the tests alone, and the corpus with
+     `--serving` and `--resume` was not run; the test of `Store.handMember` did
+     not fail first; no test has a body that writes into what it was handed, and
+     that such a write throws is known from the freeze alone; the stored label
+     entries of the result were compared with those of the commit the round
+     started from after each of five steps of the four cases of
+     `compare/runner-path.ts` at 6 rows, 549 entries, and are the same sets,
+     which says nothing of inputs whose rows have labels of their own; the
+     memory the store holds was not measured, and each write now leaves the
+     containers it replaced to the collector; nothing was run in a browser or on
+     a toolshed.
+
+### CFC questions deferred, round 11
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. An edit of one member of the result of a per-element construct over plain
+   values in place is a splice that leaves every other member where it stood,
+   and the runtime refuses a record that names the array in a transaction that
+   wrote one position of it (note 686). Whether the record of the membership of
+   such a splice is given again as the record of a value that stayed, or not
+   given, and whether the label that `membersChanged` stores once for every
+   position is then stored again when the labels of what decides the membership
+   change.
+2. `equals` of a value that was read through a link and a reference to the same
+   place gives `true` now where the executor gave `false` in the evaluation that
+   decided (note 689). The comparison depends on the links each operand crossed
+   and on its outcome (PL §3.16, ruling Z26). Whether a value that value code
+   holds, and not a reference, is an operand that `equals` resolves to a place
+   at all, and what the evaluation then observed of that place.
+3. Outside a body a stored container has the address of its last read (P233).
+   For a container that the store holds at two positions, the address a
+   comparison or a `flatMap` takes for it is the later one, whatever position
+   the evaluation read it at. No label is formed from that address in what was
+   read of the code, and the case needs `Store.undo` or a write of a value taken
+   from the store to arise. Whether an address taken that way can reach a write
+   record.
+4. The adapter hands the runtime the object the executor's store holds (P234).
+   The two then share one frozen value, and the runtime's memo of a value's hash
+   and of its frozen state is keyed by an object the executor made. Nothing of a
+   label is involved; it is recorded because a value of the storage is now
+   reachable from a store that value code is handed values of.
