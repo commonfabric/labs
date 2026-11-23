@@ -319,6 +319,14 @@ listed in the plan as questions 391 to 467 and 512, and per round under
 "CFC questions deferred" in `SPEC-NOTES.md`. Several are suspected
 under-labels; a construct that has one is not to be relied on for labels.
 
+**The owner's rule on optimizations** (Z91, 2026-11-23). A goal is to be
+met because the compiled approach is generally better, not by an
+optimization for the measured case that today's runtime has no counterpart
+of. An outlier, such as the first edit after a restart or a FabriChat send
+that grows with the room, is studied as the sign of a general defect, and
+the fix sought is one that helps every pattern. Each brief repeats this, and
+each round reports figures with and without an optimization it adds.
+
 ## How a round is briefed and checked
 
 A round is one agent in one worktree with a written brief. The briefs of

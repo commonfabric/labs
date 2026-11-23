@@ -6596,6 +6596,19 @@ is relitigated.
   start takes 8.5 s on the compiled path and 2.3 s on today's. Question 430
   carries the plan for a basis by unit that it needs.
 
+- The goals are met because the compiled approach is generally better, not by
+  an optimization for the measured case (2026-11-23, Z91). The owner's words:
+  "if we make optimizations like link-in-documents we should make sure we're
+  not doing a point optimization to hit the goal, especially if main doesn't
+  have the same corresponding idea", and of an outlier such as the first edit
+  after a restart: "see it as a signal for a defect not as something narrow
+  to optimize". A round that proposes an optimization says whether today's
+  runtime has the corresponding mechanism and reports its figures with and
+  without it. A list of links in a document of its own corresponds to the
+  result cell of today's `map`, which holds the links of all rows in one
+  document; the chunks of a list above 128 rows (P393) have no counterpart
+  on today's path and are reported as such.
+
 ## Provisional decisions awaiting the owner's ratification
 
 The owner's standing instruction of 2026-11-17: "Don't block progress on
