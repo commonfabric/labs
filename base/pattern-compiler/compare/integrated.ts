@@ -55,7 +55,7 @@ import { diffAndUpdate } from "../../../runtime/runner/src/data-updating.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../exec/executor.ts";
-import { identifierOf, isLink, nameText } from "../exec/store.ts";
+import { identifierOf, isLink, nameText, sameStored } from "../exec/store.ts";
 import {
   artifactsOf,
   corpusModules,
@@ -493,9 +493,14 @@ export const inStorage = async (
     const stored = hooks.stored();
     for (const [doc, held] of instance.store.docs) {
       if (documents.some(({ id }) => id === doc)) continue;
+      // The executor holds the members of a record in the order of the
+      // storage, and the transaction of the runtime in the order they
+      // were written.
       if (
-        JSON.stringify(withoutSchemas(stored.get(doc))) !==
-          JSON.stringify(withoutSchemas(held.value))
+        !sameStored(
+          withoutSchemas(stored.get(doc)),
+          withoutSchemas(held.value),
+        )
       ) {
         differs.push(`stored ${held.kind}`);
       }

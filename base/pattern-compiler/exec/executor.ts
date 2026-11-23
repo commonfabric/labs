@@ -51,6 +51,7 @@ import {
   recordOfKey,
   Ref,
   rekeyed,
+  sameStored,
   type Schema,
   schemaBelow,
   spliceIn,
@@ -3187,7 +3188,8 @@ export class Instance {
   readonly #readers = new Map<string, Readers>();
   /**
    * On the root: the readers through a reference by key, by the array
-   * that the key was found in and the key.
+   * that the key was found in, as what stands for it through its changes
+   * (`Store.lineageOf`), and the key.
    */
   #keyedReaders = new WeakMap<object, Map<string, Set<Reg>>>();
   /** On the root: how many registrations `#keyedReaders` holds. */
@@ -3482,11 +3484,12 @@ export class Instance {
     const detach = (value: unknown, top: boolean) => {
       if (typeof value !== "object" || value === null || isLink(value)) return;
       if (Array.isArray(value)) {
-        const readers = top && moved.has(value)
+        const lineage = this.store.lineageHeld(value);
+        const readers = lineage === undefined || (top && moved.has(lineage))
           ? undefined
-          : this.#keyedReaders.get(value);
-        if (readers !== undefined) {
-          this.#keyedReaders.delete(value);
+          : this.#keyedReaders.get(lineage);
+        if (lineage !== undefined && readers !== undefined) {
+          this.#keyedReaders.delete(lineage);
           for (const set of readers.values()) {
             for (const reg of [...set]) {
               const { slot } = reg;
@@ -6212,10 +6215,12 @@ export class Instance {
         return;
       }
       if (isRecord(form) && isRecord(held) && !isLink(form) && !isLink(held)) {
+        // The store holds the members of a record in the order of the
+        // storage, whatever order the form has them in.
         const [names, were] = [Object.keys(form), Object.keys(held)];
         if (
           names.length > 0 && names.length === were.length &&
-          names.every((name, index) => name === were[index])
+          names.every((name) => Object.hasOwn(held, name))
         ) {
           for (const name of names) put([...at, name], form[name], held[name]);
           return;
@@ -6238,7 +6243,7 @@ export class Instance {
         }
       }
       const now = filled(form, held);
-      if (held === now || JSON.stringify(held) === JSON.stringify(now)) {
+      if (sameStored(held, now)) {
         // A reference that stays names the cell it named.
         if (!isLink(now) && !isStream(now)) this.#unchangedOutput(at);
         return;

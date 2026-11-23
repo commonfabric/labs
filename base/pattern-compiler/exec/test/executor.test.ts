@@ -3557,13 +3557,15 @@ describe("a stream a function body returns into the result", () => {
         path.join("/"),
         elements,
       ]),
+      // In the order the result document holds its members in, which is
+      // that of the storage.
     ).toEqual([
       [0, "inc", []],
-      [0, "wrapped/again", []],
-      [1, "rows/0/again", [0]],
-      [1, "rows/1/again", [1]],
       [2, "labels/0/again", [0]],
       [2, "labels/1/again", [1]],
+      [1, "rows/0/again", [0]],
+      [1, "rows/1/again", [1]],
+      [0, "wrapped/again", []],
     ]);
   });
 });

@@ -332,13 +332,17 @@ describe("startCompiledPiece()", () => {
     const log = piece.instance.stateCells().find(({ name }) => name === "log")!;
     result.key("record").send({ text: "t", extra: "e" } as never);
     await settled();
-    const held = piece.instance.store.docs.get(log.id)?.value;
+    const held = piece.instance.store.docs.get(log.id)?.value as unknown[];
 
     result.key("record").send({ text: "u", extra: "e" } as never);
     await settled();
 
-    // The array the executor keeps the keys of is the one it held before.
-    expect(piece.instance.store.docs.get(log.id)?.value).toBe(held);
+    // A change of the list replaces the array with a copy that shares its
+    // members, and a document read again from the storage would hold new
+    // objects: the member the first event added is the object it was.
+    const now = piece.instance.store.docs.get(log.id)?.value as unknown[];
+    expect(now).toHaveLength(2);
+    expect(now[0]).toBe(held[0]);
     expect(read(result, "log")).toEqual([{ text: "t" }, { text: "u" }]);
   });
 });
