@@ -29,8 +29,16 @@ next.
   the pull request #10142 against `main`; the harnesses
   `base/pattern-compiler/compare/runner-path.ts` and
   `compare/runner-corpus.ts`, with the arm `runner` of
-  `compare/topics/scale.ts`; and the notes 579 to 609 of the crate's
-  `SPEC-NOTES.md`. The latest commit of it read is `1788b7eb75`. A change to a
+  `compare/topics/scale.ts`; the collection index, the entries of a record,
+  `sortBy` and the segments of a `flatMap` in the crate and the executor;
+  and the notes 579 to 645 of the crate's `SPEC-NOTES.md`. Milestone 5 is
+  built on `claude/compiled-pattern-sandbox-m5`, cut from the branch of
+  milestone 3 and merged into it: `runtime/runner/src/compiled/value-code.ts`
+  and `compile.deno.ts`, the command `emit --accepted` of the crate, the
+  harness `compare/sandbox-cost.ts`, and the notes 700 to 709. The latest
+  commit of the branch of milestone 3 read is `8965ed2b8e`, the merge. The two
+  Topics boards that the tables measure are on the local branch
+  `claude/compiled-pattern-topics-runs`, in no pull request. A change to a
   pattern goes to `main` in a pull request of its own and not into the stack:
   #10036 and #10050 are open, and #10054 is closed without a merge.
 - **Documents**, all under `docs/specs/compiled-pattern-language/`:
@@ -308,8 +316,9 @@ next.
 - **Integration:** [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
   is the strategy for measuring the design inside the real runtime
   (provisional decision P30), with its milestones, the figures of milestones
-  1, 2 and 4, and what milestone 3 built and measured (notes 579 to 609 of the
-  crate's `SPEC-NOTES.md` on the branch of milestone 3 are written into it).
+  1, 2 and 4, and what milestones 3 and 5 built and measured (notes 579 to 645
+  and 700 to 709 of the crate's `SPEC-NOTES.md` on the branch of milestone 3
+  are written into it).
 - **Merged branches:** `claude/pattern-language-subset-spec`,
   `claude/pattern-language-plan-labels-spec`, and
   `claude/pattern-language-builtin-inventory` are fully merged into the branch
@@ -6695,6 +6704,23 @@ pointer to its entry.
 12. **The start of a piece in several commits** (question 368, P65), for the
    owner. P64, which commits the first derivation of an instance a handler made
    apart, is within the ruling Z87.
+13. **What confines value code** (question 386, P100), for the owner. A
+   compiled piece evaluates value code in a compartment, and the crate's check
+   is the only barrier between a pattern and the objects of the executor that
+   the code is handed: the host and `$rt` hold the executor in public members,
+   and the emitter writes no freeze of module data and no hardening of a
+   function. One path through a handle is closed.
+14. **The surface of the constructs** (question 382; P67, P68, P70, P80 and
+   P85), for the owner. The grouping, the keyed join and the per-entry
+   construct use surface the language has; `sortBy` is a new method; and a
+   grouping of the result of another per-element construct, with every
+   `sortBy`, runs on the compiled path alone, so the two measured Topics boards
+   do not run on today's runtime.
+15. **P74,** which closes an under-label of a chain of two per-element
+   constructs by a binding of a slot to an output and to a read at once, which
+   no clause of the specification has. The site carries the `SPEC-PENDING`
+   marker, and the questions of labels that the constructs raise are deferred
+   by the ruling Z88 (questions 391 to 404).
 
 Beside these, question 285 is no provisional decision: the documents said that
 today's runtime commits none of the writes of a node that throws, and it commits
@@ -8368,6 +8394,403 @@ today.
   place. The test directory of the runner passes, 2,157 files. *Where it is:*
   commit `42676da433` of the branch of milestone 3. *If decided otherwise:*
   `freezeReadActivityRecords`, the frozen metadata objects and the two counters.
+- **P67. The grouping is the collection index the language has, `groupBy` and
+  `keyBy` with `lookup`, and no new function.** The coordinator's decision of
+  2026-11-22; it is no owner ruling. It answers part (c) of question 370. *The
+  case:* `crossrefIndexOf` of Topics groups the rows of a table by name, and a
+  `lift` does it by reading every row. `language-subset.md` §4.4,
+  `plan-and-label-templates.md` §3.17 and today's runtime
+  (`IDerivable.groupBy` of `base/api/index.ts`) already have a grouping and a
+  lookup by key; the crate's plan emitter refused both and the executor had
+  neither. *Decision:* `xs.groupBy((x) => key)` and `xs.keyBy((x) => key)` in
+  the reactive tier, with the callback grammar of a `map` callback, and
+  `index.lookup(k)`. A key is a string, a number, a boolean or a cell; `null`
+  and `undefined` leave the element out. Over an array of references a bucket
+  holds the references of its members in source order; over an array of plain
+  values in place, a reference by key to each member's position; over the
+  result of another per-element construct, a reference to the row where the
+  rows are documents (P77) and a copy of the row otherwise. The label rule is
+  that of §3.17: the membership of a bucket is the source's membership joined
+  with a `fold` of the key function's template over every element.
+  *Alternative:* `Object.groupBy(xs, f)` inside a promoted `computed`, whose
+  result is a plain record with no `lookup` and no place for a dependency on
+  one key. *Tests:* `base/pattern-compiler/tests/plan.rs`,
+  `base/pattern-compiler/exec/test/collection-index.test.ts`, and
+  `collection-index.test.ts`, `kept-index.test.ts` and `index-modes.test.ts`
+  under `runtime/runner/test/compiled/`. *Not built:* `keys()` and
+  `keyEntries()`. *If decided otherwise:* the arm of `Emitter::method` of
+  `src/plan.rs` and `Index` of `exec/executor.ts`.
+- **P68. The keyed join is a `map` whose body calls `lookup`, and a source that
+  names several keys is spread with `flatMap` first.** The coordinator's
+  decision of 2026-11-22; it is no owner ruling. It answers part (b) of question
+  370. *The case:* `crossrefTable` of Topics gives for each topic the topics
+  that mention it. *Decision:* no construct of its own. The rows are those of a
+  `map` whose body calls `index.lookup(key)`: over an array of references each
+  row is a document of its own where it is a record (P54), and over plain values
+  in place or over the result of another per-element construct the rows are in
+  place. A source that names several keys is first spread into one element for
+  each (source, key) pair, as `topics.flatMap((from) => from.mentions.map((to)
+  => ({ from, to }))).groupBy((pair) => pair.to)`. A row has the label of what
+  its body reads of its own element and, for the lookup, the template of the key
+  joined with the fold over every source, so a row whose key no source names
+  depends on every source's key. *Alternative:* `joinBy(sources, (source) =>
+  keys, (key, matches) => row)`, new surface that today's transformer refuses,
+  with the label rule that a source that names no key of a row adds nothing to
+  the row, which is an under-label; and a key function that returns an array of
+  keys, which today's `groupBy` does not take. *Tests:* the fixture
+  `keyed-join.tsx` with `exec/test/collection-index.test.ts` and
+  `runtime/runner/test/compiled/collection-index.test.ts`; the fixture
+  `crossref.tsx` with the two `crossref.test.ts`. *If decided otherwise:* a
+  record of the plan and a construct of the executor for the join.
+- **P69. The membership of all buckets of an index is one label entry of the
+  index's state document. Designed, not built.** The coordinator's decision of
+  2026-11-22; it is no owner ruling. *The case:* the fold over every member's
+  key is one label for all buckets. Stored at each bucket it is `N` entries each
+  as long as the fold, which is how `plan-and-label-templates.md` §3.17 and
+  `execution-and-storage.md` §6.3 read. *Decision:* the index is one state
+  document whose `buckets` member holds a record from the encoded key to the
+  bucket, and the fold is stored once, as the entry of `buckets`; a read of a
+  bucket, of a position in it, of its length, or of a key that is absent
+  resolves to that entry, as a read of a row in place joins the `*` templates.
+  Where a bucket holds copies of rows, the entry is also joined with a fold of
+  the row's template over the source, an over-label of each bucket by the rows
+  of the others. *As built:* the result document holds a label entry at the
+  index, at each bucket and at `keys`, each with the fold, and the index is
+  formed again whole as a record when a bucket changes. *What it leaves where
+  each member has a clause of its own:* the one entry holds `N` clauses and
+  every reader of any bucket consumes all of them; a row whose body reads its
+  bucket stores `N` clauses, so `N` rows store `N` squared (questions 352 and
+  379). *Alternative:* a document for each bucket with the one label in each
+  (question 379). *Tests:* none, since it is not built. *If decided otherwise:*
+  nothing built changes.
+- **P70. The per-entry construct over a record is
+  `Object.entries(record).map(f)` over a record that is an input, keyed by the
+  entry's name.** The coordinator's decision of 2026-11-22; it is no owner
+  ruling. It answers part (a) of question 370. *The case:* `namesTable` of
+  Topics is a row for each entry of a record of references. *Decision:* the
+  crate takes `Object.entries(x).map(([name, value]) => row)`, where `x` is a
+  name or a member read that is a path of an input, as a `Collection` of
+  construct `map` over the slot of the record with `source.entries`, the record
+  observed as `enumeration`; an element slot has the path `0` for the name and
+  a path from `1` for the value. Over a record of references `value` is the
+  reference at the entry; over a record of plain values in place it is the
+  value there; `Object.entries` of a record the instance computed stays a plain
+  array generated from scratch. The membership, the count, the order and the
+  name of an entry have the label of the enumeration; a row has the label of
+  what its body reads. *Alternative:* a method `record.mapEntries(f)` of a cell,
+  which needs a method in `base/api/index.ts` and a lowering in today's
+  transformer. *Not covered:* `Object.keys(x).map`, `Object.values(x).map`, and
+  a `filter` or a `flatMap` over the entries, which stay expressions over the
+  whole record; an entry removed and added again under one name within a
+  transaction, where the row keeps its state. *Tests:* `tests/plan.rs`,
+  `exec/test/record-entries.test.ts` and
+  `runtime/runner/test/compiled/record-entries.test.ts`. *If decided
+  otherwise:* `Emitter::entries_of_record` and `Instance.#entries`.
+- **P71. The sort by a key as a recognized comparator of `toSorted`: replaced by
+  P85, which builds the method `sortBy`.** The coordinator's decision of
+  2026-11-22; it is no owner ruling. *As first decided,* with nothing built.
+  *The case:* the `lift` `topicsByActivity` reads the sort key of every topic on
+  an edit of one. *The plan:* `xs.toSorted((a, b) => key(a) - key(b))`, with the
+  operands exchanged for a descending order and `key(a).localeCompare(key(b))`
+  for texts, taken out of the function tier where the comparator has one of
+  these forms; a `Collection` of construct `sort`. The method `sortBy` was the
+  alternative, left to the owner because it needs a method in
+  `base/api/index.ts`. *Replaced* by P85: the method is one arm of the emitter
+  beside `groupBy`, where the comparator needs a recognizer of its two forms,
+  and `localeCompare` follows the locale of the process. *If decided
+  otherwise:* see P85.
+- **P72. The collection of an index is recorded in the plan as a `Collection`
+  whose `construct` is `groupBy` or `keyBy`, with no `Operation` record.** The
+  coordinator's decision of 2026-11-22; it is no owner ruling. *The case:*
+  `plan-and-label-templates.md` §3.17 has the index as an `Operation` of kind
+  `index` and a `Collection` of construct `operation` over the receiver.
+  *Decision:* one `Collection` whose body cone is the key function and whose
+  `membership` is the template of a `filter`; `lookup` on a place that is such
+  an output is a value derived from the key and the index's output, and `lookup`
+  on a slot, an index the instance is handed, is a `pick` below the `buckets`
+  member of the slot (§3.18). *Alternative:* the two records of §3.17.
+  *Tests:* `tests/plan.rs`, the test of the fold of the key function and of the
+  key that a `lookup` joins. *If decided otherwise:* `Emitter::collection` and
+  `index_of_place` of `src/plan.rs`, and the executor's reading of the
+  collection.
+- **P73. A bucket lists its members in the order of the source.** The
+  coordinator's decision of 2026-11-22; it is no owner ruling. *The case:*
+  today's runtime gave the members of a bucket in another order than the
+  source's for an array of cells in one probe. *Decision:* the source order, as
+  `plan-and-label-templates.md` §3.17 states, kept under a move in the source
+  and a member that returns to a bucket. *Alternative:* the order in which the
+  members entered the bucket. *Tests:* `exec/test/collection-index.test.ts`.
+  *If decided otherwise:* the insertion by position in `Index`. The probe of
+  today's runtime was not examined.
+- **P74. A slot that reads the value a reference in an upstream row names has
+  the label of the upstream output joined with the label of that read.** The
+  coordinator's decision of 2026-11-22; it is no owner ruling. It closes an
+  under-label. *The case:* a `map` over an array of references whose row holds a
+  member of its element holds a reference to where the element stores it, and
+  the plan gives that output the `identity` slot of the position. A per-element
+  construct over the result of that `map` whose body reads the value has a
+  `value` slot of root `element`, which `Instance.bindSlot` bound to the
+  upstream output alone, so the stored label held nothing of the label of the
+  value at the position the reference names. *Decision:* `bindSlot` keeps,
+  beside the upstream element, the stored positions that the read of the slot
+  went through, where the slot does not observe `identity`. `SlotBinding` of the
+  write record takes `through` beside `output` (`exec/plan-write.ts`,
+  `runtime/runner/src/cfc/types.ts`), and `inputsFor` of
+  `runtime/runner/src/cfc/plan-labels.ts` joins the label of that read with the
+  label of the output: the confidentiality of both, and the integrity both
+  carry. The site carries the `SPEC-PENDING` marker, since such a binding is in
+  no clause of the specification. *Alternative:* a plan that gives the upstream
+  output the `value` slot, which labels a row with what it does not hold.
+  *Tests:* `chained-maps.test.ts` and `index-of-rows.test.ts` under
+  `runtime/runner/test/compiled/`, each with the rows as documents and in place.
+  *If decided otherwise:* `SlotBinding.through` and its join (questions 392 and
+  397).
+- **P75. The key of an index and of a `lookup` is observed by its type, and a
+  key of an unresolved type and a `lookup` by a cell in a handed index are
+  refused.** The coordinator's decision of 2026-11-22; it is no owner ruling.
+  *The case:* the key of `crossrefTable` is a cell. *Decision:*
+  `Emitter::key_class` of `src/plan.rs` observes a key as `value` where its
+  type is a scalar and as `identity` where it is a cell, an object or an
+  unknown. A key whose type the crate does not resolve is listed as unsupported;
+  the crate does not resolve the type of a row of a `map` written in the body of
+  a `flatMap`, so the key function of an index over such rows has its parameter
+  annotated. A `lookup` in an index of the same instance passes a cell key as
+  the reference it is, and the executor files a cell under the address it names.
+  A `lookup` by a cell in an index the instance is handed is listed as
+  unsupported: the buckets of a stored index are members of a record that a
+  `pick` chooses by a value. *Alternative:* a key read as a value always, which
+  reads the content of a cell to compare it. *Tests:* `tests/plan.rs`, the test
+  of the cell key and the two tests of the refusals. *If decided otherwise:*
+  `key_class` and `Facts::cell_key` of `src/emit.rs`.
+- **P76. The members of a bucket that a `lookup` gave are elements with the keys
+  of the index's source.** The coordinator's decision of 2026-11-22; it is no
+  owner ruling. *The case:* a `map` over a bucket was a `map` over an array of
+  plain values that a computation returned, which keys each value by the salted
+  hash of the value with every link followed. For pairs that hold references to
+  topics that mention each other the hash walks a graph as a tree, and the
+  fixture did not load at 50 topics. *Decision:* `Host.lookup` names the members
+  as the elements of the index's source (`bucketElements`), with the keys they
+  have there, and `Instance.#table` takes them. `Index` marks the buckets whose
+  members differ when its assembly is formed again whole. *What stays:* the same
+  hash for any other `map` over an array of plain values in place that hold
+  references to documents that refer to each other (question 380).
+  *Alternative:* the key of note 643 for every plain value, which is the plan
+  of question 380. *Tests:* `exec/test/crossref.test.ts`. *If decided
+  otherwise:* `bucketElements`.
+- **P77. A kept index over rows that are documents holds references by key to
+  the rows.** The coordinator's decision of 2026-11-22; it is no owner ruling.
+  *The case:* a kept index over the result of another per-element construct held
+  a copy of each row, so it was written when a row changed, and a read of a
+  bucket keyed the copies by the hash of P76. *Decision:* where the rows are
+  documents of their own (the `Instance` option `rowDocuments`, which
+  `startCompiledPiece` sets from `rowDocumentCollections`),
+  `Instance.indexRecord` gives a reference by key to the row at its place in the
+  result; `Store.locate` finds a row of an array named in `Store.rowKeys` by its
+  element key, and `RuntimeTransactions.#encode` writes the reference as a link
+  to the row's document. The index is written when a member enters or leaves a
+  bucket, and a read of a member reads the row's document under the row's label.
+  Where the rows are in place the bucket holds copies. *Alternative:* copies in
+  both layouts. *Tests:* `runtime/runner/test/compiled/crossref.test.ts`. *If
+  decided otherwise:* `Instance.indexRecord` and `Store.rowKeys`.
+- **P78. The rows of a `map` over the entries of a record of references are
+  documents.** The coordinator's decision of 2026-11-22; it is no owner ruling.
+  It extends P54. *The case:* the rows of `Object.entries(names).map(([name,
+  member]) => ({ member, name }))`. *Decision:* `rowDocumentCollections` of
+  `exec/row-documents.ts` takes a `map` over the entries of a record whose
+  schema declares its values as cells. A record declared with values of an
+  unknown type keeps its rows in place, which is the case of `namesTable` on the
+  two Topics boards. *Alternative:* rows in place for every record. *Tests:*
+  the fixture `names-table.tsx` with
+  `runtime/runner/test/compiled/names-table.test.ts`. *If decided otherwise:*
+  that arm of `rowDocumentCollections`.
+- **P79. A read that finds what a reference names is no read of what is stored
+  below the named position.** The coordinator's decision of 2026-11-22; it is no
+  owner ruling. *The case:* the element table of a collection over an array of
+  references, and the keys of the array, are formed from what each link names.
+  Registered as reads of the named position and everything below it, they had a
+  write to any field of any member mark every assembly over the array and
+  report a read of every member to the transaction: 1,013 positions read for an
+  edit of a title at 1,000 topics. *Decision:* `Position.own` of `exec/store.ts`
+  marks such a read; `Store.changedSince` and the marking of readers in
+  `Instance` take a write at the position for a change and a write below it for
+  none. A document that comes to exist, or whose root is replaced by a link, is
+  a write at the position. *Alternative:* the read of the whole document.
+  *Tests:* `exec/test/crossref.test.ts`, the last three cases. *If decided
+  otherwise:* `Position.own`. It changes what marks a reader and no record
+  (question 395).
+- **P80. A grouping of the result of another per-element construct is in the
+  compiled language alone, and the two measured Topics boards do not run on
+  today's runtime.** The coordinator's decision of 2026-11-22; it is no owner
+  ruling. *The case:* `groupBy` is declared on a cell of an array, the result of
+  a `flatMap` or a `map` in a pattern body is typed as a plain array, and a cast
+  to a cell type is refused by today's transformer and by the crate. The pivot
+  of Topics and its index both group such a result. *Decision:* the boards
+  `board-filing-order.tsx` and `board-sorted-references.tsx` use the grouping,
+  and the arms `today` and `today-labeled` of the harness run `main.tsx`. The
+  facts that the arm `runner` reads of each board at 100 topics equal those the
+  arm `today-labeled` read of the same board with the three `lift`s.
+  *Alternative that today's types take:* a key function that returns the list of
+  mentions, so that the grouping is over the array of topic references itself;
+  today's `groupBy` takes one key. *Tests:* the comparison of the facts at 100
+  topics, which is a run of the harness and no test. *If decided otherwise:*
+  `groupBy` declared for the result of a per-element construct in
+  `base/api/index.ts`, with a lowering in today's transformer (question 382).
+- **P81. A verb that passes a collection on to an instance it makes is a handler
+  with cells in its state.** The coordinator's decision of 2026-11-22; it is no
+  owner ruling. *The case:* `addTopic` as an `action` in the pattern body closes
+  over the mention universe, the pivot and its index, and the executor hands a
+  handler each value it closes over read whole (`Instance.#attempt`): every row
+  and, through the references in the rows, every topic. *Decision:* on the two
+  boards `addTopic` is a handler whose state declares the three as cells.
+  *Alternative, the plan:* the crate observes a captured value that the body
+  only passes on as `identity` (question 381). *Tests:* none of its own; the
+  boards are measured. *If decided otherwise:* the boards.
+- **P82. A change of a label that leaves an element of a folded collection in
+  its group gives no record of the fold again.** The coordinator's decision of
+  2026-11-22; it is no owner ruling. *The case:* a write by another writer
+  changed the label entry at one field of a topic's document.
+  `Instance.#regroupReaders` of `exec/executor.ts` updated the group of the
+  element of the pivot that read the document and gave the record of every
+  output whose template folds over the pivot again, whether or not the
+  element's group changed. The index of the pivot by name is such an output, so
+  an edit of any field of any topic gave a record of the result document, and
+  the piece and the preparation then read each of its 4,094 label entries at
+  1,000 topics. *Decision:* `#regroupKey` returns whether the element is in
+  another group than before, and the records of the folds are given again only
+  then. The group of an element is the identifier of the labels its cone
+  instances consumed. *Alternative:* the record at every change of a label
+  entry of a member. *Measured:* an edit of a title of the middle topic takes
+  11, 12 and 18 ms at 100, 1,000 and 2,000 topics, against 15, 48 and 89 ms.
+  *Tests:* `runtime/runner/test/compiled/crossref.test.ts`, "gives no record of
+  the index of the rows by name when another writer writes the title of a topic,
+  which no body reads". *If decided otherwise:* `#regroupKey` (question 399).
+- **P83. An array of scalars that differs from the stored one at more than one
+  position is written whole.** The coordinator's decision of 2026-11-22; it is
+  no owner ruling. *The case:* the kept index stores its occupied keys as an
+  array in the order the buckets came to exist. A topic whose name changes takes
+  its key out of the middle and adds one at the end, and `put` in
+  `Instance.#place` wrote each position behind the one that left with a record
+  of its own: 500 of 521 records at 1,000 topics, and a preparation that is the
+  number of records times the number of label entries. *Decision:* such an
+  array is written whole, as an array of another length is: one write and one
+  record (`shiftedScalars`). *Alternative:* no array of the occupied keys, which
+  is the plan of question 379. *Measured:* 20 records at every size, the piece's
+  own time 6, 34 and 68 ms and the preparation 9, 53 and 119 ms. *Tests:*
+  `runtime/runner/test/compiled/kept-index.test.ts`, "gives one record of the
+  occupied keys, and none of a position among them, when a key leaves the middle
+  of them and another enters". *If decided otherwise:* `shiftedScalars`
+  (question 401).
+- **P84. The assembly of a `flatMap` whose bodies return the result of an inner
+  per-element construct keeps its segments and splices the one that changed.**
+  The coordinator's decision of 2026-11-22; it is no owner ruling. *The case:*
+  the assembly of a `flatMap` over an array of references depended on each
+  element's body and on the inner assembly each body returned, and
+  `Instance.#reassemble` refused an entry with a dependency beside those of the
+  elements, so a change of one topic's mentions formed every segment again and
+  located every member: 1,003 positions read at 1,000 topics. *Decision:* where
+  every body returned the assembled result of another per-element construct,
+  the assembly keeps the length of each segment and its dependency on each
+  inner assembly (`Rows.segments`), and a mark that names an element or its
+  inner assembly puts the members of that segment in the place of those it had,
+  as one splice. A change of the source array, and a `flatMap` whose body
+  returns a stored array or writes one, are formed whole. *Alternative:* the
+  whole assembly for every change. *Measured:* an edit of the mentions reads 4
+  positions at every size. *Tests:* `exec/test/crossref.test.ts`, "forms the
+  segment of the one topic whose mentions changed, among 1,000 topics as among
+  10". *If decided otherwise:* `Rows.segments`.
+- **P85. The sort by a key is the method `sortBy` with one key function,
+  ascending, with texts ordered by their code units.** The coordinator's
+  decision of 2026-11-22; it is no owner ruling. It replaces P71. *The case:*
+  the `lift` `topicsByActivity` of the board `sorted-references`. *Decision:*
+  `xs.sortBy((x) => key)`; a descending order is a negated numeric key. The plan
+  holds a `Collection` whose `construct` is `sortBy`, with the key function as
+  its body cone, observed as `value`, and the membership template of a
+  `filter`: the `fold` of the key over every element joined with the source's
+  membership. The order of keys is `compareSortKeys` of `exec/executor.ts`:
+  numbers by value, texts by their code units, `false` before `true`; a number
+  before a text before a boolean; `null`, `undefined` and `NaN` behind every
+  other key; equal keys in the order of the source. Over an array of references
+  a changed key is two splices and one evaluation of the body of the element
+  that moved; over the result of another per-element construct the order is
+  formed whole for each change. `base/api/index.ts` declares no `sortBy`, so a
+  source that uses it does not run on today's runtime. On the board a topic
+  whose key reads as `undefined` has a card behind every other, where the
+  `lift` leaves it out. *Alternative:* the recognized comparator of P71; and
+  `localeCompare` for texts, whose order follows the locale of the process.
+  *Tests:* `tests/plan.rs`, `exec/test/sort-by.test.ts` and
+  `runtime/runner/test/compiled/sort-by.test.ts`. *If decided otherwise:* the
+  arm of `Emitter::method`, `Rows.sortKeys` and `compareSortKeys` (question
+  382).
+- **P86. A `map` over a `sortBy` of an array of references has its rows as
+  documents.** The coordinator's decision of 2026-11-22; it is no owner ruling.
+  It extends P54. *The case:* the cards of `sorted-references`. *Decision:*
+  `rowDocumentCollections` takes a `map` over a `sortBy` of an array of
+  references as it takes one over a `filter` of one. The link at a position then
+  has the fold of the keys and the row's document its own label. *Alternative:*
+  rows in place, where each row stores the label of the order. *Tests:*
+  `runtime/runner/test/compiled/sort-by.test.ts`. *If decided otherwise:* that
+  arm of `rowDocumentCollections`.
+- **P100. A handle keeps the instance and the host in private fields, and the
+  classes of what a function body is given are frozen where a compartment
+  evaluator is made.** The coordinator's decision of 2026-11-22; it is no owner
+  ruling. It closes a defect of soundness. *The case:* `Handle` held the
+  instance and the host of its cone in public members, and the crate's check
+  accepts a member that the type of a handle does not declare, so a handler body
+  of an accepted pattern, evaluated in the compartment, read the executor's
+  store through `last.instance`. *Decision:* both are private fields of `Handle`
+  (`Handle.refusingWrites` is the one use outside the class), and
+  `compartmentEvaluator` freezes `Handle`, `Ref` and `StreamRef` with their
+  prototypes. A body still reads `handle.target`. *What it leaves:* the check
+  still accepts the undeclared member, and `$h` and `$rt` are confined by the
+  check alone (question 386). *Alternative:* a membrane between the executor and
+  value code, which copies or wraps each value for each call. *Tests:*
+  `runtime/runner/test/compiled/value-code.test.ts`, the two cases on a handle.
+  *If decided otherwise:* the private fields and `freezeHandedClasses` of
+  `runtime/runner/src/compiled/value-code.ts`.
+- **P101. The crate runs on load as its release binary in a child process,
+  started from the realm that starts the piece.** The coordinator's decision of
+  2026-11-22; it is no owner ruling. *The case:* milestone 5 has the runtime
+  compile on load with the crate in the compile worker. *Decision:*
+  `PatternCompiler` of `runtime/runner/src/compiled/compile.deno.ts` writes the
+  files of the program to a temporary directory, runs the binary there with
+  `emit --accepted`, and removes the directory. It is not a WebAssembly build:
+  the crate reads its modules with `std::fs` and has a binary, and a
+  WebAssembly build needs a target, bindings for the file reads and a built
+  artifact that something keeps current. It is not started from the compile
+  worker (`ModuleCompileWorker`): the worker exists to take the type check and
+  the emit off the thread of the realm, and a child process is off it already.
+  With `cacheDir` the output is kept under the hash of the binary's bytes and
+  the hash of the source. *Alternative:* a WebAssembly build in the compile
+  worker. *Tests:* `runtime/runner/test/compiled/compile.test.ts`,
+  `base/pattern-compiler/compare/test/compile-on-load.test.ts` and
+  `base/pattern-compiler/tests/emit_accepted.rs`. *If decided otherwise:*
+  `PatternCompiler.compile`; the cache and the errors stay (questions 387 and
+  389).
+- **P102. A piece makes a compartment of its own, and a caller may share one
+  evaluator among pieces.** The coordinator's decision of 2026-11-22; it is no
+  owner ruling. *The case:* how many compartments the value code of a process
+  runs in. *Decision:* `startCompiledPiece` makes one `compartmentEvaluator()`
+  for a piece, 0.09 to 0.12 ms after the first of a process, and
+  `CompiledPieceOptions.evaluate` takes one that a caller made. Sharing is
+  admitted by two properties: the global object of the compartment is frozen,
+  and a module's text is the body of a function, so one module leaves nothing in
+  the compartment that another finds. *Alternative:* one compartment for each
+  module, as today's bundles have. *Tests:* `value-code.test.ts`, a module that
+  assigns to a global does not load. *If decided otherwise:* the default of
+  `startCompiledPiece`.
+- **P103. The globals of value code are those of a module of today's bundles
+  without `__cfReg`, with the gated clock under a frame of a handler.** The
+  coordinator's decision of 2026-11-22; it is no owner ruling. *The case:* what
+  value code may name. *Decision:* the globals of
+  `createModuleCompartmentGlobals` without the registrar of hoisted builder
+  artifacts, which value code does not call. `CompiledPiece` runs each compiled
+  handler under a frame of a handler with the time of the event, so the gated
+  `Date` gives a handler the event's time to the second and the gated `Math` a
+  random draw; the derivation and module scope run under no such frame, and the
+  same calls throw there. Today's module verifier is not run on value code, as
+  `language-subset.md` §3.4 has it. *Alternative:* a set of globals of the
+  design's own. *Tests:* `value-code.test.ts`. *If decided otherwise:*
+  `valueCodeGlobals` of `value-code.ts` (question 402).
 
 **The scope of the storage decisions** (the coordinator's recommendation to
 the owner, 2026-11-18; not an owner ruling). Read in source after round 5:
@@ -13901,62 +14324,45 @@ of its three rounds. Whenever a question says `map`, it names the case.
      one it arrives with stops there, which `coveringSelector` decides for the
      roots. *Assumed:* a cost of the memory server that this work does not
      change; each figure says which topic schema it was measured under.
-370. **Three constructs that Topics needs, so that a create and an edit of the
-     mentions do not read the whole board** (for the owner). On the runner path
-     of milestone 3 an edit of a topic's title does the same work at every size
-     of the board and settles in 9 to 17 ms. A create, and an edit of a topic's
-     mentions or `shortName`, do not: they run `lift`s of the board that read
-     every topic, because the language has no construct that keeps such a result
-     under a change of one member by reading that member alone, as `map` does
-     for a row. Measured on the board `filing-order` on 2026-11-22 at 100, 1,000
-     and 2,000 topics, with the mentions declared as references in the harness's
-     topic schema: a create takes 158, 1,034 and 1,783 ms and reads 2,061,
-     19,161 and 38,161 positions; an edit of the mentions takes 34, 273 and 517
-     ms and reads 1,000, 10,000 and 20,000 positions; an edit of the `shortName`
-     takes 44, 365 and 773 ms. Of the create at 1,000 topics, 297 ms are the
-     piece's and 282 ms the preparation's. Today's runtime takes 16,531 ms for a
-     create at 1,000 topics with its pull. This is the largest cost that is left
-     on Topics. The notes give these costs for a create and an edit whole and
-     not for each `lift`. The three constructs, each with the `lift` it would
-     replace, what that `lift` reads today, and the label rule the prototype's
-     notes propose: (a) *a per-entry construct over a record,* `entries(record)`
-     as a source of `map`, whose rows are keyed by the entry's name, for
-     `namesTable`, a row for each entry of a record of references. On a create
-     that `lift` must read the entry that was added, and reads every entry. A
-     row has the label of the reference observed at its entry and of what its
-     body reads; the set of rows has the label of the enumeration of the
-     record's names. (b) *A keyed join,* `joinBy(sources, (source) => keys,
-     (key, matches) => row)`, which keeps for each key the sources that name it,
-     for `crossrefTable`, which gives for each topic the topics that mention it.
-     On a create that `lift` must read the mentions and the `shortName` of the
-     new topic, add one row and change the row of each topic the new one
-     mentions, and reads 6 positions of every topic; it runs as well on every
-     edit of the mentions or the `shortName` of one topic. A row has the label
-     of the keys of the sources that name it and of what its body reads of them,
-     and the label of the membership of each source in its group, which is the
-     label of that source's key list; a source that names no key of a row adds
-     nothing to the row. (c) *A grouping by a key,* `groupBy(rows, (row) =>
-     key)`, which gives a record from each key to the references of its rows,
-     for `crossrefIndexOf`, the positions of the rows of `crossrefTable` by
-     name. On a create that `lift` must read the name of the row that was added,
-     and reads the name of every row. A group has the label of the key of each
-     of its members and of the enumeration of the source; the record's set of
-     keys has the label of every key, since which keys exist depends on all of
-     them. Beside the three, on the board `sorted-references` an edit of
-     `lastActivityAt` runs the sorting `lift` over every topic, 57, 445 and 868
-     ms; the construct for it is the `sortBy` of the integration plan's "Labels
-     of large derived collections" (question 352). Each construct is new surface
-     of the language, a record of the plan and a label rule; the label rules
-     above are the build agent's and are not reviewed against the specification.
-     No board can be changed without them: a `map` over the array of topics
-     gives the rows of `namesTable` only while the namespace and the array hold
-     the same members, and nothing in the subset gives the inverse of the
-     mentions without reading every topic. *The coordinator's recommendation,
-     not a ruling:* add the three constructs, written and measured in the
-     prototype first, as the integration plan requires of new semantics. The
-     notes give no order among them; the keyed join is the one whose `lift` runs
-     for an edit as well as for a create. *Assumed* until answered: no construct
-     is added, and the boards keep the `lift`s.
+370. **The constructs that Topics needs, so that a create and an edit of the
+     mentions do not read the whole board** (answered in part: by the ruling
+     Z87 the constructs are designed and built; their surface is question 382,
+     and what still follows the board is question 379). With the three
+     whole-list `lift`s `namesTable`, `crossrefTable` and `crossrefIndexOf`, a
+     create and an edit of a topic's mentions or `shortName` read every topic.
+     Measured on the board `filing-order` on 2026-11-22 at 100, 1,000 and 2,000
+     topics, with the mentions declared as references in the harness's topic
+     schema: a create takes 158, 1,034 and 1,783 ms and reads 2,061, 19,161 and
+     38,161 positions; an edit of the mentions takes 34, 273 and 517 ms and
+     reads 1,000, 10,000 and 20,000 positions; an edit of the `shortName` takes
+     44, 365 and 773 ms; and on `sorted-references` an edit of `lastActivityAt`
+     runs the sorting `lift` over every topic, 57, 445 and 868 ms. *What is
+     built* (provisional decisions P67 to P86; the integration plan, "The
+     constructs"): (a) the per-entry construct over a record is
+     `Object.entries(record).map(f)` over a record that is an input, keyed by
+     the entry's name, and not a source `entries(record)`; (b) the keyed join
+     is a `map` whose body calls `lookup` in an index, with a `flatMap` into
+     pairs for a source that names several keys, and not a function `joinBy`;
+     (c) the grouping is the method `groupBy`, with `keyBy` and `lookup`, which
+     the language and today's runtime have, and its result is a collection
+     index and not a record; and the sort is the method `sortBy`. *A correction
+     of the label rule first proposed for the join:* a row has the label of the
+     key of every source, of those that are in no bucket of the row as well,
+     since an absent match is an observation of every key; the rule that a
+     source that names no key of a row adds nothing to the row was an
+     under-label. *Measured on the boards on the constructs,* same day and
+     schema, the median of three runs: an edit of the mentions takes 13, 181 and
+     17 ms on `filing-order` and 14, 16 and 16 ms on `sorted-references` and
+     reads 4 positions at every size, the 181 ms being a collection of the heap;
+     an edit of the `shortName` takes 42, 275 and 969 ms; an edit of
+     `lastActivityAt` on `sorted-references` 38, 232 and 558 ms; and a create
+     165, 1,109 and 3,323 ms with 801, 7,101 and 14,101 positions read. So the
+     edit of the mentions no longer follows the board, and the other three do,
+     for another cause than before: each writes a document that grows with the
+     board (question 379), and a create is also handed two collections whole
+     (question 381). *Assumed:* the constructs as built. The label rules are the
+     build agents' reading of `plan-and-label-templates.md` §3.17 and are not
+     reviewed against the specification (questions 391 to 401).
 371. **The executor compares every unit of the result in each derivation** (not
      for the owner). The piece's own time in an edit of a title on
      `sorted-references` is 2.9, 4.5 and 5.6 ms at 100, 1,000 and 2,000 topics.
@@ -13979,10 +14385,13 @@ of its three rounds. Whenever a question says `map`, it names the case.
      cell with no document as nothing where the executor reads the default of
      its schema. The shell does not render a compiled piece. Of the corpus, 183
      of 239 modules run pass on the runner path (question 376). Value code runs
-     with no sandbox (milestone 5). The board `main` and the rows-in-place
-     layout were not measured after the first round, today's arm was not run at
-     2,000 topics, and no figure is of two writers, of a memory server over a
-     socket, or of an idle machine. *Assumed:* each is a stub with its reason in
+     in a compartment, and the crate's check is the only barrier between a
+     pattern and the executor (milestone 5; question 386). The board `main` and
+     the rows-in-place layout were not measured with the reads through handles,
+     the label readers or the constructs, today's arm was not run at 2,000
+     topics or beside the boards on the constructs, which it does not take, and
+     no figure is of two writers, of a memory server over a socket, or of an
+     idle machine. *Assumed:* each is a stub with its reason in
      the integration plan, and the figures of milestone 3 are read with them.
      The order in which they are built is not decided.
 373. **Whether the first derivation of an instance a handler made may be a
@@ -14057,6 +14466,12 @@ of its three rounds. Whenever a question says `map`, it names the case.
      takes 256 to 265 ms, with 7 ms of preparation and 2 to 4 ms in the piece,
      where every other edit of a title takes 9 to 17 ms. A write alone at the
      middle of 1,000 topics took 143 ms once. The cause was not looked for.
+     These figures are of the boards with the three `lift`s. On the boards on
+     the constructs the same edit takes 10 to 16 ms in three runs of each
+     board, and pauses of 170 to 220 ms that the piece and the preparation do
+     not account for were seen, in one trace and one profile, to be a
+     mark-compact collection and an insertion into the weak set of deep-frozen
+     objects (question 383). The edit of this question was not profiled.
      *Assumed:* a cost outside the piece and the preparation, until examined.
 378. **The harness switches of the Topics tables** (settled). The Topics
      scale harness with every switch the tables of milestone 3 name,
@@ -14066,7 +14481,356 @@ of its three rounds. Whenever a question says `map`, it names the case.
      tables measure are on the local branch
      `claude/compiled-pattern-topics-runs`, with the compiled subset of
      Topics, which is a change to a pattern and so not part of the stack.
-     *Open:* where those two boards go.
+     *Open:* where those two boards go (question 382).
+
+**From the constructs of milestone 3 and from milestone 5 (2026-11-22 and
+2026-11-23).** The constructs that stand in the place of Topics' whole-list
+`lift`s are built and the two boards are written with them, and value code runs
+in a compartment
+([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+"Milestone 3: a compiled piece in the runner" and "Milestone 5: value code in
+the sandbox"). Questions 370, 372, 377 and 378 above are brought in line with
+it. The provisional decisions P67 to P86 and P100 to P103 are of this work.
+Whenever a question says `map`, `filter`, `flatMap`, `groupBy` or `sortBy`, it
+names the case.
+
+379. **An index, and an array of the result, stored so that one change writes no
+     document that grows with the data** (not for the owner until designed;
+     provisional decisions P69 and P83). This is the largest cost left on
+     Topics. A kept index is one record of the result document, with a bucket
+     and a label entry for each key and an array of the occupied keys; a change
+     of one member's key writes the `buckets` record whole where a key leaves it
+     and another enters, in a commit of a document of 2.0 MB at 1,000 topics and
+     4.0 MB at 2,000, and an edit of a `shortName` takes 275 and 969 ms. A move
+     in an array of links of the result writes each position between the old
+     place and the new, and an append writes a document as long as the list: an
+     edit of `lastActivityAt` on `sorted-references` takes 232 and 558 ms, and a
+     create writes three documents of 0.37 to 1.6 MB at 1,000 topics. *The
+     plan, not built:* one document for each bucket, named by the index and the
+     encoded key, which holds the members and the one label of the membership,
+     with no record of all buckets and no array of the occupied keys; `lookup`
+     in a handed index resolves the bucket's document from the key; `keys()` and
+     `keyEntries()`, which are not built, need a listing that is kept apart. It
+     is the state document of `execution-and-storage.md` §6.3 split by bucket.
+     For the arrays, the part documents of P20 (`exec/parts.ts`), which the
+     runner path runs without. *Open:* whether the label of the membership is
+     stored once for the index (P69) or once in each bucket document; what a
+     listing of the occupied keys costs a change of one key; and whether part
+     documents wait for the storage layer, as "The scope of the storage
+     decisions" has it. *Assumed:* as built, with the cost stated.
+380. **The key of a plain value that holds references** (not for the owner until
+     designed; provisional decision P76). `Instance.#table` of
+     `exec/executor.ts` keys a plain value of an array that a computation
+     returned by the salted hash of the value with every link followed. For
+     values that hold references to documents that refer to each other the hash
+     walks a graph as a tree: a fixture of pairs of topics that mention each
+     other did not load at 50 topics. The members of a bucket are exempt (P76);
+     every other `map` over an array of plain values in place that hold such
+     references has it, and nothing in the crate refuses one. *The plan, not
+     built:* key the value by its plain content with each reference in it as the
+     address of what it names (`Store.addressOf`), and read nothing of what is
+     stored there; a value that holds no reference keeps the key it has. The
+     keys of values that hold references change with it, and with them the
+     identity of what is derived for each; the ruling on the salted hash of a
+     plain value says nothing of a reference inside the value. Its label side is
+     question 400. *Assumed:* as built.
+381. **A body that is handed a collection reads it whole** (not for the owner;
+     provisional decision P81). The executor hands a handler each value it
+     closes over, and a `lift` each computed value, read whole (`Host.pass`,
+     `Store.read`, `Instance.#attempt`). On Topics the `lift` `backlinksOf` of a
+     new topic declares the pivot and its index as cells and reads one bucket,
+     and each of two derivations copies both: 67 and 84 ms of a create at 1,000
+     topics, 7 positions read for each topic. The verb `addTopic` is a handler
+     with cells in its state for the same reason, and any `action` that passes a
+     collection on to an instance it makes has the cost. *The plan, not built:*
+     the crate gives a parameter declared as a cell no `value` entry, so that
+     the handle reads on `get`, and observes a captured value that the body only
+     passes on as `identity`. *Assumed:* as built.
+382. **The surface of the constructs, and that the two measured boards do not
+     run on today's runtime** (for the owner; provisional decisions P67, P68,
+     P70, P80 and P85). The ruling Z87 has the three constructs that Topics
+     lacks designed and built next; which surface they have was the
+     coordinator's to choose and is the owner's to ratify. As built: the
+     grouping is `groupBy` and `keyBy` with `lookup`, which the language and
+     today's runtime have; the keyed join is a `map` whose body calls `lookup`,
+     with a `flatMap` into pairs for a source that names several keys; the
+     per-entry construct is `Object.entries(record).map`; and the sort is a new
+     method `sortBy`, ascending, with texts ordered by their code units and not
+     by `localeCompare`. *What follows for today's path:* `base/api/index.ts`
+     declares `groupBy` on a cell of an array and no `sortBy`, so a grouping of
+     the result of another per-element construct and every `sortBy` are in the
+     compiled language alone, and the boards `board-filing-order.tsx` and
+     `board-sorted-references.tsx` run on the runner path and not on today's
+     runtime. The two boards differ from the boards with the three `lift`s in
+     three observable points: a topic the board lists at two entries has two
+     rows of the pivot, a key of the namespace that the name grammar does not
+     admit has a row of the table, and a topic whose sort key reads as
+     `undefined` has a card behind every other. *Open:* whether `sortBy`, and
+     `groupBy` over the result of a per-element construct, are added to
+     `base/api/index.ts` with a lowering in today's transformer, so that one
+     source runs both ways; whether texts sort by code units; whether a
+     descending order gets a form of its own; and where the two boards go, which
+     question 378 leaves open. *The coordinator's recommendation, not a
+     ruling:* the surface as built, and the two methods added to today's API
+     before a board on the constructs goes to `main`. *Assumed* until answered:
+     as built.
+383. **Measurements of the Topics boards on the constructs that are not
+     explained or not made** (not for the owner until examined). A create at
+     2,000 topics on `filing-order` takes 3,323 ms as the median of three runs,
+     where an earlier measurement of the same boards gave 2,174 ms and the
+     boards with the three `lift`s 1,783 ms; the one change on its path between
+     the two measurements is the write of the occupied keys (P83), the load
+     averages were 5 to 10 against 3 to 6, and it was not examined. The
+     coordinator's one run of 2026-11-23 at 1,000 topics has a create at 1,559
+     to 2,501 ms where the build agent's median is 1,109 ms. An edit of the
+     mentions on `filing-order` at 1,000 topics takes 174 to 222 ms in three
+     runs with 7 ms in the piece and the preparation, which one trace attributes
+     to a mark-compact collection of 181 ms at a heap of 1.1 GB. One profile has
+     194 ms of an edit in an insertion into the weak set of deep-frozen objects
+     (`addToDeepFrozenCache` of `base/data-model/src/deep-freeze.ts`), under the
+     harness's own write. Not made: a profile of `sorted-references`; a run
+     under the default schema with P82 to P84; a run with a clause for each
+     topic; a count of the commits and documents of a load; a run of the boards
+     with the two evaluators of milestone 5 compared; a run of today's runtime
+     at these sizes beside them. *Assumed:* costs outside the piece and the
+     preparation, until examined. Question 377 is the same for the boards with
+     the three `lift`s.
+384. **What the constructs do not cover** (not for the owner). Each is a gap of
+     the build with its cause named. `keys()` and `keyEntries()` of an index are
+     not built. A `lookup` by a cell in an index the instance is handed, and a
+     key whose type the crate does not resolve, are listed as unsupported; the
+     crate does not resolve the type of a row of a `map` written in the body of
+     a `flatMap`, so the parameter of a key function over such rows is
+     annotated. A kept index is formed again whole, as a record, for each change
+     of a bucket, and `Index` finds a member in its bucket by a scan, so the
+     time of a change of a key follows the size of the two buckets: 8.7 ms at
+     10,000 members in ten buckets. A `sortBy` and a `filter` over the result of
+     another per-element construct form their order whole for each change, 158
+     ms for one change among 16,000 elements, and a `sortBy` over an array of
+     references does so when an element moved in the source. A `flatMap` whose
+     body returns a stored array or writes one, and any `flatMap` after a change
+     of its source array, forms its assembly whole. `Object.keys(x).map`,
+     `Object.values(x).map` and a `filter` or a `flatMap` over the entries of a
+     record stay expressions over the whole record, and the element table of
+     `Object.entries(x).map` is formed again for each change of the record. A
+     record whose entry a handler removes and adds again under one name within a
+     transaction keeps the row's state, as a re-keyed element does under the
+     ruling Z41. The plan of an index holds no `Operation` record (P72).
+     *Assumed:* each as built; none is needed by the two Topics boards but the
+     first cost of the kept index, which is question 379.
+385. **Over-labels of the constructs** (not for the owner; noted under the
+     ruling Z88 and not resolved). The name of a row of
+     `Object.entries(record).map` whose rows are in place is bound to no stored
+     position and takes the join of the transaction that derived the row; the
+     plan is to bind the slot of the name to the record's `enumeration`. The
+     `name` of the result of a second piece that is handed a kept index consumes
+     the clause of every item beside its own; not examined, and the crate reads
+     the handed index with `$h.read` and no slot. Where a bucket holds copies of
+     rows, its label is joined with the fold of the row's template over the
+     source, an over-label of each bucket by the rows of the others. On the two
+     boards the rows of `namesTable` are in place, which puts three of the four
+     label entries for each topic into the result document; declaring the values
+     of `names` as cells makes the rows documents (P78). *Assumed:* none is an
+     under-label.
+386. **The crate's check is the only barrier between a pattern and the objects
+     of the executor** (for the owner, as to what milestone 5 has to close
+     before a compiled piece runs a pattern that is not trusted; provisional
+     decision P100). The compartment confines names. `$h`, the host of a call,
+     holds the instance in a public member, and `$rt.setups` is the array the
+     executor writes, so a text that names either reaches the executor, its
+     transactions and the runtime; the check refuses both names in a source.
+     `emit <file>` writes value code for a module the check refuses, so load
+     runs `emit --accepted`, and an artifact from anywhere else is trusted as
+     given. The emitter writes no freeze of module data and no hardening of a
+     function, which `language-subset.md` §3.3 says the compiler emits, and a
+     value that a slot reads is a copy that is not frozen. The check accepts a
+     member that the type of a handle does not declare; what that member reached
+     is closed (P100), and the check is not changed. *The plan, not built:* the
+     host and `$rt` as objects that keep their state in private fields or
+     closures, as the handle does; the freeze and the hardening in the emitter;
+     an error of the check for an undeclared member of a handle. *The
+     coordinator's recommendation, not a ruling:* all three before the option
+     is on for a space that holds a pattern of another author. *Assumed* until
+     answered: the check alone, on a path that is off by default and a
+     measurement.
+387. **The call of the compiler from `Runtime.run`, and the two decisions it
+     needs** (for the owner; provisional decision P101). Nothing in the runtime
+     calls `PatternCompiler`. The plan: `RuntimeOptions` takes the compiler, a
+     binary path and a cache directory, which toolshed sets, and only the
+     serving runtime compiles; where the option is on and the space is marked as
+     compiled, `PatternManager.compilePattern` asks `PatternCompiler` for the
+     program and the runner's start of a piece calls `startCompiledPiece`; and a
+     piece that is loaded again is resumed from its stored documents, which is
+     not built (question 372). *To decide:* first, what happens for a program
+     the crate refuses in a compiled space, a refusal of the piece or today's
+     path for that piece. Second, which identity a stored piece names: on
+     today's path that of its compiled module, and in a plan the hash the crate
+     gives (`Plan.patterns`); `scheduler-and-serving-loop.md` §10.5 has the
+     result cell name the hash of the `CompiledPattern` record. *Open with it:*
+     the mark of a compiled space is not built; and §10.5 has compiling run in
+     the compile worker, where P101 has a child process started from the realm
+     that starts the piece. *Assumed:* nothing, since nothing calls the
+     compiler.
+388. **A function body that is handed a whole array reads it twice for each
+     call, each read a copy** (not for the owner). For a `lift` over an array of
+     plain values in place, 95 of the 99 ms of one edit at 10,000 rows on the
+     executor in memory are the two reads of the store: `$h.slot(0)` in the
+     value code for the computed part, and `Host.slot` again in `Host.invoke`
+     for the entry of `Body.reads`. For a `map` over the same array, whose
+     element body reads one row, the edit costs 0.08 ms. *The plan, not built:*
+     the emitter passes `$h.invoke` nothing at a path that a `value` entry of
+     `Body.reads` fills, which removes one read. The other stays a copy while a
+     body may change what it is handed and while `Instance.returned` knows a
+     value passed on unchanged by the identity of the object. *Open:* whether a
+     read is frozen and shared among the readers of one transaction, with which
+     a change by a body throws where it is dropped today; that needs the corpus
+     run both ways, since a body that sorts its argument in place would fail.
+     *Assumed:* a cost of the build.
+389. **What milestone 5 leaves unmeasured and unbuilt beside the two above**
+     (not for the owner). Nothing removes an old tree of the artifact cache, and
+     no claim keeps two processes from compiling one source at once; both write
+     the same text. An edit in a `map` over an array of plain values in place
+     does work that follows the length of the array, 0.08 ms at 1,000 and at
+     10,000 rows, and that work is about four times slower in a realm that is
+     locked down, 0.30 ms at 10,000; which step it is was not profiled. The
+     runner path was measured in three runs for each cell on a loaded machine,
+     and its arms do not separate. No continuous-integration job builds the
+     binary, and no WebAssembly build exists for where no native binary can
+     run. *Assumed:* each as built.
+390. **Statements of the design's documents that the provisional decisions P67
+     to P86 and P100 to P103 differ from** (not for the owner; a list for the
+     author who brings the documents in line, and none is changed here).
+     `plan-and-label-templates.md` §1.1 lists the values of `construct` and of
+     `source.via` without `groupBy`, `keyBy` and `sortBy`, and has a bucket of
+     an index as a source of kind `operation`; §3.17 has the index as an
+     `Operation` of kind `index` (P72), reads as a label entry for each bucket
+     (P69), and says nothing of a bucket over the result of another per-element
+     construct or of a copied row (P67, P77); no section has a `Collection` over
+     the entries of a record with `source.entries` and element paths `0` and `1`
+     (P70), a sort by a key (P85), a slot bound to an output and to a read at
+     once (P74), or the segments of a `flatMap` (P84). `language-subset.md`
+     §4.4 lists the collection methods and the index methods without `sortBy`,
+     and has `toSorted` with a comparator as function-tier code (P85); §4.4.1
+     shows `Object.entries(prices).map` as a destructuring example and not as a
+     per-entry construct with the entry's name as the element key (P70); §9
+     lists `localeCompare`, which the order of `sortBy` does not use; §3.3 says
+     the compiler emits the freeze of each frozen-data constant and the
+     hardening of each authored function, which the emitter does not (question
+     386); §3.4 says the compiler's check is the only one, which holds only for
+     an artifact of `emit --accepted`, and that the gate of the clock stays,
+     which is built under a frame the piece pushes (P103).
+     `execution-and-storage.md` §6.3 has the state document of an index with a
+     label entry for each bucket and the set of occupied keys, where the index
+     is a record of the result document (P69, question 379); where it has a
+     plain value keyed by a salted hash of its content, it has no case of a
+     value that holds references (question 380) or of a bucket's members
+     (P76). `scheduler-and-serving-loop.md` §10.5 has
+     compiling run in the compile worker (P101) and the plan and the value code
+     stored as documents of the space, where the artifacts are files of a cache
+     directory. `builtin-inventory.md` has `groupBy` and `keyBy` as class A with
+     durable index state, and no `sortBy`. `footprint-analysis.md` has
+     `toSorted(compare)` and `Object.entries(v)` as rows of a function body
+     alone.
+     This plan's integration document has the crate in the compile worker in
+     the text of milestone 5's item, which its status corrects.
+
+**Questions of Contextual Flow Control that the build met, deferred by the
+ruling Z88.** The owner ruled on 2026-11-22 that a question about a label, or a
+suspected under-label, that a round meets is written down and reported, and
+taken up after the milestones. Each question below stands on its own; none is
+resolved, none blocks a milestone, and the constructs they concern are not
+checked for labels beyond the tests named. Questions 391 to 401 are of the
+constructs of milestone 3, and 402 to 404 of milestone 5.
+
+391. **Whether a read of which reference a position holds consumes the label of
+     what the link names** (deferred by Z88). In the runtime's resolution it
+     does, where the runtime stored that label with the link: the `mentionedBy`
+     of a row of the fixture `crossref.tsx` has the clause of a topic that is
+     mentioned and is in no array the pattern reads
+     (`runtime/runner/test/compiled/crossref.test.ts`). *Open:* whether that is
+     the intended label of a reference that is compared and not followed.
+392. **Whether the label of a link position is consumed when the link is
+     followed** (deferred by Z88; beside P74). A value reached by crossing a
+     link in a member, as `item.note.text`, is stored with the clause of the
+     note and without the clause of the item whose link was crossed, in a direct
+     `map` over an array of references and in a chain of two per-element
+     constructs. *Open:* whether the label declared at the root of the item's
+     schema, which is the label of the link position, should be consumed.
+393. **A constant of the result that no record of the plan covers takes the join
+     of the transaction** (deferred by Z88). A constant beside the rows, as
+     `kind: "table"`, has no record and is stored with the join, which holds the
+     clause of the record: an over-label. *Open:* a record with an empty
+     template for a constant.
+394. **Whether the membership of an index may be held once and consumed through
+     a reference** (deferred by Z88; P69; beside question 352). The label of a
+     row that reads its bucket holds the fold over every member's key, so each
+     row is given its record again when a member with a label of its own enters
+     the source: 1,000 of 1,102 records of a create at 1,000 topics. *Open:*
+     whether a row may name the one stored membership of the index in place of
+     holding its clauses.
+395. **Whether a transaction that only locates the members of an array consumes
+     less than it should** (deferred by Z88; P79). `Position.own` changes what
+     marks a reader and what forms the keys of an array again, and changes no
+     record: a transaction no longer reports a read of each member of an array
+     it only locates. The rows' own records name the positions their bodies
+     read, and the membership record names the array. *Open:* whether the join
+     of a path with no record then lacks a clause it had.
+396. **What a miss in a kept index that is read by its key consumes** (deferred
+     by Z88). A `lift` that is handed a kept index as a cell and reads one
+     bucket by its key (`backlinksOf`) is labeled by what the read went through
+     and not by a `lookup` of the plan. *Open:* whether a miss, which reads a
+     position that holds nothing, consumes the membership of the index, as a
+     `lookup` that misses does.
+397. **The integrity of a slot bound to an output and to a read** (deferred by
+     Z88; P74). The join of `SlotBinding.through` takes the integrity that the
+     output and the read both carry, and the read's alone where the output has
+     no label. *Open:* whether that is the meet the specification intends for
+     such a binding, which no clause of it has; the site carries the
+     `SPEC-PENDING` marker.
+398. **Whether the label entry of a bucket must itself carry the fold**
+     (deferred by Z88). After a transaction that writes a kept index, the
+     `enumerate` entry of each bucket is stored with its integrity alone,
+     without the confidentiality that the load stored there. A read of a bucket
+     and of its length still consumes the clause of every member, through the
+     entry at the index (`runtime/runner/test/compiled/kept-index.test.ts`).
+     With P82 no later record of the index stores the entries with their
+     confidentiality again. *Open:* whether a read that resolves to the bucket's
+     entry alone exists, and what it would consume.
+399. **Whether the stored label of a fold may stay when a label entry of a
+     member changed and the element's group did not** (deferred by Z88; P82).
+     The record of a fold is not given again when a label entry of a member's
+     document changed and the element is in the group it was in. The group is
+     the identifier of the labels the element's cone instances consumed. *Open:*
+     whether the stored label may stay whenever what a read of the member
+     consumes did not change, whatever entries changed.
+400. **Whether a collection over plain values keyed by the references they hold
+     consumes less than it should** (deferred by Z88; question 380, a plan). A
+     plain value keyed by the identity of the references it holds is keyed
+     without a read of the documents referred to, where the keying reads them
+     whole and the transaction reports those reads. *Open:* whether the
+     membership of the collection then lacks what those reads gave it.
+401. **A read of one position among the occupied keys of an index** (deferred by
+     Z88; P83). The occupied keys are written as one array with one record. A
+     read of the array consumes the clause of every member
+     (`kept-index.test.ts`); a read of one position among the keys was not
+     compared.
+402. **Whether a compiled handler's read of the clock and a random draw need a
+     label or a record of the plan** (deferred by Z88; P103). The gated clock of
+     a handler gives the time of the event to the second, under a frame the
+     piece pushes, and `Math.random()` gives a draw. The executor records no
+     read for either, where `language-subset.md` reports an ambient read where
+     the compiler can see it (`function-body:ambient-read`).
+403. **Whether a body may observe the identifier of a document it was handed by
+     reference without consuming a label** (deferred by Z88; P100). A function
+     body reads `handle.target`, the reference a handle holds: the identifier of
+     the document, the path and the schema of the position.
+404. **Whether an artifact read from a cache directory that another process
+     wrote is trusted as the compiler's output** (deferred by Z88; P101). The
+     artifact cache is keyed by the source and the binary and holds plans with
+     their label templates, and the preparation takes its labels from the
+     plan's templates (`plan-and-label-templates.md` §3). Today's compile cache
+     has the same question for module bytes.
+
 ## Open, and not needing the owner
 
 - **The pattern closure's remaining gaps** (K12) are questions 307 to 310
@@ -14403,9 +15167,19 @@ The open questions each document ends with stay where they are.
   the branch `claude/compiled-pattern-runner-m3`
   ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
   "Milestone 3: a compiled piece in the runner"). On the Topics boards
-  `filing-order` and `sorted-references` an edit of a title does the same work
-  at 100, 1,000 and 2,000 topics. Open, with what is unsound, stubbed or not
-  verified first, then the cost that grows with the data:
+  `filing-order` and `sorted-references`, written with the collection index,
+  the entries of a record and `sortBy` in the place of their whole-list `lift`s,
+  an edit of a title and of the mentions does the same work at 100, 1,000 and
+  2,000 topics. Open, with what is unsound, stubbed or not verified first, then
+  the cost that grows with the data:
+  - the label rules of the constructs are the build agents' and are not reviewed
+    against the specification; one under-label of a chain of two per-element
+    constructs is closed by a binding that no clause of the specification has
+    (P74), and fourteen questions of labels are deferred by the ruling Z88
+    (questions 391 to 404);
+  - the two boards do not run on today's runtime, which declares no `sortBy` and
+    no `groupBy` over the result of another per-element construct, and they are
+    on a local branch in no pull request (P80 and P85; question 382);
   - a write by another writer to a derived array is not applied to the executor,
     and with rows in place nothing reports it (P61; question 366);
   - after a refused commit the piece takes what the storage holds, and two cases
@@ -14427,9 +15201,10 @@ The open questions each document ends with stay where they are.
     memory; 9 do not start, 30 leave an event unhandled, 15 have a commit
     refused and 7 differ and are not examined; the run has plain inputs and is
     not beside today's runtime (question 376);
-  - the tables of the third round were measured with a switch of the harness
-    that the branch does not hold, and the edit of the last of 2,000 topics
-    takes 256 to 265 ms for a cause not looked for (questions 377 and 378);
+  - steps take 170 to 450 ms more than the piece and the preparation account
+    for, for a collection of a heap of 1.1 GB and for other causes that were
+    not profiled, and a create at 2,000 topics on the constructs is slower than
+    with the `lift`s for a cause not examined (questions 377 and 383);
   - a document that is not in the replica reads as absent, a document in another
     space is not told of changes, a piece is not started again from what it
     stored, the runtime does not follow a link whose path crosses an array by
@@ -14439,10 +15214,23 @@ The open questions each document ends with stay where they are.
     and the first derivation of an instance a handler made is a transaction of
     its own where the design has one derivation transaction behind a batch (P51,
     P52 and P64; questions 362 and 373);
-  - three whole-list `lift`s of Topics read every member on a create and on an
-    edit of the mentions or the `shortName`, 1.0 s for a create at 1,000 topics,
-    because the language lacks three constructs; this is the largest cost left
-    on Topics (question 370);
+  - an edit of a `shortName`, an edit of `lastActivityAt` on
+    `sorted-references` and a create each write, whole, a document that grows
+    with the board, 2.0 MB at 1,000 topics and 4.0 MB at 2,000, and take 0.3,
+    0.2 and 1.1 s at 1,000 topics; an index stored as a document for each bucket
+    and the arrays of the result as part documents are not built; this is the
+    largest cost left on Topics (question 379);
+  - a body that is handed a collection reads it whole, twice in a create
+    (question 381), and where each member has a clause of its own a row that
+    reads its bucket stores the clause of every member (P69; questions 352 and
+    394);
+  - a plain value of an array that a computation returned is keyed by a hash
+    that follows every reference in it, and a fixture of values that refer to
+    documents that refer to each other does not load at 50 members (question
+    380);
+  - `keys()` and `keyEntries()` are not built, and a `sortBy` or a `filter` over
+    the result of another per-element construct forms its order whole (question
+    384);
   - the load is bounded for the rows of a `map` over an array declared as
     references and not for the documents a `lift` writes, 4,000 of 8,011
     documents at 2,000 topics (P65; questions 368 and 374);
@@ -14457,7 +15245,34 @@ The open questions each document ends with stay where they are.
   - a prepend and a removal write the array of links whole (question 365);
   - each derivation compares every unit of the result (question 371);
   - every figure is of one process on emulated storage on a machine under load,
-    and all but one run of `filing-order` are the build agent's.
+    and all but two runs of `filing-order` are the build agents'.
+- **Milestone 5 of the integration is built but for the call from the runtime,
+  and what confines value code is open.** A compiled piece evaluates its value
+  code in one SES compartment with a frozen global object, and
+  `PatternCompiler` compiles a pattern source with the crate's release binary in
+  a child process
+  ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+  "Milestone 5: value code in the sandbox"). Open, with what is unsound first:
+  - the crate's check is the only barrier between a pattern and the executor:
+    the host of a call and `$rt` hold the executor in public members, the
+    emitter writes no freeze of module data and no hardening of a function, and
+    the check accepts a member that the type of a handle does not declare; an
+    artifact that is not the output of `emit --accepted` is trusted as given
+    (P100; question 386);
+  - nothing in the runtime calls the compiler, the mark of a compiled space is
+    not built, and what a refused program does in a compiled space and which
+    identity a stored piece names are not decided (P101; question 387);
+  - the clock and a random draw of a handler are read with no record, and three
+    questions of labels are deferred by the ruling Z88 (questions 402 to 404);
+  - a function body that is handed a whole array reads it from the store twice
+    for each call, each read a copy, 95 of 99 ms of an edit at 10,000 rows
+    (question 388);
+  - nothing removes an old tree of the artifact cache, no claim serializes two
+    compiles of one source, no job builds the binary, and an edit in a `map`
+    over an array of plain values in place is about four times slower in a realm
+    that is locked down, for a step that was not profiled (question 389);
+  - the Topics boards were not run with the two evaluators compared, and the
+    runner path was measured in three runs for each cell on a loaded machine.
 - **A pattern closure used as a value is not translated by the
   prototype.** `Plan.closures` is empty, and a closure given to a
   language-model built-in as a tool is left out of the request. A
@@ -15243,18 +16058,29 @@ The open questions each document ends with stay where they are.
    commit, and what a load in bounded transactions leaves stored when its handed
    transaction does not commit (questions 367 and 374); the over-labels
    (questions 364 and 375); the pull request of the preparation's asks for the
-   reads to `main`, if the owner agrees (question 347); the three constructs for
-   the whole-list `lift`s of Topics, if the owner agrees, in the prototype first
-   (question 370); the documents a `lift` writes in a load (question 374); the
+   reads to `main` (question 347; #10142); what confines value code, which is
+   the host and `$rt` with private state, the freeze and the hardening in the
+   emitter, and the check of a member of a handle (question 386); the index as a
+   document for each bucket and the arrays of the result as part documents,
+   which is what still makes three Topics steps follow the board (question
+   379); a collection handed to a body as a handle (question 381); the key of a
+   plain value that holds references (question 380); the surface of the
+   constructs in today's API, if the owner agrees (question 382); the second
+   read of a whole argument (question 388); the documents a `lift` writes in a
+   load (question 374); the
    comparison of every unit of the result in each derivation (question 371); the
    memory server's walk of a written document, in `runtime/memory` (question
-   369); the failures of the corpus on the runner path (question 376); the edit
-   that is not explained and the harness switch that the branch lacks (questions
-   377 and 378); the board `main` and today's arm at the sizes not run (question
+   369); the failures of the corpus on the runner path (question 376); the
+   steps that are not explained and the measurements not made (questions 377
+   and 383); what the constructs do not cover (question 384); the board `main`
+   and today's arm at the sizes not run (question
    372); the boundary of rows as documents emitted by the crate, and the
    executor as a workspace package (questions 363 and 361); resume, sync and the
-   forms that readers outside the executor read (question 372). Then value code
-   in the sandbox, and server execution with the network.
+   forms that readers outside the executor read (question 372). Then the call
+   of the compiler from `Runtime.run`, which needs the resume and two decisions
+   (question 387), and server execution with the network. By the ruling Z88 the
+   questions of labels that these milestones met (questions 391 to 404) are
+   taken up after the milestones.
 ### Briefing an author
 
 A brief that produced a usable document in the first round had these parts:
