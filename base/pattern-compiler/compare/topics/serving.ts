@@ -46,8 +46,8 @@
  *
  * The crate's check refuses the two measured boards (a handle declared as
  * a view of the type the cell holds), so the serving runtime of the arm
- * compiles with `emit` and not with `emit --accepted`, as the arm `runner`
- * does.
+ * compiles with `emit --unchecked` and not with `emit --accepted`, as the
+ * arm `runner` does.
  */
 // deno-lint-ignore no-external-import -- The sampling profiler is reached through this Node builtin alone.
 import inspector from "node:inspector";
@@ -153,7 +153,7 @@ const emitProgram: CompilePatternProgram = async (program: PatternProgram) => {
     }
     const { success, stdout, stderr } = await new Deno.Command(
       `${repository}base/pattern-compiler/target/release/pattern-compiler`,
-      { args: ["emit", ...names], cwd: directory },
+      { args: ["emit", "--unchecked", ...names], cwd: directory },
     ).output();
     if (!success) throw new Error(new TextDecoder().decode(stderr));
     const modules = JSON.parse(new TextDecoder().decode(stdout)) as {
@@ -360,13 +360,20 @@ export const runServing = async (
   const space: MemorySpace = signer.did();
   const resumed: ResumedPiece[] = [];
   const failures: string[] = [];
+  const failure = Promise.withResolvers<never>();
+  failure.promise.catch(() => {});
   const serving: CompiledServingMemoryServer =
     await listenCompiledServingMemoryServer({
       compile: emitProgram,
       pieces: {
         piece: { now: 1_000_000 },
         resumed: (_result, piece) => resumed.push(piece),
-        failed: (_result, error) => failures.push(`${error}`),
+        failed: (_result, error) => {
+          failures.push(`${error}`);
+          failure.reject(
+            new Error(`The serving runtime failed: ${error}`),
+          );
+        },
       },
     });
   const client = () =>
@@ -451,7 +458,11 @@ export const runServing = async (
       );
       const began = performance.now();
       await change();
-      const [first, second] = await Promise.all(visible);
+      // A piece the serving runtime did not start never shows the value.
+      const [first, second] = await Promise.race([
+        Promise.all(visible),
+        failure.promise,
+      ]);
       await serving.host.whenQuiescent();
       const quiescent = performance.now();
       await stopProfile?.();
@@ -606,6 +617,58 @@ export const runServing = async (
         (value) => value === size + turn + 1,
         () => addTopic.send(board.created(turn) as never),
       );
+    }
+
+    // With `SCALE_PROFILE_EDITS` naming a kind of edit, that edit is made
+    // `SCALE_PROFILE_ROUNDS` times on the middle topic, each awaited as a
+    // step is, under one sampling profile written to `SCALE_CPU_PROFILE`.
+    const profiled = Deno.env.get("SCALE_PROFILE_EDITS");
+    if (profiled !== undefined) {
+      const rounds = Number(Deno.env.get("SCALE_PROFILE_ROUNDS") ?? 20);
+      const file = Deno.env.get("SCALE_CPU_PROFILE");
+      const stopProfile = file === undefined
+        ? undefined
+        : await startProfile(file);
+      for (let turn = 0; turn < rounds; turn++) {
+        if (profiled === "title") {
+          await measure(
+            `repeated title ${turn}`,
+            ["mentionable", middle, "title"],
+            (value) => value === `Repeated ${turn}`,
+            () =>
+              commit((tx) => {
+                cells[middle].withTx(tx).key("title").set(`Repeated ${turn}`);
+              }),
+          );
+        } else if (profiled === "shortName") {
+          await measure(
+            `repeated shortName ${turn}`,
+            ["mentionable", middle, "shortName"],
+            (value) => value === `again-${turn}`,
+            () =>
+              commit((tx) => {
+                cells[middle].withTx(tx).key("shortName").set(`again-${turn}`);
+              }),
+          );
+        } else if (profiled === "mentions") {
+          // The mention of the first topic is taken away and given back.
+          const gone = turn % 2 === 0;
+          await measure(
+            `repeated mentions ${turn}`,
+            ["crossrefs", 0, "mentionedBy", 2],
+            (value) => (value === undefined || value === null) === gone,
+            () =>
+              commit((tx) => {
+                cells[middle].withTx(tx).key("mentions").set(
+                  gone ? [] : [cells[0]],
+                );
+              }),
+          );
+        } else {
+          throw new Error(`SCALE_PROFILE_EDITS names no edit: ${profiled}.`);
+        }
+      }
+      await stopProfile?.();
     }
 
     if (Deno.env.get("SCALE_TAKEOVER") !== undefined) {
