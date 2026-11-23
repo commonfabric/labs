@@ -39,6 +39,10 @@ describe("storedRowCollections() by what a `map` is over", () => {
     expect(await storedOf("OverSort")).toEqual([[1, ["rows"]]]);
   });
 
+  it("gives a `map` of a pattern that is compiled in at a call site", async () => {
+    expect(await storedOf("AtSite")).toEqual([[0, ["rows"]]]);
+  });
+
   it("gives the first of two `map`s in a chain, which the result keeps at no path, and not the second, whose rows are in place", async () => {
     expect(await storedOf("OverMap")).toEqual([[0, undefined]]);
   });

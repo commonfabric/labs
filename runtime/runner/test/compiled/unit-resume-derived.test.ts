@@ -284,6 +284,21 @@ describe("resumeCompiledPieceByUnits() by what a `map` is over", () => {
     });
   });
 
+  describe("a `map` over an array of references in a pattern compiled in at a call site", () => {
+    it("evaluates no body at the wake, and the body of one row for an event that changes one item", async () => {
+      const { artifact, result } = await stopped("AtSite", TITLES);
+
+      const piece = await wokenByUnits(artifact, result);
+      expect(piece.instance.counts.elementEvaluations).toBe(0);
+      expect(piece.instance.counts.rowsLeftStored).toBe(TITLES.length);
+      await send(result, "rename", { at: 2, title: "third" });
+
+      expect(piece.refusals).toEqual([]);
+      expect(piece.instance.counts.elementEvaluations).toBe(1);
+      expect(labels(result)).toEqual(["one!", "two!", "third!", "four!"]);
+    });
+  });
+
   // `Once` of `compare/fixtures/unit-resume.tsx`: the `map` is over the
   // slot that holds the array.
   describe("a `map` over a slot that holds an array of references", () => {

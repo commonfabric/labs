@@ -180,7 +180,12 @@ export const storedRowCollections = (
     if (!rows.has(index) || declaredIn.has(index) || folded.has(index)) {
       return;
     }
-    if (collection.construct !== "map" || collection.within.length > 0) return;
+    // A pattern that is compiled in at a call site adds a `site` step to
+    // the `within` of what it declares, and names no element.
+    if (
+      collection.construct !== "map" ||
+      collection.within.some((step) => step.element !== undefined)
+    ) return;
     if (collection.source.entries === true) return;
     const place = plan.outputs.find((output) => output.collection === index);
     if (place === undefined || place.path.includes("*")) return;

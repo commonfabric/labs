@@ -85,3 +85,23 @@ export const OverMap = pattern<
     .map((row) => ({ label: row.title + "!", done: row.done }));
   return { rows, rename: rename({ items }), finish: finish({ items }) };
 });
+
+// A pattern whose rows are those of a `map` over an array of references.
+const Rows = pattern<{ items: Writable<Item[]> }, { rows: Row[] }>(
+  ({ items }) => ({
+    rows: items.map((item) => ({
+      label: item.title + "!",
+      done: item.done,
+    })),
+  }),
+);
+
+// The pattern above compiled in at a call site: the `map` is written in
+// the pattern that is called, and in no element body.
+export const AtSite = pattern<
+  { items: Writable<Item[]> },
+  { rows: Row[] } & Events
+>(({ items }) => {
+  const { rows } = Rows({ items });
+  return { rows, rename: rename({ items }), finish: finish({ items }) };
+});
