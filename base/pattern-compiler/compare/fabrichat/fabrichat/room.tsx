@@ -1346,6 +1346,14 @@ export interface ChatRoomView {
 
 /** What a room offers everyone its space admits: `ChatRoomOutput`. */
 export interface ChatRoomOutput extends ChatRoomView {
+  /**
+   * The stream a send tells the manager through that the viewer joined. The
+   * result holds it so that the storage has its marker: a compiled piece in
+   * the runner does not yet take an event a handler sends to a stream that
+   * the state of a binding alone holds.
+   */
+  tellJoined: Stream<JoinedEvent>;
+
   /** The room's name, for lists of pieces. */
   [NAME]: string;
 
@@ -2076,6 +2084,7 @@ export const FabriChatRoomCore = pattern<
     participantEntries: participantEntriesForUser,
     participantPrincipals: participantPrincipalsForUser,
     addParticipant: join,
+    tellJoined,
     messages: {
       count: facts.list.count,
       oldestAt: facts.list.oldestAt,
@@ -2477,6 +2486,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       participantEntries: room.participantEntries,
       participantPrincipals: room.participantPrincipals,
       addParticipant: room.addParticipant,
+      tellJoined: room.tellJoined,
       messages: room.messages,
       canSend: room.canSend,
       viewer: room.viewer,
