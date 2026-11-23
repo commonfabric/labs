@@ -487,13 +487,36 @@ export class Index {
   ) {}
 }
 
+/** The collection and the element keys an `IndexHandle` names. */
+let indexPartsOf: (
+  handle: IndexHandle,
+) => { collection: number; context: Context };
+
 /**
  * A collection index as value code holds it: a reference to the index for
  * the element keys it was named under. `Host.lookup` reads one bucket
  * through it and depends on that bucket alone.
  */
 export class IndexHandle {
-  constructor(readonly collection: number, readonly context: Context) {
+  /**
+   * Private as the parts of a `Handle` are: a body that is handed the
+   * index reads no member of it, and the context, a map the executor
+   * holds, is not reached through it. The executor reads the two with
+   * `indexPartsOf`.
+   */
+  readonly #collection: number;
+  readonly #context: Context;
+
+  static {
+    indexPartsOf = (handle) => ({
+      collection: handle.#collection,
+      context: handle.#context,
+    });
+  }
+
+  constructor(collection: number, context: Context) {
+    this.#collection = collection;
+    this.#context = context;
     Object.freeze(this);
   }
 }
@@ -2026,10 +2049,15 @@ export class Host {
   settled(value: unknown): unknown {
     if (value instanceof IndexHandle) {
       const instance = this.#instance;
-      const assembled = instance.assembled(value.collection);
-      const entry: Lazy = () => assembled(instance.freshContext(value.context));
+      const assembled = instance.assembled(indexPartsOf(value).collection);
+      const entry: Lazy = () =>
+        assembled(instance.freshContext(indexPartsOf(value).context));
       const index = this.done ? entry(this.context).value : this.depend(entry);
-      return instance.indexRecord(index as Index, this, value.collection);
+      return instance.indexRecord(
+        index as Index,
+        this,
+        indexPartsOf(value).collection,
+      );
     }
     if (!(value instanceof Assembled)) return value;
     const instance = this.#instance;
@@ -2114,8 +2142,9 @@ export class Host {
     if (!(index instanceof IndexHandle)) {
       throw new Unsupported("a `lookup` on what is no collection index");
     }
-    const assembled = instance.assembled(index.collection);
-    const lazy: Lazy = () => assembled(instance.freshContext(index.context));
+    const assembled = instance.assembled(indexPartsOf(index).collection);
+    const lazy: Lazy = () =>
+      assembled(instance.freshContext(indexPartsOf(index).context));
     const entry = lazy(this.context);
     const held = entry.value as Index;
     const encoded = encodeIndexKey(instance, key);
@@ -2134,7 +2163,10 @@ export class Host {
     });
     // An index written in an element body is brought up to date when it is
     // read and by nothing else, so its readers depend on it whole.
-    if (instance.plan.collections[index.collection].within.length > 0) {
+    if (
+      instance.plan.collections[indexPartsOf(index).collection].within.length >
+        0
+    ) {
       this.dependEntry(lazy);
     }
     const keys = held.buckets.get(encoded)?.keys ?? [];
@@ -2148,7 +2180,7 @@ export class Host {
     bucketElements.set(members, instance.indexElements(held, keys));
     const record = keys.length === 0
       ? undefined
-      : instance.bucketRecordOf(index.collection);
+      : instance.bucketRecordOf(indexPartsOf(index).collection);
     if (record !== undefined) {
       bucketPlaces.set(members, new Ref(instance.id, [...record, encoded]));
     }
@@ -5070,7 +5102,7 @@ export class Instance {
     if (value instanceof Index) return { $index: [...value.of] };
     if (value instanceof IndexHandle) {
       return assembled === undefined
-        ? { $index: this.plan.collections[value.collection].name }
+        ? { $index: this.plan.collections[indexPartsOf(value).collection].name }
         : assembled(value, path);
     }
     if (value instanceof Assembled) {
@@ -6362,7 +6394,7 @@ export class Instance {
    * (`#storeIndex`). Otherwise the form is the index whole.
    */
   #indexForm(handle: IndexHandle, at: string[], atRoot: boolean): unknown {
-    const { collection, context } = handle;
+    const { collection, context } = indexPartsOf(handle);
     const record = atRoot ? this.bucketRecordOf(collection) : undefined;
     const entry = this.assembled(collection)(this.freshContext(context));
     const index = entry.value as Index;
