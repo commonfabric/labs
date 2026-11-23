@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/instantiate-labeled.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Row = pattern(\n  \"sha256:b4057b25e98bda43f74ebfd6492486c05a9aeae9cb26dad576071656e68a033b\",\n);\nconst add = handler((event, { rows, note }) => {\n  rows.push(Row({ title: event.title, note }));\n});\nconst $default = (pattern(\"sha256:4b57f227cc5b9280312ae1b353ad674b9f51c442ce6cd7ced855266c63fd73b7\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + $h.v($h.slot(1)))));\nreturn $rt.thunk(($h) => (({ title: $h.slot(2), shout: $h.output(0) })));\n});"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Row = $rt.data(pattern(\n  \"sha256:b4057b25e98bda43f74ebfd6492486c05a9aeae9cb26dad576071656e68a033b\",\n));\nconst add = $rt.data(handler((event, { rows, note }) => {\n  rows.push(Row({ title: event.title, note }));\n}));\nconst $default = $rt.data((pattern(\"sha256:4b57f227cc5b9280312ae1b353ad674b9f51c442ce6cd7ced855266c63fd73b7\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + $h.v($h.slot(1)))));\nreturn $rt.thunk(($h) => (({ title: $h.slot(2), shout: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -219,7 +219,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/instantiate-labeled.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Row = pattern(\n  \"sha256:b4057b25e98bda43f74ebfd6492486c05a9aeae9cb26dad576071656e68a033b\",\n);\nconst add = handler((event, { rows, note }) => {\n  rows.push(Row({ title: event.title, note }));\n});\nconst $default = (pattern(\"sha256:4b57f227cc5b9280312ae1b353ad674b9f51c442ce6cd7ced855266c63fd73b7\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ note: $h.slot(3), rows: $h.slot(4), add: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { rows, note }) => {\n  rows.push(Row({ title: event.title, note }));\n})($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Row = $rt.data(pattern(\n  \"sha256:b4057b25e98bda43f74ebfd6492486c05a9aeae9cb26dad576071656e68a033b\",\n));\nconst add = $rt.data(handler((event, { rows, note }) => {\n  rows.push(Row({ title: event.title, note }));\n}));\nconst $default = $rt.data((pattern(\"sha256:4b57f227cc5b9280312ae1b353ad674b9f51c442ce6cd7ced855266c63fd73b7\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ note: $h.slot(3), rows: $h.slot(4), add: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { rows, note }) => {\n  rows.push(Row({ title: event.title, note }));\n})($e, $s));"
             }
           ],
           "outputsBelow": [],

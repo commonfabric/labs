@@ -14,7 +14,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/kept-index.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst Reader = pattern(\"sha256:7ad0a549b1ebf36f08588cbe5251e3ca2585611e49dc2ac74972f2afa30fc16d\");\nconst $default = (pattern(\"sha256:bfb91e4fbea4fe0c574b016881f4fb7d2c759e177f575c551dded2bd1ea1215d\"));\nObject.defineProperty($exports, \"Reader\", { enumerable: true, get: () => Reader });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.lookup($h.read({\"kind\":\"argument\"}, [\"index\"]), $h.v($h.slot(0)), 0)));\n{\n$rt.element(0, ($h) => ($h.slot(3)));\n}\nreturn $rt.thunk(($h) => (({ name: $h.slot(4), titles: $h.output(1) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst Reader = $rt.data(pattern(\"sha256:7ad0a549b1ebf36f08588cbe5251e3ca2585611e49dc2ac74972f2afa30fc16d\"));\nconst $default = $rt.data((pattern(\"sha256:bfb91e4fbea4fe0c574b016881f4fb7d2c759e177f575c551dded2bd1ea1215d\")));\nObject.defineProperty($exports, \"Reader\", { enumerable: true, get: () => Reader });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.lookup($h.read({\"kind\":\"argument\"}, [\"index\"]), $h.v($h.slot(0)), 0)));\n{\n$rt.element(0, ($h) => ($h.slot(3)));\n}\nreturn $rt.thunk(($h) => (({ name: $h.slot(4), titles: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -327,7 +327,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/kept-index.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst Reader = pattern(\"sha256:7ad0a549b1ebf36f08588cbe5251e3ca2585611e49dc2ac74972f2afa30fc16d\");\nconst $default = (pattern(\"sha256:bfb91e4fbea4fe0c574b016881f4fb7d2c759e177f575c551dded2bd1ea1215d\"));\nObject.defineProperty($exports, \"Reader\", { enumerable: true, get: () => Reader });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.at($h.slot(0), [\"length\"])));\n{\n$rt.element(0, ($h) => ($h.slot(1)));\n}\nreturn $rt.thunk(($h) => (({ count: $h.output(0), byTag: $h.output(1) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst Reader = $rt.data(pattern(\"sha256:7ad0a549b1ebf36f08588cbe5251e3ca2585611e49dc2ac74972f2afa30fc16d\"));\nconst $default = $rt.data((pattern(\"sha256:bfb91e4fbea4fe0c574b016881f4fb7d2c759e177f575c551dded2bd1ea1215d\")));\nObject.defineProperty($exports, \"Reader\", { enumerable: true, get: () => Reader });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.at($h.slot(0), [\"length\"])));\n{\n$rt.element(0, ($h) => ($h.slot(1)));\n}\nreturn $rt.thunk(($h) => (({ count: $h.output(0), byTag: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],

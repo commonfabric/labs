@@ -15,7 +15,7 @@
             {
               "module": 0,
               "path": "sorted-rows.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\"sha256:60bfe7871ae72d94b4d4d12877841d7d7ec6fc4524db11f50e61279352993f00\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.at($h.slot(0), [\"length\"])));\n{\n$rt.element(0, ($h) => ($h.slot(1)));\n}\n{\n$rt.element(1, ($h) => (({ title: $h.slot(3) })));\n}\nreturn $rt.thunk(($h) => (({ count: $h.output(0), cards: $h.output(3) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = $rt.data((pattern(\"sha256:60bfe7871ae72d94b4d4d12877841d7d7ec6fc4524db11f50e61279352993f00\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.at($h.slot(0), [\"length\"])));\n{\n$rt.element(0, ($h) => ($h.slot(1)));\n}\n{\n$rt.element(1, ($h) => (({ title: $h.slot(3) })));\n}\nreturn $rt.thunk(($h) => (({ count: $h.output(0), cards: $h.output(3) })));\n});"
             }
           ],
           "outputsBelow": [],

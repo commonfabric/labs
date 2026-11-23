@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/handler.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst record = handler((event, { secret, last, log }) => {\n  last.set(event.text + secret);\n  log.push({ text: event.text });\n});\n\nconst $default = (pattern(\"sha256:64fcda9a09e312fd7f32eb19392a0e962ce20cebcf998c10c823c2bb4b07c41e\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ last: $h.slot(4), log: $h.slot(5), note: $h.slot(7), record: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { secret, last, log }) => {\n  last.set(event.text + secret);\n  log.push({ text: event.text });\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst record = $rt.data(handler((event, { secret, last, log }) => {\n  last.set(event.text + secret);\n  log.push({ text: event.text });\n}));\n\nconst $default = $rt.data((pattern(\"sha256:64fcda9a09e312fd7f32eb19392a0e962ce20cebcf998c10c823c2bb4b07c41e\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ last: $h.slot(4), log: $h.slot(5), note: $h.slot(7), record: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { secret, last, log }) => {\n  last.set(event.text + secret);\n  log.push({ text: event.text });\n})($e, $s));"
             }
           ],
           "outputsBelow": [],

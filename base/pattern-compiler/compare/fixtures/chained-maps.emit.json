@@ -16,7 +16,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/chained-maps.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"sha256:c2ecbc171fb3f17c9113aabf4db9e191f184e4a5c7aa4323ecfa1d60a99e1f38\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ tag: $h.slot(1), text: $h.slot(2) })));\n}\n$rt.value(1, ($h) => ($h.at($h.slot(0), [\"length\"])));\n{\n$rt.element(1, ($h) => (($h.v($h.slot(3)) + (\"!\"))));\n}\n{\n$rt.element(2, ($h) => (($h.v($h.slot(4)) + (\"!\"))));\n}\nreturn $rt.thunk(($h) => (({ count: $h.output(4), tags: $h.output(5), texts: $h.output(7) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = $rt.data((pattern(\"sha256:c2ecbc171fb3f17c9113aabf4db9e191f184e4a5c7aa4323ecfa1d60a99e1f38\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ tag: $h.slot(1), text: $h.slot(2) })));\n}\n$rt.value(1, ($h) => ($h.at($h.slot(0), [\"length\"])));\n{\n$rt.element(1, ($h) => (($h.v($h.slot(3)) + (\"!\"))));\n}\n{\n$rt.element(2, ($h) => (($h.v($h.slot(4)) + (\"!\"))));\n}\nreturn $rt.thunk(($h) => (({ count: $h.output(4), tags: $h.output(5), texts: $h.output(7) })));\n});"
             }
           ],
           "outputsBelow": [],

@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/length-of-labeled.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"sha256:b459e71fe5194e500cd79daa3487fed9c33fb059d2ff9687c82588f6496850bc\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.v($h.slot(0)).length));\nreturn $rt.thunk(($h) => (({ count: $h.output(0) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = $rt.data((pattern(\"sha256:b459e71fe5194e500cd79daa3487fed9c33fb059d2ff9687c82588f6496850bc\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.v($h.slot(0)).length));\nreturn $rt.thunk(($h) => (({ count: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],

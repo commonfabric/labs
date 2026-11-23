@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/handle-fields.tsx",
-              "source": "const { \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst doneCount = lift(\n  (\n    { sources },\n  ) => Array.from(sources).filter((source) => source.get().done).length,\n);\nconst $default = (pattern(\n  \"sha256:575c6cd04feabc0ab44250efcb421062bd6878be36b26d6de5203a0f27f07305\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((\n    { sources },\n  ) => Array.from(sources).filter((source) => source.get().done).length)($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ sources: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ done: $h.output(0) })));\n});"
+              "source": "const { \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst doneCount = $rt.data(lift(\n  (\n    { sources },\n  ) => Array.from(sources).filter((source) => source.get().done).length,\n));\nconst $default = $rt.data((pattern(\n  \"sha256:575c6cd04feabc0ab44250efcb421062bd6878be36b26d6de5203a0f27f07305\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((\n    { sources },\n  ) => Array.from(sources).filter((source) => source.get().done).length)($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ sources: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ done: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],

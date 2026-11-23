@@ -16,7 +16,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/index-in-body.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"sha256:abfc7ba83c51922c609b643e93f7a5eb17f8155ab667faaa64be6c0e2a34414c\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n{\n$rt.element(1, ($h) => ($h.slot(2)));\n}\n$rt.value(1, ($h) => ($h.lookup($h.output(0), (\"even\"))));\n{\n$rt.element(2, ($h) => ($h.slot(4)));\n}\n$rt.element(0, ($h) => (({ name: $h.slot(5), even: $h.output(2) })));\n}\n$rt.value(4, ($h) => ($h.at($h.slot(0), [\"length\"])));\nreturn $rt.thunk(($h) => (({ count: $h.output(9), rows: $h.output(5) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = $rt.data((pattern(\"sha256:abfc7ba83c51922c609b643e93f7a5eb17f8155ab667faaa64be6c0e2a34414c\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n{\n$rt.element(1, ($h) => ($h.slot(2)));\n}\n$rt.value(1, ($h) => ($h.lookup($h.output(0), (\"even\"))));\n{\n$rt.element(2, ($h) => ($h.slot(4)));\n}\n$rt.element(0, ($h) => (({ name: $h.slot(5), even: $h.output(2) })));\n}\n$rt.value(4, ($h) => ($h.at($h.slot(0), [\"length\"])));\nreturn $rt.thunk(($h) => (({ count: $h.output(9), rows: $h.output(5) })));\n});"
             }
           ],
           "outputsBelow": [],

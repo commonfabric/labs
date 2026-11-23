@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/state-declared.tsx",
-              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\n\nconst $default = (pattern(\"sha256:a320f8982f4554bb312711a2c4f9243d85c7f686a69f011972529252c1528a54\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ pinned: $h.slot(0) })));\n});"
+              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\n\nconst $default = $rt.data((pattern(\"sha256:a320f8982f4554bb312711a2c4f9243d85c7f686a69f011972529252c1528a54\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ pinned: $h.slot(0) })));\n});"
             }
           ],
           "outputsBelow": [],

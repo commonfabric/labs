@@ -14,7 +14,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/collection-output.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\nconst $default = (pattern(\"sha256:4b53f74a01817f16554301f38fc9c42aef61a86323106096f7de8e2e9d67f080\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).length === (0))));\n{\n$rt.element(0, ($h) => ($rt.h(\"b\", {  }, [$h.slot(1)])));\n}\n$rt.value(6, ($h) => ($rt.h(\"div\", {  }, [($h.select(0, $h.v($h.output(0))) ? $rt.h(\"i\", {  }, [\"none\"]) : $h.output(1))])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(4) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\nconst $default = $rt.data((pattern(\"sha256:4b53f74a01817f16554301f38fc9c42aef61a86323106096f7de8e2e9d67f080\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).length === (0))));\n{\n$rt.element(0, ($h) => ($rt.h(\"b\", {  }, [$h.slot(1)])));\n}\n$rt.value(6, ($h) => ($rt.h(\"div\", {  }, [($h.select(0, $h.v($h.output(0))) ? $rt.h(\"i\", {  }, [\"none\"]) : $h.output(1))])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(4) })));\n});"
             }
           ],
           "outputsBelow": [],

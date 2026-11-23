@@ -14,7 +14,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/names-table.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"sha256:07af94f97f07241624c39fc1dfee6b70396b8125c7ef6b20885f5f22be24a0f4\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ member: $h.slot(1), name: $h.slot(2) })));\n}\n$rt.value(1, ($h) => ($h.output(0)));\nreturn $rt.thunk(($h) => (({ kind: (\"table\"), rows: $h.output(4) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = $rt.data((pattern(\"sha256:07af94f97f07241624c39fc1dfee6b70396b8125c7ef6b20885f5f22be24a0f4\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ member: $h.slot(1), name: $h.slot(2) })));\n}\n$rt.value(1, ($h) => ($h.output(0)));\nreturn $rt.thunk(($h) => (({ kind: (\"table\"), rows: $h.output(4) })));\n});"
             }
           ],
           "outputsBelow": [],

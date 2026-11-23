@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/literal-state.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst put = handler((_, { items, logs, item }) => {\n  items.key(\"k\").set(item);\n  logs.push(`wrote ${item.value}`);\n});\nconst $default = (pattern(\"sha256:ba0d9e23b6ef35c8a344e10fc75467fa61bb909c98bdce9eb9196eb8c747831d\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ note: $h.slot(6), items: $h.slot(4), logs: $h.slot(5), put: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { items, logs, item }) => {\n  items.key(\"k\").set(item);\n  logs.push(`wrote ${item.value}`);\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst put = $rt.data(handler((_, { items, logs, item }) => {\n  items.key(\"k\").set(item);\n  logs.push(`wrote ${item.value}`);\n}));\nconst $default = $rt.data((pattern(\"sha256:ba0d9e23b6ef35c8a344e10fc75467fa61bb909c98bdce9eb9196eb8c747831d\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ note: $h.slot(6), items: $h.slot(4), logs: $h.slot(5), put: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { items, logs, item }) => {\n  items.key(\"k\").set(item);\n  logs.push(`wrote ${item.value}`);\n})($e, $s));"
             }
           ],
           "outputsBelow": [],

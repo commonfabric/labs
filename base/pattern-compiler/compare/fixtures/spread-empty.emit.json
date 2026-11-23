@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/spread-empty.tsx",
-              "source": "const { \"computed\": computed, \"Default\": Default, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst $default = (pattern(\"sha256:a0eb24318fcd813bdbe321f8e949fb6881f4190855128b63b3217849c83c73d6\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { list, trigger } = $a; return (() => {\n    const current = list.get();\n    list.set([...current, trigger]);\n    return current.length;\n  })(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ appended: $h.output(0) })));\n});"
+              "source": "const { \"computed\": computed, \"Default\": Default, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst $default = $rt.data((pattern(\"sha256:a0eb24318fcd813bdbe321f8e949fb6881f4190855128b63b3217849c83c73d6\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { list, trigger } = $a; return (() => {\n    const current = list.get();\n    list.set([...current, trigger]);\n    return current.length;\n  })(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ appended: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],

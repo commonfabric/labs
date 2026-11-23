@@ -15,7 +15,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/cost-filter-map.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\"sha256:38b90ea819f6414aaf44f40e9ea1125c8a5cc1eee9109b7eab1df0ecab7e07fe\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (($h.v($h.slot(1)) + (\"!\"))));\n}\n{\n$rt.element(1, ($h) => (($h.v($h.slot(2)) !== (\"skip!\"))));\n}\nreturn $rt.thunk(($h) => (({ loud: $h.output(2) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = $rt.data((pattern(\"sha256:38b90ea819f6414aaf44f40e9ea1125c8a5cc1eee9109b7eab1df0ecab7e07fe\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (($h.v($h.slot(1)) + (\"!\"))));\n}\n{\n$rt.element(1, ($h) => (($h.v($h.slot(2)) !== (\"skip!\"))));\n}\nreturn $rt.thunk(($h) => (({ loud: $h.output(2) })));\n});"
             }
           ],
           "outputsBelow": [],

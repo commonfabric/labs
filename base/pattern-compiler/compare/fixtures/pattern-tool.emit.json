@@ -14,7 +14,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/pattern-tool.tsx",
-              "source": "const { \"generateText\": generateText, \"pattern\": pattern, \"patternTool\": patternTool } = $rt.external(\"commonfabric\");\nconst Search = pattern(\n  \"sha256:fdb58ac69273563870762a280876b31958870e7a3132e012d614efd1afb3af21\",\n);\nconst $default = (pattern(\n  \"sha256:d2b994ef5fe74de447ca27533f44fea450d61cca982ffd1fc0efef30db4f30dc\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (($h.v($h.slot(1)) === $h.v($h.slot(2)))));\n}\nreturn $rt.thunk(($h) => (({ found: $h.output(0) })));\n});"
+              "source": "const { \"generateText\": generateText, \"pattern\": pattern, \"patternTool\": patternTool } = $rt.external(\"commonfabric\");\nconst Search = $rt.data(pattern(\n  \"sha256:fdb58ac69273563870762a280876b31958870e7a3132e012d614efd1afb3af21\",\n));\nconst $default = $rt.data((pattern(\n  \"sha256:d2b994ef5fe74de447ca27533f44fea450d61cca982ffd1fc0efef30db4f30dc\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (($h.v($h.slot(1)) === $h.v($h.slot(2)))));\n}\nreturn $rt.thunk(($h) => (({ found: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -231,7 +231,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/pattern-tool.tsx",
-              "source": "const { \"generateText\": generateText, \"pattern\": pattern, \"patternTool\": patternTool } = $rt.external(\"commonfabric\");\nconst Search = pattern(\n  \"sha256:fdb58ac69273563870762a280876b31958870e7a3132e012d614efd1afb3af21\",\n);\nconst $default = (pattern(\n  \"sha256:d2b994ef5fe74de447ca27533f44fea450d61cca982ffd1fc0efef30db4f30dc\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.request(0, ($h) => ([({ prompt: $h.slot(0), tools: ({ search: (pattern($h.v(((rest) => $h.v((Search($h.v(({ ...(rest), donuts: (donuts) }))))))))) }) })]));\nreturn $rt.thunk(($h) => (({ reply: $h.slot(2), pending: $h.slot(1) })));\n});"
+              "source": "const { \"generateText\": generateText, \"pattern\": pattern, \"patternTool\": patternTool } = $rt.external(\"commonfabric\");\nconst Search = $rt.data(pattern(\n  \"sha256:fdb58ac69273563870762a280876b31958870e7a3132e012d614efd1afb3af21\",\n));\nconst $default = $rt.data((pattern(\n  \"sha256:d2b994ef5fe74de447ca27533f44fea450d61cca982ffd1fc0efef30db4f30dc\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.request(0, ($h) => ([({ prompt: $h.slot(0), tools: ({ search: (pattern($h.v(((rest) => $h.v((Search($h.v(({ ...(rest), donuts: (donuts) }))))))))) }) })]));\nreturn $rt.thunk(($h) => (({ reply: $h.slot(2), pending: $h.slot(1) })));\n});"
             }
           ],
           "outputsBelow": [],

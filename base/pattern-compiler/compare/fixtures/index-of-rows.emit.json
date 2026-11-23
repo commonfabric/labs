@@ -16,7 +16,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/index-of-rows.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\n\nconst $default = (pattern(\"sha256:1d9caa220b3b8ebdcd00052541709addf92bcf5973b0b703d7bfd1cc314a11ff\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ tag: $h.slot(1), text: $h.slot(2) })));\n}\n{\n$rt.element(1, ($h) => ($h.slot(3)));\n}\n$rt.value(2, ($h) => ($h.at($h.slot(0), [\"length\"])));\n$rt.value(3, ($h) => ($h.lookup($h.output(4), $h.v($h.slot(5)))));\n{\n$rt.element(2, ($h) => ($h.slot(6)));\n}\nreturn $rt.thunk(($h) => (({ count: $h.output(6), byTag: $h.output(4), picked: $h.output(8) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\n\nconst $default = $rt.data((pattern(\"sha256:1d9caa220b3b8ebdcd00052541709addf92bcf5973b0b703d7bfd1cc314a11ff\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ tag: $h.slot(1), text: $h.slot(2) })));\n}\n{\n$rt.element(1, ($h) => ($h.slot(3)));\n}\n$rt.value(2, ($h) => ($h.at($h.slot(0), [\"length\"])));\n$rt.value(3, ($h) => ($h.lookup($h.output(4), $h.v($h.slot(5)))));\n{\n$rt.element(2, ($h) => ($h.slot(6)));\n}\nreturn $rt.thunk(($h) => (({ count: $h.output(6), byTag: $h.output(4), picked: $h.output(8) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -564,7 +564,12 @@
             }
           }
         ],
-        "unsupported": []
+        "unsupported": [
+          {
+            "kind": "the key of an index whose type is not resolved",
+            "start": 989
+          }
+        ]
       }
     ]
   }

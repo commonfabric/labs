@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/whole-after-push.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst append = handler(\n  (_, { items }) => {\n    items.push({ note: \"appended\", amount: 3 });\n  },\n);\nconst $default = (pattern(\"sha256:36eb7bee8b0fd34396b436a4396f50a5d16c5081d5bade48298c5dfd1c4a6d90\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (((JSON).stringify($h.v($h.slot(0))))));\nreturn $rt.thunk(($h) => (({ all: $h.output(0), append: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { items }) => {\n    items.push({ note: \"appended\", amount: 3 });\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst append = $rt.data(handler(\n  (_, { items }) => {\n    items.push({ note: \"appended\", amount: 3 });\n  },\n));\nconst $default = $rt.data((pattern(\"sha256:36eb7bee8b0fd34396b436a4396f50a5d16c5081d5bade48298c5dfd1c4a6d90\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (((JSON).stringify($h.v($h.slot(0))))));\nreturn $rt.thunk(($h) => (({ all: $h.output(0), append: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { items }) => {\n    items.push({ note: \"appended\", amount: 3 });\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],

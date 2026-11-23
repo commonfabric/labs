@@ -14,7 +14,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/filter-of-computed.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst $default = (pattern(\n  \"sha256:e4f9fa64c6fe7bc6a3abab52c42d90f3ccdc20fe9ad8f0e692adb9b7fa781c7b\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => (($h.select(0, $h.v($h.slot(1))) || [])));\n{\n$rt.element(0, ($h) => ($h.slot(2)));\n}\n$rt.value(3, ($h) => (((() => {\n      const list = $h.v(($h.select(0, $h.v($h.slot(1))) || []));\n      return (`${$h.v($h.at($h.output(0), [\"length\"]))}`);\n    })())));\nreturn $rt.thunk(($h) => (({ summary: $h.output(3) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst $default = $rt.data((pattern(\n  \"sha256:e4f9fa64c6fe7bc6a3abab52c42d90f3ccdc20fe9ad8f0e692adb9b7fa781c7b\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => (($h.select(0, $h.v($h.slot(1))) || [])));\n{\n$rt.element(0, ($h) => ($h.slot(2)));\n}\n$rt.value(3, ($h) => (((() => {\n      const list = $h.v(($h.select(0, $h.v($h.slot(1))) || []));\n      return (`${$h.v($h.at($h.output(0), [\"length\"]))}`);\n    })())));\nreturn $rt.thunk(($h) => (({ summary: $h.output(3) })));\n});"
             }
           ],
           "outputsBelow": [],

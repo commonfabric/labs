@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "bucket-reference.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\n\nconst $default = (pattern(\"sha256:4f154486dde8983b140d532bfc5b385d73dc80af68ad5437bb858b73e0b497c4\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n{\n$rt.element(1, ($h) => (({ from: $h.slot(2), to: $h.slot(3) })));\n}\n$rt.element(0, ($h) => ($h.output(0)));\n}\n{\n$rt.element(2, ($h) => ($h.slot(4)));\n}\n{\n$rt.element(3, ($h) => (({ topic: $h.slot(6), mentionedBy: $h.lookup($h.output(6), $h.slot(6)) })));\n}\n$rt.value(5, ($h) => ($h.at($h.slot(0), [\"length\"])));\nreturn $rt.thunk(($h) => (({ count: $h.output(12), rows: $h.output(8), byMentioned: $h.output(6) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\n\nconst $default = $rt.data((pattern(\"sha256:4f154486dde8983b140d532bfc5b385d73dc80af68ad5437bb858b73e0b497c4\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n{\n$rt.element(1, ($h) => (({ from: $h.slot(2), to: $h.slot(3) })));\n}\n$rt.element(0, ($h) => ($h.output(0)));\n}\n{\n$rt.element(2, ($h) => ($h.slot(4)));\n}\n{\n$rt.element(3, ($h) => (({ topic: $h.slot(6), mentionedBy: $h.lookup($h.output(6), $h.slot(6)) })));\n}\n$rt.value(5, ($h) => ($h.at($h.slot(0), [\"length\"])));\nreturn $rt.thunk(($h) => (({ count: $h.output(12), rows: $h.output(8), byMentioned: $h.output(6) })));\n});"
             }
           ],
           "outputsBelow": [],

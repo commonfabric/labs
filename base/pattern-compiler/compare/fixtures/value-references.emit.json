@@ -14,7 +14,7 @@
             {
               "module": 0,
               "path": "value-references.tsx",
-              "source": "const { \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst pairsOf = lift(({ topics }) =>\n  topics.flatMap((from) =>\n    (from.get().mentions ?? []).map((to) => ({ from, to }))\n  )\n);\nconst $default = (pattern(\"sha256:41c1d608af7fb32abd09964b3336617a8945046a89c477596b2fac98f4d195f5\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => (({ topics }) =>\n  topics.flatMap((from) =>\n    (from.get().mentions ?? []).map((to) => ({ from, to }))\n  ))($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ topics: $h.slot(0) }))));\n{\n$rt.element(0, ($h) => ($h.slot(2)));\n}\nreturn $rt.thunk(($h) => (({ titles: $h.output(1) })));\n});"
+              "source": "const { \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst pairsOf = $rt.data(lift(({ topics }) =>\n  topics.flatMap((from) =>\n    (from.get().mentions ?? []).map((to) => ({ from, to }))\n  )\n));\nconst $default = $rt.data((pattern(\"sha256:41c1d608af7fb32abd09964b3336617a8945046a89c477596b2fac98f4d195f5\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => (({ topics }) =>\n  topics.flatMap((from) =>\n    (from.get().mentions ?? []).map((to) => ({ from, to }))\n  ))($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ topics: $h.slot(0) }))));\n{\n$rt.element(0, ($h) => ($h.slot(2)));\n}\nreturn $rt.thunk(($h) => (({ titles: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],
