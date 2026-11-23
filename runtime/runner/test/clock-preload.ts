@@ -207,6 +207,8 @@ installFakeClock({
     "compiled-serving",
     // The same, for the event a client sends to a compiled piece.
     "compiled-serving-actor",
+    // The same, for the events of two principals in turn.
+    "compiled-serving-principals",
   ],
 });
 

@@ -52,7 +52,10 @@ import { stampWaveRunContext, waveRunContextOf } from "../executor/wave.ts";
 import { deriveEventKey } from "../scheduler/event-identity.ts";
 import type { Action, EventHandler } from "../scheduler/types.ts";
 import type { URI } from "../sigil-types.ts";
-import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
+import {
+  setCfcImplementationIdentity,
+  setCfcTrustSnapshot,
+} from "../storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import type { FabricValue } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity";
@@ -535,6 +538,12 @@ export class CompiledPiece {
       actsFor === undefined || !this.#runtime.servingPosture ||
       waveRunContextOf(tx) !== undefined
     ) return;
+    // The claims a handler's write makes about the current principal name
+    // the principal of the transaction's trust snapshot, which the stamper
+    // of a serving loop sets beside the actor.
+    if (what === "handler") {
+      setCfcTrustSnapshot(tx, this.#runtime.trustSnapshotForPrincipal(actsFor));
+    }
     stampWaveRunContext(
       tx,
       what === "handler"

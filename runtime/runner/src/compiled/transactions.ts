@@ -82,8 +82,11 @@ import {
 } from "../cfc/types.ts";
 import { readMaybeLink } from "../link-resolution.ts";
 import type { Runtime } from "../runtime.ts";
+import { ignoreReadForScheduling } from "../scheduler.ts";
 import { handlerIdentityOf } from "./handler-identity.ts";
+import { appendedBehind } from "./appended.ts";
 import { isStateCellSeed, recordStateCellSeed } from "./initialization.ts";
+import { type ResultPolicy, writePoliciesOf } from "./result-policy.ts";
 import type { URI } from "../sigil-types.ts";
 import type {
   IExtendedStorageTransaction,
@@ -404,6 +407,10 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #patternOf = new Map<string, string>();
   /** The identity each artifact was registered under. */
   readonly #registered = new Map<Artifact, string>();
+  /** The artifact the adapter was given, of the instance it was started with. */
+  readonly #artifact: Artifact | undefined;
+  /** The artifact of each instance the executor made of another artifact. */
+  readonly #artifactOf = new Map<string, Artifact>();
   /**
    * The number of changes of what decides whether a binding takes a staged
    * label, in the transaction in progress: its writes, and its reads of a
@@ -458,6 +465,13 @@ export class RuntimeTransactions implements TransactionHooks {
    * given; write records are recorded only then.
    */
   readonly #compiledPattern: string | undefined;
+  /**
+   * The write policies the result type of the compiled pattern declares, or
+   * `undefined` where it declares none.
+   */
+  readonly #resultPolicy: ResultPolicy | undefined;
+  /** The transaction `#resultPolicy` was last recorded for. */
+  #resultPolicyIn: IExtendedStorageTransaction | undefined;
   /** The paths the transaction in progress wrote, by document. */
   readonly #written = new Map<string, (readonly string[])[]>();
   /** The stored labels of each document `labelOf` read, per transaction. */
@@ -707,6 +721,13 @@ export class RuntimeTransactions implements TransactionHooks {
         !runtime.experimental.compiledPatterns || !runtime.servingPosture
       ? undefined
       : this.#register(options.artifact);
+    this.#artifact = options.artifact;
+    this.#resultPolicy = writePoliciesOf(
+      options.artifact?.schemas.find(({ id }) =>
+        id === (options.artifact?.plan as { resultSchema?: unknown })
+          .resultSchema
+      )?.schema,
+    );
     if (
       this.#compiledPattern !== undefined || this.#onChanges !== undefined ||
       this.#sources !== undefined
@@ -925,21 +946,27 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /** @inheritDoc */
   instantiated(instance: string, artifact: Artifact): void {
+    this.#artifactOf.set(instance, artifact);
     if (this.#compiledPattern === undefined) return;
     this.#patternOf.set(instance, this.#register(artifact));
   }
 
   /**
    * The identity a transaction that runs the handler of `stream` is stamped
-   * with (`handlerIdentityOf`), or `undefined` where the runtime registered
-   * no compiled pattern for the instance of the stream.
+   * with (`handlerIdentityOf`), or `undefined` where the adapter was given
+   * no artifact or the experimental option `compiledPatterns` is off.
    */
   handlerOf(stream: StreamOfExecutor): ImplementationIdentity | undefined {
-    const pattern =
+    const artifact =
       (stream.instance === undefined
         ? undefined
-        : this.#patternOf.get(stream.instance)) ?? this.#compiledPattern;
-    if (pattern === undefined) return undefined;
+        : this.#artifactOf.get(stream.instance)) ?? this.#artifact;
+    if (
+      artifact === undefined || !this.#runtime.experimental.compiledPatterns
+    ) return undefined;
+    // A runtime that stores no labels from templates registers the pattern
+    // here: a writer claim is checked in every runtime that commits.
+    const pattern = this.#register(artifact);
     return handlerIdentityOf(
       this.#runtime.compiledPlans.plan(
         pattern,
@@ -1992,6 +2019,26 @@ export class RuntimeTransactions implements TransactionHooks {
         : store.peek(doc, path.slice(0, -1));
       const absent = path.length > 0 && isWalkableObjectNotArray(parent) &&
         !Object.hasOwn(parent, path[path.length - 1]);
+      // A handler that puts an array in the place of the array the storage
+      // holds, with members added behind those it held, wrote the added
+      // positions: the storage is given those and the number of members, as
+      // for a splice, so that a claim the schema declares for a member is
+      // decided for the members the handler added and for no other.
+      if (splice === undefined && this.#cause === "event") {
+        const stored = tx.readValueOrThrow(at(path), {
+          meta: ignoreReadForScheduling,
+        });
+        splice = appendedBehind(
+          stored,
+          store.peek(doc, path),
+          (member) => this.#encode(member),
+        );
+        // Where the storage holds no array yet, the empty one is written
+        // first, and the members behind it.
+        if (splice !== undefined && stored === undefined) {
+          tx.writeValueOrThrow(at(path), []);
+        }
+      }
       const held = splice === undefined ? undefined : store.peek(doc, path);
       if (splice !== undefined && Array.isArray(held)) {
         // A splice of a stored array writes the number of members and the
@@ -2067,6 +2114,7 @@ export class RuntimeTransactions implements TransactionHooks {
     // A schema of a plan is a JSON schema with the members the executor
     // reads typed (`Schema` of `exec/store.ts`).
     this.#recordSchema(tx, doc, path, schema, store);
+    if (doc === this.#owner) this.#recordResultPolicy(tx, path, store);
     if (this.#compiledPattern === undefined) return;
     // A write of the value the storage holds is no write of the
     // transaction: its records are given as those of a write that left the
@@ -2636,6 +2684,49 @@ export class RuntimeTransactions implements TransactionHooks {
       this.#address(doc, path.slice(0, first)),
       typeof spelled === "object" ? spelled : undefined,
     );
+  }
+
+  /**
+   * Records, for a write at `path` of the result document, the write
+   * policies the result type declares (`writePoliciesOf`), once for each
+   * transaction, so that the write answers to them. Where the write leaves
+   * a reference at a path that declares a writer claim, and is no write of
+   * a handler, the reference is recorded as a binding the runtime staged
+   * there (CFC specification §8.15.4, `08-15-write-authority.md`: "The
+   * reference that exposes the new cell is protected in its own right"):
+   * the claim then holds for every change of the reference that the
+   * piece's own derivation does not make, and the value the reference names
+   * is written under the policy of its own document.
+   */
+  #recordResultPolicy(
+    tx: IExtendedStorageTransaction,
+    path: readonly string[],
+    store: Store,
+  ): void {
+    const policy = this.#resultPolicy;
+    const owner = this.#owner;
+    if (policy === undefined || owner === undefined) return;
+    if (this.#resultPolicyIn !== tx) {
+      this.#resultPolicyIn = tx;
+      recordRelevantSchemaWritePolicyInput(
+        tx,
+        this.#address(owner, []),
+        policy.schema,
+      );
+    }
+    if (this.#cause === "event") return;
+    for (const claimed of policy.claimed) {
+      if (!isPrefix(path, claimed) && !isPrefix(claimed, path)) continue;
+      const held = store.peek(owner, claimed);
+      if (!isLink(held)) continue;
+      const at = this.#address(owner, claimed);
+      tx.recordCfcWritePolicyInput({
+        kind: "initialization",
+        mode: "binding",
+        target: { space: at.space, id: at.id, scope: at.scope, path: at.path },
+        value: this.#encode(held),
+      }, runtimeWritePolicyAuthorization);
+    }
   }
 
   /**
