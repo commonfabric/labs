@@ -353,7 +353,11 @@ impl Resolver<'_, '_> {
                     // (PL §1.3, "A declared key field"; ruling Z49).
                     schema.insert("keyFields".to_string(), annotation_value(annotation));
                 } else if LABEL_KEYS.contains(&annotation.key) {
-                    ifc.insert(annotation.key.to_string(), annotation_value(annotation));
+                    crate::writer::insert_label(
+                        &mut ifc,
+                        annotation.key,
+                        annotation_value(annotation),
+                    );
                 }
             }
             if !ifc.is_empty() {

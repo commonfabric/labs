@@ -298,6 +298,11 @@ impl<'m, 'a> Resolver<'m, 'a> {
         self.parsed[module].as_ref()
     }
 
+    /// The module of the program at `path`.
+    pub(crate) fn module_at(&self, path: &str) -> Option<usize> {
+        self.paths.get(path).copied()
+    }
+
     /// The module a relative specifier written in module `from` names, if
     /// the program holds it.
     pub fn module_of(&self, from: usize, specifier: &str) -> Option<usize> {

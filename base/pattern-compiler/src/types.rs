@@ -1827,7 +1827,12 @@ impl<'a> Resolver<'_, 'a> {
                         else {
                             return None;
                         };
-                        return self.binding_value(home, name);
+                        // The identity of the declaring module beside the
+                        // record: the pair `Body.code` of the handler holds.
+                        let mut body = self.binding_value(home, name)?;
+                        let declaring = self.module_at(body["module"].as_str()?)?;
+                        body["identity"] = json!(self.module_identity(declaring));
+                        return Some(body);
                     }
                     TSType::TSTypeReference(alias) => match self.label_term(home, alias) {
                         LabelTerm::Body(next, body, _) => {

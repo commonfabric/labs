@@ -49,6 +49,7 @@ import { type Cell, convertCellsToLinks } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
 import type { Action, EventHandler } from "../scheduler/types.ts";
 import type { URI } from "../sigil-types.ts";
+import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import type { FabricValue } from "@commonfabric/data-model";
 import {
@@ -454,6 +455,11 @@ export class CompiledPiece {
       // The events the handler sent to streams of the piece, each with the
       // entity of the marker of its stream.
       const queued: { entity: URI; event: unknown }[] = [];
+      // What the handler stages is recorded under its identity, which a
+      // writer claim of a written position is checked against.
+      const writer = transactions.handlerOf(stream);
+      const before = tx.getCfcState().implementationIdentity;
+      if (writer !== undefined) setCfcImplementationIdentity(tx, writer);
       try {
         // The frame of a handler, under which the gated `Date` and `Math`
         // of the value code give the time of the event and a random draw.
@@ -481,6 +487,7 @@ export class CompiledPiece {
             }),
         );
       } finally {
+        if (writer !== undefined) setCfcImplementationIdentity(tx, before);
         this.#counts.ownMs += performance.now() - began;
       }
       if (!outcome.committed) this.#counts.eventsRefused += 1;

@@ -72,6 +72,7 @@ import {
   type CfcAddress,
   type CfcMetadata,
   type IFCLabel,
+  type ImplementationIdentity,
   type ObservedPosition as RuntimeObserved,
   type PlanElements,
   type PlanWrite as RuntimePlanWrite,
@@ -81,6 +82,8 @@ import {
 } from "../cfc/types.ts";
 import { readMaybeLink } from "../link-resolution.ts";
 import type { Runtime } from "../runtime.ts";
+import { handlerIdentityOf } from "./handler-identity.ts";
+import { isStateCellSeed, recordStateCellSeed } from "./initialization.ts";
 import type { URI } from "../sigil-types.ts";
 import type {
   IExtendedStorageTransaction,
@@ -924,6 +927,27 @@ export class RuntimeTransactions implements TransactionHooks {
   instantiated(instance: string, artifact: Artifact): void {
     if (this.#compiledPattern === undefined) return;
     this.#patternOf.set(instance, this.#register(artifact));
+  }
+
+  /**
+   * The identity a transaction that runs the handler of `stream` is stamped
+   * with (`handlerIdentityOf`), or `undefined` where the runtime registered
+   * no compiled pattern for the instance of the stream.
+   */
+  handlerOf(stream: StreamOfExecutor): ImplementationIdentity | undefined {
+    const pattern =
+      (stream.instance === undefined
+        ? undefined
+        : this.#patternOf.get(stream.instance)) ?? this.#compiledPattern;
+    if (pattern === undefined) return undefined;
+    return handlerIdentityOf(
+      this.#runtime.compiledPlans.plan(
+        pattern,
+        runtimeWritePolicyAuthorization,
+      ),
+      pattern,
+      stream.binding,
+    );
   }
 
   /** The space the documents of the executor are in. */
@@ -1868,17 +1892,18 @@ export class RuntimeTransactions implements TransactionHooks {
       if (
         !(this.#resume && doc === this.#owner && document.value === undefined)
       ) {
-        tx.writeValueOrThrow(
-          this.#address(doc, []),
-          this.#encodeWithRows(
-            tx,
-            store,
-            rows,
-            [],
-            document.value,
-            buckets,
-          ),
+        const whole = this.#encodeWithRows(
+          tx,
+          store,
+          rows,
+          [],
+          document.value,
+          buckets,
         );
+        tx.writeValueOrThrow(this.#address(doc, []), whole);
+        if (isStateCellSeed(document, path, schema, writes)) {
+          recordStateCellSeed(tx, this.#address(doc, []), whole);
+        }
       }
       this.#enroll(tx, doc);
       this.#linkToResult(tx, doc);

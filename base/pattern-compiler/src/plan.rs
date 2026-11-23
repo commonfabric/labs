@@ -5927,6 +5927,19 @@ impl<'a> Emitter<'_, '_, 'a> {
         let saved_within = std::mem::take(&mut self.within);
         let saved_cone = self.cone.take();
         self.body_record(kind, name, &record, &inputs, false, start, false);
+        // `Body.code` (PL §1.5), for a handler declared at a `const` of
+        // module scope, which is what a writer policy can name.
+        if body_kind == BodyKind::Handler {
+            let declared = self
+                .body_at(home, start)
+                .map(|body| &self.bodies[home][body])
+                .filter(|body| body.parent.is_none())
+                .and_then(|body| body.name.clone());
+            if let Some(declared) = declared {
+                self.plan_bodies[index]["code"] =
+                    crate::writer::body_code(&self.resolver.module_identity(home), &declared);
+            }
+        }
         self.facts.handlers.insert(
             index,
             crate::emit::HandlerFact {
