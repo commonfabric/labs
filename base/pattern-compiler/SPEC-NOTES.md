@@ -18011,3 +18011,395 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    document of today's board under the serving loop and 68 on the compiled
    board's (note 845). Whether the two arms store labels of the same strength
    for the same derived values was not compared under the serving loop.
+
+## Round 13: a resume that leaves the rows of a list as stored, and what it does not reach
+
+Round thirteen (2026-11-23), on the branch `claude/compiled-pattern-runner-m3`
+from the commit `5f45021c1d`. The notes are numbered from 692. The provisional
+decisions are numbered from P270. Whenever a note says `map`, it names the case.
+
+692. **What the round did, by step.**
+     - _A resume per unit (step 1), built for one construct._ A `map` in no
+       element body, over a slot that holds an array of references, whose rows
+       are documents of their own and whose element body declares nothing, is
+       resumed with no body evaluated (notes 693 to 696). Every other construct
+       is evaluated whole by the resumed executor, as before. **No module of the
+       corpus has a collection the built case covers** (note 697), so the corpus
+       and, by the same rules, most likely Topics resume whole as before.
+     - _The same under the serving loop (step 2)._ The built case is taken under
+       the serving loop alone (P270), so the tests and the table are of the
+       serving loop (notes 698 and 699). Topics was not run (note 700).
+     - _The load in bounded transactions (step 3), stubbed._ Note 701.
+     - _Correctness across a resume (step 4)._ Note 702.
+     - _With the experimental option off._ `StorageManager.readsThroughStore` of
+       `runtime/runner/src/storage/v2.ts` is a new method that nothing calls
+       without a compiled piece. The other changes are in
+       `runtime/runner/src/compiled/` and `base/pattern-compiler/`.
+693. **Step 1, built: the rows of a `map` over an array of references are left
+     as stored (provisional decisions P270, P272 and P274).**
+     - _Which collections_ (`storedRowCollections` of `exec/stored-units.ts`).
+       The construct is `map`, in no element body. Its rows are documents of
+       their own (`rowDocumentCollections`). Its source is a slot that holds an
+       array, so each element is a reference. The result keeps it at a path
+       through no element. Nothing is declared inside its element body: no
+       handler binding, no state cell, no instance, no operation, no other
+       collection, and no cone with side-writes. No label template folds over it
+       (P273).
+     - _What the resumed executor does_ (`Instance.#heldResult`, `#seed`). The
+       result document is created with what the storage holds, without the
+       arrays of row documents and the records of bucket documents. At the first
+       evaluation of the assembly of such a collection the executor reads the
+       source array, which is one document, and forms the key of each element
+       from the position its link names, with no read of the document the link
+       leads to. It takes the table only where the row document of each key
+       formed so (`identifierOf` of the path and the key) is the one the stored
+       result links to at the same position (P272). The assembled value holds
+       `STORED_ROW` at each position, the unit of the result holds the same, and
+       the store step writes nothing for such a row. The store holds the keys as
+       it holds keys it formed (`Store.adoptKeys`), so a later splice of the
+       array is applied to the table as before (`#reassemble`).
+     - _When a body is evaluated._ When a document changes, the executor reads
+       the list of the readers of that document once (`#hydrate`) and registers
+       each element the list names as a reader of the paths it read. The mark
+       then passes to the assembly, which evaluates the body of that element,
+       and the store step writes the row, which the adapter compares with the
+       row document. A reader that takes the rows as values, as a body that is
+       handed the collection whole, an index or a `map` over the rows, and a
+       unit at another place than the kept path, has every body evaluated
+       (`#unseed`): the collection is then whole, as before.
+     - _A document that changed while no runtime ran the piece._ The wake is
+       given the sources whose number differs from the basis (`staleSourcesOf`).
+       The elements that the lists of those documents name are evaluated when
+       the table is formed. Where a source array links into a document that
+       changed, the executor reads that document and takes the table only where
+       the link still names the same position. A source array that changed fails
+       the comparison with the stored row links, and the collection is whole.
+     - _An element that depends on more than positions (P274)._ The lists hold
+       positions. An element whose evaluation used another entry, read the
+       position of its element, demanded a cone with side-writes or read through
+       a reference by key is not plain, and a collection with one such element
+       is not left as stored: the document of the units says for each collection
+       whether every element was plain.
+     - _Only where the replica reads from the store (P270)._ The executor reads
+       a row document, a list and a source when it evaluates what reads them,
+       inside the derivation. A replica that reads over a session would have to
+       wait there. `resumeCompiledPieceFromBasis` takes the wake by units
+       (`resumeCompiledPieceByUnits` of `compiled/unit-resume.ts`) where
+       `StorageManager.readsThroughStore` says so, the basis is of the same
+       compiled pattern and the plan has such a collection, and
+       `resumeCompiledPiece` otherwise. This closes the last item of note 843:
+       the resume can tell that a read-through is installed.
+694. **Step 1, built: the lists of the readers, kept in reverse (provisional
+     decisions P271 and P275).** `runtime/runner/src/compiled/units.ts`.
+     - _What is stored._ For each document that the body of an element read: the
+       elements that read it, each with its collection, its key, the paths it
+       read, and the paths at which it found which position a reference names.
+       The lists are spread over 256 documents by the hash of the document read
+       that spreads the numbers of the basis (P271). One more document, named
+       from the result document, holds the identity of the compiled pattern, the
+       parts that have a document, and for each collection whether it is plain
+       (P275).
+     - _When it is written._ The executor tells the piece what each evaluation
+       of a body of such a collection read (`StoredUnits.read`). The derivation
+       that evaluated the body writes the entry where it differs from what the
+       part holds, with the rows and the basis, in one transaction. An
+       evaluation that read the positions it read before writes nothing. An
+       appended item writes one path of one part, and the document of the units
+       where that part is new. The load writes one entry for each element: at
+       10,000 rows the load took 3.6 to 4.2 s where it took 3.1 to 3.3 s (note
+       699).
+     - _What is not stored._ The names an entry used (`Dependency.on`), which
+       P274 makes unnecessary for the built case and which every other case
+       needs. The lists of anything but the body of an element of such a
+       collection.
+     - _A refused commit_ takes its entries with it, and the piece writes them
+       again with the next derivation (`PieceUnits.refused`).
+     - _A resume on a replica that reads over a session_ evaluates every body,
+       and brings the document of the units and the parts it names first, so
+       that it writes no entry that the lists hold (`syncBasis` of
+       `compiled/resume.ts`).
+     - _Not closed._ The entry of an element that left its collection is removed
+       where this runtime evaluated the element, and stays where it did not. An
+       entry that stays names an element no table holds and marks nothing.
+       Nothing removes it.
+695. **Step 1, two defects found on the way and closed.**
+     - _A wake from inside the replica's notification of a commit._ A change of
+       a source wakes a piece that waits, from the notification of the commit.
+       The wake by units starts the executor with nothing awaited, so it ran
+       while the replica was still applying that commit, and its transaction was
+       refused: `StorageTransactionInconsistent` on a content-addressed document
+       that it had read as absent. The wake now starts on the next microtask.
+       This rests on the replica applying one commit within one synchronous
+       turn, which was read off the failure and not from the code of the
+       replica.
+     - _A collection at a second place of the result._ The adapter stores the
+       rows of a row-document collection as documents at every place of the
+       result document itself, and knows the keys of an array only once it wrote
+       it. A place that the resumed executor compares member by member against
+       stored links would be written as rows in place. The executor empties such
+       a place before the comparison (`#unitPlaced`), so the array is stored
+       whole there, as the resume before this round stored it. Reasoned, not
+       covered by a test.
+696. **Step 1 measured.**
+     `runtime/runner/test/compiled/compiled-serving-takeover.test.ts`, six cases
+     on `fixtures/serving-list.tsx`, a `map` over an array of references with
+     rows as documents, under `listenCompiledServingMemoryServer`. After another
+     serving loop took the space over and found the piece current, the event
+     that gives one item another title evaluates 4 entries at 100 and at 1,000
+     rows: the result, the assembly with no body, the body of that row, and the
+     assembly again. Before the change it evaluated 104 and 1,004. The replica
+     of the serving runtime reads 10 to 12 documents from the store for that
+     event at both sizes (`ServingLoopStats.storeReads`). A client's change of
+     one item that wakes the piece evaluates 3 entries. An added item, three
+     more renames and a third serving loop that finds the piece current give the
+     labels expected, with 4 bodies evaluated. `exec/test/stored-units.test.ts`
+     has six cases on which collections are taken. The test file is on the real
+     clock (`test/clock-preload.ts`), as `compiled-serving.test.ts` is.
+     - _A bound of an older test moved._ `resume.test.ts` asserted that no
+       commit after a resume writes more than 4 documents. The derivation behind
+       an added item now also writes one part of the lists and, where that part
+       is new, the document of the units: the bound is 6.
+697. **What the built case does not reach: every row-document collection of the
+     corpus, and every construct that is no row.**
+     - _The corpus._ Of the 375 modules the crate emits here, 43 have a
+       collection whose rows are documents, 84 collections in all. None of the
+       84 is taken by `storedRowCollections`. By the first reason found for
+       each, in this order: 40 have a handler binding in the element body, 3
+       another collection or an operation in the body, 17 a source that is no
+       slot (the result of a `lift` or a `computed`, a `filter` or a `sortBy`),
+       and 24 are named by a fold of a label template or not kept at a path. The
+       count is that of a script of the round, kept with its raw output, which
+       found a fold by a search of the text of the plan.
+     - _Everything that is no row is evaluated at the wake._ The result, every
+       value of the pattern's own body, each `reduce`, each index and each sort
+       are evaluated by the resumed executor as before: a `reduce` and an index
+       evaluate one step or one body for each element. The entry that stands for
+       a stored unit (note 843, item 4 (a)) exists for a row alone.
+     - _What each needs, in the order of what it would free in the corpus._
+       1. _A row that binds a handler._ A row left as stored registers no
+          handler, so an event to its stream would be dropped. Either the piece
+          registers a handler for each stream of each row when the table is
+          formed, from the binding and the key, which is work for each row with
+          no document read, and the handler evaluates the body of its row before
+          the handler body, as a cone with side-writes is evaluated before a
+          handler body; or the entity of a stream stores its binding and its
+          keys and the runtime asks the piece when an event finds no handler,
+          which needs a change of the scheduler's path for such an event.
+       2. _A fold over the collection._ The label of a fold is formed from the
+          groups of the members (`Instance.#regroup`), which the executor holds
+          for the members it evaluated. It needs the stored labels of the
+          members (note 843, item 5).
+       3. _A source that is an output, a `filter` or a `sortBy`._ The table is
+          then that of another entry, which has to stand for a stored unit
+          first.
+       4. _An entry of the pattern's own body, a `reduce`, an index, a sort._
+          Each needs its value read back from the storage, which is sound for a
+          value the stored form gives back, the lists of what it read, and with
+          each stored unit the names of the entries that used it, which this
+          round did not store.
+698. **Step 2: the list of `compare/serving-path.ts`.** One process for each
+     run, the compiled arm three times and today's once, 7 events for each
+     figure, load averages 5.3 to 6.9 (1 minute). The pattern and the columns
+     are those of note 847, the cells the median of the runs, in milliseconds.
+
+     |   Rows | Arm      | Runs |   Load | `rename`, sender | `rename`, reader | `add`, sender | `add`, reader |
+     | -----: | -------- | ---: | -----: | ---------------: | ---------------: | ------------: | ------------: |
+     |    100 | compiled |    3 |    130 |             14.0 |             14.6 |          25.0 |          25.3 |
+     |    100 | today    |    1 |    631 |              4.7 |             19.7 |          11.7 |          42.1 |
+     |  1,000 | compiled |    3 |    465 |             15.7 |             16.0 |          41.9 |          42.2 |
+     |  1,000 | today    |    1 |  2,246 |              3.7 |             17.1 |          52.7 |           171 |
+     | 10,000 | compiled |    3 |  3,726 |             33.9 |             34.6 |           238 |           239 |
+     | 10,000 | today    |    1 | 50,065 |             17.2 |             73.2 |           990 |         2,876 |
+
+     After another serving loop takes the space over, from the restart:
+
+     |   Rows | Arm      | A client reads the last row | The loop is quiescent | Documents the comparison read | Evaluations before an event | First event, reader | Evaluations after two events | Second event, reader |
+     | -----: | -------- | --------------------------: | --------------------: | ----------------------------: | --------------------------: | ------------------: | ---------------------------: | -------------------: |
+     |    100 | compiled |                        26.3 |                  29.2 |                           199 |                           0 |                17.7 |                            6 |                 11.3 |
+     |    100 | today    |                         113 |                   147 |                             – |                           – |                14.2 |                            – |                 13.8 |
+     |  1,000 | compiled |                        84.8 |                  87.9 |                         1,263 |                           0 |                25.0 |                            6 |                 13.2 |
+     |  1,000 | today    |                       1,112 |                 1,597 |                             – |                           – |                18.9 |                            – |                 15.5 |
+     | 10,000 | compiled |                         971 |                   974 |                        10,268 |                           0 |                 137 |                            6 |                 19.2 |
+     | 10,000 | today    |                      36,126 |                73,035 |                             – |                           – |                32.5 |                            – |                 32.0 |
+
+     The three runs of the compiled arm: load 125 to 131, 432 to 478 and 3,561
+     to 4,190; `add` at the reader 25.0 to 26.0, 38.6 to 45.3 and 218 to 248;
+     the first event after the takeover 16.8 to 22.0, 23.8 to 30.6 and 114 to
+     150. Against note 847 the first event after a takeover is 17.7, 25.0 and
+     137 ms from 48.2, 223 and 2,134, and the evaluations after two events are 6
+     at every length, from 113, 1,013 and 10,013.
+     - _The first event still follows the rows in time, and at 10,000 rows it is
+       four times today's._ One run with the start of the executor timed at
+       10,000 rows: 79 ms, of which 60 ms form the table: the element part of
+       each link 10 ms, the keys 14 ms, the identifier of each row document for
+       the comparison 20 ms, the keys held by the store and the elements 11 ms.
+       That is in memory, with no document read and no body evaluated, at about
+       8 microseconds for a row. What removes it is a table that is not formed
+       whole: the links of the array in documents of a bounded number of links,
+       with the keys of each, read when a key in it is asked for.
+     - _The load is longer_ at 1,000 and at 10,000 rows, 465 and 3,726 ms from
+       352 and 3,153: it writes one entry of the lists for each row.
+     - _The read of a client after a takeover is longer at 10,000 rows,_ 971 ms
+       from 658, with the same 10,268 documents compared. Not explained: the
+       comparison is unchanged, the store holds the lists in addition, and the
+       runs of the two rounds were on a machine with other load.
+699. **Step 2: what the takeover reads is unchanged.** The comparison of the
+     basis still brings one document for each source, 10,268 at 10,000 rows,
+     before anything is known to be current. The lists of this round do not
+     shorten it: they say which elements read a document, and the comparison
+     asks which documents changed, which the memory server knows from the head
+     of each (note 823).
+700. **Step 2: Topics was not run.** The boards are on the measurement worktree,
+     which another agent used in this round. What to run there, after a merge of
+     this branch: `compare/topics/scale.ts` with the arms `serving` and
+     `serving-today` and `SCALE_TAKEOVER`, as note 846 ran them, at 100, 1,000
+     and 2,000 topics, and the row "first edit after the takeover" with the
+     evaluations of the wake. What to expect: by note 697, a board whose cards
+     bind handlers and that has indexes, a sort and counts over the topics has
+     no collection that is taken, and the first edit after a takeover is the
+     whole derivation as in note 846, 8.5 s at 2,000 topics. Whether the boards
+     are such was not read from their artifacts in this round.
+701. **Step 3, stubbed: the load under the serving loop in bounded transactions.
+     The plan this round's mechanism gives.** The load is one transaction of one
+     wave, as in note 844. The second way of note 820, a first derivation that
+     stops and goes on in the next cycle, can be built on what `#reassemble`
+     does for a splice:
+     1. The assembly of a collection over a stored array takes, in one
+        derivation, at most a bounded number of the keys that entered, and
+        leaves the others as entered and not yet taken. The table and the stored
+        array then hold the rows taken so far, each stored whole under its own
+        record, and the piece has its derivation run again while keys are left
+        (`CompiledPiece.#invalidate`).
+     2. Each such derivation is a transaction of a wave of its own, so a reader
+        sees the array grow.
+     3. The basis and the document of the units are written by the derivation
+        that took the last key. A serving loop that takes the space over before
+        that finds no basis and derives whole. What it changes in meaning: every
+        reader of the collection inside the piece, a `reduce`, an index, a
+        count, sees a collection that holds some of its rows until the load
+        ends, and so does a reader of the result. What a reader may conclude
+        from such a result is part of the ruling of note 844, so nothing was
+        built.
+702. **Step 4: the corpus.** `compare/runner-corpus.ts`, one run of each mode
+     over the 375 modules the crate emits on this branch. No module has a
+     collection that is left as stored (note 697), so the runs say that the
+     round changed nothing for a piece that resumes whole.
+     - _On the runner path:_ 272 modules are run, with a `wish` answered from
+       the seeded home, and 194 pass. Of the 239 that the other modes run, which
+       leave out a module with a `wish`, 183 pass, as in note 848.
+     - _Under the serving loop_ (`--serving`): the same 183 pass.
+     - _After a resume_ (`--resume`): 182 of the 183 pass. 131 modules were
+       resumed, the basis of all 131 matched, and the wake wrote no document for
+       94 of them. The one that does not pass is
+       `dev/gideon-tests/test-idempotent-side-effects.tsx`, as in note 848.
+       `apps/redactor/vault.tsx`, whose commits are refused on the runner path,
+       has none refused in this run, as in note 822.
+     - _Under the serving loop with a takeover_ (`--serving --resume`, new in
+       this round): another serving loop takes the space over after the first
+       half of the events of each module
+       (`CompiledServingMemoryServer.restart`), and the event behind it wakes
+       the piece in a serving runtime whose replica reads from the store. The
+       same 182 of the 183 pass, with `vault.tsx` beside them. 80 modules were
+       taken over with an event behind the takeover, and the basis of all 80
+       matched. This run was made before the commit that leaves out a folded
+       collection, which changes nothing for a module with no collection that is
+       taken.
+     - No module's line changed against note 848.
+703. **Findings on structure, scale and soundness.**
+     - _Structure, not closed: the resume per unit covers one construct, and no
+       collection of the corpus_ (note 697). A row that binds a handler, a
+       collection a fold names, a source that is no slot, and every entry that
+       is no row are evaluated whole at a wake. The first event after a takeover
+       of a piece of the corpus costs what it cost.
+     - _Scale, closed for the built case: the first event after a takeover
+       evaluated every row and read every document of the piece_ (note 696). It
+       evaluates 4 entries and reads 10 to 12 documents at 100 and at 1,000
+       rows.
+     - _Scale, not closed: the table of a collection is formed whole in memory
+       at a wake_ (note 698), about 8 microseconds for a row, so the first event
+       is 137 ms at 10,000 rows against today's 32.5.
+     - _Scale, new: the load writes one entry of the lists for each row_ (note
+       698), 0.4 to 0.6 s more at 10,000 rows.
+     - _Scale, not closed: the takeover reads one document for each source_
+       (note 699), and _the load is one transaction of one wave_ (note 701).
+     - _Scale, not closed: an entry of the lists for an element that left while
+       this runtime had not evaluated it is never removed_ (note 694).
+     - _Soundness, held by a rule of the plan and not by a mechanism: an event
+       to a stream that a row binds._ A row left as stored registers no handler.
+       `storedRowCollections` leaves out every collection whose body binds one.
+       A change of that rule without the registration of note 697 drops events.
+     - _Soundness, held by a stored flag: an element that depends on another
+       entry_ (P274). The lists hold positions and not the entries an element
+       used. A collection is left as stored only while every element of it was
+       plain when it was last evaluated.
+     - _Soundness, an assumption: the sources of the basis are every document
+       that can change while no runtime runs the piece and that a body read._ A
+       document that the piece derives changes only in the running executor,
+       where the change reads the list. A document in another space is never
+       current (P114), so it is among the documents that changed at every wake.
+     - _Soundness, an assumption: the replica applies a commit within one
+       synchronous turn_ (note 695).
+     - _Soundness, closed: a wake from inside the notification of a commit was
+       refused_ (note 695).
+     - _Soundness, reasoned and not tested: a collection at a second place of
+       the result_ (note 695); _a refused commit after a wake by units_, where
+       `Instance.restore` gives the executor the result document with every row
+       read from the storage, which follows the rows.
+     - _Soundness, suspected and deferred: a change of the label alone of a
+       document that a row left as stored read does not form the label of that
+       row again_ (CFC question 2 below).
+     - _A defect of the harness, closed: the test of the takeover failed on the
+       fake clock_ with "memory session.open challenge expired", as the note in
+       `test/clock-preload.ts` on `storage-admission-notice` describes.
+704. **Provisional decisions of the round, and what was not done.** P270: the
+     rows of a collection are left as stored only on a runtime whose replica
+     reads from the store, and every other runtime resumes whole (note 693).
+     P271: the lists of the readers are spread over 256 documents by the hash of
+     the document read that spreads the numbers of the basis (note 694). P272:
+     the key of an element of an array of references is formed from the position
+     its link names with no read of the document, and taken only where the row
+     document of that key is the one the stored result links to at the same
+     position (note 693). P273: a collection that a fold of a label template
+     names is not left as stored (note 693). P274: the document of the units
+     says for each collection whether every element of it depends on positions
+     alone, and a collection for which it does not say so is evaluated whole
+     (note 693). P275: the document of the units names the parts that have a
+     document, and a resume on a replica that reads over a session brings them
+     (note 694). Not done: a row that binds a handler, a folded collection, a
+     source that is no slot, an index, a sort, a `flatMap`, a `reduce` and every
+     entry of the pattern's own body as a stored unit (note 697); the names an
+     entry used, stored with each unit (note 694); a table that is not formed
+     whole (note 698); the bounded load (note 701); Topics (note 700); the heads
+     of the sources read from the memory server's tables (note 699); a test of a
+     collection at a second place of the result, of a refused commit after a
+     wake by units, and of an element that is not plain; a comparison of the
+     labels a wake by units stores for a row with those a whole derivation
+     stores; more than one run of today's arm; a machine with no other load.
+
+### CFC questions deferred, round 13
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. The documents of the parts of the lists of the readers, and the document of
+   the units, are written with no record of a plan
+   (`RuntimeTransactions.writeOwn`), as the document of the basis is: each
+   stores the join of what its transaction read. A list says which positions of
+   which inputs each row was derived from, and the keys in it name the addresses
+   of the inputs. Which label a list should carry, and whether a reader of the
+   piece may read it, is question 2 of the fourth round of milestone 6, now for
+   data that is stored.
+2. Suspected under-label. A change of the label alone of a document reaches the
+   executor through `Instance.labelsChanged`, which finds the records to give
+   again among the records it holds. A row left as stored has no record in the
+   resumed executor, so its stored label stays as it was when an input it read
+   takes a stronger label and no value changes. A whole resume has the same
+   records after its first derivation and gives them again. Not shown by a test.
+3. The first derivation of a wake by units gives no record for a row it left as
+   stored, where a whole resume compares every row and gives the record of each
+   as that of a write that left the value as it was. Whether a row may keep the
+   label it was stored with across a takeover, with no derivation that confirms
+   it, is the question of note 843, item 5.
+4. A collection that a fold names is evaluated whole (P273). To leave it as
+   stored, the groups of a fold label would be formed from the stored labels of
+   the members: whether a label read back from the storage may stand in a group
+   beside one the executor formed is not ruled.
