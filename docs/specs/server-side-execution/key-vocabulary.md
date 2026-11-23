@@ -323,7 +323,7 @@ per-run identities where run contexts carry them):
 **Recorded sound-per-session:**
 
 - `runtime/memory/v2/query.ts` — the `EngineObjectManager` caches
-  (`load`, `detail`, `invalidateIds`) key
+  (`load`, `detail`, `forgetInstance`) key
   `${scope_key}/${id}/${type}`, the scope key resolved against the
   manager's bound identity (`#scopeKeyFor`), and are sound because the
   constructor binds ONE identity per manager: every entry a manager
