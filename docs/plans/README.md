@@ -358,6 +358,11 @@ a record: archive it to `docs/history/plans/` following the procedure in
   get costs the prototype alone cannot give: the options weighed, two
   tracks with Topics as their shared target, six milestones with what each
   measures, and what stays in the prototype.
+- [Compiled pattern language: where each branch stands and what to do next](compiled-pattern-language-handoff.md)
+  is for a session that continues the build: which branch holds what, which
+  branches are not merged and in which order to merge them, the open lines
+  of work with the notes that hold their plans, and how a round is briefed
+  and checked.
 
 ## Concepts not planned for deployment
 
