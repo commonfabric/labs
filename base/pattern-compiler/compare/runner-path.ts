@@ -4,7 +4,12 @@
  * from the write that causes it until the runtime is settled (milestone 3
  * of `docs/plans/compiled-pattern-language-integration.md`).
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today,alone] [--case=<part of a name>] [--no-pull] [--rows=in-place] [--slots=<n>] [lengths]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today,alone] [--case=<part of a name>] [--no-pull] [--rows=in-place] [--slots=<n>] [--inputs-first] [lengths]`
+ *
+ * With `--inputs-first` the inputs are written in a transaction of their
+ * own (`inputs`), which is committed before the piece is started (`load`).
+ * A compiled piece then loads in bounded transactions; one started in the
+ * transaction that wrote its inputs loads in that transaction whole.
  *
  * The arm `alone` starts no piece: it makes the inputs and the same
  * changes, so its time is that of the harness's own writes, the commit and
@@ -166,7 +171,16 @@ export const running = async (
     result: Cell<unknown>;
     piece?: CompiledPiece;
   },
-): Promise<{ running: Running; load: StepCost }> => {
+  /**
+   * Makes the inputs in a transaction of its own, which is committed and
+   * settled before `start` runs. Its cost is returned as `inputs`.
+   */
+  before?: (
+    runtime: Runtime,
+    space: MemorySpace,
+    tx: ReturnType<Runtime["edit"]>,
+  ) => void,
+): Promise<{ running: Running; load: StepCost; inputs?: StepCost }> => {
   // The identity whose space is the audience that every generated clause
   // names as an alternative (`scenarioAudience`).
   const signer = await Identity.fromPassphrase("pattern-compiler-compare");
@@ -269,11 +283,15 @@ export const running = async (
       tx.abort();
     }
   };
+  const inputs = before === undefined
+    ? undefined
+    : await measure((tx) => before(runtime, space, tx));
   const load = await measure(async (tx) => {
     ({ result, piece } = await start(runtime, space, tx));
   });
   return {
     load,
+    ...(inputs === undefined ? {} : { inputs }),
     running: {
       arm,
       runtime,
@@ -347,6 +365,8 @@ const growthArm = async (
   pulls: boolean,
   rows: "documents" | "in-place",
   slots: number | undefined,
+  /** Whether the inputs are committed before the piece is started. */
+  inputsFirst: boolean,
 ) => {
   const audience = await scenarioAudience();
   const ifc = { confidentiality: [inputClause("items", audience)] };
@@ -376,21 +396,29 @@ const growthArm = async (
     cell.set(item(index));
     return cell;
   };
-  const { running: run, load } = await running(
+  const makeInputs = (
+    runtime: Runtime,
+    space: MemorySpace,
+    tx: ReturnType<Runtime["edit"]>,
+  ) => {
+    for (let index = 0; index < length; index++) {
+      held.push(make(runtime, space, tx));
+    }
+    items = runtime.getCell<unknown[]>(space, "items", schema, tx);
+    if (one.references) items.set(held as never);
+    else {
+      const link = items.getAsNormalizedFullLink();
+      recordRelevantSchemaWritePolicyInput(tx, link, schema);
+      diffAndUpdate(runtime, tx, link, held as never);
+    }
+  };
+  const { running: run, load, inputs } = await running(
     arm,
     pulls,
     slots,
     async (runtime, space, tx) => {
-      for (let index = 0; index < length; index++) {
-        held.push(make(runtime, space, tx));
-      }
-      items = runtime.getCell<unknown[]>(space, "items", schema, tx);
-      if (one.references) items.set(held as never);
-      else {
-        const link = items.getAsNormalizedFullLink();
-        recordRelevantSchemaWritePolicyInput(tx, link, schema);
-        diffAndUpdate(runtime, tx, link, held as never);
-      }
+      if (!inputsFirst) makeInputs(runtime, space, tx);
+      else items = items!.withTx(tx);
       const result = runtime.getCell<unknown>(space, `growth ${one.name}`);
       if (arm === "alone") return { result };
       if (arm === "compiled") {
@@ -426,6 +454,7 @@ const growthArm = async (
       runtime.run(tx, compiled, { items }, result.withTx(tx));
       return { result };
     },
+    inputsFirst ? makeInputs : undefined,
   );
   const { runtime, space } = run;
   const list = (tx: ReturnType<Runtime["edit"]>) => items!.withTx(tx);
@@ -477,7 +506,7 @@ const growthArm = async (
       setAll(tx);
     },
   };
-  return { run, load, operations };
+  return { run, load, inputs, operations };
 };
 
 /**
@@ -539,6 +568,7 @@ if (import.meta.main) {
             !flags.includes("--no-pull"),
             flag("rows") === "in-place" ? "in-place" : "documents",
             flag("slots") === undefined ? undefined : Number(flag("slots")),
+            flags.includes("--inputs-first"),
           )),
         });
         await stopLoadProfile?.();
@@ -553,6 +583,14 @@ if (import.meta.main) {
         return rest.every((other) => other === first);
       };
       const base = { case: one.name, length, operation: "" };
+      if (flags.includes("--inputs-first")) {
+        row("inputs", {
+          ...base,
+          ...Object.fromEntries(
+            started.map(({ arm, inputs }) => [arm, inputs]),
+          ),
+        });
+      }
       row("load", {
         ...base,
         ...Object.fromEntries(started.map(({ arm, load }) => [arm, load])),
