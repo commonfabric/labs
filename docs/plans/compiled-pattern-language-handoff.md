@@ -319,6 +319,20 @@ listed in the plan as questions 391 to 467 and 512, and per round under
 "CFC questions deferred" in `SPEC-NOTES.md`. Several are suspected
 under-labels; a construct that has one is not to be relied on for labels.
 
+**The window is to be written as `slice`** (Z92, 2026-11-23; not built).
+The owner ruled that the language adds no method regular JavaScript arrays
+lack. After the serving branch is merged: the crate recognizes
+`xs.slice(-n)` and `xs.slice(0, n)` on a collection and plans the window of
+P391 for them (`api::is_window_method`, `window` in `plan.rs`,
+`array_method` in `infer.rs`, `collection_call` in `check/mod.rs`); `last`
+and `first` are removed, with their entry in `api::is_handle_member`; the
+room's copy, the fixtures and the tests `window-construct.test.ts` and
+`window.test.ts` are rewritten to `slice`. The round reports a FabriChat
+send with the window and with the `slice` evaluated whole, and does not
+extend the window over the result of a `map` before the general costs of a
+send are fixed (the registration of a record at every position, the deep
+comparison in the store).
+
 **The owner's rule on optimizations** (Z91, 2026-11-23). A goal is to be
 met because the compiled approach is generally better, not by an
 optimization for the measured case that today's runtime has no counterpart

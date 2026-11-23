@@ -6609,6 +6609,16 @@ is relitigated.
   document; the chunks of a list above 128 rows (P393) have no counterpart
   on today's path and are reported as such.
 
+- A window of a collection is written as JavaScript's own `slice`, and the
+  language adds no method that regular JavaScript arrays lack (2026-11-23,
+  Z92). The owner's words: "just so we don't add more syntax that isn't in
+  regular JS". The compiler recognizes `xs.slice(-n)` as the newest `n`
+  elements and `xs.slice(0, n)` as the first `n`, and plans each as the
+  window the serving branch built as `xs.last(n)` and `xs.first(n)` (P391);
+  the methods `last` and `first` are removed, with the entry for them in
+  `api::is_handle_member`. Any other `slice` is evaluated as today. Not
+  built: it follows the merge of the serving branch.
+
 ## Provisional decisions awaiting the owner's ratification
 
 The owner's standing instruction of 2026-11-17: "Don't block progress on
