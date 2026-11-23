@@ -6068,7 +6068,7 @@ export class Instance {
     const path = at.slice(0, nearest.path.length);
     const key = this.#recordKey(nearest.output, path);
     if (root.#givenNow.has(key)) return;
-    root.#namedIndex.clear();
+    if (!root.#placing) root.#namedIndex.clear();
     const write = this.#outputRecord(this.id, nearest.output, [...path]);
     root.#noteRecord(key, this.id, write);
     hooks.unchanged(
@@ -6110,8 +6110,17 @@ export class Instance {
         inside?.delete(id);
       }
     }
-    const { store, id: doc } = this;
+    const { store, id: doc, root } = this;
     const bucketPaths = this.#bucketRecordPaths();
+    // The form is whole: from here to the end of the comparison nothing is
+    // evaluated, and each write forgets the inputs formed before it
+    // (`#writesOf`), so the records of the places that are left as they
+    // are name the inputs of a cone instance that were formed once.
+    const outermost = !root.#placing;
+    if (outermost) {
+      root.#namedIndex.clear();
+      root.#placing = true;
+    }
     // What a place holds, where the form has `KEPT` at or below it.
     const filled = (form: unknown, held: unknown): unknown => {
       if (form === KEPT) return held;
@@ -6192,8 +6201,19 @@ export class Instance {
         }
       }
     };
-    put(path, form, store.peek(doc, path));
+    try {
+      put(path, form, store.peek(doc, path));
+    } finally {
+      if (outermost) root.#placing = false;
+    }
   }
+
+  /**
+   * On the root: a place of a result document is being compared with its
+   * form (`#place`), and the inputs formed for the records of the places
+   * left as they are, are kept from one such record to the next.
+   */
+  #placing = false;
 
   /**
    * Brings the stored rows of a unit up to date with its assembly
