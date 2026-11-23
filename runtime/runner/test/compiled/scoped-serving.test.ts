@@ -9,6 +9,7 @@ import {
   type CompiledServingMemoryServer,
   listenCompiledServingMemoryServer,
 } from "../../src/compiled/serving-memory-server.deno.ts";
+import type { ResumedPiece } from "../../src/compiled/resume.ts";
 import {
   type PatternProgram,
   setUpCompiledPiece,
@@ -23,7 +24,7 @@ const fixture = (name: string, extension: string): URL =>
     import.meta.url,
   );
 
-const FIXTURES = ["scoped", "runtime-builtins"];
+const FIXTURES = ["scoped", "runtime-builtins", "scoped-list"];
 const ARTIFACTS = new Map<string, Artifact>();
 const PROGRAMS = new Map<string, PatternProgram>();
 for (const name of FIXTURES) {
@@ -60,6 +61,8 @@ describe("a compiled piece that two principals demand under the serving loop", (
   let serving: CompiledServingMemoryServer;
   let clients: Runtime[];
   let cancels: (() => void)[];
+  /** The pieces a serving runtime resumed from their basis. */
+  let resumed: ResumedPiece[];
 
   const clientOf = (identity: Identity): Runtime => {
     const client = new Runtime({
@@ -86,7 +89,9 @@ describe("a compiled piece that two principals demand under the serving loop", (
           main: ARTIFACTS.get(program.main.slice(1, -".tsx".length))!,
           artifacts: () => undefined,
         }),
+      pieces: { resumed: (_result, piece) => resumed.push(piece) },
     });
+    resumed = [];
     clients = [];
     cancels = [];
   });
@@ -302,5 +307,92 @@ describe("a compiled piece that two principals demand under the serving loop", (
     await levelOf(second, "WRITE");
     await levelOf(first, "OWNER");
     expect(serving.pieces()[0].refusals).toEqual([]);
+  });
+
+  // `fixtures/scoped-list.tsx`: a `map` over an array of references, whose
+  // rows are documents of their own and read nothing of a user, beside a
+  // nickname of the scope `user`. A serving loop that takes over a piece
+  // with no document of a scope leaves such rows as stored.
+  it("starts the executor whole, with no row left as stored, when another serving loop takes over a piece with state of a scope", async () => {
+    type Item = { id: string; title: string; done: boolean };
+    type Listed = {
+      rows: { label: string }[];
+      summary: string;
+      rename: unknown;
+      call: unknown;
+    };
+    const [first, second] = [clientOf(ann), clientOf(bob)];
+    const items = first.getCell<Item[]>(space, "items");
+    const tx = first.edit();
+    items.withTx(tx).set(
+      Array.from({ length: 5 }, (_, index) => {
+        const member = first.getCell<Item>(
+          space,
+          `item ${index}`,
+          undefined,
+          tx,
+        );
+        member.set({ id: `i${index}`, title: `t${index}`, done: false });
+        return member;
+      }) as never,
+    );
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await setUp(first, "scoped-list", { items });
+    const listed = (client: Runtime) => {
+      const read = readBy<Listed>(client, "scoped-list");
+      return {
+        read,
+        labels: async (expected: string[]) => {
+          await waitForCellValue<Listed>(
+            client,
+            read,
+            (held) =>
+              JSON.stringify(held?.rows?.map((row) => row?.label)) ===
+                JSON.stringify(expected),
+            { stuckLabel: `a client reads the rows ${expected}` },
+          );
+        },
+        summary: async (expected: string) => {
+          const member = read.key("summary") as unknown as Cell<string>;
+          cancels.push(member.sink(() => {}));
+          await waitForCellValue<string>(
+            client,
+            member,
+            (held) => held === expected,
+            { stuckLabel: `a client reads the summary ${expected}` },
+          );
+        },
+      };
+    };
+    const labels = ["t0!", "t1!", "t2!", "t3!", "t4!"];
+    const [byAnn, byBob] = [listed(first), listed(second)];
+    await byAnn.labels(labels);
+    (byAnn.read.key("call") as unknown as Cell<unknown>).send(
+      { name: "Ann" } as never,
+    );
+    await byAnn.summary("Ann reads");
+    await byBob.summary("nobody reads");
+    await serving.host.whenQuiescent();
+
+    await serving.restart();
+    const [later, latest] = [listed(clientOf(ann)), listed(clientOf(bob))];
+    await later.labels(labels);
+    await later.summary("Ann reads");
+    await latest.summary("nobody reads");
+    await serving.host.whenQuiescent();
+
+    expect(resumed.map(({ current }) => current)).toEqual([false]);
+    const [piece] = serving.pieces();
+    expect(piece.instance.counts.rowsLeftStored).toBe(0);
+
+    (later.read.key("rename") as unknown as Cell<unknown>).send(
+      { at: 1, title: "renamed" } as never,
+    );
+
+    const renamed = ["t0!", "renamed!", "t2!", "t3!", "t4!"];
+    await later.labels(renamed);
+    await latest.labels(renamed);
+    await later.summary("Ann reads");
+    expect(serving.pieces().flatMap((piece) => piece.refusals)).toEqual([]);
   });
 });

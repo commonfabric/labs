@@ -81,6 +81,10 @@ export const linkOfDocument = (
   };
 };
 
+/** Whether the name `doc` of a document of the executor names a scope. */
+export const namesScope = (doc: string): boolean =>
+  scopeOfDocument(doc).scope !== undefined;
+
 /**
  * Whether the name `doc` of a document of the executor names no other
  * space than that of its piece (`names.ts`).

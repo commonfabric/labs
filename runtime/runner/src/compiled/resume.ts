@@ -59,7 +59,7 @@ import {
   type CompiledPieceOptions,
   startCompiledPiece,
 } from "./piece.ts";
-import { inSpaceOfPiece, linkOfDocument } from "./scopes.ts";
+import { inSpaceOfPiece, linkOfDocument, namesScope } from "./scopes.ts";
 
 /**
  * A schema that declares no structure, under which a sync follows every
@@ -517,8 +517,12 @@ export const resumeCompiledPieceFromBasis = async (
   // rows can be left as stored. A piece with rows in place alone
   // (`CompiledPieceOptions.rows`) finds no list of the readers and derives
   // whole.
+  // A piece that has named a document of a scope derives for each
+  // principal that demands it, and its basis names a source of a scope
+  // (`CompiledPiece`): it resumes whole, with no row left as stored.
   const byUnits = basis !== undefined &&
     basis.pattern === compiledIdentityOf(artifact) &&
+    !Object.keys(basis.inputs).some(namesScope) &&
     readsThroughStore(runtime, space) &&
     storedRowCollections(artifact, rowDocumentCollections(artifact)).size > 0;
   const staleNow = (stored: StoredBasis): string[] => [

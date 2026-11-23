@@ -7582,7 +7582,9 @@ export class Instance {
     const lazy = output.collection !== undefined
       ? buildsIndex(this.plan.collections[output.collection].construct)
         ? undefined
-        : this.assembled(output.collection)
+        // The rows an assembly holds as stored were stored for every
+        // scope key: asking for the scope of the assembly evaluates none.
+        : this.assembled(output.collection, true)
       : value !== undefined && this.#values.has(value)
       ? this.evaluated(value)
       : undefined;
@@ -7620,12 +7622,23 @@ export class Instance {
     const { scopes } = this.store;
     if (scopes === undefined) return undefined;
     if (!atRoot || !this.#placeScopes.has(JSON.stringify(at))) {
-      const assembly = scopes.framed(() =>
-        this.assembled(reference.collection)(
-          this.freshContext(reference.context),
-        )
-      ).value;
-      if (assembly.scoped === undefined) return undefined;
+      // A piece that was started with rows left as stored learns where
+      // the rows of a collection stand when the unit is placed, and its
+      // assembly is first evaluated then, with the rows it can leave. Such
+      // rows were stored for every scope key, so an assembly that has no
+      // entry yet is asked nothing here. The rows an assembly holds as
+      // stored are left so in every other case too.
+      const held = this.#memo.get(reference.name);
+      const assembly = held === undefined &&
+          this.options.units?.stale !== undefined &&
+          this.#listed?.has(reference.collection) === true
+        ? undefined
+        : scopes.framed(() =>
+          this.assembled(reference.collection, true)(
+            this.freshContext(reference.context),
+          )
+        ).value;
+      if (assembly?.scoped === undefined) return undefined;
     }
     if (!atRoot) {
       return errorState(
