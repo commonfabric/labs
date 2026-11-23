@@ -600,7 +600,7 @@ const tableName = (assembly: string): string => `${TABLE_PREFIX}${assembly}`;
  * formed again (`#reassemble`).
  */
 type Rows = {
-  construct: "map" | "filter";
+  construct: "map" | "filter" | "flatMap";
   /**
    * For a collection over a stored array: the reference that the array
    * was found through, its name, and of the keys of the array the
@@ -3099,9 +3099,13 @@ export class Instance {
       open.record.changes += 1;
       open.record.patchBytes += (JSON.stringify(put) ?? "").length;
     }
-    const mark = (regs: Iterable<Reg> | undefined) => {
+    // `above` says that the readers are of a position above the change:
+    // a read that found which position a reference names (`Position.own`)
+    // is not one of what the position holds below it.
+    const mark = (regs: Iterable<Reg> | undefined, above = false) => {
       if (regs === undefined) return;
       for (const reg of [...regs]) {
+        if (above && reg.position.own) continue;
         reg.slot.instance.#mark(reg.slot, reg.position);
       }
     };
@@ -3112,7 +3116,7 @@ export class Instance {
     let node = this.#readers.get(change.doc);
     for (const segment of change.path) {
       if (node === undefined) break;
-      mark(node.regs);
+      mark(node.regs, true);
       node = node.below?.get(segment);
     }
     if (node !== undefined) {
@@ -6589,7 +6593,7 @@ export class Instance {
           });
           // What a later change of the array or of one row is applied to.
           const rows = (
-            construct: "map" | "filter",
+            construct: "map" | "filter" | "flatMap",
             members: Element[],
             flags?: boolean[],
           ) => {
@@ -6744,6 +6748,9 @@ export class Instance {
                 return segment.values;
               });
               host.members = numbered(members);
+              // A later mark that names no element whose segment changed
+              // leaves the assembly as it is (`#reassemble`).
+              rows("flatMap", host.members);
               return keyed(flat);
             }
             case "some":
@@ -6933,6 +6940,7 @@ export class Instance {
           reads,
         );
         for (const read of reads) {
+          read.own = true;
           rows.elementReads.set(read, key);
           held.reads.push(read);
           this.#watch(slot, read);
@@ -6981,6 +6989,14 @@ export class Instance {
         upstream.version = from.version ?? 0;
       };
     } else {
+      return undefined;
+    }
+    // The segments of a `flatMap` are not kept apart, so a change of the
+    // source or of what an element's body returned forms the assembly
+    // whole. What is left for this path is a mark that changes neither: a
+    // write to a document an element refers to, at a path that no body of
+    // the collection read.
+    if (rows.construct === "flatMap" && (ops.length > 0 || changed.size > 0)) {
       return undefined;
     }
     const { elements, byKey } = table;
@@ -7576,6 +7592,10 @@ export class Instance {
           : located.named.key(keySegment(keys[index])),
       };
       for (let read = from; read < host.reads.length; read++) {
+        // What a member that is a link names is found from the links on
+        // the way: a write below the position it names changes nothing
+        // of the table.
+        if (isLink(member)) host.reads[read].own = true;
         elementReads.set(host.reads[read], keys[index]);
       }
       return element;

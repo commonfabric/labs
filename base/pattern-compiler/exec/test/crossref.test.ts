@@ -173,3 +173,49 @@ describe("the inverse of a relation each member holds as a list of references: a
     expect(counts[1]).toEqual(counts[0]);
   });
 });
+
+describe("a write to a document that an array of references refers to, at a path that no body of a collection over the array reads", () => {
+  it("evaluates nothing: no assembly over the array is formed again or brought up to date", async () => {
+    const { instance, work } = await started(40);
+
+    const done = work(() =>
+      instance.store.write(new Ref("topic-20", ["title"]), "edited")
+    );
+
+    expect(done).toEqual({
+      evaluations: 0,
+      elementEvaluations: 0,
+      bucketsChanged: 0,
+    });
+  });
+
+  it("forms the keys of the array once for writes to 40 of its members", async () => {
+    const { instance } = await started(40);
+    const before = instance.store.keyings;
+
+    for (let index = 0; index < 40; index++) {
+      instance.store.write(new Ref(`topic-${index}`, ["title"]), "edited");
+      instance.settle();
+    }
+
+    expect(instance.store.keyings).toBe(before);
+  });
+
+  it("follows a member whose document is written whole", async () => {
+    const { instance, mentionedBy } = await started(4);
+
+    instance.store.write(new Ref("topic-3", []), {
+      title: "t3",
+      shortName: "4",
+      mentions: [link("topic-0")],
+    });
+    instance.settle();
+
+    expect(mentionedBy()).toEqual({
+      t0: ["t1", "t2", "t3"],
+      t1: ["t2"],
+      t2: [],
+      t3: [],
+    });
+  });
+});

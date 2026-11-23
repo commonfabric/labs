@@ -565,6 +565,13 @@ export type Position = {
    * observed the link as a reference and nothing at its target.
    */
   stopped?: true;
+  /**
+   * The read found which position a reference names and read nothing of
+   * what that position holds: it is the read of the links crossed on the
+   * way and of whether the last position holds a link. A write at the
+   * position changes what the read found; a write below it does not.
+   */
+  own?: true;
   keyed?: {
     ref: Ref;
     seen: string;
@@ -1490,14 +1497,37 @@ export class Store {
     return this.#kept && this.locate(state.at, true).value === state.held;
   }
 
-  /** Notes what forming a part read of other documents. */
-  #others(state: KeyState, reads: readonly Position[]): void {
+  /**
+   * Notes what forming a part read of other documents: each document
+   * whole for the reads of a member that is a plain value, and for the
+   * reads that found what a member that is a link names (`named`) the
+   * positions themselves, since the key of such a member is the address
+   * the link names and nothing of what is stored there. Each is noted
+   * once.
+   */
+  #others(
+    state: KeyState,
+    reads: readonly Position[],
+    named: readonly Position[] = [],
+  ): void {
     const array = this.locate(state.at, true).ref;
+    const known = new Set(
+      state.others.map(({ doc, path, own }) =>
+        own ? JSON.stringify([doc, path]) : doc
+      ),
+    );
     for (const { doc, path } of reads) {
       if (doc === array.doc && isPrefix(array.path, path)) continue;
-      if (!state.others.some((known) => known.doc === doc)) {
-        state.others.push({ doc, path: [] });
-      }
+      if (known.has(doc)) continue;
+      known.add(doc);
+      state.others.push({ doc, path: [] });
+    }
+    for (const { doc, path } of named) {
+      if (doc === array.doc && isPrefix(array.path, path)) continue;
+      const text = JSON.stringify([doc, path]);
+      if (known.has(doc) || known.has(text)) continue;
+      known.add(text);
+      state.others.push({ doc, path: [...path], own: true });
     }
   }
 
@@ -1831,6 +1861,8 @@ export class Store {
     this.#keying.add(id);
     this.keyings += 1;
     const reads: Position[] = [];
+    // The reads that found what a member that is a link names.
+    const namings: Position[] = [];
     try {
       const parts = held.map((member, index): ElementPart => {
         if (isLink(member)) {
@@ -1839,7 +1871,7 @@ export class Store {
           const { named } = this.locate(
             new Ref(member.$link.doc, member.$link.path),
             true,
-            reads,
+            namings,
             true,
           );
           return this.addressOf(named);
@@ -1873,7 +1905,7 @@ export class Store {
           ops: [],
           dropped: 0,
         };
-        this.#others(state, reads);
+        this.#others(state, reads, namings);
         const states = this.#states.get(held) ?? new Map<string, KeyState>();
         states.set(named, state);
         this.#states.set(held, states);
@@ -1985,7 +2017,15 @@ export class Store {
             fallback,
           };
         }
-        if (reads !== undefined && !this.#plain.has(reads)) {
+        // The rows of a collection that are stored under their element
+        // keys are found by those keys (`rowKeys`), and no key is formed
+        // from what a row holds. Such a key does not follow what the row
+        // holds, so the read keeps no copy of the row to find a change of
+        // the key by: it reads the position that holds the row now.
+        const rows = this.rowKeys.get(JSON.stringify([doc, at]));
+        if (
+          rows === undefined && reads !== undefined && !this.#plain.has(reads)
+        ) {
           const keyed = new Ref(doc, [...named_, segment, ...rest]);
           const inner: Position[] = [];
           this.#plain.add(inner);
@@ -2010,10 +2050,6 @@ export class Store {
         let key = segment;
         const held = value;
         const here = new Ref(doc, at);
-        // The rows of a collection that are stored under their element
-        // keys are found by those keys (`rowKeys`), and no key is formed
-        // from what a row holds.
-        const rows = this.rowKeys.get(JSON.stringify([doc, at]));
         const indexOf = (key: string) =>
           !Array.isArray(held)
             ? -1
@@ -2721,7 +2757,7 @@ export class Store {
       while (node !== undefined) {
         this.changeNodesVisited += 1;
         if (depth === position.path.length) {
-          if (node.below > since) return true;
+          if ((position.own ? node.at : node.below) > since) return true;
           break;
         }
         if (node.at > since) return true;
