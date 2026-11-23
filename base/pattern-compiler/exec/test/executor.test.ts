@@ -6235,6 +6235,34 @@ describe("an element of a plain array generated from scratch inside an element b
     expect((instance.result() as Result).pickedStars).toBe(3);
   });
 
+  it("is the element of its own group for an event sent through the stored link to the stream, where a later group holds an element of the same key", async () => {
+    const instance = new Instance(await artifactOf("generated-inner"), {
+      groups: [{ name: "g", titles: ["ab"] }, { name: "h", titles: ["ab"] }],
+      bonus: 0,
+    });
+    instance.result();
+    const stream = new Handle(
+      instance,
+      new Ref("result", ["groups", "0", "rows", "0", "pick"]),
+      undefined,
+      undefined,
+      [],
+    );
+
+    stream.send({});
+    const [outcome] = instance.dispatch();
+
+    expect(outcome.committed).toBe(true);
+    expect(picked(instance)).toEqual({
+      $link: {
+        doc: instance.outputDocument(0, [
+          whole(instance, { name: "g", titles: ["ab"] }),
+        ]),
+        path: [keySegment(byFields(instance, { title: "ab" }))],
+      },
+    });
+  });
+
   it("reads the current value through a link to it that is stored elsewhere, before anything else demands the output", async () => {
     const instance = await start();
     instance.send(bindingOf(instance, "pick"), {}, [0, 1]);
