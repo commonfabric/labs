@@ -323,13 +323,17 @@ changes for it.
    *Needs first:* a crate that emits the corpus of the main branch, which
    it does not today (the method of the figures below says where it
    fails), and the decision of milestone 2. *Status:* built on the branch
-   `claude/compiled-pattern-runner-m3` for one writer on emulated storage:
-   the start, the events, the store, the writes by others, the rows of a
-   `map` over an array declared as references as documents of their own,
-   and what follows a refused commit. Not built: the load in bounded
-   transactions, sync and resume, readers outside the executor, the shell,
-   and the corpus on the runner path. The figures and the open findings are
-   in "Milestone 3: a compiled piece in the runner" below.
+   `claude/compiled-pattern-runner-m3` for one writer on emulated storage: the
+   start, with the load in bounded transactions, the events, the store, the
+   writes by others, the rows of a `map` over an array declared as references as
+   documents of their own, the first derivation of an instance a handler made as
+   a transaction of its own, what follows a refused commit, and a harness that
+   runs the corpus on the runner path, where 183 of 239 modules run start,
+   handle every event, have no commit refused and hold the values of the
+   executor in memory. Not built: the three constructs that Topics' whole-list
+   `lift`s need, a bound for the documents a `lift` writes in a load, sync and
+   resume, readers outside the executor, and the shell. The figures and the open
+   findings are in "Milestone 3: a compiled piece in the runner" below.
 4. **Labels from templates at commit.** Today `prepareCfc()` derives one
    label, the join over everything the transaction read
    (`deriveFlowJoin` in `runtime/runner/src/cfc/prepare.ts`), and stamps
@@ -447,9 +451,21 @@ storage builds them, with the harness of milestone 3.
   (`showcase/battleship/pass-and-play/main.tsx`, 7.64 against 5.64 ms).
   Each milestone profiles the integrated run, so that the executor's cost
   and the runtime's cost are reported apart. On the runner path of milestone
-  3 the piece reports its own time (`CompiledPieceCounts.ownMs`): 3.0 to 3.8
-  ms of an edit of a title on the Topics board `filing-order` at 100 to
-  2,000 topics, and 736 ms of a create of 1,960 ms at 1,000.
+  3 the piece reports its own time (`CompiledPieceCounts.ownMs`): 2 to 4 ms of
+  an edit of a title on the Topics board `filing-order` at 100 to 2,000 topics,
+  and 297 ms of a create of 1,034 ms at 1,000. Each derivation compares every
+  unit of the result, which is 4.5 of 7.5 ms of an edit at 2,000 topics on the
+  board `sorted-references`.
+- **The start of a piece is several commits.** The load of a compiled piece
+  commits the documents the instance makes for itself and the rows that are
+  documents before the transaction the caller handed (provisional decision P65).
+  Where that transaction is never committed, or is refused, the documents of the
+  earlier commits stay stored with nothing that links to them, and nothing
+  removes them. The documents a `lift` writes for its rows are not split off, so
+  a board of about 4,000 topics is past the memory server's limit for one
+  message. The design's own statement is one transaction for a creation outside
+  a handler (`execution-and-storage.md` §1.1, assumed there under its question
+  77).
 
 ## Milestone 1: first figures
 
@@ -2551,28 +2567,33 @@ settled. Each part is ten times what it is at 100 topics. Three causes:
   holds the schema of the type a body declares for a handle, and a read under
   it registers the members that schema declares (provisional decisions P56
   and P57). On the runner path an edit of a title runs no whole-list `lift`.
-- **The records of rows a `lift` writes are given for every row on each
-  run** (provisional decision P48): 1,010 given for an edit at 1,000 topics,
-  of which 11 are recorded. The remedy is no record for a row whose value and
-  whose inputs' label identifiers are those of the run before. Milestone 3
-  builds it (provisional decision P59). It does not apply where the
-  transaction in progress wrote a position the `lift` read, as a create
-  does, since such a position has no label identifier yet.
+- **The records of rows a `lift` writes are given for every row on each run**
+  (provisional decision P48): 1,010 given for an edit at 1,000 topics, of which
+  11 are recorded. The remedy is no record for a row whose value and whose
+  inputs' label identifiers are those of the run before. Milestone 3 builds it
+  (provisional decision P59). It does not apply where the transaction in
+  progress wrote a position the `lift` read, since such a position has no label
+  identifier yet. On the runner path the first derivation of an instance a
+  handler made is therefore committed before the derivation of what reads the
+  instance (provisional decision P64), so that a create is not that case.
 
 The language has no construct for three of the board's whole-list `lift`s:
-`namesTable` is a row for each entry of a record of references, and there is
-no per-element construct over a record; `crossrefTable` is a join; and
-`crossrefIndexOf` groups by name into a record.
+`namesTable` is a row for each entry of a record of references, and there is no
+per-element construct over a record; `crossrefTable` is a join; and
+`crossrefIndexOf` groups by name into a record. "The three constructs the
+language lacks" under milestone 3 has a construct and a label rule for each.
 
-**The decision.** The owner decided on 2026-11-21 to go to milestone 3 on
-this evidence, and to build the rows as documents there. The edit at 100,
-1,000 and 2,000 topics, from send to settled, is measured on the runner
-path in "Milestone 3: a compiled piece in the runner" below: on
-`filing-order` an edit of a title takes 14 to 123 ms where this section has
-232 to 5,888 ms, and the work of the piece in it is 3 to 4 ms at each size.
+**The decision.** The owner decided on 2026-11-21 to go to milestone 3 on this
+evidence, and to build the rows as documents there. The edit at 100, 1,000 and
+2,000 topics, from send to settled, is measured on the runner path in "Milestone
+3: a compiled piece in the runner" below: on `filing-order`, with the mentions
+declared as references in the harness's topic schema, an edit of a title settles
+in 9 to 17 ms where this section has 232 to 5,888 ms, and the work of the piece
+in it is 2 to 4 ms. One edit there, of the last of 2,000 topics, takes 265 ms
+and is not explained.
 
-**Two defects found on the Topics branch.** The first stays on the runner
-path of milestone 3. The second is closed there.
+**Two defects found on the Topics branch.** The first was not measured again on
+the board `main`. The second is closed on the runner path of milestone 3.
 
 - The first create after a load on `main` brings a new clause into what the
   whole-list `lift`s read, so every row is labeled again in one commit: 15.5 s
@@ -2580,11 +2601,14 @@ path of milestone 3. The second is closed there.
   27.0 s. The preparation finds written and covered paths by prefix
   (`runtime/runner/src/cfc/prepare.ts`) and is still more than linear in the
   paths of one document; two passes compare each cleared existence entry with
-  each written path. Milestone 3 changes neither the preparation nor the
-  board: a create on the runner path runs the whole-list `lift`s and gives
-  every row its record again, and the preparation of a large transaction is
-  also the number of targets times the number of reads (the new section,
-  "What still grows, and why").
+  each written path. The board `main` was not measured on the runner path of
+  milestone 3 after its first round. On the boards `filing-order` and
+  `sorted-references` a create there runs the whole-list `lift`s, which read
+  every member, and gives 91 write records at every size, since the first
+  derivation of the created topic is committed before the derivation of what
+  reads it (provisional decision P64). The preparation of a document that holds
+  a long array of links is still a product within that document ("What still
+  grows, and why" there).
 - A change of a label alone, at a position a `lift` read, does not form the
   labels of the rows that `lift` wrote again until the `lift` runs again. The
   record of an output is formed again on such a change; the rows have nothing
@@ -2696,192 +2720,327 @@ readable topics, each with a result per user.
 
 ## Milestone 3: a compiled piece in the runner
 
-Built in two rounds on 2026-11-22 on the branch
+Built in three rounds on 2026-11-22 on the branch
 `claude/compiled-pattern-runner-m3`, behind the experimental option
-`compiledPatterns`. The part that touches storage, the scheduler and
-Contextual Flow Control is `runtime/runner/src/compiled/` (`piece.ts` and
-`transactions.ts`); the executor is `base/pattern-compiler/exec/`. Notes 579
-to 598 of `base/pattern-compiler/SPEC-NOTES.md` on that branch hold the
-detail, and the provisional decisions P50 to P63 of
+`compiledPatterns`. The part that touches storage, the scheduler and Contextual
+Flow Control is `runtime/runner/src/compiled/` (`piece.ts` and
+`transactions.ts`); the executor is `base/pattern-compiler/exec/`. Notes 579 to
+609 of `base/pattern-compiler/SPEC-NOTES.md` on that branch hold the detail, and
+the provisional decisions P50 to P66 of
 [compiled-pattern-language.md](compiled-pattern-language.md) are of these
 rounds. Every figure is of one writer on emulated storage in one process, with
-flow labels stored (`cfcFlowLabels` is `persist`), on an 18-core machine at
-load averages of 3 to 10. Every topic or item has one shared clause unless a
+flow labels stored (`cfcFlowLabels` is `persist`), on an 18-core machine at load
+averages of 3 to 10. Every topic or item has one shared clause unless a
 paragraph says otherwise. Whenever this section says `map`, it names the case:
 an array of references, an array of plain values in place, or the result of
 another per-element construct.
 
+**The topic schema of a figure.** The harness writes each topic as a cell under
+a schema, and the memory server follows links from a written topic as far as
+that schema lets it (the seventh finding). Two schemas are in use. The *default*
+schema (`topicSchemaOf` of `compare/topics/scale.ts`) declares a label and no
+structure. The schema with *the mentions declared as references* is the one the
+tables of the third round were measured with; the notes name its switch
+`SCALE_TOPIC_SCHEMA=mentions-as-cells`, and the harness at the head of the
+branch, `1788b7eb75`, does not hold that switch (question 378 of the design's
+plan). Each table below says which round and which schema it is of.
+
 **Findings on structure, scale and soundness.**
 
-- *An edit of one topic's title does the same work at every size of the
-  board.* On the boards `filing-order` and `sorted-references`, with rows as
-  documents, the edit makes 5 evaluations, reads 12 positions, gives 9 write
-  records, makes 2 commits and writes 3 documents with 30 label entries, at
-  100, 1,000 and 2,000 topics. The work of the piece in it is 3.0 to 3.8 ms on
-  `filing-order` at each size. The time of the whole step is 14 to 123 ms and
-  follows the position of the edited topic among the topics, for a cause in
-  the memory server that today's path has as well (fourth finding).
-- *Soundness: a label that changed has to reach every record that read it,
-  also where a value changed with it.* Milestone 4 forms the label of a record
-  again only for a change that the store reports as one of labels alone. A
-  write by another writer that changes the label of a document together with a
-  value that no derivation read then leaves every record that read the
-  document, rows and outputs alike, stored under the label of before, which is
-  an under-label. On the branch of milestone 3 the label of a record is formed
-  again whenever a label its inputs read changed and the record is not given
-  again (provisional decision P58), with a test.
+- *Soundness: a load split over several transactions under-labels in two cases,
+  and both are closed with a test.* The load of a compiled piece commits the
+  creation and the row documents in transactions of their own before the
+  transaction the caller handed (provisional decision P65). First, the documents
+  of the creation hold the argument, which the caller can have computed from
+  what it read in the handed transaction; a transaction of the adapter that read
+  nothing would store them with no label. The creation therefore makes the reads
+  the handed transaction had made when the load began. Second, a caller that
+  writes an input into the handed transaction and starts the piece in it stages
+  positions that only that transaction reads; a row stored by another
+  transaction would read them as absent. A load whose handed transaction holds a
+  write of the caller is therefore written into that transaction whole.
+- *Soundness: a label that changed has to reach every record that read it, also
+  where a value changed with it.* Milestone 4 forms the label of a record again
+  only for a change that the store reports as one of labels alone. A write by
+  another writer that changes the label of a document together with a value that
+  no derivation read then leaves every record that read the document, rows and
+  outputs alike, stored under the label of before, which is an under-label. On
+  the branch of milestone 3 the label of a record is formed again whenever a
+  label its inputs read changed and the record is not given again (provisional
+  decision P58), with a test.
 - *Soundness: the executor has gone on when a commit of the piece is refused.*
   Left so, its documents are ahead of the storage, and a later derivation can
-  store, under the labels of what the storage holds, a value computed from
-  what the refused transaction wrote. The piece takes what the storage holds
-  for each document the refused transaction wrote and derives again
-  (provisional decision P62). This is closed for those documents, with what
-  "Not verified" below lists.
-- *Scale: the memory server's refresh of tracked queries follows the links
-  from a written document.* On the generated boards each topic mentions the
-  two before it, so a write of topic `k` follows `k` topics: a write of a
-  field the board does not read takes 30 ms at the first of 2,000 topics and
-  88 ms at the last. A profile of the edit of the last of 2,000 topics has 68
-  of 87 ms in the server's `refreshTrackedGraph`. This bounds what an edit
-  costs on either path. It follows the links of the written document and not
-  the size of the board.
-- *Scale: the runtime's preparation of a commit is the number of targets times
-  the number of reads.* The preparation asks `InputReadView.reads` of
-  `runtime/runner/src/cfc/prepare.ts` once for each target it verifies, and
-  each ask compares every read record of the transaction with the snapshot the
-  view holds (`InputReadView.#stands`). It is on today's path as well and no
-  part of the compiled path: writing 10,000 input cells in one transaction
-  with no piece started has 9.8 s of preparation where 1,000 cells have 0.17
-  s, and today's arm loads the board of 1,000 topics in 110 to 125 s, 76 s of
-  one run in the preparation.
-- *Scale: the load of a compiled piece is one commit.* At 2,000 topics that
-  commit holds 8,011 documents and the memory server refuses it with
-  `MessageTooLargeError`, since one client message is limited to 1,000,000
-  array slots and record members. The split into bounded transactions is a
-  plan and not built (provisional decision P63).
-- *Scale: a create, and every change of the members of a long array, still
-  follow the size.* "What still grows, and why" below has each.
-- *Three over-labels are found,* one of rows in place, one of rows as
-  documents and one of the crate ("Over-labels found" below). No under-label
-  of rows as documents is found against rows in place.
+  store, under the labels of what the storage holds, a value computed from what
+  the refused transaction wrote. The piece takes what the storage holds for each
+  document the refused transaction wrote and derives again (provisional decision
+  P62). This is closed for those documents, with what "Not verified" below
+  lists.
+- *Structure: a load whose handed transaction never commits leaves documents
+  stored.* Where the caller does not commit the handed transaction, or its
+  commit is refused, the creation and the row documents that the load committed
+  stay in the storage, with sound labels and with no document that links to
+  them. Nothing removes them.
+- *Scale: three whole-list `lift`s bound every create and every edit of a field
+  they read. This is the largest cost left on Topics.* On `filing-order` at
+  1,000 topics a create takes 1.0 s and an edit of the mentions of one topic 0.3
+  s, and both double at 2,000. `namesTable`, `crossrefTable` and
+  `crossrefIndexOf` each read every member where one member changed, because the
+  language has no per-entry construct over a record, no keyed join and no
+  grouping by a key. "The three constructs the language lacks" below has what
+  each reads, the construct and its label rule.
+- *Scale: the load is bounded for the rows of a `map` and not for the documents
+  a `lift` writes.* The rows of a `map` over an array declared as references, or
+  over the result of a construct that yields references, are committed in
+  transactions of at most `CompiledPieceOptions.loadRows` rows, 250 unless
+  given. The documents a `lift` writes for its rows are given their records when
+  the body has returned, and stay in the handed transaction: 4,000 of the 8,011
+  documents of the load at 2,000 topics. A board of about twice that size is
+  refused by the memory server as the load in one commit is at 2,000
+  (`MessageTooLargeError`: one client message is limited to 1,000,000 array
+  slots and record members).
+- *Scale: the write whose time followed the position of a topic was the
+  harness's own subscription, under a schema with no structure.* The memory
+  server's `refreshTrackedGraph` (`runtime/memory/v2/query.ts`) walks each
+  written document again under each selector its tracker holds for it, and a
+  walk follows the links the selector's schema lets it follow. The piece reads
+  through transactions and holds no query. The harness holds each topic under
+  the default schema, which admits every link, so the walk of topic `k` follows
+  its mentions to the topics before it and reads `k + 3` documents. With the
+  mentions declared as references, a write of a field the board does not read
+  takes 12, 8 and 14 ms at the first, the middle and the last of 2,000 topics,
+  where under the default schema it takes 25, 44 and 79 ms. For a real board the
+  cost of a write of one document is the number of documents reachable through
+  links from it under the schema of the widest query that reaches it. A board
+  whose topics are read under the board's own argument schema, which declares
+  the mentions as cells, pays for the topic itself. A reader that subscribes to
+  a topic with no schema, or with one that declares no structure, pays the
+  transitive closure of the topic's mentions on every write of the topic, on
+  today's path and on the compiled path alike. No real board was measured.
+- *Scale: the preparation of a commit has one product left, within one
+  document.* The preparation asks `InputReadView.reads` of
+  `runtime/runner/src/cfc/prepare.ts` once for each target it verifies. On the
+  branch an ask of a transaction that lists the read records it listed compares
+  no record and classifies only the metadata objects that are not frozen
+  (provisional decision P66), so the asks are not the number of targets times
+  the number of reads: writing 10,000 cells in one transaction with no piece
+  started has 2.9 s of preparation, where it has 9.8 s without the change. What
+  is left is more than linear: for a document that holds an array of 10,000
+  links, `pathHoldsUnattributedInitialization`, `pathHoldsStagedReference` and
+  `isRuntimeWritePolicyInput` compare each written path of the document with
+  each write-policy input of the document, 1.4 s of the 2.9 s, since
+  `writePolicyInputsForDocument` indexes the inputs by document and not by path.
+  The change of P66 is on the branch of milestone 3 alone; `main` has the
+  product of targets and reads, on today's path (question 347 of the design's
+  plan).
+- *Scale: the executor compares every unit of the result in each derivation.*
+  `Instance.#storeResult` stores every unit of the result again and compares
+  what it holds member by member (`Instance.#storeUnit`, `canonical` of
+  `exec/store.ts`). A profile of one edit at 2,000 topics on `sorted-references`
+  has 4.5 of 7.5 ms there. The result of that board holds the output of
+  `topicsByActivity`, an array of one reference for each topic; the result of
+  `filing-order` holds no such array.
+- *Structure: the derivation behind an event that made an instance is two
+  commits.* The first derivation of the new instance is committed before the
+  derivation of what reads it (provisional decision P64). The owner's ruling has
+  the derivations a batch made stale settle once behind the batch; each is still
+  evaluated once, and whether two commits are within the ruling is question 373
+  of the design's plan.
+- *An edit of one topic's title does the same work at every size of the board.*
+  On the boards `filing-order` and `sorted-references`, with rows as documents,
+  the edit makes 5 evaluations, reads 12 positions, gives 9 write records, makes
+  2 commits and writes 3 documents with 30 label entries, at 100, 1,000 and
+  2,000 topics. With the mentions declared as references it settles in 9 to 17
+  ms at each size and position, with one exception that is not explained: the
+  edit of the last of 2,000 topics takes 256 to 265 ms in three runs of two
+  boards, with 7 ms of preparation and 2 to 4 ms in the piece.
+- *Over-labels: a load in one transaction over-labels what is bound through the
+  argument, and three more are found,* one of rows in place, one of rows as
+  documents and one of the crate ("Over-labels found" below). No under-label of
+  rows as documents is found against rows in place.
 - *A write by another writer to a derived array is not taken by the executor,*
   in either layout. With rows as documents it is reported
-  (`CompiledPiece.refusals`); with rows in place nothing reports it
-  (provisional decision P61).
+  (`CompiledPiece.refusals`); with rows in place nothing reports it (provisional
+  decision P61).
 
 **What is built.**
 
-- *Start.* `startCompiledPiece(runtime, tx, artifact, argument, resultCell)`
-  of `runtime/runner/src/compiled/piece.ts` is the call beside `Runtime.run`,
-  and it throws with the option off. The result document of the instance is
-  the entity of `resultCell`, every other document the executor makes is an
-  entity of the same space, and the creation and the first derivation are
-  written into `tx`, which the caller commits. `runtime.ts` and `index.ts` of
-  the runner do not import `src/compiled/`, so a runtime that starts no
+- *Start.* `startCompiledPiece(runtime, tx, artifact, argument, resultCell)` of
+  `runtime/runner/src/compiled/piece.ts` is the call beside `Runtime.run`, and
+  it throws with the option off. The result document of the instance is the
+  entity of `resultCell`, and every other document the executor makes is an
+  entity of the same space. The caller commits `tx`. `runtime.ts` and `index.ts`
+  of the runner do not import `src/compiled/`, so a runtime that starts no
   compiled piece loads none of it. The runner imports the executor by relative
   path, and the executor imports nothing of `runtime/` (provisional decision
   P50). Value code is evaluated as the executor evaluates it, with no sandbox.
-- *Events.* A stream of the executor is stored as a link to an entity that
-  holds the runtime's stream marker, and the piece registers one event handler
-  of the scheduler for it (`Scheduler.addEventHandler`), so `Cell.send` on the
-  member of the result reaches it. The handler runs the compiled handler in
-  the transaction the scheduler gives it (`Instance.handleEvent`), which the
+- *The load in bounded transactions.* `RuntimeTransactions.within` takes
+  `loadRows`, and `startCompiledPiece` passes `CompiledPieceOptions.loadRows`,
+  250 unless given (provisional decision P65). The adapter commits, before
+  `startCompiledPiece` returns: the creation, which is the documents the
+  instance makes for itself, in a transaction that makes the reads `tx` had made
+  when the load began; and then the row documents, in transactions of at most
+  `loadRows` rows. A row goes into such a transaction where its write records
+  name stored positions alone (`#namesStoredAlone`: no position the load wrote,
+  no `output` and no `staged` binding), where one of the records is of the row
+  whole, and where no transaction of the load has written its document. Each
+  transaction of rows is committed at `loadRows` rows and at the end of the
+  change of the result that made the rows, so that none is open when the
+  executor next reads or writes. Everything else, the links to the rows among
+  it, is written into `tx`. Where the preparation refuses one of the adapter's
+  transactions, `tx` is aborted. A load whose `tx` the caller wrote into before
+  the start, and a load with `loadRows` set to `Infinity`, is written into `tx`
+  whole. A reader may observe, after the creation, the argument, the empty
+  result and the state documents, and after a transaction of rows, row documents
+  that no document links to. Each row is stored with the records it has in a
+  load in one transaction, and those records name stored positions alone, so the
+  label they instantiate to is the label the row has when the load is done; no
+  path of a row is without a record, since one record is of the row whole. A
+  read through a link that `tx` then writes joins the label of the link's
+  position. The commits of the adapter keep `StorageManager.synced()` waiting
+  like any commit.
+- *Events.* A stream of the executor is stored as a link to an entity that holds
+  the runtime's stream marker, and the piece registers one event handler of the
+  scheduler for it (`Scheduler.addEventHandler`), so `Cell.send` on the member
+  of the result reaches it. The handler runs the compiled handler in the
+  transaction the scheduler gives it (`Instance.handleEvent`), which the
   scheduler commits. An event that a handler sends to a stream of the piece is
   queued with the scheduler as well (`Instance.takeQueued`). No event is
   appended to a stream document and no watermark is written (provisional
-  decision P52), and every transaction the executor opens within one call of
-  the scheduler is written into the scheduler's one transaction
+  decision P52), and every transaction the executor opens within one call of the
+  scheduler is written into the scheduler's one transaction
   (`RuntimeTransactions.within`; provisional decision P53).
 - *The derivation, and settled.* The derivation is one action of the scheduler
   for the piece, an effect, which runs `Instance.settle()` in the scheduler's
   transaction (provisional decision P51). The piece invalidates it after an
   event, after a change by another writer, when a commit of another writer
-  changed a label the executor read, and after a refused commit. Settled is
-  what it is for any piece: `Runtime.idle()` resolves when no event is queued
-  and the derivation action is not invalid, and the harness then awaits the
-  commits (`Scheduler.idleWithPendingCommits()`). The action opts out of the
-  scheduler's delay of 100 ms for actions that take 50 ms or more on average
+  changed a label the executor read, and after a refused commit. Settled is what
+  it is for any piece: `Runtime.idle()` resolves when no event is queued and the
+  derivation action is not invalid, and the harness then awaits the commits
+  (`Scheduler.idleWithPendingCommits()`). The action opts out of the scheduler's
+  delay of 100 ms for actions that take 50 ms or more on average
   (`Scheduler.setNoDebounce`; provisional decision P55).
+- *An instance a handler made.* A handler that makes an instance stores the
+  instance's two documents in the event's transaction. The derivation action
+  first runs `Instance.settleMade`, which derives the instances a handler made
+  and nothing else in one derivation transaction, and the action then
+  invalidates itself and runs again for the rest, which the scheduler commits
+  apart (provisional decision P64). The derivation of what reads the new
+  instance then finds the labels of its result stored, with identifiers, and a
+  `lift` over the list gives no record again for a row whose value and labels
+  stayed. A reader between the two commits finds the new member with its result
+  and the board's derived outputs without it. One create is two derivations, and
+  the new member reads the outputs of the board it is handed once in its own
+  transaction and again when they change, about 5 positions a topic more for
+  each create on Topics.
 - *The store.* The executor's store is the copy in memory that keeps the
   identity of arrays. A document the executor did not make, such as an input
   cell the argument links to, is read from the replica when a reference first
   leads to it (`Store` option `load`) and not again. Each position read is
   journaled in the transaction (`TransactionHooks.read`).
 - *Writes by others.* The piece subscribes to the storage notifications. A
-  commit whose source is no transaction of the piece and that changed a
-  document the executor holds is applied to the store outside any transaction,
-  which marks the readers, and the derivation is invalidated. A change of the
-  members of an array is applied as the one splice between the array before
-  and after, found by comparing the canonical text of the members from both
-  ends (`spliceBetween`). A write into the document of a row is applied to the
-  row the executor holds; a write of the array of links of a derived array, or
-  above it, is reported and not applied (provisional decision P61).
-- *Rows as documents.* `rowDocumentCollections` of `exec/row-documents.ts`
-  reads the plan when the piece starts (provisional decision P54). It names a
+  commit whose source is no transaction of the piece and that changed a document
+  the executor holds is applied to the store outside any transaction, which
+  marks the readers, and the derivation is invalidated. A change of the members
+  of an array is applied as the one splice between the array before and after,
+  found by comparing the canonical text of the members from both ends
+  (`spliceBetween`). A write into the document of a row is applied to the row
+  the executor holds; a write of the array of links of a derived array, or above
+  it, is reported and not applied (provisional decision P61).
+- *Rows as documents.* `rowDocumentCollections` of `exec/row-documents.ts` reads
+  the plan when the piece starts (provisional decision P54). It names a
   collection whose construct is `map`, written in no element body, with an
-  output below a row, whose source is a slot whose schema declares the array
-  or its members as cells, or an output whose body gives a reference at each
+  output below a row, whose source is a slot whose schema declares the array or
+  its members as cells, or an output whose body gives a reference at each
   member, or a `filter` over such a source. That is a `map` over an array of
   references that the type declares as references, or over the result of a
   construct that yields references. A `map` over an array of plain values in
   place keeps its rows in place whatever the data holds. Each named row is an
-  entity of its own, named by the array's document, its path and the key of
-  the row, and the array holds the runtime's link to it. The array can stand
-  below a member of an array, as the cards among the children of a view node
-  do. On the boards `filing-order` and `sorted-references` the rule names the
-  cards and `mentionable`; on `main` it names nothing, since there both are
-  the result of a `lift` that gives plain values. `CompiledPieceOptions.rows`
-  set to `in-place` keeps the rows in the array, for comparison. A member
-  added at the end of an array of row documents is written as the number of
-  members and the link added (provisional decision P60); a prepend and a
-  removal write the array of links whole.
+  entity of its own, named by the array's document, its path and the key of the
+  row, and the array holds the runtime's link to it. The array can stand below a
+  member of an array, as the cards among the children of a view node do. On the
+  boards `filing-order` and `sorted-references` the rule names the cards and
+  `mentionable`; on `main` it names nothing, since there both are the result of
+  a `lift` that gives plain values. `CompiledPieceOptions.rows` set to
+  `in-place` keeps the rows in the array, for comparison. A member added at the
+  end of an array of row documents is written as the number of members and the
+  link added (provisional decision P60); a prepend and a removal write the array
+  of links whole.
 - *Reads through handles.* The crate emits the schema of the type a body
   declares for a handle (`ReadInput.schema` and `ComputedInput.schema`, from
   `body_record` of `src/plan.rs`), the executor reads through the handle under
-  that schema, and a read under a schema that declares its members registers
-  the positions of those members and not the root of the member's document
-  (provisional decision P57). The read of a slot that observes which children
-  a container has gives the members as references and reads none of them,
-  where no slot of the cone reads a child as a value or a shape, or where
-  every body of the cone that is handed the container declares a handle at
-  each child (provisional decision P56).
-- *The label readers.* The label of a write record is formed again when a
-  label its inputs read changed and the record is not given again
-  (`Instance.labelsChanged`; provisional decision P58). The store says for
-  each change whether a read of a class at a position consumes the label it
-  consumed before (`LabelChange.unchanged`), so an entry that a `Cell.set` of
-  one field adds under the label of the document's root forms no label again.
-  The records of the row documents that a `lift` writes are one reader of the
-  labels of what the body read, and when the body runs again a row that holds
-  what it held is given no record where the labels the body read are those it
-  had read (provisional decision P59). The adapter finds the entries a read
-  consumes through the runtime's index of a document's entries
-  (`ConsumedLabelIndex`).
+  that schema, and a read under a schema that declares its members registers the
+  positions of those members and not the root of the member's document
+  (provisional decision P57). The read of a slot that observes which children a
+  container has gives the members as references and reads none of them, where no
+  slot of the cone reads a child as a value or a shape, or where every body of
+  the cone that is handed the container declares a handle at each child
+  (provisional decision P56).
+- *The label readers.* The label of a write record is formed again when a label
+  its inputs read changed and the record is not given again
+  (`Instance.labelsChanged`; provisional decision P58). The store says for each
+  change whether a read of a class at a position consumes the label it consumed
+  before (`LabelChange.unchanged`), so an entry that a `Cell.set` of one field
+  adds under the label of the document's root forms no label again. The records
+  of the row documents that a `lift` writes are one reader of the labels of what
+  the body read, and when the body runs again a row that holds what it held is
+  given no record where the labels the body read are those it had read
+  (provisional decision P59). The adapter finds the entries a read consumes
+  through the runtime's index of a document's entries (`ConsumedLabelIndex`). It
+  keeps the label identifier of each position of a document of the piece's space
+  until a commit changes the document (`#labelIds`, cleared from the storage
+  notification), and keeps the identifier the runtime's table gave a label by
+  the label's text (`#internedByText`). A document of another space is not kept,
+  since the adapter hears of no commit there. Without the two, forming and
+  hashing the label of every position a `lift` read of every member took 263 ms
+  of a create at 1,000 topics.
+- *The preparation's asks for the reads.* The transaction freezes the read
+  records it lists when `InputReadView` asks and returns a count that advances
+  when the list gains a record or is emptied (`freezeReadActivityRecords` of
+  `storage/interface.ts`, implemented in `v2-transaction.ts` and passed on by
+  the two wrappers of `extended-storage-transaction.ts`). With the same list and
+  the same count the view compares no record, and it classifies again only the
+  distinct metadata objects that are not frozen; the sites of the runner that
+  build a metadata object for a read freeze it. A transaction that does not
+  offer the call, or hands out another list, is compared record by record. A
+  record the view has copied refuses another metadata object with a `TypeError`;
+  a metadata object changed in place is found at the next ask. The change is in
+  a file the specification correspondence governs and on a path that runs with
+  the option off. By the notes' classification it is a host arrangement in the
+  terms of `docs/development/cfc-spec-correspondence.md`: it decides nothing and
+  stores nothing (provisional decision P66).
 - *Refused commits.* When a commit of the piece is refused, by the preparation
-  or by the store, the adapter reads from the replica what the storage holds
-  for each document of the executor that the transaction wrote, the piece
-  takes it in place of what the executor holds (`Instance.restore`), which
-  marks what read those documents, and the derivation runs. A document the
-  storage does not hold is removed. The result document of an instance is
-  taken with the rows of each of its collections left out, and the next
-  derivation stores each path that differs and every row. The piece keeps the
-  reason (`CompiledPiece.refusals`). An event that the executor itself refuses
-  aborts the scheduler's transaction.
+  or by the store, the adapter reads from the replica what the storage holds for
+  each document of the executor that the transaction wrote, the piece takes it
+  in place of what the executor holds (`Instance.restore`), which marks what
+  read those documents, and the derivation runs. A document the storage does not
+  hold is removed. The result document of an instance is taken with the rows of
+  each of its collections left out, and the next derivation stores each path
+  that differs and every row. The piece keeps the reason
+  (`CompiledPiece.refusals`). An event that the executor itself refuses aborts
+  the scheduler's transaction.
 - *The harness.* `compare/runner-path.ts` starts today's piece with
-  `Runtime.run` and the compiled piece with `startCompiledPiece` over the
-  lists of `compare/fixtures/runner-lists.tsx`, sends with `Cell.send`, writes
-  with `Cell.set`, awaits settled, compares the results and reports per change
-  the time, the commits, the documents written and the preparation's counters.
-  Its arm `alone` makes the same changes with no piece started, which is what
-  the harness's own writes cost. The arm `runner` of `compare/topics/scale.ts`
-  does the same for the Topics boards with the calls of its arm
-  `today-labeled`: each topic and each input is a cell written under a schema
-  with the clause of the input `topics`, an edit is a `Cell.set` of a title,
-  and a create is `Cell.send` on `addTopic`.
+  `Runtime.run` and the compiled piece with `startCompiledPiece` over the lists
+  of `compare/fixtures/runner-lists.tsx`, sends with `Cell.send`, writes with
+  `Cell.set`, awaits settled, compares the results and reports per change the
+  time, the commits, the documents written and the preparation's counters. Its
+  arm `alone` makes the same changes with no piece started, which is what the
+  harness's own writes cost. With `--inputs-first` it commits the inputs before
+  the piece is started, which is what lets the piece load in bounded
+  transactions. The arm `runner` of `compare/topics/scale.ts` does the same for
+  the Topics boards with the calls of its arm `today-labeled`: each topic and
+  each input is a cell written under a schema with the clause of the input
+  `topics`, an edit is a `Cell.set` of a field, and a create is `Cell.send` on
+  `addTopic`. `compare/runner-corpus.ts` runs the main pattern of each corpus
+  module as a compiled piece and beside it on the executor in memory ("The
+  corpus on the runner path" below).
 - *Tests.* `runtime/runner/test/compiled/piece.test.ts`,
-  `row-documents.test.ts`, `layout-labels.test.ts` and
-  `refused-commit.test.ts`. They load the checked-in artifacts of
-  `compare/fixtures/` and need no build of the crate.
+  `row-documents.test.ts`, which holds the tests of the load in bounded
+  transactions, `layout-labels.test.ts`, `refused-commit.test.ts` and
+  `created-members.test.ts`; and for the preparation
+  `runtime/runner/test/cfc/InputReadView.test.ts`, which counts the work with
+  `InputReadView.recordsCompared` and `InputReadView.metadataObjectsClassified`.
+  The tests of the piece load the checked-in artifacts of `compare/fixtures/`
+  and need no build of the crate.
 
 **Which comparison is like with like.** Today's piece computes what a reader
 demands, so the harness pulls the whole result of today's piece in each step
@@ -2889,73 +3048,98 @@ demands, so the harness pulls the whole result of today's piece in each step
 piece derives without a reader, so its figure is taken without a pull, and the
 pull of its whole result is reported apart. For having the result up to date
 after a change, the runner's figure without a pull stands against today's with
-it: on `filing-order` at 1,000 topics, 29 ms against 9,459 ms for an edit of
-the middle topic. For a reader that reads the whole result after each change,
-both include the pull: 4.5 s against 9.5 s. A pull of the compiled result
-reads every row document and every topic in one transaction, and its time
-follows the board on both arms.
+it: on `filing-order` at 1,000 topics, an edit of the middle topic settles in 10
+ms with the mentions declared as references and in 30 ms under the default
+schema, against 9,459 ms for today's arm, which was measured in the second round
+under the default schema. For a reader that reads the whole result after each
+change, both include the pull: 4.5 s against 9.5 s, both of the second round. A
+pull of the compiled result reads every row document and every topic in one
+transaction, and its time follows the board on both arms.
 
-**Topics, one edit of a title.** A write of one topic's title by a writer
-outside the board, rows as documents, one process for each board and size.
-Each edit is preceded by a write of a field of the same topic that the board
-does not read, the "write alone", which is what the write costs with no
-derivation behind it. Times in ms.
+**Topics on the runner path.** Measured in the third round with the mentions
+declared as references, rows as documents, the load in bounded transactions with
+the memory server's default limit, without a pull. One process for each board
+and size. An edit of a title is one edit; the "write alone" is a write of a
+field of the same topic that the board does not read, which is what the write
+costs with no derivation behind it; the other edits are of the middle topic; a
+create is `Cell.send` on `addTopic`, the median of three. Load averages of 3.4
+to 4.4. Times in ms.
 
-| One edit of a title | 100 topics | 1,000 topics | 2,000 topics |
+| `filing-order` | 100 topics | 1,000 topics | 2,000 topics |
 | --- | ---: | ---: | ---: |
-| `filing-order`, runner, the first topic | 17 | 18 | 21 |
-| `filing-order`, runner, the middle topic | 14 | 29 | 48 |
-| `filing-order`, runner, the last topic | 15 | 47 | 123 |
-| `filing-order`, write alone, first / middle / last | 12 / 10 / 11 | 19 / 27 / 46 | 30 / 58 / 88 |
-| `filing-order`, the piece's own time in an edit | 3.8 | 3.0 | 3.1 |
-| `filing-order`, a pull of the whole result behind it | 376 | 4,507 | 10,071 |
-| `sorted-references`, runner, first / middle / last | 17 / 17 / 14 | 20 / 34 / 67 | 22 / 64 / 151 |
-| `sorted-references`, write alone, median of three | 11 | 30 | 53 |
-| `sorted-references`, the piece's own time in an edit | 4.0 | 4.5 | 11.2 |
-| `sorted-references`, a pull of the whole result behind it | 369 | 4,879 | 10,483 |
-| `filing-order`, today's runtime, with its pull | 765 | 9,459 | not run |
-| `filing-order`, today's runtime, write alone, with its pull | 481 | 5,987 | not run |
-| `sorted-references`, today's runtime, with its pull | 679 | 9,399 | not run |
+| load | 450 | 4,031 | 7,485 |
+| commits of the load | 3 | 10 | 18 |
+| edit of a title, the first topic | 13 | 17 | 15 |
+| edit of a title, the middle topic | 11 | 10 | 13 |
+| edit of a title, the last topic | 9 | 9 | 265 |
+| write alone, the first topic | 9 | 13 | 13 |
+| write alone, the middle topic | 7 | 143 | 10 |
+| write alone, the last topic | 6 | 19 | 11 |
+| edit of the mentions | 34 | 273 | 517 |
+| edit of the `shortName` | 44 | 365 | 773 |
+| edit of `lastActivityAt` | 7 | 9 | 14 |
+| create | 158 | 1,034 | 1,783 |
 
-Today's arm was not run at 2,000 topics: its load at 1,000 takes 110 s, and
-the run would pass ten minutes. The coordinator ran `filing-order` on the
-runner path again on 2026-11-22: an edit of the first, the middle and the last
-topic settles in 20, 15 and 15 ms at 100 topics and in 26, 36 and 49 ms at
-1,000, with 5 evaluations, 12 reads and 9 records at both sizes. Every other
-figure of this section is the build agent's.
+| `sorted-references` | 100 topics | 1,000 topics | 2,000 topics |
+| --- | ---: | ---: | ---: |
+| load | 445 | 4,095 | 7,762 |
+| edit of a title, the first topic | 13 | 16 | 16 |
+| edit of a title, the middle topic | 10 | 13 | 14 |
+| edit of a title, the last topic | 10 | 10 | 256 |
+| edit of the mentions | 32 | 253 | 500 |
+| edit of the `shortName` | 43 | 346 | 694 |
+| edit of `lastActivityAt` | 57 | 445 | 868 |
+| create | 163 | 1,163 | 2,019 |
+| the piece's own time in an edit of a title | 2.9 | 4.5 | 5.6 |
+
+The write alone of 143 ms at the middle of 1,000 topics was seen once. The edit
+of the last of 2,000 topics takes 256 to 265 ms in three runs of two boards; the
+cause was not looked for (question 377 of the design's plan).
+
+The coordinator ran `filing-order` on the runner path at 1,000 topics on
+2026-11-22, under the default schema: the load takes 3,673 ms, an edit of the
+title of the first, the middle and the last topic 21, 30 and 43 ms, and a create
+1,029 to 1,084 ms. Under that schema the time of an edit follows the position of
+the topic, for the cause of the seventh finding. Every other figure of this
+section is the build agent's.
+
+What a create does on `filing-order` at 100, 1,000 and 2,000 topics: 15
+evaluations, 3 commits and 91 write records, of which 89 are recorded, at each
+size; 2,061, 19,161 and 38,161 positions read; 41, 297 and 510 ms in the piece;
+and 41, 282 and 503 ms in the preparation. An edit of the mentions reads 1,000,
+10,000 and 20,000 positions and gives 4 records.
+
+**Topics, measured in the second round alone.** Under the default schema, with
+the load in one commit, rows as documents. Nothing newer exists for these rows.
+Times in ms.
+
+| | 100 topics | 1,000 topics | 2,000 topics |
+| --- | ---: | ---: | ---: |
+| `filing-order`, the piece's own time in an edit of a title | 3.8 | 3.0 | 3.1 |
+| `filing-order`, a pull of the whole result behind an edit | 376 | 4,507 | 10,071 |
+| `sorted-references`, a pull of the whole result behind an edit | 369 | 4,879 | 10,483 |
+| `filing-order`, today's runtime, an edit of a title, with its pull | 765 | 9,459 | not run |
+| `filing-order`, today's runtime, write alone, with its pull | 481 | 5,987 | not run |
+| `sorted-references`, today's runtime, an edit of a title, with its pull | 679 | 9,399 | not run |
+| `filing-order`, today's runtime, a create, with its pull | 1,520 | 16,531 | not run |
+
+Today's arm was not run at 2,000 topics: its load at 1,000 takes 110 to 125 s,
+76 s of one run in the preparation, and the run would pass ten minutes.
 
 The board `main` was measured on the runner path in the first round alone,
-before the reads through handles and the label readers were built: an edit
-takes 349, 3,400 and 9,946 ms at 100, 1,000 and 2,000 topics, against 986 and
-14,478 ms for today's runtime with its pull at 100 and 1,000. No rows of
-`main` are documents, and its cards are the output of one `lift` over the
-whole array of topic references, which reads every title.
-
-**Topics, one create.** `Cell.send` on `addTopic`, the median of three
-creates, rows as documents, without a pull. Times in ms.
-
-| One create | 100 topics | 1,000 topics | 2,000 topics |
-| --- | ---: | ---: | ---: |
-| `filing-order`, runner | 243 | 1,960 | 5,096 |
-| `sorted-references`, runner | 261 | 2,343 | 4,913 |
-| `filing-order`, today's runtime, with its pull | 1,520 | 16,531 | not run |
-
-In the coordinator's run of `filing-order` a create takes 237 to 275 ms at 100
-topics and 1,745 to 2,087 ms at 1,000.
-
-**Topics, the load.** On `filing-order`, runner, rows as documents, the load
-takes 421 ms at 100 topics and 4.3 to 4.7 s at 1,000, with 74 ms and 1.1 s of
-preparation. At 2,000 the memory server refuses the commit; with its limit
-raised in the harness (`SCALE_MESSAGE_SLOTS`) the load takes 11.6 to 14.6 s,
-of which 3.5 to 5.1 s are preparation. Today's arm loads 1,000 topics in 110
-to 125 s.
+without the reads through handles and the label readers: an edit takes 349,
+3,400 and 9,946 ms at 100, 1,000 and 2,000 topics, against 986 and 14,478 ms for
+today's runtime with its pull at 100 and 1,000. No rows of `main` are documents,
+and its cards are the output of one `lift` over the whole array of topic
+references, which reads every title.
 
 **The fixture of growth.** `compare/runner-path.ts`, the list `Cells` of
 `runner-lists.tsx`: a `map` over an array of references that the type declares
-as references, rows as documents. The mean of five changes after the first of
-a kind. The compiled arm is without a pull; the arm `alone` makes the same
-change with no piece started; today's arm includes the pull of the result and
-is of the run of the first round, at a load average of 7 to 10. Times in ms.
+as references, rows as documents. No topic schema enters. The table is of the
+second round: the mean of five changes after the first of a kind. The compiled
+arm is without a pull; the arm `alone` makes the same change with no piece
+started; today's arm includes the pull of the result and is of the run of the
+first round, at a load average of 7 to 10. Times in ms.
 
 | Change | compiled, 100 | 1,000 | 10,000 | alone, 100 | 1,000 | 10,000 | today, 100 | 1,000 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -2965,121 +3149,215 @@ is of the run of the first round, at a load average of 7 to 10. Times in ms.
 | remove first | 19 | 146 | 2,546 | 13 | 134 | 1,839 | 111 | 1,098 |
 | remove last | 13 | 85 | 1,096 | 8 | 55 | 822 | 94 | 923 |
 
-The piece gives 6 records for an append, 4 for a prepend and 1 for a removal
-at every length, and writes 5, 4 and 3 documents. Most of each change of the
+The piece gives 6 records for an append, 4 for a prepend and 1 for a removal at
+every length, and writes 5, 4 and 3 documents. Most of each change of the
 members is the harness's own write, a `Cell.set` of an array of `N` links and
 the preparation of that commit. What the piece adds is 7, 10 and 112 ms for an
-append and 8, 38 and 570 ms for a prepend at 100, 1,000 and 10,000 rows. The
-load of the compiled piece takes 170 ms, 1.0 s and 42.5 s, with 33 ms, 335 ms
-and 35.3 s of preparation, and 10,000 rows need the memory server's limit
-raised; today's load takes 1.8 s at 100 rows and 70.6 s at 1,000, of which
-66.5 s are the preparation, and was not run at 10,000. A pull of the compiled
-result takes about 24, 200 and 2,400 ms. With the rows in place, measured in
-the first round, an edit of one field of one member takes 10.6, 62.9 and 794
-ms: it follows the length of the list, as today's does.
+append and 8, 38 and 570 ms for a prepend at 100, 1,000 and 10,000 rows. A pull
+of the compiled result takes about 24, 200 and 2,400 ms. With the rows in place,
+measured in the first round, an edit of one field of one member takes 10.6, 62.9
+and 794 ms: it follows the length of the list, as today's does.
+
+The load of this fixture, measured in the third round with `--inputs-first` and
+the memory server's default limit:
+
+| The load, `Cells` | 100 rows | 1,000 rows | 10,000 rows |
+| --- | ---: | ---: | ---: |
+| load, ms | 78 | 471 | 4,598 |
+| commits of the load | 3 | 6 | 42 |
+| preparation in it, ms | 13 | 80 | 721 |
+| the harness's write of the inputs before it, ms | 114 | 573 | 6,278 |
+
+Of the 6,278 ms of the harness's write at 10,000 rows, 3.1 s are the
+preparation, for the product within one document of the eighth finding. In one
+transaction with the inputs, measured in the second round, the load takes 170
+ms, 1.0 s and 42.5 s, and 10,000 rows need the memory server's limit raised.
+Today's load takes 1.8 s at 100 rows and 70.6 s at 1,000, of which 66.5 s are
+the preparation, and was not run at 10,000.
 
 **What an edit of a title does, at every size.** On `filing-order` and
 `sorted-references` with rows as documents, the writer's commit changes the
-topic's document, and the piece's derivation evaluates 5 cone instances (the
-row of `mentionable`, the strings of the card, and the card), reads 12
-positions through the transaction, gives 9 write records and commits two row
-documents. Three documents are written in 2 commits, the topic and the two
-rows, with 30 label entries in them. No whole-list `lift` runs, and the result
-document is not written. An edit of a body, an author or a comment count is
-the same. Three things make it so: the cards and the rows of `mentionable` are
-documents of their own; a body that reads `mentions` and `shortName` through a
-handle typed with those members is not marked by a change of the title; and
-the read of the array of topics for its members and their number reads no
-topic.
+topic's document, and the piece's derivation evaluates 5 cone instances (the row
+of `mentionable`, the strings of the card, and the card), reads 12 positions
+through the transaction, gives 9 write records and commits two row documents.
+Three documents are written in 2 commits, the topic and the two rows, with 30
+label entries in them. No whole-list `lift` runs, and the result document is not
+written. An edit of a body, an author or a comment count is the same. Three
+things make it so: the cards and the rows of `mentionable` are documents of
+their own; a body that reads `mentions` and `shortName` through a handle typed
+with those members is not marked by a change of the title; and the read of the
+array of topics for its members and their number reads no topic.
+
+**The three constructs the language lacks.** Four `lift`s of the board run on a
+create, each over the whole array of topic references or over a result of one.
+`topicCount` reads the number of members, and nothing is to change there. The
+other three read every member where one changed. Each construct below keeps its
+result under a change of one member by reading that member alone, which is what
+`map` does for a row. None is built, and no board is changed: a `map` over the
+array of topics gives the rows of `namesTable` only while the namespace and the
+array hold the same members, and nothing in the subset gives the inverse of the
+mentions without reading every topic.
+
+- *A per-entry construct over a record,* for `namesTable`, which is a row for
+  each entry of a record of references. On a create it must read the entry that
+  was added, and reads every entry. *Construct:* `entries(record)` as a source
+  of `map`, whose rows are keyed by the entry's name. *Label rule:* a row has
+  the label of the reference observed at its entry and of what its body reads;
+  the set of rows has the label of the enumeration of the record's names.
+- *A keyed join,* for `crossrefTable`, which gives for each topic the topics
+  that mention it. On a create it must read the mentions and the `shortName` of
+  the new topic, add one row, and change the row of each topic the new one
+  mentions; it reads 6 positions of every topic. It runs as well on an edit of
+  the mentions or the `shortName` of one topic. No per-member form exists: the
+  row of topic `t` depends on every topic that mentions `t`. *Construct:*
+  `joinBy(sources, (source) => keys, (key, matches) => row)`, which keeps for
+  each key the sources that name it. *Label rule:* a row has the label of the
+  keys of the sources that name it and of what its body reads of them, and the
+  label of the membership of each source in its group, which is the label of
+  that source's key list; a source that names no key of a row adds nothing to
+  the row.
+- *A grouping by a key,* for `crossrefIndexOf`, which gives the positions of the
+  rows of `crossrefTable` by name. On a create it must read the name of the row
+  that was added, and reads the name of every row. *Construct:* `groupBy(rows,
+  (row) => key)`, which gives a record from each key to the references of its
+  rows. *Label rule:* a group has the label of the key of each of its members
+  and of the enumeration of the source; the record's set of keys has the label
+  of every key, since which keys exist depends on all of them.
+
+On `sorted-references` an edit of `lastActivityAt` runs `topicsByActivity`, a
+`lift` that reads the sort key of each topic, and gives a record for four
+positions of every topic, 8,002 at 2,000 topics. The construct for it is the
+`sortBy` of "Labels of large derived collections".
 
 **What still grows, and why.**
 
-- *A create.* It runs `crossrefTable`, `namesTable`, `crossrefIndexOf` and
-  `topicCount`, each a `lift` over the whole array of topic references or over
-  a result of one. At 1,000 topics on `filing-order` it reads 14,136 positions
-  through the transaction and gives 2,122 write records, and takes 736 ms in
-  the piece and 462 ms in the preparation, the rest in the commits and the
-  memory server. Every row of `crossrefTable` and `namesTable` is given its
-  record again, because the created topic is stored in the transaction that
-  runs the `lift`s and the label of a position that the transaction in
-  progress wrote has no identifier (P59). Two things would shorten it: the
-  adapter knowing the identifier of a label that the transaction in progress
-  stages, and boards written with a construct in place of the `lift`s over the
-  whole list. The language has none of the three constructs: a per-element
-  construct over a record, a join, and a grouping by a key.
-- *Other edits that run a whole-list `lift`.* An edit of `mentions` or
-  `shortName` of a topic runs `crossrefTable`, and `crossrefIndexOf` behind it
-  where a row's `name` or the number of rows changed. On `sorted-references`
-  an edit of `lastActivityAt` runs `topicsByActivity`. Not measured.
+- *A create, and an edit of a field a whole-list `lift` reads,* for the cause of
+  the section before. A create reads 19 positions a topic and takes 1.0 s at
+  1,000 topics on `filing-order`, 0.30 s of it in the piece and 0.28 s in the
+  preparation. An edit of the mentions or the `shortName` runs `crossrefTable`
+  over the whole list on both boards and takes 0.25 to 0.37 s at 1,000 topics;
+  an edit of `lastActivityAt` on `sorted-references` takes 0.45 s.
 - *A change of the members of an array of row documents.* A prepend and a
-  removal write the array of links whole, `N` links, because the executor
-  gives the record of a change of the members of a kept `map` as one that
-  names the array, and the runtime refuses a record that names a path the
-  transaction did not write. The piece also compares the members of the array
-  before and after a change by another writer, and the executor brings the
-  keys of the assembly up to date. An append writes the number of members and
-  one link. Most of the time of each is the write that causes the change, on
-  either path.
-- *The load.* It is one commit (the sixth finding), and its preparation is
-  more than linear for the cause of the fifth finding: a profile of the load
-  at 10,000 rows has 29.1 s of 43.2 s in `InputReadView.reads`, 23.2 s of them
-  in `InputReadView.#stands`. Both the targets and the reads follow the rows:
-  20,007 documents and more than 20,000 reads at 10,000 rows. A transaction
-  that said whether its read activity changed since an ask, as a count that
-  moves with each record added or reclassified, would make an ask cost nothing
-  where it did not. That changes a file the specification correspondence
-  governs and a path that runs with the option off, so it is not made on this
-  branch (questions 347 and 351 of
-  [compiled-pattern-language.md](compiled-pattern-language.md)).
-- *The memory server's refresh of tracked queries* (the fourth finding). The
-  piece's commit of two row documents adds to it, since each row holds a
-  reference to its topic: 35 ms at the last of 2,000 topics.
+  removal write the array of links whole, `N` links, because the executor gives
+  the record of a change of the members of a kept `map` as one that names the
+  array, and the runtime refuses a record that names a path the transaction did
+  not write. The storage has a mergeable append and no splice that keeps the
+  label entries of the positions that stay. The piece also compares the members
+  of the array before and after a change by another writer, and the executor
+  brings the keys of the assembly up to date. An append writes the number of
+  members and one link. Most of the time of each is the write that causes the
+  change, on either path.
+- *The load.* It follows the board, at about 4 ms a topic: 4.0 s at 1,000 topics
+  and 7.5 s at 2,000 on `filing-order`. The documents a `lift` writes for its
+  rows are in the one handed transaction (the sixth finding).
+- *The preparation of a document that holds a long array of links* (the eighth
+  finding).
+- *The memory server's refresh of tracked queries,* for a subscription whose
+  schema admits links (the seventh finding). The piece's commit of two row
+  documents is walked as well, since each row holds a reference to its topic.
 - *The work after a refused commit* follows the size of the result, since the
   result document is stored again row by row.
-- *The piece's own time in an edit on `sorted-references`* is 4.0 ms at 100
-  topics and 11.2 ms at 2,000, and a write that the board does not read costs
-  the piece 1.9 to 5.8 ms. The cause is not traced. On `filing-order` it is
-  3.0 to 3.8 ms at each size.
-- *A pull of the whole result* follows the board on both arms: 0.4 s, 4.5 s
-  and 10 s at 100, 1,000 and 2,000 topics on the runner path.
+- *The piece's own time in an edit on `sorted-references`,* 2.9, 4.5 and 5.6 ms
+  at 100, 1,000 and 2,000 topics, for the comparison of every unit of the result
+  (the ninth finding). On `filing-order` it is 3.0 to 3.8 ms at each size in the
+  second round.
+- *A pull of the whole result* follows the board on both arms: 0.4 s, 4.5 s and
+  10 s at 100, 1,000 and 2,000 topics on the runner path in the second round.
 
 **Over-labels found.** `runtime/runner/test/compiled/layout-labels.test.ts`
 starts each list of `runner-lists.tsx` twice in one runtime, with rows as
 documents and with rows in place, over items that each have a clause of their
 own, and reads the root, the array, the number of members, each position and
-each leaf of a row through a cell. What a read consumes is the join the
-runtime derives from the reads of that transaction (`deriveFlowJoin`). After
-the load, an edit, an addition at the end and a removal, rows as documents
-give no clause less than rows in place at any of these, for a `map` over an
-array declared as references, a `map` over an array of references declared as
-plain values, a `map` over an array of plain values in place, and a `map` over
-the result of a `filter` over an array of plain values in place. On Topics
-boards of 4 topics, each with a clause of its own, 3,474 probes over the load,
-three edits and three creates give the same in both layouts after the load and
-after each create.
+each leaf of a row through a cell. What a read consumes is the join the runtime
+derives from the reads of that transaction (`deriveFlowJoin`). After the load,
+an edit, an addition at the end and a removal, rows as documents give no clause
+less than rows in place at any of these, for a `map` over an array declared as
+references, a `map` over an array of references declared as plain values, a
+`map` over an array of plain values in place, and a `map` over the result of a
+`filter` over an array of plain values in place. On Topics boards of 4 topics,
+each with a clause of its own, 3,474 probes over the load, three edits and three
+creates give the same in both layouts after the load and after each create.
 
-- *Rows in place, after an edit below `$UI`.* After each edit rows as
-  documents give less than rows in place at 134 probes on `filing-order` and
-  105 on `sorted-references`, all below `$UI`, and more at none. At each of
-  them rows as documents give what both layouts gave after the load. An edit
-  that writes below `$UI` in the result document removes the entries the
-  document stored at `$UI` (`value`, with no clause) and at `$UI/children`
-  (`enumerate`), and a read below `$UI` with no nearer entry then consumes the
-  entry of the root, which holds every clause the load read. This is an
-  over-label of rows in place, which is not the default layout.
-- *A result that holds nothing but links, with rows as documents.* The result
-  of `Cells` is the array of links alone. The runtime takes a written value
-  that holds nothing but links for a structure of links and stores, for every
-  child of its root, the join of the transaction that wrote it, so every read
-  below the root consumes every clause, where rows in place give a leaf the
-  clause of its member. With a plain value beside the array (`Counted` of
+- *A load in one transaction, at what is bound through the argument.* On boards
+  of 6 topics with a clause per topic, 4,652 probes of what a read of the result
+  consumes over the load, three edits and three creates: the load in bounded
+  transactions gives the same as the load in one transaction at 4,546, less at
+  106, on both boards, and more at none. The 106 are at `topics`, `names`,
+  `namesTable` and `index`, whose records are bound through the argument
+  document. In a load in one transaction that document is staged, and a staged
+  document takes the join of everything the transaction read, so each of the
+  four holds the clause of the other input. With the creation stored first they
+  hold the label of the reference alone. A load that is written into the handed
+  transaction whole, because the caller wrote into it or `loadRows` is
+  `Infinity`, has this over-label.
+- *Rows in place, after an edit below `$UI`.* After each edit rows as documents
+  give less than rows in place at 134 probes on `filing-order` and 105 on
+  `sorted-references`, all below `$UI`, and more at none. At each of them rows
+  as documents give what both layouts gave after the load. An edit that writes
+  below `$UI` in the result document removes the entries the document stored at
+  `$UI` (`value`, with no clause) and at `$UI/children` (`enumerate`), and a
+  read below `$UI` with no nearer entry then consumes the entry of the root,
+  which holds every clause the load read. This is an over-label of rows in
+  place, which is not the default layout.
+- *A result that holds nothing but links, with rows as documents.* The result of
+  `Cells` is the array of links alone. The runtime takes a written value that
+  holds nothing but links for a structure of links and stores, for every child
+  of its root, the join of the transaction that wrote it, so every read below
+  the root consumes every clause, where rows in place give a leaf the clause of
+  its member. With a plain value beside the array (`Counted` of
   `handle-reads.tsx`) a leaf of a row consumes the clause of its member alone.
+  *Plan:* the adapter gives the record of the array for each link position of
+  such a result, as `#recordAppended` does for the links an append adds.
 - *The `value` slot the crate lists beside a handle.* For `crossrefTable` and
-  `namesTable` the crate lists a `value` slot at `sources.*` beside the
-  handle, from the helpers that test a member for presence. The body is handed
-  a handle at each member, so the executor reads no member for that slot, and
-  the slot stays in the template: the label of each row holds the label of a
-  read of each topic whole. It is the crate's to narrow.
+  `namesTable` the crate lists a `value` slot at `sources.*` beside the handle,
+  from the helpers that test a member for presence. The body is handed a handle
+  at each member, so the executor reads no member for that slot, and the slot
+  stays in the template: the label of each row holds the label of a read of each
+  topic whole. It is the crate's to narrow.
+
+**The corpus on the runner path.** `compare/runner-corpus.ts` runs the main
+pattern of each module as a compiled piece, with the generated inputs as plain
+values in the argument and the generated events queued with the scheduler, and
+beside it on the executor with its documents in memory. Measured in the third
+round. The comparison is with the executor in memory and not with today's
+runtime, which was not run beside it; the value comparison of
+`compare/values-corpus.ts` is what relates that executor to today's runtime. The
+inputs are plain values, so the run says little about labels.
+
+| Of 373 modules | |
+| --- | ---: |
+| not run: exports no pattern | 66 |
+| not run: needs `wish` | 40 |
+| not run: requests an effect | 24 |
+| not run: no value code | 4 |
+| run | 239 |
+| started, with the first commit taken | 230 |
+| handled every event | 200 |
+| had no commit refused | 215 |
+| hold the values the executor in memory holds | 209 |
+| all four of the above | 183 |
+
+The classes of failure:
+
+- *Did not start, 9 modules.* The value code throws in 4 (`table is not a
+  function` in three, `asScope is not a function` in one). The executor has no
+  built-in `indexedCollections`, `getEntityId` or `linksOf` in a function body,
+  1 module each. The preparation refuses the first commit for a
+  `writeAuthorizedBy` claim, which no template covers, in 2.
+- *An event not handled, 30 modules.* In 23 no stream of the binding is stored:
+  the binding is in an element body and its collection has no element, or the
+  stream belongs to an instance a body made. In 7 the handler did not commit.
+- *A commit refused, 15 modules.* A missing trusted-event policy input, 6; the
+  transaction aborted, 5; `writeAuthorizedBy`, 1; `maxConfidentiality`, 2; a
+  writer-fit misfit, 1. Twelve of these also differ from the executor in memory,
+  which has no such gate.
+- *Values differ with every event handled and no commit refused, 7 modules.* Not
+  examined: `apps/project-list/main.tsx`, `apps/reward-spinner`,
+  `dev/gideon-tests/test-33`,
+  `examples/scoped-group-chat/main-plain-inputs.tsx`,
+  `product/primitives/amount-ledger.tsx`, `product/primitives/check-list.tsx`
+  and `showcase/wordsearch`. A draw of the random source or of the clock in an
+  event differs between the two runs by construction.
 
 **Not verified.**
 
@@ -3087,48 +3365,76 @@ after each create.
   through the scheduler in a test: with the server's fan-out held, the
   scheduler's wait for the replica has no end.
 - A refused commit of a transaction that created an instance is not tested.
+- A load in bounded transactions whose handed transaction is not committed, or
+  is refused by the store, is not tested for what it leaves;
+  `refused-commit.test.ts` loads with `loadRows` set to `Infinity`, since its
+  harness withholds the server's fan-out and the commits of the adapter keep
+  `StorageManager.synced()` waiting.
+- The tables of the third round were measured with a harness switch that the
+  head of the branch does not hold, and the load at 2,000 topics was not
+  measured under the default schema.
+- The edit of the last of 2,000 topics, 256 to 265 ms, and the write alone of
+  143 ms seen once, are not explained.
+- No real board was measured for what the memory server's refresh of tracked
+  queries costs.
+- The 7 corpus modules whose values differ on the runner path are not examined,
+  and the corpus was not run beside today's runtime or with labeled inputs.
 - No figure is of two writers that share a space, of a memory server reached
   over a socket, or of an idle machine.
 - The board `main` and the rows-in-place layout of the Topics boards were not
-  measured after the second round, and today's arm was not run at 2,000
-  topics.
+  measured after the first round, and today's arm was not run at 2,000 topics or
+  after the second round.
 - The comparison of what a read consumes in the two layouts is at 4 topics and
-  on the four lists of `runner-lists.tsx`; it compares rows as documents with
-  rows in place and not either with today's runtime.
-- Which function copies frozen values in an edit, and how much, was not
-  profiled apart after the second round.
-- The document of a row that left is deleted in the transaction that removes
-  its link. A reader that held the link then reads nothing; no test covers
-  such a reader.
+  on the four lists of `runner-lists.tsx`, and that of the two loads at 6
+  topics; each compares two arrangements of the compiled piece and neither with
+  today's runtime.
+- Which function copies frozen values in an edit, and how much, was not profiled
+  apart.
+- The document of a row that left is deleted in the transaction that removes its
+  link. A reader that held the link then reads nothing; no test covers such a
+  reader.
 - An entry at the position of a link added at the end stays until the array is
   next written at or above it (P60); no test reads it after a later prepend.
 
 **Not built.**
 
-- *The load in bounded transactions.* The plan (provisional decision P63): the
-  creation of the instance's own documents in a first transaction; each row
-  that is a document of its own, with its records, in a transaction of at most
-  `K` rows, where each record of the row has inputs with no position the first
-  derivation staged; and the result document with the links, and everything
-  else, in the transaction the caller commits. Open in the plan: a refusal of
-  an earlier transaction has to refuse the caller's, and the rows a `lift`
-  writes are given their records when the body has returned, so they stay in
-  the last transaction, 2,000 documents at 2,000 topics.
+- *The three constructs,* `entries` as a source of `map`, `joinBy` and
+  `groupBy`, and `sortBy`. They are the owner's to decide (question 370 of the
+  design's plan).
+- *What the bounded load leaves.* The documents a `lift` writes for its rows in
+  transactions of their own, and the removal of what a load stored where the
+  handed transaction does not commit.
+- *The memory server's refresh, in `runtime/memory`.* A plan: a write that
+  changes no link of the written document leaves what the walk reaches as it is,
+  so the refresh can send the document's own snapshot and keep the closure, and
+  walk again only where a link was added or removed; and a walk that reaches a
+  document already tracked under a selector that covers the one it arrives with
+  can stop there, which `coveringSelector` decides for the roots.
+- *The preparation indexed by path.* `writePolicyInputsForDocument` indexes the
+  write-policy inputs by document.
+- *A unit of the result that is not compared.* A plan: a unit whose entry was
+  not evaluated in the derivation is not compared.
+- *The minimal write of a prepend and a removal.* A plan: a splice operation of
+  the storage that moves the label entries with their positions, as the
+  plan-write `moves` does for a handler's splice of a stored list.
+- *The record of a result that holds nothing but links,* and *the `value` slot
+  beside a handle narrowed in the crate* ("Over-labels found" above).
 - *No sync and no resume.* A document that is not in the replica when a
   reference leads to it reads as absent. A document in another space than the
   piece's is not told of changes. The result cell carries no mark of the
   pattern, and a piece is not started again from what it stored.
-- *Readers outside the executor.* The runtime follows the link to a row that
-  is a document. It does not follow a link whose path crosses an array by key,
-  and it reads a state cell with no document as nothing. The harness compares
-  the compiled result as the executor holds it.
+- *Readers outside the executor.* The runtime follows the link to a row that is
+  a document. It does not follow a link whose path crosses an array by key, and
+  it reads a state cell with no document as nothing. The harness compares the
+  compiled result as the executor holds it.
 - *The shell* does not render a compiled piece.
-- *The corpus on the runner path.* No corpus module is started with
-  `startCompiledPiece`, and no continuous-integration job builds the crate.
+- *What the corpus on the runner path lacks:* `wish`, an effect's request, the
+  three built-ins named above, a template for a `writeAuthorizedBy` claim, and a
+  stream for a binding whose collection has no element. No
+  continuous-integration job builds the crate.
 - *The rest of the design's scheduler and serving loop:* a scheduler node for
   each cone instance (P51), the stream document and its watermark (P52), an
   effect's request leaving the piece, and the withdrawal of one derived write,
   which belong to milestone 6.
-- *The boundary of rows as documents emitted by the crate* (P54), the executor
-  as a workspace package (P50), and the identifier of a label that the
-  transaction in progress stages.
+- *The boundary of rows as documents emitted by the crate* (P54), and the
+  executor as a workspace package (P50).
