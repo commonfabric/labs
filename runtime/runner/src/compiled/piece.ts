@@ -429,8 +429,14 @@ export class CompiledPiece {
       }
       if (!outcome.committed) this.#counts.eventsRefused += 1;
       this.#keepMinted(tx);
-      // An event a handler sends to a stream of the piece is an event of
-      // the scheduler's queue like one sent from outside.
+      // An event a handler sends to a stream of the piece is sent through
+      // the cell of the stream in the handler's transaction, as a handler
+      // of today's runtime sends one (`Cell.send`). On a serving runtime
+      // that appends the event to the entries of the stream in this
+      // transaction, so it is stored with what the handler wrote and
+      // withdrawn with it, and a serving loop that takes the space over
+      // before the event was handled finds it. On every other runtime it
+      // is an event of the scheduler's queue.
       for (const sent of this.instance.takeQueued()) {
         const target = transactions.entityOfStream(sent.stream);
         if (target === undefined) {
@@ -438,10 +444,11 @@ export class CompiledPiece {
             "A handler sent an event to a stream the storage has no marker of.",
           );
         }
-        this.#runtime.scheduler.queueEvent(
+        this.#runtime.getCellFromLink(
           { space, id: target, path: [], scope: "space" },
-          transactions.encode(sent.event),
-        );
+          undefined,
+          tx,
+        ).send(transactions.encode(sent.event) as never);
       }
       this.#invalidate();
     };
