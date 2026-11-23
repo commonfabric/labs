@@ -578,7 +578,7 @@ const cellAt = (
 const indexesOf = (
   list: Cell<MessagesValue> | Cell<ReactionsValue>,
 ): number[] =>
-  Array.from({ length: (list.get() ?? []).length }, (_, index) => index);
+  Array.from({ length: list.key("length").get() ?? 0 }, (_, index) => index);
 
 /**
  * The value of `cell`, or `undefined` where it lacks a field its schema
