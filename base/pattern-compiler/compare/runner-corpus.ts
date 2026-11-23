@@ -9,7 +9,7 @@
  * Run from the repository root, after `cargo build --release` in
  * `base/pattern-compiler`:
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path] [--resume | --serving] [--evaluate=function] [--wishes=table] [--detail]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path] [--resume] [--serving] [--references] [--evaluate=function] [--wishes=table] [--detail]`
  * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts report <results.jsonl>`
  *
  * With `--resume`, a second runtime on the same memory server takes the
@@ -23,7 +23,30 @@
  * on this thread, and one client with server execution on that sets the
  * piece up (`setUpCompiledPiece`) and appends each event with `Cell.send`
  * on the entity of its stream. The piece is the one the serving runtime
- * runs, and its values are compared as above.
+ * runs, and its values are compared as above. With `--resume` as well,
+ * another serving loop takes the space over after the first half of the
+ * events (`CompiledServingMemoryServer.restart`): the event behind the
+ * takeover wakes the piece in the serving runtime of that loop, whose
+ * replica reads from the store, so the wake leaves the rows it can as
+ * stored (`resumeCompiledPieceByUnits`). The values compared are then what
+ * that runtime derived and, for a row it left, what the storage holds.
+ *
+ * With `--serving --resume`, the run also says for each module how many
+ * of its collections have rows in documents of their own, how many of
+ * those `storedRowCollections` takes, how many rows the wake left as
+ * stored, and how many entries and bodies the piece that woke evaluated
+ * through the first event behind the takeover, beside how many the load
+ * evaluated: a whole resume evaluates at its wake what the load did.
+ *
+ * With `--references` under `--serving`, the client writes each array of
+ * records that a member of the argument holds through a cell of its own,
+ * where the argument schema declares that member as references. The
+ * runtime stores each record in an entity of its own, so the array is an
+ * array of references, which is what a wake can leave the rows of as
+ * stored. Without it the array is in the argument document, as plain
+ * values in place. The executor in memory is given the plain argument in
+ * both cases, so a result that holds a reference to an element differs
+ * from it with `--references`.
  *
  * `run` appends one line per module and leaves out a module the file
  * already has. The inputs are plain values in the argument, so the run
@@ -73,6 +96,9 @@ import {
   evaluateWithFunction,
   type ModuleEvaluator,
 } from "../exec/executor.ts";
+import { rowDocumentCollections } from "../exec/row-documents.ts";
+import type { Schema } from "../exec/store.ts";
+import { storedRowCollections } from "../exec/stored-units.ts";
 import {
   artifactsOf,
   type CorpusModule,
@@ -129,6 +155,22 @@ type Outcome = {
     checked?: number;
     documents?: number;
     failure?: string;
+    /**
+     * Under the serving loop: the collections of the plan whose rows are
+     * documents, and how many of them a wake can leave the rows of as
+     * stored by what the plan says (`storedRowCollections`).
+     */
+    rows?: number;
+    taken?: number;
+    /** The rows the wake left as stored. */
+    left?: number;
+    /** The entries and the bodies that the load evaluated. */
+    load?: { evaluations: number; bodies: number };
+    /**
+     * The entries and the bodies that the piece which woke evaluated
+     * through the first event behind the takeover.
+     */
+    wake?: { evaluations: number; bodies: number };
   };
 };
 
@@ -199,6 +241,7 @@ export const runOne = async (
   serving = false,
   evaluate: ModuleEvaluator | undefined = undefined,
   wishTable = false,
+  references = false,
 ): Promise<Outcome> => {
   const chosen = await mainPattern(module);
   if (chosen === undefined) {
@@ -234,6 +277,7 @@ export const runOne = async (
   if (wishes && (serving || (resume && wishTable))) {
     return { ...base, skipped: "needs `wish`" };
   }
+  const takeover = serving && resume;
 
   // The executor with its documents in memory.
   const stubs = wishes ? homeStubs(await memoryHome()) : undefined;
@@ -268,6 +312,8 @@ export const runOne = async (
         alone,
         artifacts,
         now,
+        takeover,
+        references,
       );
     } catch (error) {
       return { ...base, started: false, startFailure: categoryOf(error) };
@@ -471,12 +517,19 @@ const runServed = async (
   alone: ExecutorRun,
   artifacts: (id: string) => Artifact | undefined,
   now: number,
+  /** Whether another serving loop takes over after half of the events. */
+  takeover = false,
+  /** Whether the arrays the plan declares as references are written as such. */
+  references = false,
 ): Promise<Outcome> => {
   const signer = await Identity.fromPassphrase("pattern-compiler-compare");
   const space = signer.did();
   // The piece the serving runtime starts, or why it did not start.
-  const loaded = Promise.withResolvers<CompiledPiece>();
+  let loaded = Promise.withResolvers<CompiledPiece>();
   loaded.promise.catch(() => {});
+  // Whether the loop that took over found the piece current by its basis.
+  let current: boolean | undefined;
+  let resumed: Outcome["resume"];
   const main = `/${base.module.replace(/^\/+/, "")}`;
   const program = {
     main,
@@ -497,6 +550,9 @@ const runServed = async (
       piece: { now },
       started: (piece) => loaded.resolve(piece),
       failed: (_result, error) => loaded.reject(error),
+      resumed: (_result, piece) => {
+        current = piece.current;
+      },
     },
   });
   const client = new Runtime({
@@ -509,8 +565,24 @@ const runServed = async (
   });
   try {
     const result = client.getCell<unknown>(space, "corpus on the runner");
+    let given = argument;
+    if (references) {
+      const written = client.edit();
+      given = referencesOf(client, written, space, artifact, argument);
+      const refused = (await written.commit().settled).error;
+      if (refused !== undefined) {
+        return {
+          ...base,
+          started: false,
+          startFailure: {
+            category: `the inputs were refused: ${refused.name}`,
+            detail: `${refused.message}`.split("\n")[0].slice(0, 200),
+          },
+        };
+      }
+    }
     const tx = client.edit();
-    setUpCompiledPiece(client, tx, program, argument, result.withTx(tx));
+    setUpCompiledPiece(client, tx, program, given, result.withTx(tx));
     const { error } = await tx.commit().settled;
     if (error !== undefined) {
       return {
@@ -534,9 +606,23 @@ const runServed = async (
       return { ...base, started: false, startFailure: categoryOf(error) };
     }
     await serving.host.whenQuiescent();
+    const load = {
+      evaluations: piece.instance.counts.evaluations,
+      bodies: piece.instance.counts.elementEvaluations,
+    };
+    const rowDocuments = rowDocumentCollections(artifact);
     let handled = 0;
     const failures: string[] = [];
-    for (const { binding, event } of events) {
+    const half = Math.floor(events.length / 2);
+    for (const [index, { binding, event }] of events.entries()) {
+      // The piece the event wakes in the loop that took over.
+      let woken: Promise<CompiledPiece> | undefined;
+      if (takeover && index === half && index > 0) {
+        loaded = Promise.withResolvers<CompiledPiece>();
+        loaded.promise.catch(() => {});
+        woken = loaded.promise;
+        await serving.restart();
+      }
       const stream = piece.instance.streams().find((held) =>
         held.binding === binding && held.instance === undefined &&
         held.elements !== undefined
@@ -574,6 +660,32 @@ const runServed = async (
         continue;
       }
       await appended.promise;
+      if (woken !== undefined) {
+        try {
+          piece = await woken;
+          resumed = { after: index, current };
+        } catch (error) {
+          resumed = { after: index, failure: categoryOf(error).detail };
+          failures.push("the piece did not wake");
+          break;
+        }
+        await serving.host.whenQuiescent();
+        resumed = {
+          ...resumed,
+          rows: rowDocuments.size,
+          taken: storedRowCollections(artifact, rowDocuments).size,
+          left: piece.instance.counts.rowsLeftStored,
+          load,
+          wake: {
+            evaluations: piece.instance.counts.evaluations,
+            bodies: piece.instance.counts.elementEvaluations,
+          },
+        };
+        if (piece.counts.events > 0 && piece.counts.eventsRefused === 0) {
+          handled += 1;
+        } else failures.push("the handler did not commit");
+        continue;
+      }
       await serving.host.whenQuiescent();
       const after = piece.counts;
       if (
@@ -593,12 +705,58 @@ const runServed = async (
       refusals: [...piece.refusals].map((reason) => reason.slice(0, 200)),
       equal: difference === undefined,
       ...(difference === undefined ? {} : { difference }),
+      ...(resumed === undefined ? {} : { resume: resumed }),
     };
   } finally {
     await serving.host.close();
     await client.dispose();
     await serving.close();
   }
+};
+
+/**
+ * `argument` with each top-level member that holds an array of records,
+ * and that the argument schema of `artifact` declares as references, as a
+ * cell that `tx` writes the array through.
+ */
+const referencesOf = (
+  client: Runtime,
+  tx: ReturnType<Runtime["edit"]>,
+  space: ReturnType<Identity["did"]>,
+  artifact: Artifact,
+  argument: unknown,
+): unknown => {
+  if (typeof argument !== "object" || argument === null) return argument;
+  const schemas = new Map(
+    artifact.schemas.map(({ id, schema }) => [id, schema as Schema]),
+  );
+  const declared = schemas.get(artifact.plan.argumentSchema as string);
+  const properties = typeof declared === "object"
+    ? declared.properties ?? {}
+    : {};
+  const given: Record<string, unknown> = { ...argument };
+  for (const [name, value] of Object.entries(given)) {
+    const member = properties[name];
+    if (
+      !Array.isArray(value) || value.length === 0 ||
+      typeof member !== "object" ||
+      (member.asCell === undefined &&
+        (typeof member.items !== "object" ||
+          member.items.asCell === undefined)) ||
+      !value.every((one) =>
+        typeof one === "object" && one !== null && !Array.isArray(one)
+      )
+    ) continue;
+    const cell = client.getCell<unknown[]>(
+      space,
+      `corpus input ${name}`,
+      undefined,
+      tx,
+    );
+    cell.set(value);
+    given[name] = cell;
+  }
+  return given;
 };
 
 const readResults = async (file: string): Promise<Outcome[]> => {
@@ -619,6 +777,7 @@ const run = async (
   serving: boolean,
   evaluate: ModuleEvaluator | undefined,
   wishTable: boolean,
+  references: boolean,
 ) => {
   const modules = await corpusModules() as EmittedModule[];
   const artifacts = artifactsOf(modules as unknown as CorpusModule[]);
@@ -635,6 +794,7 @@ const run = async (
         serving,
         evaluate,
         wishTable,
+        references,
       );
     } catch (error) {
       outcome = {
@@ -724,6 +884,26 @@ const report = async (file: string) => {
         resume?.failure?.replaceAll(/of:[\w:-]+/g, "<entity>").slice(0, 110)
       )
     ) console.log(`  did not resume, ${n}: ${reason}`);
+    // What the wake of each module with rows in documents evaluated
+    // through its first event, beside what its load evaluated.
+    const counted = outcomes.filter(({ resume }) =>
+      resume?.wake !== undefined && (resume.rows ?? 0) > 0
+    );
+    if (counted.length > 0) {
+      console.log(
+        `  woken with rows in documents: ${counted.length}, of which a wake left rows as stored in ${
+          counted.filter(({ resume }) => (resume?.left ?? 0) > 0).length
+        }`,
+      );
+      console.log(
+        "  module | collections with rows in documents | taken by the plan | rows left as stored | entries, wake / load | bodies, wake / load",
+      );
+      for (const { module, resume } of counted) {
+        console.log(
+          `  ${module} | ${resume?.rows} | ${resume?.taken} | ${resume?.left} | ${resume?.wake?.evaluations} / ${resume?.load?.evaluations} | ${resume?.wake?.bodies} / ${resume?.load?.bodies}`,
+        );
+      }
+    }
   }
   for (
     const [reason, n] of count(({ events }) => events?.failures[0])
@@ -751,6 +931,7 @@ if (import.meta.main) {
       Deno.args.includes("--serving"),
       evaluate,
       Deno.args.includes("--wishes=table"),
+      Deno.args.includes("--references"),
     );
   } else if (command === "report" && file !== undefined) await report(file);
   else {

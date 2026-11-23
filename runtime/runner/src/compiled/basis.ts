@@ -176,6 +176,26 @@ export const basisMatches = (
   return true;
 };
 
+/**
+ * The sources of a stored basis that do not match the storage, as
+ * `basisMatches` compares each: the documents that changed since the
+ * stored result was derived.
+ */
+export const staleSourcesOf = (
+  basis: StoredBasis,
+  basisSeq: number,
+  seqOf: (doc: string) => number,
+): string[] => {
+  const recent = new Set(basis.recent);
+  const stale = [...recent].filter((doc) => seqOf(doc) > basisSeq);
+  for (const [doc, seq] of Object.entries(basis.inputs)) {
+    if (!recent.has(doc) && (seq === NEVER || seqOf(doc) !== seq)) {
+      stale.push(doc);
+    }
+  }
+  return stale;
+};
+
 /** What `PieceBasis` writes and reads through. */
 export type BasisStorage<Tx extends object> = {
   /**

@@ -38,6 +38,7 @@ import {
   isWalkableObjectNotArray,
 } from "@commonfabric/data-model";
 
+import type { StoredArray } from "../../../../base/pattern-compiler/exec/stored-units.ts";
 import {
   createSigilLinkFromParsedLink,
   getMetaLink,
@@ -609,6 +610,9 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #onChanges: ((changes: ChangeByOther[]) => void) | undefined;
   readonly #onArrived: ((doc: string) => void) | undefined;
   readonly #onLabels: (() => void) | undefined;
+  readonly #unheld:
+    | { reads(entity: string): boolean; changed(entities: string[]): void }
+    | undefined;
   readonly #onApplied: (() => void) | undefined;
   /**
    * For a resumed instance: the documents of the executor that the replica
@@ -697,6 +701,20 @@ export class RuntimeTransactions implements TransactionHooks {
        */
       labels?: () => void;
       /**
+       * What the adapter asks and tells of the entities of the space of
+       * the instance that the executor holds no document of, while the
+       * executor holds rows as stored (`rowsHeld`): a row left as stored
+       * was derived from documents that this executor has not read.
+       * `reads` says whether a row may have read the entity, so that the
+       * replica keeps the document and reports a write to it. `changed`
+       * is called with the entities that a commit of another writer
+       * changed, value or label.
+       */
+      unheld?: {
+        reads(entity: string): boolean;
+        changed(entities: string[]): void;
+      };
+      /**
        * Called when the replica applied the commit of a transaction the
        * adapter was handed, after the executor was told of the labels it
        * stored.
@@ -743,6 +761,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#onChanges = options.changes;
     this.#onArrived = options.arrived;
     this.#onLabels = options.labels;
+    this.#unheld = options.unheld;
     this.#onApplied = options.applied;
     this.#onRefused = options.refused;
     this.#sources = options.sources;
@@ -779,14 +798,21 @@ export class RuntimeTransactions implements TransactionHooks {
           const byOther: ChangeByOther[] = [];
           const seen = new Set<string>();
           let labelsByOther = false;
+          // The entities that another writer changed and that the executor
+          // holds no document of, while it holds rows as stored. A document
+          // that a read brings into the replica is no change.
+          const unheld = !own && this.#unheld !== undefined &&
+              this.#keptArrays.size > 0 &&
+              notification.space === this.#space &&
+              notification.type !== "load" && notification.type !== "pull"
+            ? new Set<string>()
+            : undefined;
           for (const { address, before, after } of notification.changes) {
             // Two spaces can hold documents of one entity: a document of
             // another space is held under a name that names the space.
             const named = this.#byEntity.get(
               this.#keyOf(notification.space, address.id),
             );
-            if (named === undefined) continue;
-            if (this.#spaceOf(named) !== notification.space) continue;
             // A change of an instance of a scope is of one scope key: the
             // one the change names, and the runtime's own where it names
             // none.
@@ -795,7 +821,20 @@ export class RuntimeTransactions implements TransactionHooks {
               ? undefined
               : address.scopeKey ??
                 resolveScopeKey(address.scope, this.#runtime.scopeKeyIdentity);
-            const doc = changed === undefined ? named : `${named}~${changed}`;
+            const doc = named === undefined || changed === undefined
+              ? named
+              : `${named}~${changed}`;
+            if (doc === undefined || !this.#documents.has(doc)) {
+              // A row can have read the entity where the basis of the
+              // piece names it.
+              if (
+                unheld !== undefined && changed === undefined &&
+                (doc === undefined || !this.#rowDocuments.has(doc)) &&
+                this.#unheld?.reads(address.id) === true
+              ) unheld.add(address.id);
+            }
+            if (named === undefined || doc === undefined) continue;
+            if (this.#spaceOf(named) !== notification.space) continue;
             // A document the executor asked for and the replica held none
             // of now has one: the piece reads it again.
             if (this.wanted.has(doc) && !this.#documents.has(doc)) {
@@ -935,6 +974,9 @@ export class RuntimeTransactions implements TransactionHooks {
           }
           if (byOther.length > 0) this.#onChanges?.(byOther);
           if (labelsByOther) this.#onLabels?.();
+          if (unheld !== undefined && unheld.size > 0) {
+            this.#unheld?.changed([...unheld]);
+          }
           return undefined;
         },
       };
@@ -952,7 +994,11 @@ export class RuntimeTransactions implements TransactionHooks {
       const doc = this.#byEntity.get(
         this.#keyOf(address.space, address.id),
       );
-      return doc !== undefined && address.space === this.#spaceOf(doc);
+      if (doc !== undefined) return address.space === this.#spaceOf(doc);
+      // A row left as stored was derived from documents the executor has
+      // not named: the replica keeps those, and reports a write to one.
+      return this.#keptArrays.size > 0 && address.space === this.#space &&
+        this.#unheld?.reads(address.id) === true;
     });
   }
 
@@ -1949,6 +1995,7 @@ export class RuntimeTransactions implements TransactionHooks {
     // owns. A runtime that resumed the instance enrolls it with its first
     // write of it.
     if (this.#heldBefore.delete(doc)) this.#enroll(tx, doc);
+    this.#enrollKeptRow(tx, doc, path);
     const written = this.#written.get(doc) ?? [];
     this.#written.set(doc, written);
     const document = store.docs.get(doc);
@@ -2593,6 +2640,10 @@ export class RuntimeTransactions implements TransactionHooks {
   ): void {
     for (const key of keys) {
       const id = this.#rowDocument(array, key);
+      if (this.#keptArrays.has(array) && !this.#keptEnrolled.has(id)) {
+        this.#keptEnrolled.add(id);
+        this.#enroll(tx, id);
+      }
       tx.writeValueOrThrow(this.#address(id, []), undefined, { delete: true });
       array.ids.delete(key);
       array.links.delete(key);
@@ -3765,6 +3816,12 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   #streamEntity(stream: StreamOfExecutor): URI {
     const entity = this.#entityOfStream(stream);
+    // A stream taken with a row left as stored has its marker where the
+    // stored row linked to it, which the first value that holds the stream
+    // here finds out with one read.
+    if (this.#streamsAssumed.delete(entity) && !this.#holdsMarker(entity)) {
+      this.#streams.delete(entity);
+    }
     if (!this.#streams.has(entity)) {
       this.#streams.set(entity, stream);
       this.#createdStreams.push(entity);
@@ -3774,9 +3831,56 @@ export class RuntimeTransactions implements TransactionHooks {
         { $stream: true },
       );
       this.#linkToResult(this.#open(), entity);
-      this.#onStream?.(entity, stream);
+      this.#handleStream(entity, stream);
     }
     return entity;
+  }
+
+  /**
+   * The streams of `heldStream` that no value this adapter encoded has
+   * held: whether the storage holds the marker of each was not read.
+   */
+  readonly #streamsAssumed = new Set<string>();
+
+  /** The entities of the streams whose handler was registered. */
+  readonly #streamsHandled = new Set<string>();
+
+  /** Registers the handler of a stream, once for each entity. */
+  #handleStream(entity: URI, stream: StreamOfExecutor): void {
+    if (this.#streamsHandled.has(entity)) return;
+    this.#streamsHandled.add(entity);
+    this.#onStream?.(entity, stream);
+  }
+
+  /** Whether the replica holds the runtime's stream marker in `entity`. */
+  #holdsMarker(entity: URI): boolean {
+    const read = this.#runtime.edit();
+    try {
+      const held = read.readValueOrThrow({
+        space: this.#space,
+        id: entity,
+        path: [],
+        scope: "space",
+      });
+      return isWalkableObjectNotArray(held) && held.$stream === true;
+    } finally {
+      read.abort();
+    }
+  }
+
+  /**
+   * Takes a stream of the executor as one of a row that the executor
+   * holds as stored: its handler is registered, and a link to its entity
+   * is read as the stream, with nothing written and nothing read. The run
+   * that stored the row wrote the marker where the row links to the
+   * stream.
+   */
+  heldStream(stream: StreamOfExecutor): void {
+    const entity = this.#entityOfStream(stream);
+    if (this.#streams.has(entity)) return;
+    this.#streams.set(entity, stream);
+    this.#streamsAssumed.add(entity);
+    this.#handleStream(entity, stream);
   }
 
   /**
@@ -3949,6 +4053,158 @@ export class RuntimeTransactions implements TransactionHooks {
       this.#heldBefore.add(doc);
     }
     return value;
+  }
+
+  /**
+   * The arrays of row documents whose rows the executor holds as the
+   * storage does, with no row evaluated (`rowsHeld`).
+   */
+  readonly #keptArrays = new Set<RowArray>();
+
+  /** The row documents of `#keptArrays` that this runtime enrolled. */
+  readonly #keptEnrolled = new Set<string>();
+
+  /**
+   * What the replica holds of the result document of the instance, for an
+   * executor that leaves rows as stored: the value as the executor holds
+   * one, with no member at each path of `rows`, and for each of those
+   * paths the entity that each position of the stored array links to, or
+   * nothing where the storage holds no array of links to whole documents
+   * there. With `arrays`, the value also has nothing at each other
+   * position of the document that holds an array of links to whole
+   * documents, and `found` names each such position
+   * (`StoredUnits.result`). Nothing where the replica holds no result
+   * document. The document counts as one the storage holds, and the
+   * executor's creation of it with this value is no write.
+   */
+  heldResult(
+    rows: readonly (readonly string[])[],
+    arrays = false,
+  ): {
+    value: unknown;
+    rows: (readonly string[] | undefined)[];
+    found?: StoredArray[];
+  } | undefined {
+    if (this.#owner === undefined) return undefined;
+    const read = this.#runtime.edit();
+    let stored: FabricValue | undefined;
+    try {
+      stored = read.readValueOrThrow(this.#address(this.#owner, []));
+    } finally {
+      read.abort();
+    }
+    if (!isWalkableObjectNotArray(stored)) return undefined;
+    // The entity each position of an array links to, where every position
+    // links to a whole document of the space of the instance.
+    const entitiesOf = (held: unknown): string[] | undefined => {
+      if (!Array.isArray(held)) return undefined;
+      const ids: string[] = [];
+      for (const member of held) {
+        if (!isPrimitiveCellLink(member)) return undefined;
+        const link = parseLink(member);
+        if (
+          link.id === undefined || link.path.length > 0 ||
+          (link.space !== undefined && link.space !== this.#space)
+        ) return undefined;
+        ids.push(link.id);
+      }
+      return ids;
+    };
+    const entities = rows.map((path) => entitiesOf(valueAt(stored, path)));
+    const found: StoredArray[] = [];
+    // The value without the members at the paths of `rows` and, with
+    // `arrays`, without the arrays of links to whole documents: none of
+    // the links there is decoded, which for each reads the entity it names.
+    const without = (value: unknown, at: readonly string[]): unknown => {
+      if (!arrays) {
+        const inside = rows.filter((path) =>
+          path.length > at.length && isPrefix(at, path)
+        );
+        if (inside.length === 0 || !isWalkableObjectNotArray(value)) {
+          return this.#decode(value);
+        }
+      }
+      if (Array.isArray(value)) {
+        const ids = value.length === 0 ? undefined : entitiesOf(value);
+        if (ids !== undefined) {
+          found.push({ path: at, entities: ids });
+          return undefined;
+        }
+        return value.map((member, index) =>
+          without(member, [...at, `${index}`])
+        );
+      }
+      if (!isWalkableObjectNotArray(value) || isPrimitiveCellLink(value)) {
+        return this.#decode(value);
+      }
+      const members: Record<string, unknown> = {};
+      for (const [name, member] of Object.entries(value)) {
+        const below = [...at, name];
+        if (rows.some((path) => samePath(path, below))) continue;
+        const kept = without(member, below);
+        // A member that held an array which was taken out is absent.
+        if (kept !== undefined || member === undefined) members[name] = kept;
+      }
+      return members;
+    };
+    this.#documents.add(this.#owner);
+    this.#heldBefore.add(this.#owner);
+    this.#heldWhole.add(this.#owner);
+    const value = without(stored, []);
+    return { value, rows: entities, ...(arrays ? { found } : {}) };
+  }
+
+  /**
+   * The executor holds the rows of `keys`, in that order, at `path` of the
+   * result document as the storage holds them: the array of row documents
+   * there has those keys, and no row of it is written until the executor
+   * stores one.
+   */
+  rowsHeld(path: readonly string[], keys: readonly string[]): void {
+    if (this.#owner === undefined) return;
+    const doc = this.#owner;
+    const text = JSON.stringify([doc, path]);
+    let arrays = this.#rowArrays.get(doc);
+    if (arrays === undefined) {
+      arrays = [];
+      this.#rowArrays.set(doc, arrays);
+    }
+    let array = arrays.find((one) => one.text === text);
+    if (array === undefined) {
+      array = {
+        doc,
+        path: [...path],
+        text,
+        keys: [],
+        ids: new Map(),
+        links: new Map(),
+      };
+      arrays.push(array);
+      this.#rowArraysNamed += 1;
+    }
+    array.keys = [...keys];
+    array.positions = undefined;
+    this.#keptArrays.add(array);
+  }
+
+  /**
+   * Enrolls the document of a row of an array of `#keptArrays` as a store
+   * the instance owns, with the first write of this runtime at or below
+   * the row: the runtime that made the document enrolled it, and this one
+   * has not written it whole.
+   */
+  #enrollKeptRow(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+    path: readonly string[],
+  ): void {
+    if (this.#keptArrays.size === 0 || doc !== this.#owner) return;
+    const place = this.#placeOf(doc, path);
+    if (place.doc === doc || this.#keptEnrolled.has(place.doc)) return;
+    const row = this.#rowDocuments.get(place.doc);
+    if (row === undefined || !this.#keptArrays.has(row.array)) return;
+    this.#keptEnrolled.add(place.doc);
+    this.#enroll(tx, place.doc);
   }
 
   /** Reads a document whole in `tx`, so that its commit depends on it. */

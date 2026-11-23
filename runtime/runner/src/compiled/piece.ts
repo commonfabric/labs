@@ -61,9 +61,11 @@ import type { DID } from "@commonfabric/identity";
 import {
   basisDocumentOf,
   basisPartDocumentOf,
+  compiledIdentityOf,
   PieceBasis,
   storedBasisOf,
 } from "./basis.ts";
+import { PieceUnits } from "./units.ts";
 import {
   type ChangeByOther,
   type Restored,
@@ -74,6 +76,14 @@ import { RuntimeAnswers, runtimeBuiltins } from "./builtins.ts";
 import { OutsideReads, outsideReadsDocumentOf } from "./outside-reads.ts";
 import { compartmentEvaluator } from "./value-code.ts";
 import { answersEffect, RuntimeWishes } from "./wish.ts";
+
+/**
+ * The names under which the executor of a piece can have read the document
+ * of `entity`: the entity for a document it did not make, and the entity
+ * without `of:` for one an instance of the piece made.
+ */
+const unheldNames = (entity: string): string[] =>
+  entity.startsWith("of:") ? [entity, entity.slice("of:".length)] : [entity];
 
 /** What `startCompiledPiece()` takes beside the compiled pattern. */
 export type CompiledPieceOptions = {
@@ -119,6 +129,15 @@ export type CompiledPieceOptions = {
    * stored, in the handed transaction.
    */
   resume?: boolean;
+  /**
+   * With `resume`, on a runtime whose replica reads from the store: the
+   * sources of the piece that changed since the stored result was derived.
+   * The executor then leaves the rows it can as the storage holds them,
+   * and evaluates the body of an element when a document it read changes
+   * (`resumeCompiledPieceByUnits()`). Without it a resumed piece evaluates
+   * its whole derivation.
+   */
+  stale?: readonly string[];
   /**
    * Whether the argument is the one the storage holds in the argument
    * document of the result cell, which a client wrote
@@ -192,6 +211,8 @@ export class CompiledPiece {
   readonly #result: string;
   /** The record of what the stored result was derived from. */
   readonly #basis: PieceBasis<IExtendedStorageTransaction>;
+  /** The lists of what the body of each element read. */
+  readonly #units: PieceUnits<IExtendedStorageTransaction>;
   readonly #cancels: Cancel[] = [];
   readonly #derive: Action;
   readonly #refusals: string[] = [];
@@ -208,6 +229,11 @@ export class CompiledPiece {
     created: 0,
     made: {},
   };
+  /**
+   * Whether the piece was started to leave rows as stored
+   * (`CompiledPieceOptions.stale`).
+   */
+  readonly #byUnits: boolean;
   /** The instance exists: a change by another writer can be applied. */
   #started = false;
   /**
@@ -244,6 +270,7 @@ export class CompiledPiece {
     options: CompiledPieceOptions,
   ) {
     this.#runtime = runtime;
+    this.#byUnits = options.resume === true && options.stale !== undefined;
     const result = resultCell.getAsNormalizedFullLink();
     if (result.path.length > 0) {
       throw new Error("The result cell of a compiled piece is a whole entity.");
@@ -272,6 +299,11 @@ export class CompiledPiece {
         this.#invalidate();
       },
       labels: () => this.#invalidate(),
+      unheld: {
+        reads: (entity) =>
+          unheldNames(entity).some((doc) => this.#basis.has(doc)),
+        changed: (entities) => this.#changedUnheld(entities),
+      },
       applied: () => {
         if (this.#started && this.instance.relabelPending) this.#invalidate();
       },
@@ -291,7 +323,10 @@ export class CompiledPiece {
         handed: (handed, written, sources) => {
           this.#basis.wrote(handed, written, sources);
         },
-        refused: (handed) => this.#basis.refused(handed),
+        refused: (handed) => {
+          this.#basis.refused(handed);
+          this.#units.refused(handed);
+        },
         made: (doc) => {
           this.#madeSinceBasis = true;
           this.#basis.made(doc);
@@ -325,6 +360,25 @@ export class CompiledPiece {
     );
     this.#basis.source(argumentOf(result.id));
     this.#basis.source(transactions.mintedDocument);
+    this.#units = new PieceUnits(
+      result.id,
+      compiledIdentityOf(artifact),
+      {
+        held: (doc) => transactions.heldOwn(doc),
+        write: (handed, doc, path, value) =>
+          transactions.writeOwn(handed, doc, path, value as FabricValue),
+        result: (rows, arrays) => transactions.heldResult(rows, arrays),
+        rowsHeld: (path, keys) => transactions.rowsHeld(path, keys),
+        streamsHeld: (bindings, keys) => {
+          for (const key of keys) {
+            for (const binding of bindings) {
+              transactions.heldStream({ binding, keys: [key] });
+            }
+          }
+        },
+      },
+      options.resume === true ? options.stale : undefined,
+    );
     this.#derive = (given) => {
       this.#counts.derivations += 1;
       const began = performance.now();
@@ -379,6 +433,12 @@ export class CompiledPiece {
       } else if (first) this.#invalidate();
       // The basis is of a derivation that brought everything up to date.
       if (first) return;
+      // What the bodies of the elements read, where that differs from the
+      // lists the storage holds. A piece that has documents of a scope
+      // resumes whole (`resumeCompiledPieceFromBasis`) and reads no list,
+      // and the runs of one pass for several principals would each write
+      // what the bodies read for their principal.
+      if (!transactions.scoped) this.#units.record(given);
       // A piece that has documents of a scope is derived once for each
       // principal that demands it, and no run brings it up to date for
       // all of them. Its basis names a document of a scope as a source,
@@ -479,6 +539,7 @@ export class CompiledPiece {
               : transactions.decode(convertCellsToLinks(argument as never)),
             {
               resume: resumed,
+              units: this.#units,
               ...(minted === undefined ? {} : { minted }),
               ...(made.length === 0 ? {} : { made }),
               space,
@@ -518,6 +579,7 @@ export class CompiledPiece {
     for (const doc of transactions.absent) this.#basis.source(doc);
     this.#keepMinted(tx);
     this.#sourceOfNoNumber();
+    if (!transactions.scoped) this.#units.record(tx);
     this.#basis.record(tx, true);
     this.#started = true;
     this.#bring();
@@ -860,31 +922,66 @@ export class CompiledPiece {
   }
 
   /**
+   * Another writer changed entities that the executor holds no document
+   * of, while it holds rows as stored: the body of each row that the
+   * storage lists as a reader of one of them is marked, and the derivation
+   * runs where there is one.
+   */
+  #changedUnheld(entities: string[]): void {
+    this.#afterNotification(() => {
+      if (this.instance.changedUnread(entities.flatMap(unheldNames))) {
+        this.#invalidate();
+      }
+    });
+  }
+
+  /**
+   * Runs `apply`, which tells the executor of a change that a notification
+   * of the replica named, where the piece runs: at once, or, for a piece
+   * that holds rows as stored, once the replica has applied the commit the
+   * notification is of. The executor of such a piece reads the list of the
+   * readers of a changed document, and a read inside the notification of a
+   * commit gives a document the replica does not hold as absent.
+   */
+  #afterNotification(apply: () => void): void {
+    if (!this.#started || this.#stopped) return;
+    if (!this.#byUnits) {
+      apply();
+      return;
+    }
+    queueMicrotask(() => {
+      if (!this.#stopped) apply();
+    });
+  }
+
+  /**
    * Applies the changes another writer committed to the documents the
    * executor holds, which marks what read them, and has the derivation run.
    */
   #changedByOthers(changes: ChangeByOther[]): void {
     if (!this.#started || this.#stopped) return;
     this.#changes += 1;
-    for (const { doc, path, value, splice, scoped } of changes) {
-      this.#counts.changesByOthers += 1;
-      const ref = new Ref(doc, path);
-      const apply = () => {
-        if (splice === undefined) this.instance.store.write(ref, value);
-        else {
-          this.instance.store.splice(
-            ref,
-            splice.start,
-            splice.removed,
-            splice.members,
-          );
-        }
-      };
-      // A change of an instance of a scope is applied to that instance.
-      if (scoped === undefined) apply();
-      else this.transactions.actingAs(scoped, apply);
-    }
-    this.#invalidate();
+    this.#afterNotification(() => {
+      for (const { doc, path, value, splice, scoped } of changes) {
+        this.#counts.changesByOthers += 1;
+        const ref = new Ref(doc, path);
+        const apply = () => {
+          if (splice === undefined) this.instance.store.write(ref, value);
+          else {
+            this.instance.store.splice(
+              ref,
+              splice.start,
+              splice.removed,
+              splice.members,
+            );
+          }
+        };
+        // A change of an instance of a scope is applied to that instance.
+        if (scoped === undefined) apply();
+        else this.transactions.actingAs(scoped, apply);
+      }
+      this.#invalidate();
+    });
   }
 }
 

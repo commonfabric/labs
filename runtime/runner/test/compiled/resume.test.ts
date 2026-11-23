@@ -254,8 +254,11 @@ describe("resumeCompiledPiece()", () => {
       // An event after the resume writes what one on the first runtime
       // writes: the item, the array for an added item, the state cell and
       // the counts in the event's transaction, and the row and the result
-      // in the derivation's. No row that stayed is written.
-      expect(heard.filter((ids) => ids.length > 4)).toEqual([]);
+      // in the derivation's, with the basis. The derivation behind an added
+      // item also writes the part of the lists of the readers that names
+      // the item, and the document of the units where that part is new. No
+      // row that stayed is written.
+      expect(heard.filter((ids) => ids.length > 6)).toEqual([]);
     });
 
     it("derives again what an input that changed while no runtime ran the piece makes stale, and writes that and the basis alone", async () => {

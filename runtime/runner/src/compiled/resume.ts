@@ -21,6 +21,8 @@
  * differs, in one transaction.
  */
 import type { Artifact } from "../../../../base/pattern-compiler/exec/executor.ts";
+import { rowDocumentCollections } from "../../../../base/pattern-compiler/exec/row-documents.ts";
+import { storedRowCollections } from "../../../../base/pattern-compiler/exec/stored-units.ts";
 import {
   argumentOf,
   identifierOf,
@@ -32,9 +34,19 @@ import {
   basisPartOf,
   basisPartsOf,
   compiledIdentityOf,
+  staleSourcesOf,
   type StoredBasis,
   storedBasisOf,
 } from "./basis.ts";
+import {
+  readsThroughStore,
+  resumeCompiledPieceByUnits,
+} from "./unit-resume.ts";
+import {
+  readersPartDocumentOf,
+  readersPartsOf,
+  unitsDocumentOf,
+} from "./units.ts";
 import type { JSONSchema } from "../builder/types.ts";
 import type { Cell, MemorySpace } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
@@ -116,6 +128,15 @@ const syncBasis = async (
   if (made) {
     await Promise.all(
       Object.keys(basis.documents ?? {}).map((one) => at(one).sync()),
+    );
+    // The lists of what the body of each element read, which the piece
+    // compares with what the bodies read now.
+    const units = unitsDocumentOf(id);
+    await at(units).sync();
+    await Promise.all(
+      readersPartsOf(heldAt(runtime, space, entityOf(units))).map((part) =>
+        at(readersPartDocumentOf(id, part)).sync()
+      ),
     );
   }
   return basis;
@@ -443,6 +464,8 @@ export const resumeCompiledPieceFromBasis = async (
   // The watch begins before the comparison, so that no change falls
   // between the two.
   const entities = new Set<string>();
+  // The sources a commit changed since the watch began, by entity.
+  const changedSince = new Set<string>();
   let changed: (() => void) | undefined;
   let missed = false;
   const subscription = {
@@ -460,9 +483,9 @@ export const resumeCompiledPieceFromBasis = async (
       }
       for (const { address } of notification.changes) {
         if (!entities.has(address.id)) continue;
+        changedSince.add(address.id);
         if (changed === undefined) missed = true;
         else changed();
-        break;
       }
       return undefined;
     },
@@ -481,19 +504,49 @@ export const resumeCompiledPieceFromBasis = async (
     : [...new Set([...Object.keys(basis.inputs), ...basis.recent])];
   for (const source of sources) entities.add(entityOf(source));
   const { replica } = runtime.storageManager.open(space);
+  const basisSeq = replica.confirmedDocumentSeq(entityOf(basisDocumentOf(id)));
+  const seqOf = (source: string) =>
+    replica.confirmedDocumentSeq(entityOf(source));
   const current = basis !== undefined && !missed &&
     basis.pattern === compiledIdentityOf(artifact) &&
-    basisMatches(
-      basis,
-      replica.confirmedDocumentSeq(entityOf(basisDocumentOf(id))),
-      (source) => replica.confirmedDocumentSeq(entityOf(source)),
-    );
+    basisMatches(basis, basisSeq, seqOf);
+  // A wake by units: the sources that differ from the basis, and those a
+  // commit changed since the comparison, are the documents that changed.
+  // It is taken where the storage holds a basis of this compiled pattern,
+  // the replica reads from the store, and the plan has a collection whose
+  // rows can be left as stored. A piece with rows in place alone
+  // (`CompiledPieceOptions.rows`) finds no list of the readers and derives
+  // whole.
+  const byUnits = basis !== undefined &&
+    basis.pattern === compiledIdentityOf(artifact) &&
+    readsThroughStore(runtime, space) &&
+    storedRowCollections(artifact, rowDocumentCollections(artifact)).size > 0;
+  const staleNow = (stored: StoredBasis): string[] => [
+    ...new Set([
+      ...staleSourcesOf(stored, basisSeq, seqOf),
+      ...sources.filter((source) => changedSince.has(entityOf(source))),
+    ]),
+  ];
   const resumed = new ResumedPiece(
     current,
     basis === undefined ? 1 : sources.length + 1 +
       new Set(Object.keys(basis.inputs).map(basisPartOf)).size,
     sources.length,
-    () => resumeCompiledPiece(runtime, artifact, resultCell, options),
+    () =>
+      byUnits && basis !== undefined
+        // A change of a source wakes the piece from inside the replica's
+        // notification of the commit, which the replica is still applying:
+        // the executor starts once that has returned.
+        ? Promise.resolve().then(() =>
+          resumeCompiledPieceByUnits(
+            runtime,
+            artifact,
+            resultCell,
+            options,
+            staleNow(basis),
+          )
+        )
+        : resumeCompiledPiece(runtime, artifact, resultCell, options),
     (heard) => {
       changed = heard;
       return unsubscribe;

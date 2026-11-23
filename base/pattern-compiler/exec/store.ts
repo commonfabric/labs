@@ -3617,6 +3617,56 @@ export class Store {
     this.#changed(doc, path, old);
   }
 
+  /**
+   * Takes `value` as what a document holds at a path, where a store
+   * outside the executor holds it there already: nothing is told of it as
+   * a change, the clock stands, and no reader is marked. Does nothing
+   * where a segment on the way does not exist.
+   */
+  adopt(doc: string, path: readonly string[], value: unknown): void {
+    const document = this.docs.get(doc);
+    if (document === undefined) return;
+    this.#setAt(document, path, this.#keep(value));
+  }
+
+  /**
+   * Holds `keys` as the keys of the stored array `held`, formed with
+   * `fields` through `at`, as `keysOf` holds the keys it forms: `parts` is
+   * the element part of each position. For a caller that knows the part
+   * of each position without a read of what the position leads to. The
+   * keys then stand until the array changes, and the store brings them up
+   * to date with each change of it.
+   */
+  adoptKeys(
+    held: readonly unknown[],
+    at: Ref,
+    fields: readonly string[],
+    parts: ElementPart[],
+    keys: string[],
+  ): void {
+    const named = JSON.stringify(fields);
+    const known = this.#states.get(held)?.get(named);
+    const texts = parts.map(textOf);
+    const counts = new Map<string, number>();
+    for (const text of texts) counts.set(text, (counts.get(text) ?? 0) + 1);
+    const states = this.#states.get(held) ?? new Map<string, KeyState>();
+    states.set(named, {
+      at,
+      fields: [...fields],
+      held,
+      keys,
+      parts,
+      texts,
+      counts,
+      clock: this.clock,
+      others: [],
+      formed: (known?.formed ?? 0) + 1,
+      ops: [],
+      dropped: 0,
+    });
+    this.#states.set(held, states);
+  }
+
   /** The splice of `splice`, at a path of a document, with no link followed. */
   spliceAt(
     doc: string,

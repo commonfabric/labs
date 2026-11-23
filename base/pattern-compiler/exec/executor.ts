@@ -93,6 +93,12 @@ import {
   scopeOfDocument,
   scopeOfKey,
 } from "./scope-instances.ts";
+import {
+  boundInElement,
+  STORED_ROW,
+  storedRowCollections,
+  type StoredUnits,
+} from "./stored-units.ts";
 
 /** One step of where a declaration sits (PL §1.1, `WithinStep`). */
 type Step = { element?: number; site?: Name };
@@ -1251,6 +1257,11 @@ export type Counts = {
   evaluations: number;
   /** Of those, the evaluations of a cone instance of an element body. */
   elementEvaluations: number;
+  /**
+   * The rows that a resumed instance took as the storage holds them, with
+   * no body evaluated, when it formed the table of their collection.
+   */
+  rowsLeftStored: number;
   /** Of those, the assemblies of a collection, which no cone computes. */
   assemblies: number;
   /**
@@ -3291,6 +3302,7 @@ export class Instance {
     segmentsFormed: 0,
     evaluations: 0,
     elementEvaluations: 0,
+    rowsLeftStored: 0,
     assemblies: 0,
     slotsNotListed: 0,
     readsWithoutSlot: 0,
@@ -3611,6 +3623,7 @@ export class Instance {
   ): void {
     const open = this.#tx;
     const hooks = this.options.transactions;
+    if (this.#seeds.size > 0) this.#hydrate(change.doc, change.path);
     this.#memberDocumentChanged(change.doc, change.path, change.splice);
     if (hooks !== undefined && (open !== undefined || this.#outside)) {
       let path = change.covers ?? change.path;
@@ -3983,6 +3996,15 @@ export class Instance {
        */
       resume?: boolean;
       /**
+       * The store outside the executor as it holds the units of the
+       * instance (`StoredUnits`). The executor tells it what the body of
+       * each element of a collection of `storedRowCollections` read. With
+       * `resume`, and where it names the documents that changed since the
+       * run before, the rows of such a collection are left as stored
+       * until a change reaches them.
+       */
+      units?: StoredUnits;
+      /**
        * What a run before of this instance counted (`minted`), for one
        * that is resumed: the counts go on from there, so that an event and
        * a document a body makes get a name that no run before gave.
@@ -4016,6 +4038,12 @@ export class Instance {
     this.id = options.id ?? "result";
     this.argument = argumentOf(this.id);
     this.root = options.parent?.root ?? this;
+    if (this.root === this && options.units !== undefined) {
+      this.#listed = storedRowCollections(
+        artifact,
+        options.rowDocuments ?? new Set(),
+      );
+    }
     if (this.root === this && options.minted !== undefined) {
       this.#events = options.minted.events;
       this.#created = options.minted.created;
@@ -4085,7 +4113,7 @@ export class Instance {
       ? this.root.#begin("creation")
       : undefined;
     this.store.create(this.argument, "argument", this.stored(argument));
-    this.store.create(this.id, "result", undefined);
+    this.store.create(this.id, "result", this.#heldResult());
     if (creation !== undefined) this.root.#end(creation, true);
     this.#load();
     this.#sideWriters();
@@ -5992,7 +6020,10 @@ export class Instance {
         const units = this.#units.get(unit.name) ?? new Set();
         units.add(unit);
         this.#units.set(unit.name, units);
-        return this.#rowsOf(unit);
+        if (owner === undefined) this.#claimStored(unit);
+        const rows = this.#rowsOf(unit);
+        if (owner === undefined) this.#unitPlaced(unit);
+        return rows;
       },
       [],
       (array) => bucketPlaces.get(array),
@@ -6001,7 +6032,7 @@ export class Instance {
 
   /** The rows of a unit in stored form, from its assembly as it is now. */
   #rowsOf(unit: Unit): unknown[] {
-    const entry = this.assembled(unit.collection)(
+    const entry = this.assembled(unit.collection, this.#leftStored(unit))(
       this.freshContext(unit.context),
     );
     const values = Array.isArray(entry.value) ? entry.value : [];
@@ -6015,7 +6046,8 @@ export class Instance {
       this.store.rowCollections.set(at, unit.collection);
     }
     const forms = values.map((value, index) =>
-      this.#formOf(
+      // A row the executor holds as stored is stored already.
+      value === STORED_ROW ? KEPT : this.#formOf(
         value,
         { unit, key: unit.keys[index] ?? `${index}` },
         [],
@@ -6600,7 +6632,7 @@ export class Instance {
    * array.
    */
   #storeUnit(unit: Unit): void {
-    const entry = this.assembled(unit.collection)(
+    const entry = this.assembled(unit.collection, this.#leftStored(unit))(
       this.freshContext(unit.context),
     );
     if (entry === unit.seen) return;
@@ -6806,6 +6838,478 @@ export class Instance {
     }
     index.changed.clear();
     this.#unchangedOutput(path);
+  }
+
+  // ----- rows left as stored at a resume -----
+
+  /**
+   * On the instance the executor was started with, where a store outside
+   * it keeps the units: the collections whose rows a resumed executor can
+   * leave as stored, each with the path of the result that keeps it
+   * (`storedRowCollections`).
+   */
+  #listed: ReadonlyMap<number, readonly string[] | undefined> | undefined;
+
+  /**
+   * For a resumed instance, the arrays of links to whole documents that
+   * the stored result holds at a path the plan does not name, by the text
+   * of the path, until a unit of a collection of `#listed` is placed there
+   * (`#claimStored`).
+   */
+  readonly #storedArrays = new Map<
+    string,
+    { path: readonly string[]; entities: readonly string[] }
+  >();
+
+  /**
+   * For a resumed instance, the collections whose rows the storage holds
+   * and whose assembly has not been evaluated: the path of the result that
+   * keeps each, and the entity that each position of the stored array
+   * links to.
+   */
+  readonly #storedRows = new Map<
+    number,
+    { path: readonly string[]; entities: readonly string[] }
+  >();
+
+  /**
+   * The assemblies that hold `STORED_ROW` for a row, by name: the name
+   * that the dependencies of the rows not evaluated are on, and the
+   * positions that the links of the source array name, by document, each
+   * with the key of its element.
+   */
+  readonly #seeds = new Map<
+    string,
+    {
+      collection: number;
+      /** The path of the result at which the rows are left as stored. */
+      path: readonly string[];
+      on: string;
+      targets: Map<string, { path: readonly string[]; key: string }[]>;
+    }
+  >();
+
+  /**
+   * Whether the result document was created with what the storage holds
+   * (`#heldResult`), and not empty.
+   */
+  #resultHeld = false;
+
+  /**
+   * Whether a unit stores the rows of its collection where the executor
+   * left them as stored: at the path of the result that keeps the
+   * collection. A unit that stands anywhere else holds a row of its own
+   * for each element.
+   */
+  #leftStored(unit: Unit): boolean {
+    if (!("path" in unit.place)) return false;
+    // Before the assembly is first evaluated, the path is the one the
+    // stored rows were found at.
+    const path = this.#seeds.get(unit.name)?.path ??
+      (unit.name === this.#name("assembly", unit.collection, [])
+        ? this.#storedRows.get(unit.collection)?.path
+        : undefined);
+    return path !== undefined && unit.place.path.length === path.length &&
+      unit.place.path.every((segment, index) => segment === path[index]);
+  }
+
+  /**
+   * A unit is being made at a place of the result document itself. Where
+   * the stored result holds an array of links to whole documents there,
+   * and the collection of the unit is one of `#listed` that the plan keeps
+   * at no path, whose assembly has not been evaluated, the array is taken
+   * as the stored rows of the collection: its assembly is then formed with
+   * no body evaluated (`#seed`), where the links are those of the row
+   * documents of its keys.
+   */
+  #claimStored(unit: Unit): void {
+    if (this.#storedArrays.size === 0 || !("path" in unit.place)) return;
+    const id = JSON.stringify(unit.place.path);
+    const found = this.#storedArrays.get(id);
+    if (found === undefined) return;
+    this.#storedArrays.delete(id);
+    const { collection, name } = unit;
+    if (
+      this.#listed?.has(collection) !== true ||
+      this.#listed.get(collection) !== undefined ||
+      name !== this.#name("assembly", collection, []) ||
+      this.#memo.has(name) || this.#storedRows.has(collection) ||
+      this.options.units?.listed(collection) !== true
+    ) return;
+    this.#storedRows.set(collection, found);
+  }
+
+  /**
+   * A unit was made at a place of the result document itself. Where the
+   * document was created with what the storage holds and the rows of the
+   * unit are not left as stored, the place is emptied, with nothing told of
+   * it as a change: what the storage holds there is the links of an array
+   * of row documents, which the comparison of the place with its rows
+   * would take for rows in place. The array is then stored whole.
+   */
+  #unitPlaced(unit: Unit): void {
+    if (!this.#resultHeld || !("path" in unit.place)) return;
+    if (this.#leftStored(unit)) return;
+    this.store.adopt(this.id, unit.place.path, undefined);
+  }
+
+  /** The documents whose stored readers `#hydrate` has registered. */
+  readonly #hydrated = new Set<string>();
+
+  /**
+   * What the result document of a resumed instance holds when it is
+   * created: nothing, or, where a store outside the executor gives the
+   * units (`Instance.options.units`), what the storage holds, with nothing
+   * at the path of each array of row documents and of each record of
+   * bucket documents. The assembly of a collection of `#storedRows` puts
+   * the links of its rows there (`#seed`); every other such place is
+   * stored again whole by the first derivation.
+   */
+  #heldResult(): unknown {
+    const { units, resume, rowDocuments, bucketDocuments } = this.options;
+    if (
+      this.#listed === undefined || units?.stale === undefined ||
+      resume !== true
+    ) return undefined;
+    // Nothing is read of the stored result where no collection can have
+    // its rows left as stored: the result document is then derived whole.
+    if (![...this.#listed.keys()].some((one) => units.listed(one))) {
+      return undefined;
+    }
+    const paths: (readonly string[])[] = [];
+    const of: (number | undefined)[] = [];
+    for (const collection of rowDocuments ?? []) {
+      const place = this.plan.outputs.find((output) =>
+        output.collection === collection
+      );
+      if (place === undefined || place.path.includes("*")) continue;
+      paths.push(place.path);
+      of.push(collection);
+    }
+    for (const collection of bucketDocuments ?? []) {
+      const record = this.bucketRecordOf(collection);
+      if (record === undefined) continue;
+      paths.push(record);
+      of.push(undefined);
+    }
+    // A collection that the plan keeps at no path stands where the value
+    // of the result holds it: every array of links to whole documents of
+    // the stored result is then a place such a collection can stand at.
+    const unplaced = [...this.#listed].some(([one, path]) =>
+      path === undefined && units.listed(one)
+    );
+    const held = units.result(paths, unplaced);
+    if (held === undefined) return undefined;
+    of.forEach((collection, index) => {
+      const entities = held.rows[index];
+      if (
+        collection === undefined || entities === undefined ||
+        this.#listed?.get(collection) === undefined ||
+        !units.listed(collection)
+      ) return;
+      this.#storedRows.set(collection, { path: paths[index], entities });
+    });
+    for (const found of held.found ?? []) {
+      this.#storedArrays.set(JSON.stringify(found.path), found);
+    }
+    this.#resultHeld = true;
+    return held.value;
+  }
+
+  /**
+   * The assembled result of a collection of `#storedRows` with no body
+   * evaluated, at the first evaluation of its assembly: the element table
+   * from the links of the source array, and `STORED_ROW` for each row.
+   * The key of an element is formed from the position its link names,
+   * with no read of the document it names, and the table is taken only
+   * where the row document of each key formed so is the one the stored
+   * result links to at the same position. The body of an element is
+   * evaluated here where a document that changed since the run before is
+   * one the storage lists the element as a reader of. Gives nothing where
+   * the rows are not left as stored, and the assembly is then formed
+   * whole.
+   */
+  #seed(collection: number, name: string, host: Host): unknown[] | undefined {
+    const held = this.#storedRows.get(collection);
+    const units = this.options.units;
+    if (held === undefined || units === undefined) return undefined;
+    this.#storedRows.delete(collection);
+    const { source, keyFields } = this.plan.collections[collection];
+    if (source.slot === undefined) return undefined;
+    const slot = this.plan.slots[source.slot];
+    host.demand(slot.root, slot.path);
+    if (host.writers.length > 0) return undefined;
+    const base = host.settled(host.at(this.rootOf(slot.root, host), slot.path));
+    if (!(base instanceof Ref)) return undefined;
+    const { store } = this;
+    const reads: Position[] = [];
+    const located = store.locate(base, true, reads);
+    const array = located.value;
+    if (
+      !Array.isArray(array) || array.length !== held.entities.length ||
+      !array.every(isLink)
+    ) return undefined;
+    const stale = new Set(units.stale ?? []);
+    const parts: ElementPart[] = [];
+    for (const { $link } of array) {
+      const target = new Ref($link.doc, $link.path);
+      const part = store.addressOf(target);
+      // A document that changed can hold a link where it held none.
+      if (
+        stale.has($link.doc) &&
+        textOf(
+            store.addressOf(store.locate(target, true, undefined, true).named),
+          ) !==
+          textOf(part)
+      ) return undefined;
+      parts.push(part);
+    }
+    const keys = keysOfParts(parts);
+    const rows = keys.map((key) => units.row(held.path, key));
+    if (rows.some(({ entity }, index) => entity !== held.entities[index])) {
+      return undefined;
+    }
+    const due = new Set<string>();
+    for (const doc of stale) {
+      for (const reader of units.readers(doc)) {
+        if (reader.collection === collection) due.add(reader.key);
+      }
+    }
+    for (const read of reads) host.reads.push(read);
+    const fields = keyFields ?? keyFieldsOf(located.given);
+    store.adoptKeys(array, located.ref, fields, parts, keys);
+    const state = store.keyState(array, fields);
+    if (state === undefined) return undefined;
+    const targets = new Map<
+      string,
+      { path: readonly string[]; key: string }[]
+    >();
+    const elements = array.map(({ $link }, index): Element => {
+      const at = targets.get($link.doc) ?? [];
+      at.push({ path: $link.path, key: keys[index] });
+      targets.set($link.doc, at);
+      return {
+        key: keys[index],
+        index,
+        source: new Ref($link.doc, $link.path),
+      };
+    });
+    this.#setTable(name, collection, [], elements);
+    this.#markUsers(tableName(name));
+    const first = host.dependencies.length;
+    const on = `stored ${name}`;
+    const kept: Dependency = { stamp: () => Symbol(), seen: STORED_ROW, on };
+    const keyOf = new Map<string, string>();
+    const results = elements.map(({ key }) => {
+      if (!due.has(key)) {
+        host.dependencies.push(kept);
+        return STORED_ROW;
+      }
+      const entry = host.dependEntry(this.#perElement(collection, key));
+      if (entry.key !== undefined) keyOf.set(entry.key, key);
+      return entry.value;
+    });
+    host.members = elements.map(({ key }, index) => ({
+      key,
+      index,
+      source: { entry: this.#perElement(collection, key), at: [] },
+    }));
+    const arrayReads = new Set(reads);
+    const elementReads = new Map<Position, string>();
+    host.found = {
+      base,
+      named: located.named,
+      held: array,
+      fields,
+      arrayReads,
+      elementReads,
+    };
+    host.rows = {
+      construct: "map",
+      stored: {
+        base,
+        named: store.addressText(located.named),
+        fields,
+        formed: state.formed,
+        seen: state.count,
+      },
+      arrayReads,
+      elementReads,
+      first,
+      results,
+      keyOf,
+      members: host.members,
+    };
+    const value = [...results];
+    assembledElements.set(value, {
+      members: host.members,
+      context: host.context,
+    });
+    // The result document holds the link to the document of each row, as
+    // the storage does.
+    store.adopt(
+      this.id,
+      held.path,
+      rows.map(({ doc }) => ({ $link: { doc, path: [] } })),
+    );
+    units.held(held.path, keys);
+    const bindings = boundInElement(this.artifact, collection);
+    if (bindings.length > 0) units.bound(bindings, keys);
+    this.counts.rowsLeftStored += keys.length - due.size;
+    this.#seeds.set(name, { collection, path: held.path, on, targets });
+    return value;
+  }
+
+  /**
+   * Has the assembly `name`, which holds `STORED_ROW` for a row, formed
+   * whole by its next evaluation, with the body of every element
+   * evaluated.
+   */
+  #unseed(name: string): void {
+    if (!this.#seeds.delete(name)) return;
+    this.#mark(this.#slot(name));
+  }
+
+  /**
+   * Has the assembly of a collection whose rows are left as stored depend
+   * on the entry `name` of the body of the element of `key`, where it
+   * holds `STORED_ROW` for the row: a change of that entry then marks the
+   * assembly, which evaluates the body and stores the row.
+   */
+  #adoptStored(collection: number, key: string, name: string): void {
+    if (this.#seeds.size === 0) return;
+    const assembly = this.#name("assembly", collection, []);
+    const seed = this.#seeds.get(assembly);
+    const entry = this.#memo.get(assembly);
+    const element = this.#tables.get(assembly)?.byKey.get(key);
+    if (seed === undefined || entry?.rows === undefined || !element) return;
+    const at = entry.rows.first + element.index;
+    if (entry.dependencies[at]?.on !== seed.on) return;
+    entry.dependencies[at] = {
+      stamp: () => Symbol(),
+      seen: STORED_ROW,
+      on: name,
+    };
+    entry.rows.keyOf.set(name, key);
+    this.uses(assembly, name);
+  }
+
+  /**
+   * Evaluates the body of each element of `context` that an `element`
+   * step of `within` names and whose row an assembly holds as stored: a
+   * handler that a body binds runs with the row of its element evaluated,
+   * as a whole derivation would have left it.
+   */
+  #evaluateStoredRows(within: readonly Step[], context: Context): void {
+    if (this.#seeds.size === 0) return;
+    for (const { element: collection } of within) {
+      if (collection === undefined) continue;
+      const element = context.get(collection);
+      const around = this.#keysIn(this.#outerOf(collection), context);
+      const assembly = this.#name("assembly", collection, around);
+      if (element === undefined || !this.#seeds.has(assembly)) continue;
+      this.#perElement(collection, element.key)(context);
+    }
+  }
+
+  /**
+   * On the root, before the readers of a change of `doc` at `path` are
+   * marked, while an assembly holds `STORED_ROW` for a row: registers the
+   * elements that the storage lists as readers of the document, each at
+   * the paths it read, so that the change marks them as it marks an entry
+   * that was evaluated here. An assembly whose source array links to a
+   * position at or below the change is formed whole where that position
+   * names another one now.
+   */
+  #hydrate(doc: string, path: readonly string[]): void {
+    const { store } = this;
+    for (const [assembly, { targets }] of [...this.#seeds]) {
+      for (const target of targets.get(doc) ?? []) {
+        if (
+          path.length > target.path.length ||
+          !path.every((segment, index) => segment === target.path[index])
+        ) continue;
+        const at = new Ref(doc, target.path);
+        const { named } = store.locate(at, true, undefined, true);
+        if (store.addressText(named) !== store.addressText(at)) {
+          this.#unseed(assembly);
+          break;
+        }
+      }
+    }
+    if (this.#hydrated.has(doc) || this.#seeds.size === 0) return;
+    this.#hydrated.add(doc);
+    for (const reader of this.options.units?.readers(doc) ?? []) {
+      const assembly = this.#name("assembly", reader.collection, []);
+      if (!this.#seeds.has(assembly)) continue;
+      if (!this.#tables.get(assembly)?.byKey.has(reader.key)) continue;
+      const name = this.#name("element", reader.collection, [], reader.key);
+      if (this.#memo.has(name)) continue;
+      this.#adoptStored(reader.collection, reader.key, name);
+      const slot = this.#slot(name);
+      for (const read of reader.paths) this.#watch(slot, { doc, path: read });
+      for (const read of reader.own) {
+        this.#watch(slot, { doc, path: read, own: true });
+      }
+    }
+  }
+
+  /**
+   * On the root, for a change of the documents `docs` that is no write to
+   * a document the store holds, as a change of their labels or a change of
+   * a document that this executor has not read: marks the body of each
+   * element that the storage lists as a reader of one of them and whose
+   * row an assembly holds as stored. The executor holds no entry and no
+   * record of such a row, so the body is evaluated, and the row is stored
+   * and given its record as a row evaluated here is. Returns whether it
+   * marked one.
+   */
+  #evaluateStoredReaders(docs: readonly string[]): boolean {
+    if (this.#seeds.size === 0) return false;
+    let marked = false;
+    for (const doc of docs) {
+      for (const reader of this.options.units?.readers(doc) ?? []) {
+        const assembly = this.#name("assembly", reader.collection, []);
+        if (!this.#seeds.has(assembly)) continue;
+        if (!this.#tables.get(assembly)?.byKey.has(reader.key)) continue;
+        const name = this.#name("element", reader.collection, [], reader.key);
+        if (this.#memo.has(name)) continue;
+        this.#adoptStored(reader.collection, reader.key, name);
+        this.#mark(this.#slot(name));
+        marked = true;
+      }
+    }
+    return marked;
+  }
+
+  /**
+   * Another writer changed the documents `docs`, which the store of this
+   * executor does not hold. Marks the body of each element whose row is
+   * left as stored and which the storage lists as a reader of one of them
+   * (`StoredUnits.readers`), and returns whether there was one: whoever
+   * runs the executor then calls `settle()`.
+   */
+  changedUnread(docs: readonly string[]): boolean {
+    return this.root.#evaluateStoredReaders(docs);
+  }
+
+  /**
+   * Tells the store that keeps the units what an evaluation of the body
+   * of an element of a collection of `#listed` read.
+   */
+  #noteElement(collection: number, key: string, entry: Entry): void {
+    this.options.units?.read({
+      collection,
+      key,
+      plain: entry.dependencies.length === 0 && entry.writers.length === 0 &&
+        entry.indexes.size === 0 &&
+        entry.reads.every(({ keyed }) => keyed === undefined),
+      reads: entry.reads.map(({ doc, path, own }) => ({
+        doc,
+        path,
+        own: own === true,
+      })),
+    });
   }
 
   /** The entry of a computation that has not been evaluated. */
@@ -7592,6 +8096,9 @@ export class Instance {
     }
     this.#underKey.delete(id);
     this.#indexReaders.delete(id);
+    if (this.#listed?.has(collection) === true) {
+      this.options.units?.left(collection, key);
+    }
   }
 
   /**
@@ -7785,10 +8292,20 @@ export class Instance {
       }
       inner.set(collection, element);
       this.#declare(inner);
-      return this.#ensure(name, inner, cone, "element", run, [
+      if (this.#listed?.has(collection) !== true) {
+        return this.#ensure(name, inner, cone, "element", run, [
+          ...outer,
+          collection,
+        ]);
+      }
+      const before = this.#memo.get(name);
+      this.#adoptStored(collection, key, name);
+      const entry = this.#ensure(name, inner, cone, "element", run, [
         ...outer,
         collection,
       ]);
+      if (entry !== before) this.#noteElement(collection, key, entry);
+      return entry;
     };
   }
 
@@ -7800,18 +8317,20 @@ export class Instance {
    * key of the element it came from (PL §1.3, "Derived collections carry
    * their elements' keys").
    */
-  assembled(collection: number): Lazy {
+  assembled(collection: number, stored = false): Lazy {
     const record = this.plan.collections[collection];
     const outer = this.#outerOf(collection);
     return (context) => {
       const around = this.#keysIn(outer, context);
       const key = this.#name("assembly", collection, around);
-      return this.#ensure(
+      const entry = this.#ensure(
         key,
         context,
         undefined,
         "assembly",
         (host) => {
+          const held = this.#seed(collection, key, host);
+          if (held !== undefined) return held;
           const elements = this.#table(collection, host);
           // The instances of a key that left the collection are dropped,
           // and those of a key that entered are made when they are first
@@ -8078,6 +8597,10 @@ export class Instance {
         (held, slot) =>
           this.#reassemble(collection, key, around, context, held, slot),
       );
+      // A caller that takes no row as stored gets every row evaluated.
+      if (stored || !this.#seeds.has(key)) return entry;
+      this.#unseed(key);
+      return this.assembled(collection, true)(context);
     };
   }
 
@@ -9334,7 +9857,7 @@ export class Instance {
         if (!output.kept || output.path.includes("*")) return;
         const value = this.valueOfOutput.get(index);
         if (output.collection !== undefined) {
-          this.assembled(output.collection)(none);
+          this.assembled(output.collection, true)(none);
         } else if (value !== undefined && this.#values.has(value)) {
           this.evaluated(value)(none);
         }
@@ -11002,6 +11525,7 @@ export class Instance {
     _alone = false,
     stored = false,
   ): void {
+    this.#evaluateStoredReaders(changes.map(({ doc }) => doc));
     const regrouped = new Set<string>();
     for (const instance of new Set([this, ...this.#instances.values()])) {
       for (const key of instance.#regroupReaders(changes)) regrouped.add(key);
@@ -14093,6 +14617,7 @@ export class Instance {
         error: "no element holds the stream",
       };
     }
+    this.#evaluateStoredRows(record.within, context);
     const body = record.handler.body;
     const run = body === undefined
       ? undefined
