@@ -3827,6 +3827,15 @@ export class Instance {
          */
         reads?: Address[];
       } | undefined;
+      /**
+       * Whether something outside the executor answers the request of an
+       * effect of the reactive tier, by the built-in and the identifier of
+       * the state document of the operation. Where it does, the executor
+       * stages the request and no more: it writes no hash and no pending
+       * mark, sends no request (`outbox`), and reads as the outcome what
+       * another writer stores in the state document.
+       */
+      effects?: (builtin: string, of: { state: string }) => boolean;
       /** What the clock holds when the executor starts. */
       now?: number;
       /**
@@ -5081,7 +5090,10 @@ export class Instance {
           }
           if (record.kind === "wish") {
             this.#resolveWish(state, host.v(request), host, operation);
-          } else if (!this.root.#operations.has(id)) {
+          } else if (
+            !this.root.#operations.has(id) &&
+            this.root.options.effects?.(builtin, { state: id }) !== true
+          ) {
             this.root.#operations.set(id, { instance: this, builtin });
           }
           return state;

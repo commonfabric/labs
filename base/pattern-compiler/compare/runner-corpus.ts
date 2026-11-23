@@ -49,8 +49,8 @@
  * seeds the home, and under `--resume` with the table. The built-ins the
  * runtime answers (`runtimeBuiltins`) are the runtime's own, for the one
  * user of the run, in a space with no access list. A module that requests
- * an effect is left out: nothing answers a request of a compiled piece on
- * the runner path.
+ * an effect is left out: the runtime's fetch built-ins would answer four
+ * of the effects, with requests to the addresses the generated inputs hold.
  */
 import { Identity } from "@commonfabric/identity";
 

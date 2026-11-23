@@ -37,6 +37,7 @@ import {
   type ServeCompiledPiecesOptions,
 } from "./serving.ts";
 import { type PatternProgram, setUpCompiledPiece } from "./setup.ts";
+import { answersEffect } from "./wish.ts";
 
 const logger = getLogger("compiled-run");
 
@@ -68,9 +69,12 @@ const isMissingCompiler = (error: unknown): boolean =>
 /**
  * Why a compiled program cannot run as a compiled piece in a runtime that
  * `Runtime.run` starts it in, where it cannot: a plan of the program
- * requests an effect, and nothing answers the request of an effect of a
- * compiled piece outside the executor's own harness. A `wish` is answered
- * by the runtime's own (`compiled/wish.ts`). Every pattern of the program
+ * requests an effect that no built-in of the runtime answers for a
+ * compiled piece (`answersEffect`). A `wish`, and the effects
+ * `fetchJson`, `fetchJsonUnchecked`, `fetchText` and `fetchBinary` of the
+ * reactive tier, are answered by the runtime's own (`compiled/wish.ts`).
+ * An effect a handler requests is not in the operations of a plan, and is
+ * not looked for here: it stays unanswered. Every pattern of the program
  * is looked at where the compiler gives them, since a function body of the
  * pattern may instantiate any of them.
  */
@@ -84,12 +88,18 @@ const unansweredRequestOf = (
     ...(compiled.modules ?? []).flatMap(({ patterns }) => patterns),
   ];
   for (const { plan, name } of patterns) {
-    const operations =
-      (plan as { operations?: { kind?: string }[] }).operations ?? [];
-    if (operations.some(({ kind }) => kind === "effect")) {
+    const operations = (plan as {
+      operations?: { kind?: string; implementation?: { builtin?: string } }[];
+    }).operations ?? [];
+    const unanswered = operations.find(({ kind, implementation }) =>
+      kind === "effect" && !answersEffect(implementation?.builtin ?? "")
+    );
+    if (unanswered !== undefined) {
       return `The plan of the pattern \`${
         name ?? "default"
-      }\` requests an effect, which a compiled piece does not answer in this runtime.`;
+      }\` requests the effect \`${
+        unanswered.implementation?.builtin ?? "unnamed"
+      }\`, which a compiled piece does not answer in this runtime.`;
     }
   }
   return undefined;

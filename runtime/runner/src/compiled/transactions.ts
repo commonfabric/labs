@@ -572,6 +572,7 @@ export class RuntimeTransactions implements TransactionHooks {
     | ((entity: URI, stream: StreamOfExecutor) => void)
     | undefined;
   readonly #onChanges: ((changes: ChangeByOther[]) => void) | undefined;
+  readonly #onArrived: ((doc: string) => void) | undefined;
   readonly #onLabels: (() => void) | undefined;
   readonly #onApplied: (() => void) | undefined;
   /**
@@ -648,6 +649,11 @@ export class RuntimeTransactions implements TransactionHooks {
        */
       changes?: (changes: ChangeByOther[]) => void;
       /**
+       * Called when the replica took a commit or a load of a document that
+       * `load()` was asked for and gave nothing of (`wanted`).
+       */
+      arrived?: (doc: string) => void;
+      /**
        * Called when a commit of another writer changed a document whose
        * stored labels the executor has read. The executor is told of the
        * labels that changed when it next opens a transaction or is handed
@@ -700,6 +706,7 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     this.#onStream = options.stream;
     this.#onChanges = options.changes;
+    this.#onArrived = options.arrived;
     this.#onLabels = options.labels;
     this.#onApplied = options.applied;
     this.#onRefused = options.refused;
@@ -745,6 +752,12 @@ export class RuntimeTransactions implements TransactionHooks {
             );
             if (doc === undefined) continue;
             if (this.#spaceOf(doc) !== notification.space) continue;
+            // A document the executor asked for and the replica held none
+            // of now has one: the piece reads it again.
+            if (this.wanted.has(doc) && !this.#documents.has(doc)) {
+              this.#onArrived?.(doc);
+              continue;
+            }
             this.#sources?.changed(
               doc,
               false,

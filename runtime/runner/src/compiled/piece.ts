@@ -69,7 +69,7 @@ import {
 } from "./transactions.ts";
 import { RuntimeAnswers, runtimeBuiltins } from "./builtins.ts";
 import { compartmentEvaluator } from "./value-code.ts";
-import { RuntimeWishes } from "./wish.ts";
+import { answersEffect, RuntimeWishes } from "./wish.ts";
 
 /** What `startCompiledPiece()` takes beside the compiled pattern. */
 export type CompiledPieceOptions = {
@@ -211,6 +211,8 @@ export class CompiledPiece {
    * took: what a derivation could find different from the one before.
    */
   #changes = 0;
+  /** The documents asked for that the replica has since taken a write of. */
+  readonly #arrived = new Set<string>();
   /** The documents the piece asked the storage for (`#bring`). */
   readonly #asked = new Set<string>();
   /** The reason of the last commit refused, and `#changes` then. */
@@ -250,6 +252,10 @@ export class CompiledPiece {
       ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
       stream: (entity, stream) => this.#registerStream(entity, stream),
       changes: (changes) => this.#changedByOthers(changes),
+      arrived: (doc) => {
+        this.#arrived.add(doc);
+        this.#invalidate();
+      },
       labels: () => this.#invalidate(),
       applied: () => {
         if (this.#started && this.instance.relabelPending) this.#invalidate();
@@ -305,6 +311,8 @@ export class CompiledPiece {
       this.#counts.derivations += 1;
       const began = performance.now();
       this.#stamp(given, "derivation");
+      for (const doc of this.#arrived) this.#take(doc);
+      this.#arrived.clear();
       // The first derivation of the instances a handler made is a
       // transaction of its own, which the scheduler commits before the
       // derivation of what reads them runs: that one then finds the labels
@@ -334,15 +342,14 @@ export class CompiledPiece {
       }
     };
     // The runtime's `wish` answers each `wish` operation the instance
-    // evaluates, unless a harness gave a table.
-    const wishes = options.wishes === undefined
-      ? new RuntimeWishes(runtime, {
-        resultCell: resultCell.withTx(),
-        entityOf: (doc) => transactions.entityOf(doc),
-        ...(options.actsFor === undefined ? {} : { actsFor: options.actsFor }),
-      })
-      : undefined;
-    if (wishes !== undefined) this.#cancels.push(() => wishes.stop());
+    // evaluates, unless a harness gave a table, and its built-ins the
+    // effects of the reactive tier that they implement.
+    const wishes = new RuntimeWishes(runtime, {
+      resultCell: resultCell.withTx(),
+      entityOf: (doc) => transactions.entityOf(doc),
+      ...(options.actsFor === undefined ? {} : { actsFor: options.actsFor }),
+    });
+    this.#cancels.push(() => wishes.stop());
     const resumed = options.resume === true;
     const minted = resumed ? transactions.heldMinted() : undefined;
     if (minted !== undefined) this.#minted = minted;
@@ -404,10 +411,15 @@ export class CompiledPiece {
               evaluate: options.evaluate ?? compartmentEvaluator(),
               wishes: options.wishes ?? ((_operands, of) => {
                 if (of === undefined) return undefined;
-                wishes!.answer(of.state);
+                wishes.answer(of.state);
                 // The action of the runtime's `wish` writes the outcome.
                 return { outcome: {} };
               }),
+              effects: (builtin, { state }) => {
+                if (!answersEffect(builtin)) return false;
+                wishes.answer(state, builtin as "fetchJson");
+                return true;
+              },
               builtins,
               ...(rowDocuments === undefined ? {} : { rowDocuments }),
               ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
@@ -522,16 +534,25 @@ export class CompiledPiece {
       const answered = this.#runtime.getCellFromLink(
         this.transactions.linkOf(doc, []),
       ).sync().then(() => {
-        // A place the executor has made a document of since is its own.
-        if (this.#stopped || this.transactions.holds(doc)) return;
-        const loaded = this.transactions.load(doc);
-        if (loaded === undefined) return;
-        this.instance.restore(doc, loaded.value);
-        this.#changes += 1;
-        this.#invalidate();
+        if (!this.#stopped && this.#take(doc)) this.#invalidate();
       });
       this.#runtime.scheduler.trackBackgroundTask(answered);
     }
+  }
+
+  /**
+   * Has the executor take a document it asked for and was given nothing
+   * of, where the replica now holds one, and marks what read the place.
+   * Returns whether it took one.
+   */
+  #take(doc: string): boolean {
+    // A place the executor has made a document of since is its own.
+    if (this.transactions.holds(doc)) return false;
+    const loaded = this.transactions.load(doc);
+    if (loaded === undefined) return false;
+    this.instance.restore(doc, loaded.value);
+    this.#changes += 1;
+    return true;
   }
 
   /**

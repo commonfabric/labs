@@ -32,6 +32,12 @@ import { isWalkableObjectNotArray } from "@commonfabric/data-model";
 import type { FabricValue } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity";
 
+import {
+  fetchBinary,
+  fetchJson,
+  fetchJsonUnchecked,
+  fetchText,
+} from "../builtins/fetch.ts";
 import { wish } from "../builtins/wish.ts";
 import type { Cancel } from "../cancel.ts";
 import { type Cell, isCell } from "../cell.ts";
@@ -42,6 +48,11 @@ import type { Runtime } from "../runtime.ts";
 import type { Action } from "../scheduler/types.ts";
 import type { URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+
+const isRecordOfCells = (
+  value: unknown,
+): value is Record<string, Cell<unknown>> =>
+  isWalkableObjectNotArray(value) && Object.values(value).every(isCell);
 
 /** What `RuntimeWishes` takes. */
 export type RuntimeWishesOptions = {
@@ -57,7 +68,29 @@ export type RuntimeWishesOptions = {
   actsFor?: DID;
 };
 
-/** The runtime's `wish`, registered for the `wish` operations of a piece. */
+/**
+ * The built-ins of the runtime that answer the request of an effect of the
+ * reactive tier of a compiled piece, by name. Each sends the cells of its
+ * `pending`, `result` and `error`, which are the members of the outcome.
+ * The other effects of the language have no entry: `fetchProgram`,
+ * `generateText`, `generateObject`, `sqliteQuery`, `compileAndRun`,
+ * `llmDialog`, `agent` and `navigateTo`, and an effect a handler requests.
+ */
+const EFFECTS = {
+  fetchBinary,
+  fetchJson,
+  fetchJsonUnchecked,
+  fetchText,
+} as const;
+
+/** Whether the runtime answers the effect `builtin` of a compiled piece. */
+export const answersEffect = (builtin: string): boolean =>
+  Object.hasOwn(EFFECTS, builtin);
+
+/**
+ * The runtime's `wish`, and its built-ins of `EFFECTS`, registered for the
+ * operations of a piece.
+ */
 export class RuntimeWishes {
   readonly #runtime: Runtime;
   readonly #options: RuntimeWishesOptions;
@@ -70,12 +103,13 @@ export class RuntimeWishes {
   }
 
   /**
-   * Has the runtime's `wish` answer the request that the state document
-   * `state` holds, now and whenever the request or what the resolution
-   * read changes. The first call for a state document registers the
-   * action, and a later one does nothing.
+   * Has the runtime's `wish`, or its built-in of the effect `builtin`,
+   * answer the request that the state document `state` holds, now and
+   * whenever the request or what the resolution read changes. The first
+   * call for a state document registers the action, and a later one does
+   * nothing.
    */
-  answer(state: string): void {
+  answer(state: string, builtin: "wish" | keyof typeof EFFECTS = "wish"): void {
     if (this.#registered.has(state)) return;
     const runtime = this.#runtime;
     const { resultCell, entityOf } = this.#options;
@@ -89,14 +123,15 @@ export class RuntimeWishes {
     const request = { ...document, path: ["request"] };
     const cancels: Cancel[] = [];
     this.#registered.set(state, cancels);
-    const built = wish(
+    const implementation = builtin === "wish" ? wish : EFFECTS[builtin];
+    const built = implementation(
       runtime.getCellFromLink(request) as never,
       (tx, sent) => this.#store(tx, document, sent),
       (cancel) => cancels.push(cancel),
       // What the stores of the wish are named from: the state document,
       // which is named from the instance, the operation and the keys of
       // the elements it is in.
-      { compiledWish: state } as never,
+      { compiledOperation: state, builtin } as never,
       resultCell,
       runtime,
     );
@@ -159,6 +194,21 @@ export class RuntimeWishes {
     sent: unknown,
   ): void {
     const { resultCell } = this.#options;
+    // An effect sends a record of the cells of its outcome: each member
+    // of the outcome is a link to its cell.
+    if (!isCell(sent) && !isPrimitiveCellLink(sent) && isRecordOfCells(sent)) {
+      tx.writeValueOrThrow(
+        { ...document, path: ["outcome"] },
+        Object.fromEntries(
+          Object.entries(sent).map(([name, cell]) => {
+            const { schema: _schema, ...link } = cell
+              .getAsNormalizedFullLink();
+            return [name, createSigilLinkFromParsedLink(link)];
+          }),
+        ) as FabricValue,
+      );
+      return;
+    }
     const link = isCell(sent)
       ? sent.getAsNormalizedFullLink()
       : parseLink(sent, resultCell) as NormalizedFullLink;
