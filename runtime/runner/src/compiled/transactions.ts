@@ -1023,13 +1023,24 @@ export class RuntimeTransactions implements TransactionHooks {
         this.#entriesOf.set(doc, now);
         const { paths, alone } = changedLabelPaths(before, after);
         if (paths.length > 0) {
+          // The answer for a path and a class is the same for every record
+          // that read the path, and the records of the rows of a list read
+          // the same few paths of it.
+          const answered = new Map<string, boolean>();
           changes.push({
             doc,
             paths,
             ...(alone.length > 0 ? { alone } : {}),
-            unchanged: (path, observes) =>
-              this.#labelIn(was, path, observes) ===
-                this.#labelIn(now, path, observes),
+            unchanged: (path, observes) => {
+              const asked = `${observes}\n${JSON.stringify(path)}`;
+              let answer = answered.get(asked);
+              if (answer === undefined) {
+                answer = this.#labelIn(was, path, observes) ===
+                  this.#labelIn(now, path, observes);
+                answered.set(asked, answer);
+              }
+              return answer;
+            },
           });
         }
       }
