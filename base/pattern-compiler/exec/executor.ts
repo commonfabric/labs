@@ -10440,11 +10440,8 @@ export class Instance {
     const star = record.path.indexOf("*");
     if (star < 0) return undefined;
     const above = canonical([record.root, record.path.slice(0, star)]);
-    for (const [other, { root, path, observes }] of this.plan.slots.entries()) {
-      // An `identity` slot stops at the link to the collection's cell, and
-      // its last position is not the array's.
-      if (other === slot || observes === "identity") continue;
-      if (canonical([root, path]) !== above) continue;
+    for (const other of this.#valueSlotsAt(above)) {
+      if (other === slot) continue;
       const bound = boundOf(other);
       if (bound === undefined || !("at" in bound)) continue;
       // An `enumeration` slot of one container observes the container,
@@ -11165,6 +11162,29 @@ export class Instance {
 
   /** The result of `#slotsAtPosition()` for every slot, made once. */
   #atPosition: number[][] | undefined;
+
+  /**
+   * The slots of the plan at a root and path, given as the canonical text
+   * of the pair, in the order of the plan, without those of the class
+   * `identity`: such a slot stops at the link to the cell at its path, and
+   * its last position is not that of the value there.
+   */
+  #valueSlotsAt(position: string): readonly number[] {
+    if (this.#valueSlots === undefined) {
+      this.#valueSlots = new Map();
+      this.plan.slots.forEach(({ root, path, observes }, index) => {
+        if (observes === "identity") return;
+        const key = canonical([root, path]);
+        const held = this.#valueSlots!.get(key);
+        if (held === undefined) this.#valueSlots!.set(key, [index]);
+        else held.push(index);
+      });
+    }
+    return this.#valueSlots.get(position) ?? [];
+  }
+
+  /** The result of `#valueSlotsAt()` for every position, made once. */
+  #valueSlots: Map<string, number[]> | undefined;
 
   /**
    * The slots the membership of a collection reaches: those of its

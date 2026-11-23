@@ -29,6 +29,10 @@
  * result has and which cones ended in an error state. `home` then takes
  * one event, which adds a space to the list it keeps (`interaction`).
  *
+ * With `SCALE_CPU_PROFILE` set to the path of a file, the timed sends of
+ * `room` and the event of `home` are sampled and the profile is written
+ * to that path followed by the size.
+ *
  * Unless `SCALE_POLICIES` is `keep`, the schemas are given without the
  * write policies and the integrity they declare (`withoutWritePolicies`).
  *
@@ -59,6 +63,7 @@ import {
   newLoopbackServer,
 } from "../../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../../exec/executor.ts";
+import { startCpuProfile } from "../cpu-profile.ts";
 import { homeStubs, memoryHome, PROFILE } from "../wish-home.ts";
 
 const REPOSITORY = new URL("../../../../", import.meta.url);
@@ -322,6 +327,17 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
   } satisfies Started;
 };
 
+/**
+ * Starts the sampling profiler where `SCALE_CPU_PROFILE` names a file, and
+ * returns what stops it and writes the profile of the steps since.
+ */
+const profiled = (size: number): Promise<() => Promise<void>> => {
+  const file = Deno.env.get("SCALE_CPU_PROFILE");
+  return file === undefined
+    ? Promise.resolve(() => Promise.resolve())
+    : startCpuProfile(`${file}.${size}`);
+};
+
 const print = (step: Record<string, unknown>) =>
   console.log(JSON.stringify(step));
 
@@ -384,12 +400,14 @@ for (
     );
     const before = { ...instance.counts };
     const adapter = started.adapter?.();
+    const stopProfile = await profiled(size);
     began = performance.now();
     const committed = await send(binding, {
       name: "notes",
       did: "did:key:z6MkaddedByTheRun",
     });
     const ms = performance.now() - began;
+    await stopProfile();
     const { spaces } = instance.result() as { spaces?: unknown[] };
     print({
       ...base,
@@ -412,6 +430,7 @@ for (
       if (!await send(binding, { body: `message ${index}` })) refused += 1;
     }
     print({ ...base, step: "seed", ms: performance.now() - began, refused });
+    const stopProfile = await profiled(size);
     for (let index = 0; index < 3; index++) {
       const before = { ...instance.counts };
       const adapter = started.adapter?.();
@@ -426,6 +445,7 @@ for (
         ...adapted(adapter),
       });
     }
+    await stopProfile();
     began = performance.now();
     const { messages } = instance.result() as {
       messages: { count: number; latest: { messages: { body: string }[] } };
