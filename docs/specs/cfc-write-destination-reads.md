@@ -96,10 +96,11 @@ append, a writer whose read ceiling the list's label exceeds can add to it
 without reading it.
 
 A handler that adds a keyed element (`elementById()`) to a list therefore
-carries into that element's document only what the handler itself read.
+carries into that element's document what the handler itself read and what
+resolving the list's existing entries read, but not the list's own label.
 Without the marker, a clause one earlier write left on the list would reach
 every later element document, which has no declaration to hold it, and every
-later add would be refused. An object candidate is different: it anchors into
+later keyed add would be refused. An object candidate is different: it anchors into
 a document of its own, and the anchoring's ancestry reads keep their ordinary
 classification, because they decide the id the new document takes, which is
 where the write lands. `removeByValue()` writes back a value built from what it
