@@ -425,6 +425,9 @@ export class CompiledPiece {
       this.#counts.events += 1;
       const began = performance.now();
       let outcome: ReturnType<Instance["handleEvent"]>;
+      // The events the handler sent to streams of the piece, each with the
+      // entity of the marker of its stream.
+      const queued: { entity: URI; event: unknown }[] = [];
       try {
         // The frame of a handler, under which the gated `Date` and `Math`
         // of the value code give the time of the event and a random draw.
@@ -434,11 +437,22 @@ export class CompiledPiece {
             eventTime: tx.dispatchedEventTime ?? Date.now(),
           }),
           () =>
-            transactions.within(
-              tx,
-              () =>
-                this.instance.handleEvent(stream, transactions.decode(event)),
-            ),
+            transactions.within(tx, () => {
+              const handled = this.instance.handleEvent(
+                stream,
+                transactions.decode(event),
+              );
+              // A stream that no stored value links has no marker yet: the
+              // transaction of the handler that first sends to it writes
+              // the marker.
+              for (const sent of this.instance.takeQueued()) {
+                queued.push({
+                  entity: transactions.markedStream(sent.stream),
+                  event: sent.event,
+                });
+              }
+              return handled;
+            }),
         );
       } finally {
         this.#counts.ownMs += performance.now() - began;
@@ -447,16 +461,10 @@ export class CompiledPiece {
       this.#keepMinted(tx);
       // An event a handler sends to a stream of the piece is an event of
       // the scheduler's queue like one sent from outside.
-      for (const sent of this.instance.takeQueued()) {
-        const target = transactions.entityOfStream(sent.stream);
-        if (target === undefined) {
-          throw new Error(
-            "A handler sent an event to a stream the storage has no marker of.",
-          );
-        }
+      for (const { entity, event: sent } of queued) {
         this.#runtime.scheduler.queueEvent(
-          { space, id: target, path: [], scope: "space" },
-          transactions.encode(sent.event),
+          { space, id: entity, path: [], scope: "space" },
+          transactions.encode(sent),
         );
       }
       this.#invalidate();

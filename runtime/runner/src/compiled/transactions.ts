@@ -935,6 +935,28 @@ export class RuntimeTransactions implements TransactionHooks {
     return this.#streams.has(entity) ? entity : undefined;
   }
 
+  /**
+   * The entity that holds the stream marker of a stream of the executor,
+   * written into the handed transaction in progress (`within()`) where no
+   * transaction wrote it: a stream that a handler sends to and that no
+   * stored value links, as one that the state of a binding alone holds,
+   * has its marker from the transaction of the handler that first sends to
+   * it.
+   */
+  markedStream(stream: StreamOfExecutor): URI {
+    const known = this.entityOfStream(stream);
+    if (known !== undefined) return known;
+    this.begin("send");
+    let committed = false;
+    try {
+      const entity = this.#streamEntity(stream);
+      committed = true;
+      return entity;
+    } finally {
+      this.end({ committed });
+    }
+  }
+
   /** What the transactions were given so far. */
   get counts(): Readonly<RuntimeCounts> {
     return { ...this.#counts, byCause: { ...this.#counts.byCause } };
