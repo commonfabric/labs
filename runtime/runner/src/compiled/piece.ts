@@ -168,6 +168,11 @@ export class CompiledPiece {
         { isEffect: true },
       ),
     );
+    // The scheduler delays an action whose runs take long on average, so
+    // that a slow computation does not run for each of a burst of changes.
+    // The derivation of a piece is one action for all of its cones, whose
+    // average says nothing of the next run, and an event waits for it.
+    runtime.scheduler.setNoDebounce(this.#derive, true);
     this.#cancels.push(() => transactions.close());
   }
 

@@ -4,7 +4,7 @@
  * from the write that causes it until the runtime is settled (milestone 3
  * of `docs/plans/compiled-pattern-language-integration.md`).
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today] [--case=<part of a name>] [--no-pull] [lengths]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today] [--case=<part of a name>] [--no-pull] [--rows=in-place] [lengths]`
  *
  * Both arms run in a runtime of their own on emulated storage, with
  * `cfcFlowLabels` at `persist` and the input under a schema with one
@@ -289,6 +289,9 @@ const item = (index: number) => ({
 type Case = { name: string; pattern: string; references: boolean };
 
 const CASES: Case[] = [
+  // The type declares the array as references: the rows are documents of
+  // their own, unless `--rows=in-place` is given.
+  { name: "references, declared", pattern: "Cells", references: true },
   { name: "references", pattern: "Plain", references: true },
   { name: "plain values in place", pattern: "Plain", references: false },
   { name: "result of a filter", pattern: "Chained", references: false },
@@ -317,6 +320,7 @@ const growthArm = async (
   one: Case,
   length: number,
   pulls: boolean,
+  rows: "documents" | "in-place",
 ) => {
   const audience = await scenarioAudience();
   const ifc = { confidentiality: [inputClause("items", audience)] };
@@ -375,6 +379,7 @@ const growthArm = async (
           artifact,
           { items },
           result.withTx(tx),
+          { rows },
         );
         return { result, piece };
       }
@@ -493,7 +498,13 @@ if (import.meta.main) {
       for (const arm of arms) {
         started.push({
           arm,
-          ...(await growthArm(arm, one, length, !flags.includes("--no-pull"))),
+          ...(await growthArm(
+            arm,
+            one,
+            length,
+            !flags.includes("--no-pull"),
+            flag("rows") === "in-place" ? "in-place" : "documents",
+          )),
         });
       }
       const row = (operation: string, costs: Row): void =>

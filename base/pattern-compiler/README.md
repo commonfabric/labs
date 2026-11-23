@@ -996,17 +996,19 @@ the hook `read` with the body and the entry of its `Body.handles`
 the positions the body read through that handle before the write. The executor
 keeps none of this when it is given no hooks.
 
-`compare/runtime-transactions.ts` implements the hooks with the runtime's own
-transactions (`Runtime.edit()`): each read is read through the transaction, each
-change is written into it as it is made, and the transaction commits with the
-runtime's commit and its CFC preparation, or is aborted where the executor did
-not commit. A document of the executor is the entity `of:<identifier>`, and a
-link is written as the runtime's link. An instance the executor makes of another
-artifact, one a function body instantiates or one of a pattern compiled alone,
-gives write records of that artifact's plan: the executor names the instance and
-its artifact to the hook `instantiated`, and the adapter registers the artifact
-and records the instance's write records under it, with a table of inputs per
-compiled pattern. `RuntimeTransactions.stored()` reads the documents back, and
+`runtime/runner/src/compiled/transactions.ts` (which
+`compare/runtime-transactions.ts` re-exports for the harnesses here) implements
+the hooks with the runtime's own transactions (`Runtime.edit()`): each read is
+read through the transaction, each change is written into it as it is made, and
+the transaction commits with the runtime's commit and its CFC preparation, or is
+aborted where the executor did not commit. A document of the executor is the
+entity `of:<identifier>`, and a link is written as the runtime's link. An
+instance the executor makes of another artifact, one a function body
+instantiates or one of a pattern compiled alone, gives write records of that
+artifact's plan: the executor names the instance and its artifact to the hook
+`instantiated`, and the adapter registers the artifact and records the
+instance's write records under it, with a table of inputs per compiled pattern.
+`RuntimeTransactions.stored()` reads the documents back, and
 `compare/test/runtime-transactions.test.ts` checks that they are the executor's,
 that one runtime transaction commits for each of the executor's, and that a
 handler that reads a labeled input commits labels on what it writes.
@@ -1025,6 +1027,59 @@ deno run -A --no-check base/pattern-compiler/compare/integrated.ts run values.js
 deno run -A --no-check base/pattern-compiler/compare/integrated.ts report integrated.jsonl run.jsonl
 ```
 
+## A compiled piece in the runner
+
+Milestone 3 of the same plan runs a compiled pattern as a piece of the runtime,
+behind the experimental option `compiledPatterns`.
+`startCompiledPiece(runtime, tx, artifact, argument, resultCell)` of
+`runtime/runner/src/compiled/piece.ts` is the call beside `Runtime.run`: the
+entity of `resultCell` is the result document, every other document of the
+executor is an entity of the same space, and the creation and the first
+derivation are written into `tx`, which the caller commits. The runner imports
+`exec/` by relative path, and `exec/` imports nothing of the runtime.
+
+- **Events.** A stream of the executor is stored as a link to an entity that
+  holds the runtime's stream marker, and the piece registers an event handler of
+  the scheduler for it. `Cell.send` on the member of the result queues an event,
+  and the handler runs the compiled handler in the scheduler's transaction
+  (`Instance.handleEvent`), which the scheduler commits. An event a handler
+  sends to a stream of the piece is queued with the scheduler as well
+  (`Instance.takeQueued`). No event is appended to a stream document.
+- **The derivation.** One action of the scheduler, an effect, runs
+  `Instance.settle()` in the scheduler's transaction. The piece invalidates it
+  after an event, after a change by another writer, and when a stored label
+  changed alone. `Runtime.idle()` therefore resolves when the piece is up to
+  date. The action opts out of the scheduler's delay for actions that are slow
+  on average.
+- **The store.** The executor keeps its documents in memory. A document it did
+  not make, such as an input cell the argument links to, is read from the
+  replica when a reference first leads to it (`Store` option `load`), and a
+  commit of another writer replaces what it changed: the piece subscribes to the
+  storage notifications and applies each change, a change of the members of an
+  array as the one splice that makes it, which marks the readers.
+- **Rows as documents.** For a `map` in no element body over a slot whose schema
+  declares the array or its members as cells, whose rows are records or view
+  nodes (`rowDocumentCollections` of `exec/row-documents.ts`), each row is an
+  entity of its own, named by the array and the key of the row, and the array
+  holds links, which the runtime follows. `CompiledPieceOptions.rows` set to
+  `in-place` keeps the rows in the array. The rows of every other collection
+  stay in place.
+
+`compare/runner-path.ts` starts today's piece and the compiled piece with the
+same calls of the runtime over the lists of `fixtures/runner-lists.tsx`, makes
+each change through a cell, and reports what a change costs each from the write
+until the scheduler is idle with no commit pending:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/runner-path.ts 100 1000
+deno run -A --no-check base/pattern-compiler/compare/runner-path.ts --arms=compiled --case=declared --rows=in-place 100 1000
+```
+
+The tests are `runtime/runner/test/compiled/piece.test.ts` and
+`runtime/runner/test/compiled/row-documents.test.ts`; they load the artifacts of
+`compare/fixtures/`, so they need no build of the crate. Notes 579 on of
+`SPEC-NOTES.md` have what is stubbed and the figures.
+
 ## Topics
 
 Topics (`patterns/apps/topics/`) is the target both tracks of the integration
@@ -1038,7 +1093,7 @@ deno run -A --no-check base/pattern-compiler/compare/corpus.ts run labels.jsonl 
 ```
 
 `compare/topics/scale.ts` runs the board at a size of 100, 1,000 or 2,000
-topics, on one of four arms, in a process of its own: the load, three edits of
+topics, on one of its arms, in a process of its own: the load, three edits of
 one topic by a writer outside the board, and three creates through `addTopic`,
 each timed until the board is up to date and the read of its result apart, with
 the facts of the result the arms are compared on. The arms are `executor`, the
@@ -1046,7 +1101,9 @@ executor with its documents in memory; `storage`, the executor with its
 documents in the runtime's storage, the experimental option `compiledPatterns`
 on, and each topic and each input of the board under a schema with a clause;
 `today`, today's runtime with no label stored; and `today-labeled`, today's
-runtime with the same clauses and `cfcFlowLabels` at `persist`. The arm
+runtime with the same clauses and `cfcFlowLabels` at `persist`. On the branch
+that holds the boards the crate emits, the arm `runner` runs the board as a
+compiled piece in the runner with the calls of the arm `today-labeled`. The arm
 `storage` reports per step the commits, the preparations and their time, the
 write records and their size, the label entries of the documents the step
 changed, the bounds, and the time in each hook of the storage apart from the

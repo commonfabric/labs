@@ -1221,8 +1221,12 @@ holds the measurements and the conditions for revisiting.
   `plan-inputs` inputs of the transaction hold. Every other path keeps the
   join. With it off, every `plan-write` and `plan-inputs` input is ignored
   and the preparation and its prepared digest are what they are without the
-  option. The runner path for compiled patterns is to be
-  gated by the same option.
+  option. It also gates the runner path for compiled patterns:
+  `startCompiledPiece()` of `runtime/runner/src/compiled/piece.ts` starts a
+  piece from a plan and its value code, with one event handler of the
+  scheduler for each stream of the piece and one effect for its derivation,
+  and throws with the option off. `Runtime` does not import that module, so
+  a runtime that starts no compiled piece loads none of it.
 - **Current default and planned end state.** Off by default. A measurement
   only: the specification the template labels rest on is specs pull request
   #91, unmerged, and the deciding sites carry its `SPEC-PENDING` marker. The
@@ -1232,10 +1236,13 @@ holds the measurements and the conditions for revisiting.
 - **Status on 2026-11-19.** Default off, pinned by
   `runtime/runner/test/cfc-runtime-options.test.ts` and
   `runtime/runner/test/experimental-options.test.ts`; the template labels are
-  pinned by `runtime/runner/test/cfc-plan-labels.test.ts`.
+  pinned by `runtime/runner/test/cfc-plan-labels.test.ts`, and the runner
+  path by `runtime/runner/test/compiled/piece.test.ts` and
+  `runtime/runner/test/compiled/row-documents.test.ts`.
 - **Path to removal.** Delete the runtime option, its env, authority and
   shell-source entries, `CfcTxState.planLabels`, and either the `plan-write`
-  and `plan-inputs` path or the gate on it.
+  and `plan-inputs` path or the gate on it, and either
+  `runtime/runner/src/compiled/` or the check in `startCompiledPiece()`.
 
 ## Category 2: Contextual Flow Control enforcement rollout dials
 

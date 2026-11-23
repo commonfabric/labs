@@ -97,6 +97,7 @@ import {
   isLink,
   isStream,
   type Schema,
+  spliceIn,
   type Store,
   type StreamPosition,
 } from "../../../../base/pattern-compiler/exec/store.ts";
@@ -1237,7 +1238,7 @@ export class RuntimeTransactions implements TransactionHooks {
     if (entered.length !== splice.inserted) {
       throw new Error("The executor named no key for a row that entered.");
     }
-    const left = array.keys.splice(splice.start, splice.removed, ...entered);
+    const left = spliceIn(array.keys, splice.start, splice.removed, entered);
     array.positions = undefined;
     const stay = new Set(entered);
     this.#dropRows(tx, array, left.filter((key) => !stay.has(key)));
