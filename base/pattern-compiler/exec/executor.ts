@@ -7281,18 +7281,25 @@ export class Instance {
     } else {
       return undefined;
     }
-    // A change of the source of a `flatMap` forms the assembly whole, and
-    // so does a change of what an element's body returned where the
-    // segments are not kept apart (`Rows.segments`). What is left for this
-    // path is a mark that changes neither, as a write to a document an
-    // element refers to at a path that no body of the collection read, and
-    // a change of the segments of some elements, which are spliced.
+    // A change of the source of a `flatMap`, or of what an element's body
+    // returned, forms the assembly whole where the segments are not kept
+    // apart (`Rows.segments`). Where they are, the segment of an element
+    // that left the source is taken out, and that of an element that
+    // entered or changed is formed and put at its place. What is left
+    // otherwise is a mark that changes neither, as a write to a document an
+    // element refers to at a path that no body of the collection read.
     if (
-      rows.construct === "flatMap" &&
-      (ops.length > 0 || (changed.size > 0 && rows.segments === undefined))
+      rows.construct === "flatMap" && rows.segments === undefined &&
+      (ops.length > 0 || changed.size > 0)
     ) return undefined;
     const { elements, byKey } = table;
     const { results, members, flags } = rows;
+    // For a `flatMap` whose source changed: the members and the values
+    // with the segments of the elements that left taken out, and the
+    // splices that took them out.
+    let segmentMembers: Element[] | undefined;
+    let segmentValues: unknown[] | undefined;
+    const segmentOps: KeyOp[] = [];
     const left = new Set<string>();
     let low = elements.length;
     // The positions that hold another element than before: those of
@@ -7338,6 +7345,45 @@ export class Instance {
         op.removed.length,
         fresh.map((): Dependency => ({ stamp: () => undefined, seen: 0 })),
       );
+      if (rows.construct === "flatMap" && rows.segments !== undefined) {
+        const { segments } = rows;
+        if (!Array.isArray(held.value)) return undefined;
+        segmentMembers ??= [...members];
+        segmentValues ??= [...held.value];
+        // The dependencies on the inner assemblies stand behind those on
+        // the elements, in the order of the elements.
+        const inner = spliceIn(
+          dependencies,
+          rows.first + elements.length + op.start,
+          op.removed.length,
+          fresh.map((): Dependency => ({ stamp: () => undefined, seen: 0 })),
+        );
+        for (const { on } of inner) {
+          if (on === undefined) continue;
+          this.#users.get(on)?.delete(name);
+          slot.uses.delete(on);
+          segments.of.delete(on);
+        }
+        let start = 0;
+        for (let before = 0; before < op.start; before++) {
+          start += segments.lengths[before];
+        }
+        const count = spliceIn(
+          segments.lengths,
+          op.start,
+          op.removed.length,
+          fresh.map(() => 0),
+        ).reduce((sum, length) => sum + length, 0);
+        if (count > 0) {
+          const taken = spliceIn(segmentMembers, start, count, []);
+          spliceIn(segmentValues, start, count, []);
+          segmentOps.push({
+            start,
+            removed: taken.map(({ key }) => key),
+            inserted: [],
+          });
+        }
+      }
       for (const element of gone) {
         byKey.delete(element.key);
         left.add(element.key);
@@ -7567,22 +7613,22 @@ export class Instance {
       }
     } else if (rows.construct === "flatMap") {
       const { segments } = rows;
-      if (changed.size > 0) {
+      if (changed.size > 0 || segmentOps.length > 0) {
         if (segments === undefined || !Array.isArray(held.value)) {
           return undefined;
         }
-        // The segment of each element that changed, in the order of the
-        // table, is put in the place of the one it had: one splice of the
-        // members and of the values for each. The members behind the
-        // first splice are numbered again, and no other work is done for
-        // an element whose segment stayed.
+        // The segment of each element that entered or changed, in the
+        // order of the table, is put in the place of the one it had: one
+        // splice of the members and of the values for each. The members
+        // behind the first splice are numbered again, and no other work
+        // is done for an element whose segment stayed.
         const positions = [...changed].flatMap((key) => {
           const element = byKey.get(key);
           return element === undefined ? [] : [element.index];
         }).sort((a, b) => a - b);
-        rowsNow = [...members];
-        const flat = [...held.value];
-        const spliced: KeyOp[] = [];
+        rowsNow = segmentMembers ?? [...members];
+        const flat = segmentValues ?? [...held.value];
+        const spliced: KeyOp[] = segmentOps;
         let start = 0;
         let from = 0;
         for (const position of positions) {
@@ -7631,7 +7677,8 @@ export class Instance {
           });
           segments.lengths[position] = fresh.length;
         }
-        const first = spliced[0]?.start ?? rowsNow.length;
+        let first = rowsNow.length;
+        for (const { start } of spliced) first = Math.min(first, start);
         for (let index = first; index < rowsNow.length; index++) {
           if (rowsNow[index].index !== index) {
             rowsNow[index] = { ...rowsNow[index], index };

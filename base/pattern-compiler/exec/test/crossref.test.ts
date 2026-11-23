@@ -222,6 +222,43 @@ describe("the inverse of a relation each member holds as a list of references: a
 
     expect(counts[1]).toEqual(counts[0]);
   });
+
+  it("forms the segment of the one topic appended, among 1,000 topics as among 10, and takes out the segment of a topic removed", async () => {
+    for (const count of [10, 1_000]) {
+      const { instance, mentionedBy } = await started(count);
+      const before = instance.counts.segmentsFormed;
+
+      instance.spliceArgument(["topics"], count, 0, [link("spare")]);
+      instance.settle();
+
+      expect(instance.counts.segmentsFormed - before).toBe(1);
+
+      instance.spliceArgument(["topics"], 1, 1, []);
+      instance.settle();
+
+      expect(instance.counts.segmentsFormed - before).toBe(1);
+      if (count > 10) continue;
+      const rows = mentionedBy();
+      expect(rows.t0).toEqual(["t2", "spare"]);
+      expect(rows.t2).toEqual(["t3", "t4"]);
+      expect(rows.t1).toBeUndefined();
+    }
+  });
+
+  it("splices the segment of a topic inserted in the middle of the array, between those of its neighbors", async () => {
+    const { instance, mentionedBy } = await started(4);
+
+    instance.spliceArgument(["topics"], 2, 0, [link("spare")]);
+    instance.settle();
+
+    expect(mentionedBy()).toEqual({
+      t0: ["t1", "spare", "t2"],
+      t1: ["t2", "t3"],
+      spare: [],
+      t2: ["t3"],
+      t3: [],
+    });
+  });
 });
 
 describe("a write to a document that an array of references refers to, at a path that no body of a collection over the array reads", () => {
