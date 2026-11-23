@@ -714,9 +714,11 @@ export class RuntimeTransactions implements TransactionHooks {
       this.#subscription = {
         next: (notification) => {
           if (notification.type === "reset") this.#labelIds.clear();
+          // A commit of another space changes a document the executor
+          // holds where a link led it into that space (`#spaces`).
           if (
             notification.type === "reset" ||
-            notification.space !== this.#space
+            (notification.space !== this.#space && this.#spaces.size === 0)
           ) {
             return undefined;
           }
@@ -730,6 +732,8 @@ export class RuntimeTransactions implements TransactionHooks {
           for (const { address, before, after } of notification.changes) {
             const doc = this.#byEntity.get(address.id);
             if (doc === undefined) continue;
+            // Two spaces can hold documents of one entity.
+            if (this.#spaceOf(doc) !== notification.space) continue;
             this.#sources?.changed(
               doc,
               false,
@@ -3594,6 +3598,13 @@ export class RuntimeTransactions implements TransactionHooks {
       const stream = this.#streams.get(link.id ?? "");
       if (stream !== undefined) return { $stream: stream };
       const row = this.documentOf(link.id ?? "");
+      // A link that names another space than the piece's leads to a
+      // document of that space: the executor names a document by its
+      // entity alone, and the adapter keeps the space it is read in.
+      if (
+        link.space !== undefined && link.space !== this.#space &&
+        !this.#spaces.has(row) && !this.#documents.has(row)
+      ) this.#spaces.set(row, link.space);
       if (
         rows !== undefined &&
         (this.#rowDocuments.has(row) || this.#bucketDocuments.has(row))
