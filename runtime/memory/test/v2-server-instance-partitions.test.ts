@@ -49,7 +49,7 @@ const rootSelector = {
 const aliceRoot = {
   id: "of:root",
   scope: "user",
-  entityScopeKey: ALICE_USER,
+  entityScopeKeys: { user: ALICE_USER },
   selector: rootSelector,
 };
 
@@ -375,6 +375,167 @@ describe("Server", () => {
     });
   });
 
+  describe("a watch whose root carries a `session` entry", () => {
+    /** Alice's root, naming her `user` instance and her session's. */
+    const aliceRootInSession = () => ({
+      ...aliceRoot,
+      entityScopeKeys: {
+        user: ALICE_USER,
+        session: resolveScopeKey("session", {
+          principal: ALICE,
+          sessionId: aliceSession,
+        }),
+      },
+    });
+
+    it("delivers that session's instance of a session-scoped document the root links to", async () => {
+      const root = aliceRootInSession();
+
+      const sync = await watch([root]);
+
+      expect(keysOf(sync.upserts)).toEqual([
+        `space/of:shared`,
+        `${ALICE_USER}/of:child`,
+        `${ALICE_USER}/of:root`,
+        `${root.entityScopeKeys.session}/of:draft`,
+      ].toSorted());
+      expect(
+        sync.upserts.find((upsert) => upsert.id === "of:draft")?.doc,
+      ).toEqual({ value: { owner: "alice" } });
+    });
+
+    it("delivers a write to that session's instance of the linked document", async () => {
+      const root = aliceRootInSession();
+      await watch([root]);
+      service.messages.length = 0;
+
+      await write(alice, aliceSession, 2, [{
+        op: "set",
+        id: "of:draft",
+        scope: "session",
+        value: { value: { owner: "alice, later" } },
+      }]);
+      await server.flushSessions();
+
+      const upserts = service.messages.flatMap((message) =>
+        message.type === "session/effect"
+          ? (message.effect as SessionSync).upserts
+          : []
+      );
+      expect(upserts.map((upsert) => [upsert.id, upsert.scopeKey, upsert.doc]))
+        .toEqual([[
+          "of:draft",
+          root.entityScopeKeys.session,
+          { value: { owner: "alice, later" } },
+        ]]);
+    });
+
+    it("keeps the root's graph apart from the one her `user` entry alone names", async () => {
+      // The same root watched twice, once with a session and once without:
+      // only the first reaches `of:draft`, and removing it retracts that.
+
+      const root = aliceRootInSession();
+      await watch([root, aliceRoot]);
+
+      const sync = await watch([aliceRoot]);
+
+      expect(keysOf(sync.removes)).toEqual([
+        `${root.entityScopeKeys.session}/of:draft`,
+      ]);
+    });
+  });
+
+  describe("a watch whose `space`-scoped root carries a user's `user` entry", () => {
+    it("delivers that user's instance of a user-scoped document the root links to", async () => {
+      await write(service, serviceSession, 2, [{
+        op: "set",
+        id: "of:board",
+        value: { value: { child: link("of:child", "user") } },
+      }]);
+
+      const sync = await watch([{
+        id: "of:board",
+        entityScopeKeys: { user: ALICE_USER },
+        selector: rootSelector,
+      }]);
+
+      expect(keysOf(sync.upserts)).toEqual([
+        `space/of:board`,
+        `${ALICE_USER}/of:child`,
+      ]);
+    });
+  });
+
+  describe("a watch whose root carries a malformed `entityScopeKeys`", () => {
+    /** Asks for watches of `roots`, and returns the error the server sent. */
+    const refusal = async (
+      roots: readonly FabricPlainObject[],
+    ): Promise<string | undefined> => {
+      const set = await request<WatchSetResult>(service, {
+        type: "session.watch.set",
+        space: SPACE,
+        sessionId: serviceSession,
+        watches: roots.map((root, index) => ({
+          id: `w${index}`,
+          kind: "graph",
+          query: { roots: [root] },
+        })),
+      });
+      expect(set.ok).toBeUndefined();
+      return set.error?.message;
+    };
+
+    it("refuses a map whose `session` entry names another principal", async () => {
+      expect(
+        await refusal([{
+          ...aliceRoot,
+          entityScopeKeys: {
+            user: ALICE_USER,
+            session: resolveScopeKey("session", {
+              principal: SERVICE,
+              sessionId: serviceSession,
+            }),
+          },
+        }]),
+      ).toContain("its `user` and `session` entries name different principals");
+    });
+
+    it("refuses a map holding a `session` entry alone", async () => {
+      expect(
+        await refusal([{
+          ...aliceRoot,
+          entityScopeKeys: {
+            session: resolveScopeKey("session", {
+              principal: ALICE,
+              sessionId: aliceSession,
+            }),
+          },
+        }]),
+      ).toContain("its `user` entry is not a canonical `user` scope key");
+    });
+
+    it("refuses a value that is not a map", async () => {
+      expect(await refusal([{ ...aliceRoot, entityScopeKeys: ALICE_USER }]))
+        .toContain("it is not a record");
+    });
+
+    it("refuses the whole request, a well-formed root's watch included", async () => {
+      expect(
+        await refusal([aliceRoot, { ...aliceRoot, entityScopeKeys: {} }]),
+      ).toContain("malformed `entityScopeKeys` on read root of:root");
+
+      // Nothing of the refused request was tracked, so the next watch set
+      // has nothing of it to retract.
+      const sync = await watch([hubRoot]);
+
+      expect(sync.upserts.map((upsert) => upsert.id).toSorted()).toEqual([
+        "of:hub",
+        "of:shared",
+      ]);
+      expect(sync.removes).toEqual([]);
+    });
+  });
+
   describe("a `graph.query` whose root names another user's instance", () => {
     it("returns that user's instance of a user-scoped document the root links to", async () => {
       const queried = await request<GraphQueryResult>(service, {
@@ -389,6 +550,33 @@ describe("Server", () => {
         `space/of:shared`,
         `${ALICE_USER}/of:child`,
         `${ALICE_USER}/of:root`,
+      ].toSorted());
+    });
+
+    it("returns that session's instance of a session-scoped document for a root carrying a `session` entry", async () => {
+      const session = resolveScopeKey("session", {
+        principal: ALICE,
+        sessionId: aliceSession,
+      });
+
+      const queried = await request<GraphQueryResult>(service, {
+        type: "graph.query",
+        space: SPACE,
+        sessionId: serviceSession,
+        query: {
+          roots: [{
+            ...aliceRoot,
+            entityScopeKeys: { user: ALICE_USER, session },
+          }],
+        },
+      });
+
+      expect(queried.error).toBeUndefined();
+      expect(keysOf(queried.ok!.entities)).toEqual([
+        `space/of:shared`,
+        `${ALICE_USER}/of:child`,
+        `${ALICE_USER}/of:root`,
+        `${session}/of:draft`,
       ].toSorted());
     });
   });

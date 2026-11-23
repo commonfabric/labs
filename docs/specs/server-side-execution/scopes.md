@@ -427,8 +427,8 @@ not spec debt; Phases 1–5 meet them wherever scoped state appears.
   The READ side is the half R-Q6b did not cover, and it is now
   RULED (S1; ledger LD5 ratified by the owner 2026-08-03 as the
   read half of the transaction identity model, protocol.md §1):
-  reads may name an explicit
-  `entity_scope_key`, admissible for the space's own serving session
+  a read's root may carry
+  `entityScopeKeys`, admissible for the space's own serving session
   — the same trust argument and the same one equality check as
   derived writes — and, since owner routing R3 (2026-11-01), for a
   session of the delegating class (the identities of the deployment's
@@ -514,7 +514,7 @@ machinery), and the M3 write path (§7 M3 — R-Q6b: explicit
 stays the lease check). Closed 2026-08-02 by S1, ratified by the
 owner 2026-08-03 (ledger LD5; the transaction identity model,
 protocol.md §1): the
-READ side — reads may name an explicit `entity_scope_key`, the
+READ side — a read's root may carry `entityScopeKeys`, the
 space's serving session or the service identity under a grant (§7 M1,
 protocol.md §2) — and run identity for
 non-handler runs (§5). Still open (numbering stable — external

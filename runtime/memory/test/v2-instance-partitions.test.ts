@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  type EntityScopeKeys,
   type GraphQuery,
   resolveScopeKey,
   toValuePath,
@@ -15,17 +16,18 @@ const alice = { principal: "did:key:alice", sessionId: "session:alice" };
 const aliceUser = resolveScopeKey("user", alice);
 const aliceSession = resolveScopeKey("session", alice);
 const serviceUser = resolveScopeKey("user", service);
+const serviceSession = resolveScopeKey("session", service);
 
 const selector = { path: [], schema: true };
 
-/** A user-scoped root of `id`, naming `entityScopeKey` when one is given. */
+/** A user-scoped root of `id`, carrying `entityScopeKeys` when given. */
 const userRoot = (
   id: string,
-  entityScopeKey?: GraphQuery["roots"][number]["entityScopeKey"],
+  entityScopeKeys?: EntityScopeKeys,
 ): GraphQuery["roots"][number] => ({
   id,
   scope: "user",
-  ...(entityScopeKey === undefined ? {} : { entityScopeKey }),
+  ...(entityScopeKeys === undefined ? {} : { entityScopeKeys }),
   selector,
 });
 
@@ -41,7 +43,7 @@ describe("v2-instance-partitions", () => {
 
     it("returns a partition under a principal alone for a root naming another principal's `user` instance", () => {
       const own = userRoot("of:a");
-      const named = userRoot("of:a", aliceUser);
+      const named = userRoot("of:a", { user: aliceUser });
 
       expect(partitionGraphQuery({ roots: [own, named] }, service)).toEqual([
         { instance: undefined, identity: service, query: { roots: [own] } },
@@ -55,7 +57,7 @@ describe("v2-instance-partitions", () => {
 
     it("returns a partition under a principal and a session for a root naming a `session` instance", () => {
       const named = {
-        ...userRoot("of:a", aliceSession),
+        ...userRoot("of:a", { user: aliceUser, session: aliceSession }),
         scope: "session" as const,
       };
 
@@ -64,17 +66,55 @@ describe("v2-instance-partitions", () => {
       ]);
     });
 
-    it("keeps a root naming the caller's own instance, or the `space` instance, in the caller's partition", () => {
+    it("returns a partition under a principal and a session for a `user`-scoped root carrying a `session` entry", () => {
+      const named = userRoot("of:a", {
+        user: aliceUser,
+        session: aliceSession,
+      });
+
+      expect(partitionGraphQuery({ roots: [named] }, service)).toEqual([
+        { instance: aliceSession, identity: alice, query: { roots: [named] } },
+      ]);
+    });
+
+    it("returns a partition under the named principal for a `space`-scoped root carrying its `user` entry", () => {
+      const named = {
+        id: "of:b",
+        entityScopeKeys: { user: aliceUser },
+        selector,
+      };
+
+      expect(partitionGraphQuery({ roots: [named] }, service)).toEqual([
+        {
+          instance: aliceUser,
+          identity: { principal: alice.principal },
+          query: { roots: [named] },
+        },
+      ]);
+    });
+
+    it("keeps a root naming the caller's own `user` and `session` instances in the caller's partition", () => {
       const query = {
         branch: "feature",
         roots: [
-          userRoot("of:a", serviceUser),
-          { id: "of:b", entityScopeKey: "space" as const, selector },
+          userRoot("of:a", { user: serviceUser, session: serviceSession }),
         ],
       };
 
       expect(partitionGraphQuery(query, service)).toEqual([
         { instance: undefined, identity: service, query },
+      ]);
+    });
+
+    it("returns a partition under the caller's principal alone for a root naming its `user` instance and no session", () => {
+      const named = userRoot("of:a", { user: serviceUser });
+
+      expect(partitionGraphQuery({ roots: [named] }, service)).toEqual([
+        {
+          instance: serviceUser,
+          identity: { principal: service.principal },
+          query: { roots: [named] },
+        },
       ]);
     });
 
@@ -100,8 +140,8 @@ describe("v2-instance-partitions", () => {
 
     it("keys the caller's own roots by their branch, and a named instance's by the instance and the branch", () => {
       const own = userRoot("of:a");
-      const named = userRoot("of:a", aliceUser);
-      const featured = userRoot("of:b", aliceUser);
+      const named = userRoot("of:a", { user: aliceUser });
+      const featured = userRoot("of:b", { user: aliceUser });
 
       const groups = watchGraphGroups([
         watchOf("w1", undefined, [own, named]),

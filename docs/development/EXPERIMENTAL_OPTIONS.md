@@ -381,8 +381,8 @@ flags it adopts from the deployment it runs against.
     this means: the per-class admission rows of protocol.md §2 are enforced
     — the `derived` row is the stage-B lease equality check PLUS stage F's
     derived-envelope defense-in-depth (the producing session must BE the
-    holder's own service session), reads may name an explicit
-    `entity_scope_key` (lease-holder-only; refused for anyone else), the
+    holder's own service session), a read's root may carry
+    `entityScopeKeys` (lease-holder-only; refused for anyone else), the
     delegated authored row validates its acting-identity + capabilityRef
     carriage, and the `authored`/`system` rows equal today's checks — the
     deferred `stream-data` built-in is disabled with a runtime error naming

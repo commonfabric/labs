@@ -122,10 +122,7 @@ export function inspectDocumentInterests(
         : watch.query.roots;
       if (
         roots.some((root) =>
-          root.id === query.id &&
-          ("entityScopeKey" in root && root.entityScopeKey !== undefined
-              ? root.entityScopeKey
-              : root.scope ?? "space") === "space"
+          root.id === query.id && (root.scope ?? "space") === "space"
         )
       ) directWatchCount++;
     }

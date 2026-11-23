@@ -1294,7 +1294,7 @@ Tasks:
       `scheduler_context_floor` (deletes with the
       observation machinery), the M3 write path (R-Q6b). Adversary
       round 3, 2026-08-02: the M3 ruling's READ half is now closed
-      too — reads may name an explicit `entity_scope_key`,
+      too — a read's root may carry `entityScopeKeys`,
       admissible only for the space's live lease holder (scopes.md
       §7 M1, protocol.md §2), and run identity for
       non-handler runs is per DEMANDED INSTANCE (scopes.md §5). The
@@ -1522,8 +1522,8 @@ Stages, one PR each except C, which is a three-PR train (below):
       built-ins served (spec §3.5 row 1); **M1 — per-instance run
       identity**: a derivation runs per DEMANDED instance and the
       demand supplies the identity, handlers take the event's
-      server-stamped actor, and reads name their
-      `entity_scope_key` explicitly under the lease (scopes.md §5,
+      server-stamped actor, and reads carry their
+      `entityScopeKeys` explicitly under the lease (scopes.md §5,
       §7 M1; protocol.md §2); narrowing-redirect writes gain the
       EAGER VIA-USER HOP (scopes.md §2's MUST — differs from
       main's one-hop-per-event; assigned here by the 2026-08-03
@@ -1548,7 +1548,7 @@ Stages, one PR each except C, which is a three-PR train (below):
       registry's roots, idle park honoring gate wakes), the
       `bookkeeping` stamp kind named (serving-loop §3d), the
       derived-envelope mapping `sessionKey == holder`, the read row
-      (`GraphQueryRoot.entityScopeKey`, lease-holder-only), M4
+      (`GraphQueryRoot.entityScopeKeys`, lease-holder-only), M4
       instance-keyed dirtiness/delivery with wire frames unchanged,
       the M1-cluster re-keys, the eager via-user hop (flag-gated),
       derivedThrough + the watermark doc + `waitForSettled`, the §7

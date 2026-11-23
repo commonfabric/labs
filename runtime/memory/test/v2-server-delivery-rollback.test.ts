@@ -6,6 +6,7 @@ import type { FabricValue } from "@commonfabric/api";
 
 import {
   resetServerExecutionConfig,
+  resolveScopeKey,
   type SessionEffectMessage,
   type SessionOpenResult,
   setServerExecutionConfig,
@@ -192,7 +193,9 @@ describe("Server", () => {
           });
           const sessionId = opened.ok!.sessionId;
           peer.auth = opened.ok!.sessionOpen;
-          // Naming an instance is what admits the session foreign ones.
+          // Naming an instance is what admits the session foreign ones, and
+          // the space's access list has to grant the named actor the read.
+          await write(`of:${SPACE}`, { [SERVICE]: "OWNER" });
           const watched = await request<WatchSetResult>(peer, {
             type: "session.watch.set",
             space: SPACE,
@@ -203,7 +206,9 @@ describe("Server", () => {
               query: {
                 roots: [{
                   id: "of:doc",
-                  entityScopeKey: "space",
+                  entityScopeKeys: {
+                    user: resolveScopeKey("user", { principal: SERVICE }),
+                  },
                   selector: { path: [], schema: false },
                 }],
               },

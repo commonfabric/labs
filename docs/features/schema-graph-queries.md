@@ -139,18 +139,19 @@ replay effects; a bare schema memo has neither contract.
 
 ## One graph per acting identity
 
-A serving session may name another identity's instance of a scoped document as
-a root (`entityScopeKey`; `../specs/server-side-execution/protocol.md`, §2's
-read row). `memory` splits a query by the identity each root is walked under
-(`partitionGraphQuery()` in `runtime/memory/v2/query.ts`). The roots naming one
-scope instance that is not the session's own are walked under the identity
-that instance belongs to, in a tracked graph of their own, and every other root
-is walked under the session's identity. A link followed from a named root
-therefore resolves to that identity's instances, as it does in a walk that
-identity's own session runs. `trackGraph()` and `extendTrackedGraph()` refuse a
-root naming an instance of an identity other than the one they walk under,
-since walking it there would record the document under that identity's own
-instance as well.
+A serving session may name another identity's instances of scoped documents on
+a root (`entityScopeKeys`; `../specs/server-side-execution/protocol.md`, §2's
+read row). The map names an identity: the principal of its `user` entry, with
+the session of its `session` entry where it holds one. `memory` splits a query
+by the identity each root is walked under (`partitionGraphQuery()` in
+`runtime/memory/v2/query.ts`). The roots whose maps name one identity that is
+not the session's own are walked under that identity, in a tracked graph of
+their own, and every other root is walked under the session's identity. A link
+followed from such a root therefore resolves to the entry the root carries for
+the link's scope, as it does in a walk that identity's own session runs.
+`trackGraph()` and `extendTrackedGraph()` refuse a root whose map is malformed,
+or names an identity other than the one they walk under, since walking it
+there would record the document under that identity's own instance as well.
 
 A session then holds one graph over a branch for each identity its roots are
 walked under, keyed as `watchGraphGroups()` in
@@ -159,9 +160,10 @@ own, so a document two of them reach is walked once in each and delivered
 once, and a document one of them retires is retracted only when no other graph
 of the session over that branch tracks it.
 
-A `user` instance names a principal and no session. The walk of a root naming
-one follows no session-scoped link, since its identity resolves no instance of
-that scope, and counts each link it leaves
+A map holding a `user` entry alone names a principal and no session, and so a
+different identity from a map of the same principal that holds a `session`
+entry. The walk of a root carrying one follows no session-scoped link, since
+its identity resolves no instance of that scope, and counts each link it leaves
 (`GraphQueryWalkStats.unresolvedLinkScopes`). An evaluation that left one is
 not kept in the evaluation cache, since a walk under another identity would
 reach more. A walk under an identity that names no principal fails at a

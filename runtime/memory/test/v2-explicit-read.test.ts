@@ -1,6 +1,6 @@
 // The read-side admission row (protocol.md §2's READ row; the read half of
 // §1's transaction identity model, ledger LD5, amended by owner routing R3).
-// A read naming an explicit `entity_scope_key` is admitted for the space's
+// A read whose root carries `entityScopeKeys` is admitted for the space's
 // own serving session on this server — an in-process session whose
 // principal holds the space's live lease — and for any session
 // authenticated as the deployment's service identity, the delegating class,
@@ -124,7 +124,7 @@ const newServer = (store: string): Server =>
     acl: { mode: "off", delegatingDids: [SERVICE] },
   });
 
-Deno.test("explicit entity_scope_key reads: the space's serving session and a service-identity session are admitted, an ordinary client and the off flag are refused (protocol.md §2's read row)", async () => {
+Deno.test("explicit entityScopeKeys reads: the space's serving session and a service-identity session are admitted, an ordinary client and the off flag are refused (protocol.md §2's read row)", async () => {
   const server = newServer("memory://explicit-read");
   setServerExecutionConfig(true);
   try {
@@ -153,7 +153,7 @@ Deno.test("explicit entity_scope_key reads: the space's serving session and a se
           roots: [{
             id: "of:profile",
             scope: "user",
-            entityScopeKey: aliceKey,
+            entityScopeKeys: { user: aliceKey },
             selector: { path: [], schema: false },
           }],
         },
@@ -191,7 +191,7 @@ Deno.test("explicit entity_scope_key reads: the space's serving session and a se
           roots: [{
             id: "of:profile",
             scope: "user",
-            entityScopeKey: aliceKey,
+            entityScopeKeys: { user: aliceKey },
             selector: { path: [], schema: false },
           }],
         },
@@ -231,7 +231,7 @@ Deno.test("explicit entity_scope_key reads: the space's serving session and a se
           roots: [{
             id: "of:profile",
             scope: "user",
-            entityScopeKey: aliceKey,
+            entityScopeKeys: { user: aliceKey },
             selector: { path: [], schema: false },
           }],
         },
@@ -271,7 +271,7 @@ Deno.test("explicit entity_scope_key reads: the space's serving session and a se
   }
 });
 
-Deno.test("explicit entity_scope_key reads: among in-process sessions of the service identity, the space's serving session is the one whose connection names the holder component the lease is held under (protocol.md §2's read row)", async () => {
+Deno.test("explicit entityScopeKeys reads: among in-process sessions of the service identity, the space's serving session is the one whose connection names the holder component the lease is held under (protocol.md §2's read row)", async () => {
   const server = newServer("memory://explicit-read-worker-holder");
   setServerExecutionConfig(true);
   try {
@@ -312,7 +312,7 @@ Deno.test("explicit entity_scope_key reads: among in-process sessions of the ser
           roots: [{
             id: "of:profile",
             scope: "user",
-            entityScopeKey: aliceKey,
+            entityScopeKeys: { user: aliceKey },
             selector: { path: [], schema: false },
           }],
         },
@@ -345,7 +345,7 @@ Deno.test("explicit entity_scope_key reads: among in-process sessions of the ser
   }
 });
 
-Deno.test("explicit entity_scope_key reads: an anonymous session naming a key is refused, since without a principal it serves nothing (protocol.md §2's read row)", async () => {
+Deno.test("explicit entityScopeKeys reads: an anonymous session naming a key is refused, since without a principal it serves nothing (protocol.md §2's read row)", async () => {
   const server = newServer("memory://explicit-read-anonymous");
   setServerExecutionConfig(true);
   try {
@@ -374,7 +374,9 @@ Deno.test("explicit entity_scope_key reads: an anonymous session naming a key is
         roots: [{
           id: "of:profile",
           scope: "user",
-          entityScopeKey: resolveScopeKey("user", { principal: ALICE }),
+          entityScopeKeys: {
+            user: resolveScopeKey("user", { principal: ALICE }),
+          },
           selector: { path: [], schema: false },
         }],
       },
@@ -446,7 +448,7 @@ const watchAliceInstance = (
       roots: [{
         id: "of:profile",
         scope: "user" as const,
-        entityScopeKey: aliceKey as never,
+        entityScopeKeys: { user: aliceKey as never },
         selector: { path: [], schema: false as const },
       }],
     },
@@ -621,7 +623,10 @@ Deno.test("an admitted session's keyed-delivered foreign instance is retracted B
         id: "w-both",
         kind: "graph",
         query: {
-          roots: [ownRoot, { ...ownRoot, entityScopeKey: aliceKey as never }],
+          roots: [ownRoot, {
+            ...ownRoot,
+            entityScopeKeys: { user: aliceKey as never },
+          }],
         },
       }],
     }) as ResponseMessage<WatchSetResult>;
@@ -674,7 +679,7 @@ Deno.test("an admitted session's keyed-delivered foreign instance is retracted B
 // Threads r3731191411 and r3731191526: the wire strips scope KEYS (frames
 // carry scope names), so the server must refuse what the wire cannot express
 // — one watch set (or query) resolving TWO instances of one (branch, id,
-// scope) — and must treat a changed `entityScopeKey` on an existing watch id
+// scope) — and must treat changed `entityScopeKeys` on an existing watch id
 // as a changed spec, never silently the same watch.
 //
 
@@ -741,13 +746,13 @@ Deno.test("stage A: a lease holder names two instances of one (branch, id, scope
             {
               id: "of:profile",
               scope: "user",
-              entityScopeKey: aliceKey,
+              entityScopeKeys: { user: aliceKey },
               selector: { path: [], schema: false },
             },
             {
               id: "of:profile",
               scope: "user",
-              entityScopeKey: bobKey,
+              entityScopeKeys: { user: bobKey },
               selector: { path: [], schema: false },
             },
           ],
@@ -782,7 +787,7 @@ Deno.test("stage A: a lease holder names two instances of one (branch, id, scope
           roots: [{
             id: "of:profile",
             scope: "user",
-            entityScopeKey: aliceKey,
+            entityScopeKeys: { user: aliceKey },
             selector: { path: [], schema: false },
           }],
         },
@@ -801,13 +806,13 @@ Deno.test("stage A: a lease holder names two instances of one (branch, id, scope
           {
             id: "of:profile",
             scope: "user",
-            entityScopeKey: aliceKey,
+            entityScopeKeys: { user: aliceKey },
             selector: { path: [], schema: false },
           },
           {
             id: "of:profile",
             scope: "user",
-            entityScopeKey: bobKey,
+            entityScopeKeys: { user: bobKey },
             selector: { path: [], schema: false },
           },
         ],
@@ -877,13 +882,13 @@ Deno.test("stage A: a lease holder names two instances of one (branch, id, scope
             {
               id: "of:profile",
               scope: "user",
-              entityScopeKey: aliceKey,
+              entityScopeKeys: { user: aliceKey },
               selector: { path: [], schema: false },
             },
             {
               id: "of:profile",
               scope: "user",
-              entityScopeKey: bobKey,
+              entityScopeKeys: { user: bobKey },
               selector: { path: [], schema: false },
             },
           ],
@@ -948,7 +953,7 @@ const effectUpserts = (
       }).effect?.upserts ?? []
     );
 
-Deno.test("watch.add with a changed entityScopeKey on an existing watch id is a changed spec, not silently the old instance", async () => {
+Deno.test("watch.add with changed entityScopeKeys on an existing watch id is a changed spec, not silently the old instance", async () => {
   const server = newServer("memory://explicit-read-changed-key");
   setServerExecutionConfig(true);
   try {
@@ -983,7 +988,7 @@ Deno.test("watch.add with a changed entityScopeKey on an existing watch id is a 
           roots: [{
             id: "of:profile",
             scope: "user",
-            entityScopeKey: bobKey,
+            entityScopeKeys: { user: bobKey },
             selector: { path: [], schema: false },
           }],
         },
@@ -991,7 +996,7 @@ Deno.test("watch.add with a changed entityScopeKey on an existing watch id is a 
     });
     assertExists(
       changed.error,
-      "a changed entityScopeKey must not be silently accepted as the " +
+      "changed entityScopeKeys must not be silently accepted as the " +
         "same watch spec",
     );
 
@@ -1107,7 +1112,7 @@ Deno.test("a failed delivery of an explicit foreign-instance frame is redelivere
   }
 });
 
-Deno.test("a non-canonical entity_scope_key (raw '/') is refused at admission — descendant composite keys never see it (thread r3731191505; the shared-validator fix)", async () => {
+Deno.test("a non-canonical entityScopeKeys entry (raw '/') is refused at admission — descendant composite keys never see it (thread r3731191505; the shared-validator fix)", async () => {
   const server = newServer("memory://explicit-read-noncanonical");
   setServerExecutionConfig(true);
   try {
@@ -1135,7 +1140,7 @@ Deno.test("a non-canonical entity_scope_key (raw '/') is refused at admission �
           roots: [{
             id: "of:profile",
             scope: "user",
-            entityScopeKey: bad as never,
+            entityScopeKeys: { user: bad as never },
             selector: { path: [], schema: false },
           }],
         },
@@ -1146,7 +1151,7 @@ Deno.test("a non-canonical entity_scope_key (raw '/') is refused at admission �
         `expected refusal for ${JSON.stringify(bad)}`,
       );
       assertEquals(
-        refused.error?.message.includes("malformed entity_scope_key"),
+        refused.error?.message.includes("malformed `entityScopeKeys`"),
         true,
         `expected the malformed-key refusal for ${JSON.stringify(bad)}`,
       );
@@ -1255,7 +1260,7 @@ Deno.test("a service-identity session from another process names a foreign space
         roots: [{
           id: "of:profile",
           scope: "user",
-          entityScopeKey: aliceKey,
+          entityScopeKeys: { user: aliceKey },
           selector: { path: [], schema: false },
         }],
       },
@@ -1282,7 +1287,7 @@ Deno.test("a service-identity session from another process names a foreign space
         roots: [{
           id: "of:profile",
           scope: "user",
-          entityScopeKey: aliceKey,
+          entityScopeKeys: { user: aliceKey },
           selector: { path: [], schema: false },
         }],
       },
@@ -1325,7 +1330,7 @@ Deno.test("a lease held on this server admits only the in-process session that h
           roots: [{
             id: "of:profile",
             scope: "user",
-            entityScopeKey: bobKey,
+            entityScopeKeys: { user: bobKey },
             selector: { path: [], schema: false },
           }],
         },
@@ -1397,7 +1402,7 @@ Deno.test("a service session naming a FOREIGN instance of an actor the space gra
           roots: [{
             id: "of:profile",
             scope: "user",
-            entityScopeKey: bobKey,
+            entityScopeKeys: { user: bobKey },
             selector: { path: [], schema: false },
           }],
         },
@@ -1438,7 +1443,9 @@ Deno.test("a service session naming a FOREIGN instance of an actor the space gra
         roots: [{
           id: "of:profile",
           scope: "user",
-          entityScopeKey: resolveScopeKey("user", { principal: ALICE }),
+          entityScopeKeys: {
+            user: resolveScopeKey("user", { principal: ALICE }),
+          },
           selector: { path: [], schema: false },
         }],
       },
@@ -1652,7 +1659,7 @@ describe("Server", () => {
               roots: [{
                 id: "of:profile",
                 scope: "user",
-                entityScopeKey: aliceKey,
+                entityScopeKeys: { user: aliceKey },
                 selector: { path: [], schema: false },
               }],
             },

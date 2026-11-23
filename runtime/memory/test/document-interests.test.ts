@@ -157,31 +157,31 @@ describe("document-interests", () => {
     expect(session.entities.get(cacheKeyForEntity("", id))).toBe(entry);
   });
 
-  it("resolves explicit instances before scope names and counts field watches", () => {
+  it("counts a root by the scope of its document, whatever instances it names, and counts field watches", () => {
     const registry = new SessionRegistry();
     const opened = registry.open(space, {}, 0, "connection", "owner");
     const session = registry.peek(space, opened.sessionId)!;
     session.watches = [
       {
-        id: "explicit-space",
+        id: "named-user",
         kind: "graph",
         query: {
           roots: [{
             id,
             scope: "user",
-            entityScopeKey: "space",
+            entityScopeKeys: { user: "user:owner" },
             selector: { path: [], schema: false },
           }],
         },
       },
       {
-        id: "explicit-user",
+        id: "named-on-space",
         kind: "graph",
         query: {
           roots: [{
             id,
             scope: "space",
-            entityScopeKey: "user:owner",
+            entityScopeKeys: { user: "user:owner" },
             selector: { path: [], schema: false },
           }],
         },
@@ -208,7 +208,7 @@ describe("document-interests", () => {
       registry.documentInterests({ space, id, branch: "other" }).sessions[0]
         .directWatchCount,
     ).toBe(1);
-    session.watches = [session.watches[1], session.watches[3]];
+    session.watches = [session.watches[0], session.watches[3]];
     expect(registry.documentInterests({ space, id }).totalMatches).toBe(0);
   });
 

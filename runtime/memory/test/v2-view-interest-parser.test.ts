@@ -58,7 +58,7 @@ describe("view interest parsing", () => {
     ["non-object root", { roots: [null] }],
     ["empty root id", { roots: [{ id: "", selector: { path: [] } }] }],
     ["foreign instance", {
-      roots: [{ ...query.roots[0], entityScopeKey: "user:other" }],
+      roots: [{ ...query.roots[0], entityScopeKeys: { user: "user:other" } }],
     }],
     ["unknown scope", { roots: [{ ...query.roots[0], scope: "other" }] }],
     ["non-string path", {

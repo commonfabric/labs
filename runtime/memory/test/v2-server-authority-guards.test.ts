@@ -19,6 +19,7 @@ import {
   getMemoryProtocolFlags,
   MEMORY_PROTOCOL,
   resetServerExecutionConfig,
+  resolveScopeKey,
   type ServerMessage,
   type SessionOpenResult,
   type SessionReport,
@@ -251,7 +252,11 @@ describe("server", () => {
         sessionOpenAuth: { audience: AUDIENCE },
         ownsSpace: () => fence.owns,
         requireExplicitAcl: false,
-        acl: { mode: "enforce", delegatingDids: [PRINCIPAL] },
+        acl: {
+          mode: "enforce",
+          delegatingDids: [PRINCIPAL],
+          serviceDids: [PRINCIPAL],
+        },
       });
       const messages: ServerMessage[] = [];
       const connection = server.connectRouted(
@@ -310,6 +315,24 @@ describe("server", () => {
       const { server, sessionId } = await routedSession("explicit", fence);
       setServerExecutionConfig(true);
       try {
+        // A session that does not serve the space names an actor's instances
+        // under that actor's grant in the space's access list.
+        const listed = await server.transact({
+          type: "transact",
+          requestId: "explicit-acl",
+          space: SPACE,
+          sessionId,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: `of:${SPACE}`,
+              value: { value: { [PRINCIPAL]: "OWNER" } },
+            }],
+          },
+        });
+        expect(listed.error).toBeUndefined();
         const query = {
           type: "graph.query" as const,
           requestId: "explicit",
@@ -319,7 +342,9 @@ describe("server", () => {
             roots: [{
               id: "of:doc",
               selector: { path: [], schema: false },
-              entityScopeKey: "space" as const,
+              entityScopeKeys: {
+                user: resolveScopeKey("user", { principal: PRINCIPAL }),
+              },
             }],
           },
         };

@@ -41,7 +41,7 @@ describe("v2-track-explicit-instances", () => {
     {
       id: "of:root",
       scope: "user",
-      entityScopeKey: aliceKey,
+      entityScopeKeys: { user: aliceKey },
       selector: {
         path: [],
         schema: { type: "object", properties: { child: { type: "object" } } },
@@ -211,7 +211,7 @@ describe("v2-track-explicit-instances", () => {
       }]);
     });
 
-    it("throws for a root naming an instance of a scope other than the one it declares", async () => {
+    it("throws for a `session`-scoped root whose `entityScopeKeys` holds no `session` entry", async () => {
       await withEngine((engine) => {
         expect(() =>
           trackGraph(
@@ -221,7 +221,7 @@ describe("v2-track-explicit-instances", () => {
             undefined,
             { principal: alice.principal },
           )
-        ).toThrow("declares the `session` scope");
+        ).toThrow("holds no `session` entry");
       });
     });
 
@@ -229,7 +229,7 @@ describe("v2-track-explicit-instances", () => {
       await withEngine((engine) => {
         expect(() =>
           trackGraph(space, engine, { roots: [roots[0]] }, undefined, service)
-        ).toThrow("names a scope instance of another identity");
+        ).toThrow("names the scope instances of another identity");
       });
     });
   });
@@ -247,7 +247,7 @@ describe("v2-track-explicit-instances", () => {
 
         expect(() =>
           extendTrackedGraph(space, engine, state, { roots: [roots[0]] })
-        ).toThrow("names a scope instance of another identity");
+        ).toThrow("names the scope instances of another identity");
       });
     });
   });

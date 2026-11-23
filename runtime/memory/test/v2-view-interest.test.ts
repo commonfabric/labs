@@ -1300,7 +1300,7 @@ describe("view interests", () => {
         query: {
           roots: [{
             id: "of:render",
-            entityScopeKey: "user:foreign",
+            entityScopeKeys: { user: "user:foreign" },
             selector: { path: [] },
           }],
         },

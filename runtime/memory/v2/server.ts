@@ -56,6 +56,8 @@ import {
   type EntityIdListResult,
   type EntityIdLookupRequest,
   type EntityIdLookupResult,
+  type EntityScopeKeys,
+  entityScopeKeysProblem,
   type EntitySnapshot,
   EventAppendDuplicateError,
   eventAttentionEntryKey,
@@ -73,10 +75,10 @@ import {
   type HistoryListRequest,
   type HistoryListResult,
   identityOfScopeKey,
-  isScopeKey,
   MAX_ENTITY_ID_PAGE_SIZE,
   MAX_UNTRUSTED_MESSAGE_SLOTS,
   type MemoryProtocolFlags,
+  namedRootInstance,
   type OpCursor,
   type Operation,
   type OperationFieldQueryRequest,
@@ -1677,7 +1679,7 @@ const graphWatchRoots = (watches: readonly WatchSpec[]) =>
 type ReadAdmissionRoot = {
   id: string;
   scope?: CellScope;
-  entityScopeKey?: ScopeKey;
+  entityScopeKeys?: EntityScopeKeys;
 };
 
 const watchReadRoots = (
@@ -8902,7 +8904,7 @@ export class Server {
       }
     }
     if (this.#namesExplicitInstance(message.query.roots)) {
-      // protocol.md §2's read row: explicit entity_scope_key roots are
+      // protocol.md §2's read row: roots carrying `entityScopeKeys` are
       // admitted for the space's serving session and the service
       // identity. Gated on the sync scan so the no-key path adds no
       // await between authorization and evaluation.
@@ -10256,7 +10258,7 @@ export class Server {
         graphWatchRoots(message.watches),
       )
     ) {
-      // protocol.md §2's read row: explicit entity_scope_key roots are
+      // protocol.md §2's read row: roots carrying `entityScopeKeys` are
       // admitted for the space's serving session and the service
       // identity. Gated on the sync scan so the no-key path adds no
       // await between authorization and evaluation.
@@ -10739,7 +10741,7 @@ export class Server {
         graphWatchRoots(message.watches),
       )
     ) {
-      // protocol.md §2's read row: explicit entity_scope_key roots are
+      // protocol.md §2's read row: roots carrying `entityScopeKeys` are
       // admitted for the space's serving session and the service
       // identity. Gated on the sync scan so the no-key path adds no
       // await between authorization and evaluation. watch.add
@@ -11302,8 +11304,9 @@ export class Server {
           rootKeys.add(toDirtyKey(root.id, "space"));
           continue;
         }
-        if (root.entityScopeKey !== undefined) {
-          rootKeys.add(toDirtyKey(root.id, root.entityScopeKey));
+        const named = namedRootInstance(root);
+        if (named !== undefined) {
+          rootKeys.add(toDirtyKey(root.id, named));
           continue;
         }
         rootKeys.add(
@@ -12579,7 +12582,7 @@ export class Server {
    * Distinct (id, scope) pairs across every live session's watch specs;
    * the SpaceServer loads graph structure sufficient to resolve them.
    *
-   * `entityScopeKey` is deliberately NOT part of a demand record, and
+   * `entityScopeKeys` is deliberately NOT part of a demand record, and
    * that is an INVARIANT, not an omission (PR #5439 thread
    * r3731191476): explicit-instance roots are admissible only to the
    * space's serving session and to sessions of the deployment's
@@ -14192,7 +14195,7 @@ export class Server {
 
   /**
    * The read-side admission row (protocol.md §2, ratified LD5; amended by
-   * owner routing R3): a read naming an explicit `entity_scope_key` is
+   * owner routing R3): a read whose root carries `entityScopeKeys` is
    * admitted for the space's own serving session on this server
    * (`#isServingSession`), which derives every instance and may name any,
    * and for a session of the delegating class, the identities of the
@@ -14246,18 +14249,16 @@ export class Server {
     let collapse: V2Error | undefined;
     const rows = [...entries];
     for (const { branch, root } of rows) {
-      if (
-        root.entityScopeKey !== undefined && !isScopeKey(root.entityScopeKey)
-      ) {
+      const problem = entityScopeKeysProblem(root);
+      if (problem !== undefined) {
         return toError(
           "ProtocolError",
-          `malformed entity_scope_key "${root.entityScopeKey}" on read ` +
-            `root ${root.id}`,
+          `malformed \`entityScopeKeys\` on read root ${root.id}: ${problem}`,
         );
       }
       if (collapse !== undefined) continue;
       const scopeName = root.scope ?? "space";
-      const instanceKey = root.entityScopeKey ??
+      const instanceKey = namedRootInstance(root) ??
         (canResolveScopeKey(root.scope, identity)
           ? resolveScopeKey(root.scope, identity)
           : undefined);
@@ -14282,7 +14283,7 @@ export class Server {
     if (!getServerExecutionConfig()) {
       return toError(
         "ProtocolError",
-        "reads naming an entity_scope_key are unclaimable while " +
+        "reads carrying `entityScopeKeys` are unclaimable while " +
           "EXPERIMENTAL_SERVER_EXECUTION is off (protocol.md §2)",
       );
     }
@@ -14297,7 +14298,7 @@ export class Server {
         // wire.
         return collapse ?? toError(
           "ProtocolError",
-          "read naming an entity_scope_key rejected: the requester is " +
+          "read carrying `entityScopeKeys` rejected: the requester is " +
             "not the deployment's service identity and does not serve " +
             "this space on this memory server (protocol.md §2's read row)",
         );
@@ -14312,8 +14313,8 @@ export class Server {
       // rollout, so neither the service-DID blanket nor the missing-ACL
       // compat arm applies, and a key naming no actor grants nothing.
       for (const { root } of rows) {
-        const key = root.entityScopeKey;
-        if (key === undefined || key === "space") continue;
+        const key = root.entityScopeKeys?.user;
+        if (key === undefined) continue;
         const actor = identityOfScopeKey(key)?.principal;
         const verdict = actor === undefined
           ? { granted: false as const, reason: `"${key}" names no actor` }
@@ -14321,7 +14322,7 @@ export class Server {
         if (!verdict.granted) {
           return toError(
             "ProtocolError",
-            `read naming entity_scope_key "${key}" on root ${root.id} ` +
+            `read carrying \`entityScopeKeys\` for "${key}" on root ${root.id} ` +
               `rejected: ${verdict.reason} — a foreign scoped instance is ` +
               "read under its actor's own READ grant on the space " +
               "(protocol.md §2's grant-scoped read)",
@@ -14339,7 +14340,7 @@ export class Server {
     roots: Iterable<GraphQuery["roots"][number]>,
   ): boolean {
     for (const root of roots) {
-      if (root.entityScopeKey !== undefined) return true;
+      if (root.entityScopeKeys !== undefined) return true;
     }
     return false;
   }
@@ -14350,7 +14351,7 @@ export class Server {
    * precondition, 2026-10-27 as the grant). A session under the serving
    * binding (`actingAs: "space-owner"`, the serving runtime's) reading a
    * SCOPED root of a space it does not serve on this server
-   * (`#isServingSession`), without naming an `entity_scope_key`, would
+   * (`#isServingSession`), without carrying `entityScopeKeys`, would
    * silently resolve the service identity's (empty) instance — the FP2
    * silent-empty-instance trap, cross-space edition. Refused loudly, from
    * a routed session as from an in-process one. The space's own serving
@@ -14373,7 +14374,8 @@ export class Server {
     let unnamedScopedRoot: string | undefined;
     for (const root of roots) {
       if (
-        root.entityScopeKey === undefined && (root.scope ?? "space") !== "space"
+        root.entityScopeKeys === undefined &&
+        (root.scope ?? "space") !== "space"
       ) {
         unnamedScopedRoot = `${root.id} (scope "${root.scope}")`;
         break;
@@ -14385,8 +14387,8 @@ export class Server {
       "ProtocolError",
       `scoped read of ${unnamedScopedRoot} refused: the requesting ` +
         `session is a serving runtime's reading space ${space}, which ` +
-        "it does not serve on this memory server, without naming an " +
-        "entity_scope_key — resolving it from the service identity's " +
+        "it does not serve on this memory server, without carrying " +
+        "`entityScopeKeys` — resolving it from the service identity's " +
         "envelope would silently read an empty instance (protocol.md " +
         "§2's grant-scoped read)",
     );

@@ -56,6 +56,8 @@ import {
   type EntityDocument,
   type EntityIdListOptions,
   type EntityIdListResult,
+  type EntityScopeKeys,
+  entityScopeKeysOf,
   type EventAttentionResolveResult,
   type GenesisRoot,
   getCommitPreconditionsConfig,
@@ -6154,6 +6156,23 @@ type InFlightCommit = {
  */
 const docKey = (id: URI, instance: string): string => `${instance}\0${id}`;
 
+/**
+ * Helper for the watch a load sends, which returns the `entityScopeKeys`
+ * member of its root (protocol.md §2's read row): the scope instances of the
+ * identity `instance` belongs to, or no member for a load that names no
+ * instance.
+ */
+const namedInstancesOf = (
+  instance: ScopeKey | undefined,
+): { entityScopeKeys?: EntityScopeKeys } => {
+  const identity = instance === undefined
+    ? undefined
+    : identityOfScopeKey(instance);
+  return identity === undefined
+    ? {}
+    : { entityScopeKeys: entityScopeKeysOf(identity) };
+};
+
 /** A local address the replica keys: the scope name plus, where the
  * caller knows it, the explicit instance key. */
 type LocalDocAddress = { id: URI; scope?: CellScope; scopeKey?: ScopeKey };
@@ -10056,9 +10075,7 @@ export class SpaceReplica
             // runtime's per-instance run). Own-identity loads name
             // nothing: byte-identical roots, the no-key admission fast
             // path.
-            ...(address.scopeKey !== undefined
-              ? { entityScopeKey: address.scopeKey }
-              : {}),
+            ...namedInstancesOf(address.scopeKey),
             selector,
           }],
         },
