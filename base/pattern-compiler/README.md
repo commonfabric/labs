@@ -1316,3 +1316,19 @@ The crate follows `language-subset.md` as it stands at commit `8bc4a3001a`.
 `cargo test` fails when the document's catalog and the copy differ. To follow a
 change of the catalog, edit `catalog-ids.txt` and the table in `src/catalog.rs`
 together.
+
+## Collection indexes and the entries of a record
+
+The plan emitter takes `xs.groupBy((x) => key)` and `xs.keyBy((x) => key)` as a
+collection whose body is the key function, and `index.lookup(k)` as a read of
+one bucket (`plan-and-label-templates.md` §3.17). The executor keeps the index
+by element key and by bucket, brings it up to date from the changes of its
+source, and has what looked up a key depend on that one bucket
+(`exec/executor.ts`, `Index`, `Host.lookup`). A keyed join is a `map` whose body
+calls `lookup` (`compare/fixtures/keyed-join.tsx`); an index a pattern returns
+is stored in the shape of today's index data, and another instance that is
+handed it looks up a key by reading that bucket
+(`compare/fixtures/kept-index.tsx`). `Object.entries(record).map(f)` over a
+record that is an input is a collection keyed by the entry's name
+(`compare/fixtures/record-entries.tsx`). `keys()`, `keyEntries()`, a `lookup` by
+a cell and a sort by a key are not built (`SPEC-NOTES.md`, notes 610 to 623).

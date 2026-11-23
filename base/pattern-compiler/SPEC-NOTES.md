@@ -11850,25 +11850,30 @@ names the case. `PL` is `plan-and-label-templates.md`, `ES` is
 
 610. **What the language already has, and what it lacks.** Note 601 proposed
      `joinBy` and `groupBy` as new functions. The design documents and today's
-     runtime already hold a grouping and a lookup by key: `xs.groupBy((x) =>
-     key)` and `xs.keyBy((x) => key)` build a collection index, and
-     `index.lookup(k)`, `index.keys()` and `index.keyEntries()` read it (LS
-     §4.4, the row of structural operations; PL §3.17; ES §6.3;
+     runtime already hold a grouping and a lookup by key:
+     `xs.groupBy((x) =>
+     key)` and `xs.keyBy((x) => key)` build a collection
+     index, and `index.lookup(k)`, `index.keys()` and `index.keyEntries()` read
+     it (LS §4.4, the row of structural operations; PL §3.17; ES §6.3;
      `IDerivable.groupBy` and `CollectionIndexHandle` of `base/api/index.ts`;
      `runtime/runner/src/builtins/collection-index.ts`). The crate's checker
      accepts the five methods (`is_selector_method` of `src/api.rs`), and the
-     plan emitter refuses `groupBy` and `keyBy` (`the method ... in the reactive
-     tier`) and gives the collection over a `lookup` an empty source. The
-     executor has none of them. So two of the three constructs are surface and a
-     label rule the documents decided, with no plan and no execution. A
-     per-entry construct over a record and a sort by a key are in no document.
-     Today's transformer refuses a function written in a pattern body as an
-     argument of an authored function, and a `lift` whose callback captures a
-     function (`Function creation is not allowed in pattern context`, `Callback
-     passed to lift-builder captures callable`), so a library function `joinBy(
-     sources, keysOf, rowOf)` with callbacks in place cannot run on today's
-     runtime; a method of a cell with a callback can, because the transformer
-     lowers it (`groupByWithPattern`).
+     plan emitter refuses `groupBy` and `keyBy`
+     (`the method ... in the reactive
+     tier`) and gives the collection over
+     a `lookup` an empty source. The executor has none of them. So two of the
+     three constructs are surface and a label rule the documents decided, with
+     no plan and no execution. A per-entry construct over a record and a sort by
+     a key are in no document. Today's transformer refuses a function written in
+     a pattern body as an argument of an authored function, and a `lift` whose
+     callback captures a function
+     (`Function creation is not allowed in pattern context`,
+     `Callback
+     passed to lift-builder captures callable`), so a library
+     function `joinBy(
+     sources, keysOf, rowOf)` with callbacks in place
+     cannot run on today's runtime; a method of a cell with a callback can,
+     because the transformer lowers it (`groupByWithPattern`).
 611. **The grouping (provisional decisions P67 and P69).**
      - _Surface (P67)._ `xs.groupBy((x) => key)` in the reactive tier, which
        gives a `GroupIndex`, and `xs.keyBy((x) => key)`, which gives a
@@ -11904,32 +11909,32 @@ names the case. `PL` is `plan-and-label-templates.md`, `ES` is
        depends on every key. An element of a bucket is the source element passed
        through, a reference, whose content is labeled where it is stored.
      - _How it is stored without every member's clause on every bucket (P69)._
-       The index is one state document of the operation (ES §6.3). Its
-       `buckets` member holds a record from the encoded index key to the
-       bucket. The fold is one label for all buckets, so it is stored once, as
-       the entry of the `buckets` member, and no bucket has an entry of its own:
-       a read of a bucket, of a position in it, of its length, or of a key that
-       is absent resolves to that one entry, as a read of a row in place joins
-       the `*` templates of note 572. A change of one member's key changes one
-       label entry and the buckets it left and entered. _Alternative:_ an entry
-       per bucket with the fold instantiated in each, which is what PL §3.17
-       reads as and is `N` entries each as long as the fold. _Cost where each
-       member has a clause of its own (question 352):_ the one entry holds `N`
-       clauses; it is formed again when a member's key label changes; and every
-       reader of any bucket consumes all `N` clauses. A row of a join that
-       holds its bucket as a reference holds none of them; a row whose body
-       reads the bucket's content holds the entry as one input of its record and
-       stores `N` clauses, so `N` rows store `N` squared. Not solved here.
+       The index is one state document of the operation (ES §6.3). Its `buckets`
+       member holds a record from the encoded index key to the bucket. The fold
+       is one label for all buckets, so it is stored once, as the entry of the
+       `buckets` member, and no bucket has an entry of its own: a read of a
+       bucket, of a position in it, of its length, or of a key that is absent
+       resolves to that one entry, as a read of a row in place joins the `*`
+       templates of note 572. A change of one member's key changes one label
+       entry and the buckets it left and entered. _Alternative:_ an entry per
+       bucket with the fold instantiated in each, which is what PL §3.17 reads
+       as and is `N` entries each as long as the fold. _Cost where each member
+       has a clause of its own (question 352):_ the one entry holds `N` clauses;
+       it is formed again when a member's key label changes; and every reader of
+       any bucket consumes all `N` clauses. A row of a join that holds its
+       bucket as a reference holds none of them; a row whose body reads the
+       bucket's content holds the entry as one input of its record and stores
+       `N` clauses, so `N` rows store `N` squared. Not solved here.
      - _Incremental execution._ State: for each element key the encoded index
        key its key function gave; for each index key the element keys of its
        bucket in source order. A change of one member's key evaluates that
        member's key function, removes the member from one bucket and inserts it
        into another by its position, and marks what looked up either key. A
        change of a member's content that the key function does not read does
-       nothing. A member added evaluates its key function and enters one
-       bucket; a member removed leaves one. A change of the order of the source
-       changes the order within the buckets that hold a moved member. Nothing
-       is evaluated for a member that did not change.
+       nothing. A member added evaluates its key function and enters one bucket;
+       a member removed leaves one. A change of the order of the source changes
+       the order within the buckets that hold a moved member. Nothing is
+       evaluated for a member that did not change.
      - _Storage._ The state document holds `kind`, `mode`, `keys`, `keyEntries`
        and `buckets`, the members today's `CollectionIndexData` has, so that a
        reader of today's shape reads it. A change writes the buckets that
@@ -11948,17 +11953,19 @@ names the case. `PL` is `plan-and-label-templates.md`, `ES` is
      - _Surface._ No construct of its own: a `map` over the rows whose body
        calls `index.lookup(key)`, as `patterns/apps/lunch-poll/main.tsx` does
        (`options.map((option) => votesByOption.index.lookup(option.id))`). In
-       `group` mode the lookup is a collection, so the body can pass it on,
-       read its length, or `map` over it. _Alternative:_ `joinBy(sources,
-       (source) => keys, (key, matches) => row)` of note 601, which is new
-       surface that today's transformer refuses (note 610).
-     - _A member that names several keys (P68)._ The key function gives one
-       key. A source that names several, as a topic names the topics it
-       mentions, is first spread into one element for each (source, key) pair
-       with `flatMap`, whose rows the grouping then holds:
+       `group` mode the lookup is a collection, so the body can pass it on, read
+       its length, or `map` over it. _Alternative:_
+       `joinBy(sources,
+       (source) => keys, (key, matches) => row)` of note
+       601, which is new surface that today's transformer refuses (note 610).
+     - _A member that names several keys (P68)._ The key function gives one key.
+       A source that names several, as a topic names the topics it mentions, is
+       first spread into one element for each (source, key) pair with `flatMap`,
+       whose rows the grouping then holds:
        `topics.flatMap((from) => from.mentions.map((to) => ({ from, to })))
-       .groupBy((pair) => pair.to)`. _Alternative:_ a key function that returns
-       an array of keys, which today's `groupBy` does not take.
+       .groupBy((pair) => pair.to)`.
+       _Alternative:_ a key function that returns an array of keys, which
+       today's `groupBy` does not take.
      - _What it means, by case._ The rows are those of the `map`: over an array
        of references each row is a document of its own where it is a record
        (P54); over plain values in place or over the result of another
@@ -11966,8 +11973,8 @@ names the case. `PL` is `plan-and-label-templates.md`, `ES` is
        the bucket's.
      - _The label rule._ A row has the label of what its body reads of its own
        element, and for the lookup: the template of the key, joined with the
-       bucket's membership, which is the fold over every source (note 611). So
-       a row whose key no source names still depends on every source's key: an
+       bucket's membership, which is the fold over every source (note 611). So a
+       row whose key no source names still depends on every source's key: an
        absent match is an observation of all of them. When the match becomes
        present the row's value changes and its label does not. What the body
        reads of a matched member is a read through that member's reference and
@@ -11975,18 +11982,18 @@ names the case. `PL` is `plan-and-label-templates.md`, `ES` is
        its key to the row's label, through the fold, and nothing of its content.
        This is wider than the rule of note 601, which gave a row the keys of the
        sources that name it alone and was an under-label.
-     - _Incremental execution._ The body of a row that looked up key `k`
-       depends on bucket `k` alone, by a name of the executor's memo that
-       stands for the bucket (`bucket <index> <key>`), which a change of the
-       bucket marks. A change of one source's key evaluates that source's key
-       function and the bodies of the rows that looked up the key it left and
-       the key it entered. A row that passes the lookup on as a collection is
-       not evaluated: the collection's assembly is.
+     - _Incremental execution._ The body of a row that looked up key `k` depends
+       on bucket `k` alone, by a name of the executor's memo that stands for the
+       bucket (`bucket <index> <key>`), which a change of the bucket marks. A
+       change of one source's key evaluates that source's key function and the
+       bodies of the rows that looked up the key it left and the key it entered.
+       A row that passes the lookup on as a collection is not evaluated: the
+       collection's assembly is.
      - _Storage._ A row that passes the bucket on holds a reference to the
-       bucket's position in the index's state document, so the row's document
-       is not written when the bucket changes, and a read through it joins the
-       one entry of note 611. A row whose body reads the bucket holds what the
-       body computed, under a record that names the index's entry as an input.
+       bucket's position in the index's state document, so the row's document is
+       not written when the bucket changes, and a read through it joins the one
+       entry of note 611. A row whose body reads the bucket holds what the body
+       computed, under a record that names the index's entry as an input.
 613. **The per-entry construct over a record (provisional decision P70).**
      - _Surface._ `Object.entries(record).map(([name, value]) => row)`, with
        `Object.keys(record).map((name) => row)` and
@@ -11998,17 +12005,17 @@ names the case. `PL` is `plan-and-label-templates.md`, `ES` is
        cell, which needs a method in `base/api/index.ts` and a lowering in the
        transformer.
      - _What it means, by case._ The collection's elements are the entries of
-       the record, and the key of an element is the entry's name, so a row
-       keeps its identity while its name is in the record, whatever is added or
+       the record, and the key of an element is the entry's name, so a row keeps
+       its identity while its name is in the record, whatever is added or
        removed beside it. Over a record of references `value` is the reference
-       at the entry. Over a record of plain values in place `value` is the
-       value at the entry, referred to by the record and the name. The result
-       of `Object.entries` of a record that the instance computed is a plain
-       array generated from scratch and stays the `map` over such an array that
-       the language has. The rows are in the order of the record's names as
-       the store enumerates them. A row is a document of its own where the
-       record holds references and the row is a record or a view node (P54),
-       and is in place otherwise.
+       at the entry. Over a record of plain values in place `value` is the value
+       at the entry, referred to by the record and the name. The result of
+       `Object.entries` of a record that the instance computed is a plain array
+       generated from scratch and stays the `map` over such an array that the
+       language has. The rows are in the order of the record's names as the
+       store enumerates them. A row is a document of its own where the record
+       holds references and the row is a record or a view node (P54), and is in
+       place otherwise.
      - _The plan._ A `Collection` of construct `map` whose `source` is the slot
        of the record with `entries: true`. The record's slot observes
        `enumeration`. A slot of root `element` has the path `0` for the name and
@@ -12019,9 +12026,9 @@ names the case. `PL` is `plan-and-label-templates.md`, `ES` is
        value of an entry: the reference observed at the entry, or the value
        there, as the element slot of a `map` over an array has it. A row: what
        its body reads. No row depends on another entry.
-     - _Incremental execution._ State: the element table by name. An entry
-       added evaluates one body, an entry removed drops one row, a changed
-       value at an entry evaluates the bodies that read it.
+     - _Incremental execution._ State: the element table by name. An entry added
+       evaluates one body, an entry removed drops one row, a changed value at an
+       entry evaluates the bodies that read it.
      - _The crate._ `Emitter::method` recognizes a `map`, `filter` or `flatMap`
        whose receiver is the call `Object.entries(x)`, `Object.keys(x)` or
        `Object.values(x)` with `x` a place of a record type that is a slot.
@@ -12032,16 +12039,16 @@ names the case. `PL` is `plan-and-label-templates.md`, `ES` is
        does under ruling Z41.
 614. **A sort by a key (provisional decision P71).**
      - _Surface._ `xs.toSorted((a, b) => key(a) - key(b))`, with the operands
-       exchanged for a descending order, and
-       `key(a).localeCompare(key(b))` for texts, where `key` is one expression
-       over the one parameter. On today's runtime it stands inside a
-       `computed`. The crate takes the call out of the function tier where the
-       comparator has one of these forms and the `computed` is promoted
-       otherwise; any other comparator stays a function body over the whole
-       list. _Alternative:_ a method `xs.sortBy((x) => key)` of a cell, which is
-       shorter, states the rule that the order of two members depends on those
-       two alone, and needs a method in `base/api/index.ts` and a lowering.
-       The method is what the integration plan names; it is the owner's to add.
+       exchanged for a descending order, and `key(a).localeCompare(key(b))` for
+       texts, where `key` is one expression over the one parameter. On today's
+       runtime it stands inside a `computed`. The crate takes the call out of
+       the function tier where the comparator has one of these forms and the
+       `computed` is promoted otherwise; any other comparator stays a function
+       body over the whole list. _Alternative:_ a method `xs.sortBy((x) => key)`
+       of a cell, which is shorter, states the rule that the order of two
+       members depends on those two alone, and needs a method in
+       `base/api/index.ts` and a lowering. The method is what the integration
+       plan names; it is the owner's to add.
      - _The plan._ A `Collection` of construct `sort` (a value of `construct`
        that PL §1.1 does not list) with `descending` where it is, whose body
        cone is the key expression, observed as `value`.
@@ -12059,9 +12066,206 @@ names the case. `PL` is `plan-and-label-templates.md`, `ES` is
      - _Storage._ An array of references in the sorted order; a change writes
        the positions between the old and the new place.
 615. **The build order and what is stubbed.** The grouping and `lookup` in
-     `group` mode first, since the join is a `map` over it: the crate's plan
-     and value code, the executor's index with a name per bucket, tests of
-     values against today's runtime and of the work per change at two sizes.
-     Then `keyBy`, `keys` and `keyEntries`, the per-entry construct and the
-     sort, each as far as the round reaches; what is not built keeps its design
-     above.
+     `group` mode first, since the join is a `map` over it: the crate's plan and
+     value code, the executor's index with a name per bucket, tests of values
+     against today's runtime and of the work per change at two sizes. Then
+     `keyBy`, `keys` and `keyEntries`, the per-entry construct and the sort,
+     each as far as the round reaches; what is not built keeps its design above.
+616. **What the round built.** The collection index with `lookup` in `group` and
+     `key` mode, in the plan, the value code, the executor and on the runner
+     path, which is the grouping and the keyed join; and the per-entry construct
+     over a record that is an input. Not built: `keys()` and `keyEntries()`, the
+     state document of an index with one label entry (P69), the sort by a key
+     (note 614), and the Topics boards on the constructs, which need an index
+     whose key is a cell and the changes of note 620. Every figure below is of
+     one writer in one process on an 18-core machine at load averages of 4.6 to
+     5.4.
+617. **The collection index in the crate.** `Emitter::method` of `src/plan.rs`
+     takes `groupBy` and `keyBy` with a callback in place through
+     `Emitter::collection`: a `Collection` whose `construct` is `groupBy` or
+     `keyBy`, whose body cone is the key function with its result observed as
+     `value`, and whose `membership` is the template of a `filter`, the `fold`
+     of the key function's template over the source joined with the source's
+     membership (PL §3.17). The assembled output has that template, and an
+     element is the source element passed through. `lookup` on a place that is
+     such an output is a value derived from the key and from the index's output,
+     so its template is the key's joined with the fold; a `map` over it is a
+     collection over that value. `lookup` on a slot, an index the instance is
+     handed, is a `pick` below the `buckets` member of the slot (PL §3.18). The
+     value code is `$h.lookup(index, key)` and, for a handed index,
+     `$h.lookup(index, key, pick)` (`src/emit.rs`). _What differs from PL
+     §3.17:_ the plan holds no `Operation` of kind `index`, and the collection's
+     `construct` is not `operation`; `index_of_place` finds the index by the
+     collection of the value. A key that is a cell is encoded by the executor,
+     and the value code reads the key of a `lookup` as a value, so a `lookup` by
+     a cell is not built. Tests: `tests/plan.rs`,
+     `a_collection_index_has_the_fold_of_its_key_function_and_a_lookup_joins_the_key`,
+     written after the code; before it the emitter reported
+     `the method groupBy
+     in the reactive tier` for the fixture.
+618. **The collection index in the executor.** `Index` of `exec/executor.ts`
+     holds, for each element key, the encoded index key, and for each encoded
+     index key the element keys of its bucket in source order with a count that
+     moves with each change. The assembly of the collection forms it
+     (`Instance.assembled`), and `#reassemble` brings it up to date from the
+     changes of its source as it does the rows of a `map`: an element that left,
+     entered, moved or has another key leaves one bucket and enters another at
+     its place in the source order, found by binary search over the positions of
+     the bucket's members. Value code holds an `IndexHandle`, and `Host.lookup`
+     depends on one bucket by the name `bucket <assembly>
+     <encoded key>`,
+     which a change of the bucket marks. No entry depends on the index whole but
+     the result of an instance that keeps it, so the assembly of an index of the
+     pattern body is brought up to date at the start of each pass of
+     `Instance.#settle`; an index written in an element body is read whole by
+     what looks it up. A bucket that emptied stays, with no member, so that its
+     count goes on. The encoded key is `s:`, `n:` or `b:` and the text of a
+     primitive, and `c:` and the address of a cell.
+     - _Tests_ (`exec/test/collection-index.test.ts`, the fixture
+       `compare/fixtures/keyed-join.tsx`, written before the executor's code and
+       seen to fail on `a value that is no plain data`): the rows of a join; a
+       member whose key changes; an absent match that becomes present; a key
+       that becomes `undefined`; a member added and removed; a change the key
+       function does not read; and the same number of evaluations and of buckets
+       changed for one key change among 10 and among 1,000 members.
+     - _The work of one change, on the executor in memory,_ members spread over
+       ten tags, at 10, 100, 1,000 and 10,000 members: a change of one member's
+       key evaluates 7 entries (4 element bodies, 3 assemblies) and changes 2
+       buckets at every size, and takes 1.1, 0.3, 1.1 and 8.7 ms; an append
+       evaluates 5 and changes 1 bucket, 0.4, 0.2, 0.7 and 4.7 ms; a removal of
+       the first member evaluates 3, 0.2, 0.1, 0.6 and 5.7 ms. The counts do not
+       follow the collection. The time follows the size of the buckets that
+       changed, a tenth of the members here: the rows that read a bucket `map`
+       over its members, the assembly of that `map` is formed again, and `Index`
+       finds a member in its bucket by a scan (`indexOf`).
+     - _The values against today's runtime:_
+       `compare/values-fixtures.ts
+       keyed-join`, plain values in place, 2
+       of 2 values equal. Today's runtime gave the members of a bucket in
+       another order than the source's for an array of cells in one probe (`t3`,
+       `t1`); the executor gives the source order, as PL §3.17 states.
+619. **The collection index on the runner path, and its stored labels.**
+     - _A join whose rows read their bucket_
+       (`runtime/runner/test/compiled/collection-index.test.ts`): items and tags
+       are cells, each under a clause of its own. A read of the titles of a row
+       consumes the clause of every item and of the row's own tag, and of no
+       other tag; a row whose key no item has consumes the clause of every item
+       as well; the name of a row consumes its tag's clause and no item's. A
+       write of an item's tag by another writer moves the item between two rows
+       and both keep every item's clause. One such change evaluates 7 entries,
+       gives 4 write records and makes 2 commits at 12, 120 and 600 items, and
+       reads 11, 65 and 305 positions through the transaction, which follows the
+       bucket that changed (half the items). _A result that held nothing but the
+       rows consumed every clause at every path_ (note 593, a result that is
+       nothing but links), so the fixture has a number beside the rows; the
+       first version of the test passed for that reason and tested nothing.
+     - _Each such row stores the fold._ The record of a row's titles names the
+       key of every item, so with a clause per item each of `R` rows stores `N`
+       clauses. That is the cost note 611 states for a row whose body reads its
+       bucket.
+     - _An index a piece keeps_
+       (`runtime/runner/test/compiled/kept-index.test.ts`, the fixture
+       `compare/fixtures/kept-index.tsx`): the result holds the index in the
+       shape of today's `CollectionIndexData`, without `keyEntries`. A read of a
+       bucket, of its length, of a key that has no bucket and of the occupied
+       keys consumes the clause of every item; the number of items beside it
+       consumes none. A second piece that is handed a reference to the stored
+       index and looks up one key gets the bucket's members, evaluates nothing
+       when another bucket changes, and follows its own bucket.
+     - _What is stored is not the one entry of P69._ The result document holds
+       label entries at the index, at each bucket and at `keys`, each with the
+       fold. So with a clause per member the stored index holds `N` clauses for
+       each bucket. The index is an output of the result and is formed again
+       whole, as a record, whenever a bucket changes (`Instance.indexRecord`),
+       and the store writes the paths that differ. The state document of ES
+       §6.3, written bucket by bucket with one entry, is not built.
+     - _Not examined:_ the `name` of the second piece's result consumes the
+       clause of every item beside its own, an over-label; the crate reads the
+       handed index with `$h.read` and no slot (`readsWithoutSlot`).
+620. **The per-entry construct over a record.** `Emitter::entries_of_record` of
+     `src/plan.rs` recognizes `Object.entries(x).map(f)` where `x` is a name or
+     a member read that is a path of an input. The collection is over the slot
+     of the record, observed as `enumeration`, with `source.entries`; an element
+     slot has the path `0` for the name and a path from `1` for the value.
+     `Instance.#entries` of `exec/executor.ts` forms the element table from the
+     names the record holds, reads no entry, and keys each element by its name.
+     The record is located whole for each change of it and the assembly is
+     formed again, with the body of each entry that stayed kept: the bodies
+     evaluated are those of the entries that changed, and the steps of the
+     assembly follow the record. `Object.keys(x).map` and `Object.values(x).map`
+     stay the expression over the whole record they were. _On today's runtime_
+     the fixture gives the same rows for a record of plain values
+     (`compare/values-fixtures.ts record-entries`, 2 of 2 equal), and gave no
+     row for a record of cells in one probe; not examined.
+     - _Tests._ `exec/test/record-entries.test.ts`: a row for each entry; one
+       body for a change of one member; none for a field no body reads; one body
+       for an entry added among 10 and among 1,000; no body for an entry
+       removed. `runtime/runner/test/compiled/record-entries.test.ts`, the
+       record under a clause and each member under one of its own: the title of
+       a row consumes the clause of its member and of the record and of no other
+       member; the number of rows and the name of a row consume the clause of
+       the record. `tests/plan.rs`,
+       `a_map_over_the_entries_of_an_input_record_is_a_collection_over_the_record`.
+     - _An over-label that stays._ The name of a row is bound to no stored
+       position, so its record takes the join of the transaction that derived
+       the row, which holds the clause of every member the transaction read.
+       _Plan:_ bind the slot of the name to the record's `enumeration`.
+621. **What Topics needs before its boards use the constructs.** Not done in
+     this round; no board is changed and nothing is measured on Topics.
+     - `crossrefTable`:
+       `topics.flatMap((from) => from.mentions.map((to) => ({
+       from, to })))`
+       grouped by `to`, a cell, and a `map` over the topics that looks up each
+       topic. It needs a `lookup` whose key is a cell (the value code reads the
+       key as a value) and a bucket whose members are rows of a `flatMap`, which
+       `Instance.indexMember` gives as copies and which no test covers.
+     - `crossrefIndexOf`: `pivot.groupBy((row) => row.name)`, kept in the result
+       and handed to each topic, which then calls `lookup` in place of reading
+       `byName`. The handed lookup is built and tested (note 619); the type of
+       `boardCrossrefIndex` in `topic.tsx` changes to a `GroupIndex`, and the
+       kept index is formed again whole on each change until the state document
+       exists.
+     - `namesTable`:
+       `Object.entries(names).map(([name, member]) => ({ member,
+       name }))`,
+       with the filter of `isMemberName` as a `filter` over the result. The rows
+       of today's `lift` are documents addressed by the member; the rows of the
+       construct are in place.
+     - The sort: note 614, not built.
+622. **Findings on structure, scale and soundness.**
+     - _Soundness: the label rule of note 601 for a join was an under-label,_
+       and the rule that is built is the one PL §3.17 decided: a bucket, and a
+       row that reads one, depends on the key of every source, of those that are
+       in no bucket of the row as well. Tested on stored labels with a clause
+       per member, for a bucket that holds members and for a key no member has.
+     - _Scale: a row that reads its bucket stores the fold,_ `N` clauses on each
+       of `R` rows where each member has a clause of its own, and the kept index
+       stores it for each bucket (note 619). With one clause for all members
+       both are one clause. The one entry of P69 is not built.
+     - _Scale: a kept index is one record of the result, formed again whole for
+       each change of a bucket_ (note 619), so the executor's work for a change
+       follows the number of buckets where the index is kept. An index that is
+       not kept has no such step.
+     - _Scale: the time of a change follows the size of the buckets it touches_
+       (note 618), and the table of a record's entries is formed again for each
+       change of the record (note 620).
+     - _A test of stored labels over a result that is nothing but links tests
+       nothing_ (note 619): every path consumes every clause there.
+     - _The surface existed._ Two of the three constructs were in the documents
+       and in today's runtime as `groupBy`, `keyBy` and `lookup`, with their
+       label rule decided; the crate refused them in the plan (note 610).
+623. **Provisional decisions of the round.** P67: the grouping is the collection
+     index the language has, `groupBy` and `keyBy` with `lookup`, and no new
+     function (note 611). P68: the keyed join is a `map` whose body calls
+     `lookup`, and a source that names several keys is spread with `flatMap`
+     first (note 612). P69: the membership of all buckets is one label entry of
+     the index's state document; designed, not built, and what is built stores
+     an entry for each bucket (notes 611 and 619). P70: the per-entry construct
+     is `Object.entries(record).map(f)` over a record that is an input, keyed by
+     the entry's name (notes 613 and 620). P71: the sort by a key is `toSorted`
+     with a comparator of a recognized form, or a method `sortBy` that the owner
+     adds; designed, not built (note 614). P72: the collection of an index is
+     recorded in the plan as a `Collection` whose `construct` is `groupBy` or
+     `keyBy`, with no `Operation` record (note 617). P73: a bucket lists its
+     members in the order of the source, where today's runtime gave another
+     order in one probe (note 618).

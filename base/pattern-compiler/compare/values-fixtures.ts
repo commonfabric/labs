@@ -43,6 +43,15 @@ const WRITTEN: Record<string, Written[]> = {
       tags: [{ name: "x" }, { name: "y" }, { name: "z" }],
     },
   }],
+  // A `map` over the entries of a record of plain values in place.
+  "record-entries": [{
+    argument: {
+      byName: {
+        first: { title: "a", note: "n" },
+        second: { title: "b", note: "m" },
+      },
+    },
+  }],
   "is-edited": [true, false].map((edited) => ({
     argument: {
       message: { body: "hello", sentAt: 1, ...(edited ? { editedAt: 2 } : {}) },
