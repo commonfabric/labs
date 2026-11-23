@@ -912,27 +912,51 @@ describe("the table of inputs of a transaction", () => {
 });
 
 describe("an element at no stored position", () => {
-  it("binds the slot of an element of an array a computation returned to the one position that computation read", async () => {
-    // `items.get() || []` over an array of plain values in place: the
-    // elements the `filter` sees are values in memory. The computation read
-    // the stored array whole, whose label covers every element of it.
-    const recorder = new Recorder();
-    const instance = new Instance(
-      await artifactOf("filter-of-computed"),
-      { items: [{ done: true, text: "a" }, { done: false, text: "b" }] },
-      { transactions: recorder },
-    );
-    const groups = recorder.changed.flatMap(({ writes }) => writes ?? [])
+  /** The slots of each element that a write of the `filter` names. */
+  const elementSlots = (recorder: Recorder) =>
+    recorder.changed.flatMap(({ writes }) => writes ?? [])
       .flatMap((write) => {
         const elements = write.outputs?.[0]?.elements?.[0];
         return elements !== undefined && "groups" in elements
           ? elements.groups
           : [];
       });
+
+  it("binds the slot of an element of an array a computation returned to the one position that computation read", async () => {
+    // `items?.get() || [...]` where `items` holds nothing: the `filter`
+    // runs over the array written at the right, whose elements are values
+    // in memory. The computation read `items` for the test of `||`.
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("filter-of-fallback"),
+      {},
+      { transactions: recorder },
+    );
+    const groups = elementSlots(recorder);
     expect(groups.length).toBeGreaterThan(0);
     for (const group of groups) {
       expect(group.slots[2]).toEqual({
         chain: [{ doc: instance.argument, path: ["items"] }],
+        observes: "value",
+      });
+    }
+  });
+
+  it("binds the slot of an element to its stored position where `||` selects a left operand that is an array of plain values in place", async () => {
+    // `items.get() || []` where `items` holds an array: the result of
+    // `||` is the reference to `items` (PL §3.5), so the `filter` runs
+    // over the stored array and each element is at its position.
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("filter-of-computed"),
+      { items: [{ done: true, text: "a" }, { done: false, text: "b" }] },
+      { transactions: recorder },
+    );
+    const bound = elementSlots(recorder).map((group) => group.slots[2]);
+    expect(bound.length).toBeGreaterThan(0);
+    for (const position of ["0", "1"]) {
+      expect(bound).toContainEqual({
+        chain: [{ doc: instance.argument, path: ["items", position, "done"] }],
         observes: "value",
       });
     }

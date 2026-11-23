@@ -241,6 +241,20 @@ sandboxed body becomes `$h.invoke(body, computed)`, a type annotation is
 removed, and a JSX element becomes a call that builds a view node. `$h` is the
 host object of `execution-and-storage.md` §2.2.
 
+A `??`, `||` or `&&` of the reactive tier becomes
+`$h.operand(operator, test, () => left, () => right)`. `test` is the left
+operand read as its value, inside the `$h.select` that reports the selection
+where the plan has a selector for the expression, and `left` and `right` are the
+operands as the references they are. The executor passes on the operand that is
+selected (PL §3.5): the right one as it is, and the left one as the reference
+where it holds a record or an array, so an output that the operator computes
+stores the link, and as its value where it holds a scalar
+(`compare/fixtures/selected-operand.tsx`). A per-element construct over such a
+result runs over the stored array where the left operand is an array of plain
+values in place (`compare/fixtures/filter-of-computed.tsx`), and over an array
+in memory where the right operand builds one
+(`compare/fixtures/filter-of-fallback.tsx`).
+
 The artifact's `code` has these members.
 
 | Member                | Holds                                                                                                                             |

@@ -1040,6 +1040,52 @@ export const P = pattern<{
     );
 }
 
+/// PL §3.5: the result of `??`, `||` and `&&` is the selected operand
+/// itself. The left operand is read by value for the test, whose
+/// selection `$h.select` reports, and each operand is handed to
+/// `$h.operand` as the reference it is, in a function that runs where the
+/// operand is selected.
+#[test]
+fn a_logical_operator_passes_both_operands_on_by_reference() {
+    let (plan, code) = emitted(
+        r#"import { pattern } from "commonfabric";
+interface Profile { name: string }
+export const P = pattern<{ primary?: Profile; backup: Profile; enabled: boolean }>(
+  ({ primary, backup, enabled }) => {
+    return {
+      coalesced: primary ?? backup,
+      either: primary || backup,
+      both: enabled && backup,
+    };
+  },
+);
+"#,
+        "P",
+    );
+    let text = source(&code);
+    // The cone of each output lists `primary` as an `identity` slot
+    // alone, so the test reads its value through that slot.
+    let primary = slot(&plan, "argument", &["primary"], "identity");
+    let backup = slot(&plan, "argument", &["backup"], "identity");
+    let enabled = slot(&plan, "argument", &["enabled"], "value");
+    for (operator, test) in [
+        (
+            "??",
+            format!("$h.select(0, $h.v($h.slot({primary})), true)"),
+        ),
+        ("||", format!("$h.select(1, $h.v($h.slot({primary})))")),
+    ] {
+        let call = format!(
+            "$h.operand(\"{operator}\", {test}, () => $h.slot({primary}), () => $h.slot({backup}))"
+        );
+        assert!(text.contains(&call), "{text}");
+    }
+    let call = format!(
+        "$h.operand(\"&&\", $h.select(2, $h.v($h.slot({enabled}))), () => $h.slot({enabled}), () => $h.slot({backup}))"
+    );
+    assert!(text.contains(&call), "{text}");
+}
+
 #[test]
 fn a_debug_renderer_is_given_each_operand_as_its_value() {
     let (_, code) = emitted(

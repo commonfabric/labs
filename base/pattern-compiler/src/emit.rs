@@ -1487,16 +1487,25 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     format!("({test} ? {consequent} : {alternate})"),
                 ))
             }
+            // The left operand is rendered twice: for use, which is the
+            // test whose selection is reported, and to pass on, in a
+            // function `$h.operand` calls where the operator selects the
+            // left operand and it holds a record or an array, so the
+            // result is then the reference the operand is (PL §3.5).
             Expression::LogicalExpression(logical) => {
-                let left = self.render(&logical.left, Want::Use);
-                let left = self.selected(logical.span, left);
+                let test = self.render(&logical.left, Want::Use);
+                let test = self.selected(logical.span, test);
+                let left = self.render(&logical.left, Want::Pass);
                 let right = self.render(&logical.right, Want::Pass);
                 let operator = match logical.operator {
                     LogicalOperator::And => "&&",
                     LogicalOperator::Or => "||",
                     LogicalOperator::Coalesce => "??",
                 };
-                Some(Self::wanted(want, format!("({left} {operator} {right})")))
+                Some(Self::wanted(
+                    want,
+                    format!("$h.operand(\"{operator}\", {test}, () => {left}, () => {right})"),
+                ))
             }
             Expression::StaticMemberExpression(member) => self.member(
                 &member.object,

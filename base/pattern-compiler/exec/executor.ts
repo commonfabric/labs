@@ -2011,6 +2011,29 @@ export class Host {
   }
 
   /**
+   * The operand that `??`, `||` or `&&` selects (PL §3.5), from the value
+   * `test` that the left operand resolves to. Where the left operand is
+   * selected and holds a record or an array, the result is what `left`
+   * gives, which is the operand as the reference it is, and where it
+   * holds a scalar the result is that value. The right operand is
+   * evaluated where it is selected.
+   */
+  operand(
+    operator: "??" | "||" | "&&",
+    test: unknown,
+    left: () => unknown,
+    right: () => unknown,
+  ): unknown {
+    const takesRight = operator === "??"
+      ? test === undefined || test === null
+      : operator === "||"
+      ? !test
+      : Boolean(test);
+    if (takesRight) return right();
+    return typeof test === "object" && test !== null ? left() : test;
+  }
+
+  /**
    * Records the key a pick of the cone chose (PL §3.18), with
    * `chosenBy: "valueCode"`: the key as a text, and `null` for none.
    * Gives the key back.
