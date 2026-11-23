@@ -3,6 +3,7 @@ import {
   type Cell,
   type Default,
   handler,
+  type ReadonlyCell,
   type Writable,
   type WriteAuthorizedBy,
 } from "commonfabric";
@@ -40,7 +41,9 @@ export type ParticipantRosterCell = Writable<
 
 /** The roster's profiles, in the order they were added. */
 export const rosterProfiles = (
-  roster: { get(): ParticipantRoster | Record<PropertyKey, never> | undefined },
+  roster: ReadonlyCell<
+    ParticipantRoster | Record<PropertyKey, never> | undefined
+  >,
 ): ParticipantProfile[] =>
   Array.from((roster.get() as ParticipantRoster | undefined)?.items ?? []);
 
