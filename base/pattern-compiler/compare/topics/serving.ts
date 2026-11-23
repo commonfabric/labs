@@ -37,6 +37,9 @@
  * evaluations by then; `after takeover 0` and `after takeover 1` are two
  * edits of the title of the first topic after it.
  *
+ * With `SCALE_PROFILE_STEP` naming a step and `SCALE_CPU_PROFILE` a file,
+ * the sampling profile of the process over that step is written there.
+ *
  * The topics and the inputs are under no label and the serving runtime
  * stores no flow labels, as in `../serving-path.ts`, so the figures are not
  * those of the arm `runner`, which stores labels.
@@ -46,6 +49,8 @@
  * compiles with `emit` and not with `emit --accepted`, as the arm `runner`
  * does.
  */
+// deno-lint-ignore no-external-import -- The sampling profiler is reached through this Node builtin alone.
+import inspector from "node:inspector";
 import { Identity } from "@commonfabric/identity";
 import { dirname, fromFileUrl, join } from "@std/path";
 
@@ -198,6 +203,31 @@ const seen = (
       queueMicrotask(() => cancel());
     });
   });
+};
+
+/**
+ * Starts the sampling profiler of the process and returns what stops it
+ * and writes the profile to `file`, in the format of the V8 inspector.
+ */
+const startProfile = async (file: string): Promise<() => Promise<void>> => {
+  const session = new inspector.Session();
+  session.connect();
+  const post = (method: string, params?: object) =>
+    new Promise<unknown>((resolve, reject) =>
+      session.post(
+        method,
+        params,
+        (error: Error | null, result?: unknown) =>
+          error === null ? resolve(result) : reject(error),
+      )
+    );
+  await post("Profiler.enable");
+  await post("Profiler.setSamplingInterval", { interval: 500 });
+  await post("Profiler.start");
+  return async () => {
+    const { profile } = await post("Profiler.stop") as { profile: unknown };
+    await Deno.writeTextFile(file, JSON.stringify(profile));
+  };
 };
 
 /** The mark of the caption of a card (`cardTextOf` of `card-text.ts`). */
@@ -413,6 +443,9 @@ export const runServing = async (
       change: () => void | Promise<void>,
     ) => {
       const before = countsOf();
+      const stopProfile = Deno.env.get("SCALE_PROFILE_STEP") === step
+        ? await startProfile(Deno.env.get("SCALE_CPU_PROFILE") ?? "")
+        : undefined;
       const visible = [sender, reader].map((runtime) =>
         seen(runtime, result, path, test)
       );
@@ -421,6 +454,7 @@ export const runServing = async (
       const [first, second] = await Promise.all(visible);
       await serving.host.whenQuiescent();
       const quiescent = performance.now();
+      await stopProfile?.();
       if (failures.length > 0) {
         throw new Error(`The serving runtime failed: ${failures[0]}`);
       }
