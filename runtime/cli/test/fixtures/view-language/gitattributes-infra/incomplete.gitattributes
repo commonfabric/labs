@@ -1,0 +1,3 @@
+# Tests that scripts/ holds beside the scripts they test.
+scripts/test-* test
+scripts/check-

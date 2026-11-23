@@ -1,0 +1,1 @@
+{"date": "2026-11-23", "from": {"k": "unit", "s": "memory", "n": "v2-track-explicit-instances > releaseTrackedRoots() > retracts what the released instance reaches and keeps what the session's own instance reaches"}, "to": {"k": "unit", "s": "memory", "n": "v2-track-explicit-instances > releaseTrackedRoots() > retracts what the released instance reaches"}}

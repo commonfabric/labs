@@ -286,7 +286,23 @@ describe("serving-port-plane", () => {
       bridge.onRequest("server.judgeCurrencyRoots", (params) => {
         asked.push(params);
         return {
-          servable: [{ root: "of:argument", piece: "of:piece" }],
+          servable: [{
+            root: "of:argument",
+            piece: "of:piece",
+            origins: ["of:piece"],
+          }],
+          held: [{
+            root: "of:held",
+            piece: "of:reader",
+            readers: ["of:reader"],
+          }],
+          upstream: [{
+            reader: "of:reader",
+            slice: "space",
+            id: "computed:out",
+            scopeKey: "space",
+            piece: "of:producer",
+          }],
           refused: { marked: 2 },
           marked: [],
         };
@@ -305,9 +321,26 @@ describe("serving-port-plane", () => {
         await plane.server.judgeCurrencyRoots(space, ["of:argument"], {
           excludePrincipal: alice,
           epoch: "release-7",
+          running: ["of:running"],
         }),
       ).toEqual({
-        servable: [{ root: "of:argument", piece: "of:piece" }],
+        servable: [{
+          root: "of:argument",
+          piece: "of:piece",
+          origins: ["of:piece"],
+        }],
+        held: [{
+          root: "of:held",
+          piece: "of:reader",
+          readers: ["of:reader"],
+        }],
+        upstream: [{
+          reader: "of:reader",
+          slice: "space",
+          id: "computed:out",
+          scopeKey: "space",
+          piece: "of:producer",
+        }],
         refused: { marked: 2 },
         marked: [],
       });
@@ -319,8 +352,35 @@ describe("serving-port-plane", () => {
           roots: ["of:argument"],
           excludePrincipal: alice,
           epoch: "release-7",
+          running: ["of:running"],
         },
       ]);
+    });
+
+    it("asks the server's thread to replace the demand a space carries into another, and returns how many rows it refused", async () => {
+      const rows = [{
+        id: "of:far",
+        scope: "space" as const,
+        scopeKey: "space" as const,
+        origin: { space, sessionId: "alice-session" },
+      }];
+      const asked: unknown[] = [];
+      bridge.onRequest("server.setCarriedDemand", (params) => {
+        asked.push(params);
+        return { refused: 1 };
+      });
+
+      expect(
+        await plane.server.setCarriedDemand("did:key:source", space, rows, {
+          excludePrincipal: alice,
+        }),
+      ).toEqual({ refused: 1 });
+      expect(asked).toEqual([{
+        space: "did:key:source",
+        reader: space,
+        rows,
+        excludePrincipal: alice,
+      }]);
     });
 
     it("returns whether a session is live for a principal from the sessions the server reported", async () => {

@@ -31,6 +31,7 @@ import {
 } from "@commonfabric/data-model-schema/schema-refs";
 import type { MemorySpace, Result, Unit } from "@commonfabric/memory/interface";
 import {
+  canResolveScopeKey,
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
@@ -1787,6 +1788,23 @@ type AttributingPosition = {
 };
 
 /**
+ * Whether `context`'s traversal leaves a link of `scope` unfollowed: it
+ * counts such links (`TraversalContext.onUnresolvedLinkScope`) and acts as a
+ * principal with no session, which has no instance of a session-scoped
+ * document. A memory server's walk of a root naming a `user` instance is
+ * one. Every other traversal whose identity resolves no instance of a scope
+ * fails where it builds the target's key.
+ */
+function leavesLinkUnfollowed(
+  context: TraversalContext,
+  scope: CellScope | undefined,
+): boolean {
+  const identity = context.scopeKeyIdentity;
+  return context.onUnresolvedLinkScope !== undefined &&
+    !!identity.principal && !canResolveScopeKey(scope, identity);
+}
+
+/**
  * Begins the position of `doc` memoized in `memo`, in a walk that attributes
  * by record; nothing otherwise.
  */
@@ -1797,6 +1815,9 @@ function attributingPosition(
 ): AttributingPosition | undefined {
   const records = context.records;
   if (records === undefined) return undefined;
+  // A document the walk left its link unfollowed for is absent, belongs to
+  // no record, and attributes nothing.
+  if (leavesLinkUnfollowed(context, doc.address.scope)) return undefined;
   let table = memoAttributionTables.get(memo);
   if (table === undefined) {
     table = new Map();
@@ -1890,9 +1911,17 @@ export type TraversalContext = {
    * keys carry the shared scope_key, built from this identity. The
    * identity arrives with the work — a client traversal supplies its
    * runtime's own session (`Runtime.scopeKeyIdentity`); the memory
-   * server's query path supplies the querying session's.
+   * server's query path supplies the one it walks a graph's roots under.
    */
   scopeKeyIdentity: ScopeKeyIdentity;
+
+  /**
+   * Set by a traversal that leaves a session-scoped link unfollowed where it
+   * acts as a principal with no session (`leavesLinkUnfollowed()`), and
+   * called for each link it leaves. A traversal that sets none fails at such
+   * a link, where it builds the target's key.
+   */
+  onUnresolvedLinkScope?: () => void;
 
   /**
    * Whether this is a query-shaped traversal. Such a traversal walks
@@ -2981,6 +3010,9 @@ export abstract class BaseObjectTraverser {
     if (link.scope === undefined) {
       return false;
     }
+    // A walk that leaves this link unfollowed has walked no instance of its
+    // target, and `followPointer()` does not follow the link for it.
+    if (leavesLinkUnfollowed(this.context, link.scope)) return false;
 
     const targetSelector = narrowAndCombineSelectorForLink(
       address.path,
@@ -3535,6 +3567,18 @@ function followPointerOnce(
     ]);
     return [notFound(target), selector, []];
   }
+  if (leavesLinkUnfollowed(context, link.scope)) {
+    // The walk names each document it reaches by scope instance, and acts as
+    // a principal with no session, so it has no instance of a session-scoped
+    // target to name. Nothing is read or recorded for the target.
+    context.onUnresolvedLinkScope?.();
+    logger.info("traverse", () => [
+      "session-scoped link not followed: the walk acts as a principal " +
+      "with no session",
+      { source: doc.address, target },
+    ]);
+    return [notFound(target), selector, []];
+  }
   noteDeclaredReadScope(tx, schemaScope, link.scope);
   if (selector !== undefined) {
     // We'll need to re-root the selector for the target doc
@@ -3579,7 +3623,10 @@ function followPointerOnce(
     context.referenceOnly
       ? {
         ...READ_NON_RECURSIVE,
-        meta: { ...READ_NON_RECURSIVE.meta, ...linkResolutionProbe },
+        meta: Object.freeze({
+          ...READ_NON_RECURSIVE.meta,
+          ...linkResolutionProbe,
+        }),
       }
       : READ_NON_RECURSIVE,
   );
@@ -4621,7 +4668,7 @@ type TraverseResult<T> = { ok: T; error?: never } | {
 /**
  * The traversal of one position, written as a generator: each value it yields
  * is the traversal of a position it reaches, and it resumes with that
- * traversal's result. `runTraversal()` runs it.
+ * traversal's result. `#runTraversal()` runs it.
  */
 interface Traversal extends
   Generator<
@@ -4773,58 +4820,12 @@ type Branch = {
 
 /**
  * How many positions deep a traversal runs a position it reaches within its
- * own steps (`yield*`) before handing it to `runTraversal()` instead
+ * own steps (`yield*`) before handing it to `#runTraversal()` instead
  * (`yield`). Running it within saves suspending the traversal that reached
  * it; handing it over keeps the JavaScript stack a traversal takes bounded,
  * however deep the data is.
  */
 const NATIVE_DEPTH = 64;
-
-/**
- * Runs `traversal` to its result. The traversals waiting on the result of
- * another are held in a stack here rather than on the JavaScript stack, so
- * the traversal's own recursion takes no JavaScript stack for each level of
- * the data: a chain of documents each linking to the next, or a value nested
- * far deeper than the stack would hold if each level took stack frames of
- * its own. They run in the order nested
- * calls would, and an exception propagates through each waiting traversal as
- * it would through nested calls.
- */
-function runTraversal(traversal: Traversal): TraverseResult<FabricValue> {
-  let waiting: Traversal[] | undefined;
-  let current = traversal;
-  let resumeWith: TraverseResult<FabricValue> | undefined;
-  let thrown: { error: unknown } | undefined;
-  for (;;) {
-    let step: IteratorResult<Traversal, TraverseResult<FabricValue>>;
-    try {
-      // A traversal starts with `next()`, and resumes with its child's result.
-      step = thrown !== undefined
-        ? current.throw(thrown.error)
-        : resumeWith === undefined
-        ? current.next()
-        : current.next(resumeWith);
-    } catch (error) {
-      const caller = waiting?.pop();
-      if (caller === undefined) throw error;
-      current = caller;
-      resumeWith = undefined;
-      thrown = { error };
-      continue;
-    }
-    thrown = undefined;
-    if (step.done) {
-      const caller = waiting?.pop();
-      if (caller === undefined) return step.value;
-      current = caller;
-      resumeWith = step.value;
-    } else {
-      (waiting ??= []).push(current);
-      current = step.value;
-      resumeWith = undefined;
-    }
-  }
-}
 
 /** Schema memo cache shared across SchemaObjectTraverser instances within a query */
 export type SchemaMemo = Map<string, TraverseResult<FabricValue>>;
@@ -4946,6 +4947,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
   anyOfFastRejects = 0;
   anyOfPropertyMerges = 0;
   override getDocAtPathCalls = 0;
+  #nativeDepthHandoffs = 0;
   // Track per-doc visit counts and unique paths
   #docVisits = new Map<string, number>();
   #uniquePaths = new Set<string>();
@@ -5003,6 +5005,21 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #provisional = false;
 
   schemaMemoHits = 0;
+
+  /**
+   * How many traversals of a position this traversal ran from
+   * `#runTraversal()`'s stack rather than within the traversal that reached
+   * them. A traversal hands one over only while `NATIVE_DEPTH` or more
+   * positions are in progress. Once one does, the shallower positions
+   * waiting on it resume while that many are still in progress, so they are
+   * handed over and counted too. The count is zero for a traversal that never reaches that
+   * depth, and rises with the depth of the data past it. A schema that takes
+   * more than one position for each level of the data, such as a recursive
+   * union, reaches that depth at a shallower level of the data.
+   */
+  get nativeDepthHandoffs(): number {
+    return this.#nativeDepthHandoffs;
+  }
 
   get #activeMemo(): Map<
     string,
@@ -5084,6 +5101,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     this.anyOfFastRejects = 0;
     this.anyOfPropertyMerges = 0;
     this.getDocAtPathCalls = 0;
+    this.#nativeDepthHandoffs = 0;
     this.#docVisits.clear();
     this.#uniquePaths.clear();
     this.#diagnostics = traverseDiagnosticsEnabled();
@@ -5196,6 +5214,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       `anyOfFastRejects=${this.anyOfFastRejects}`,
       `anyOfPropertyMerges=${this.anyOfPropertyMerges}`,
       `getDocAtPath=${this.getDocAtPathCalls}`,
+      `nativeDepthHandoffs=${this.#nativeDepthHandoffs}`,
       `dagMemo=${this.dagMemo.size}`,
       `uniqueDocs=${this.#docVisits.size}`,
       `uniquePaths=${this.#uniquePaths.size}`,
@@ -5222,7 +5241,56 @@ export class SchemaObjectTraverser<V extends FabricValue>
     link?: NormalizedFullLink,
   ): TraverseResult<FabricValue> {
     const position = this.#traverseSelectorPosition(doc, selector, link);
-    return "steps" in position ? runTraversal(position.steps) : position;
+    return "steps" in position ? this.#runTraversal(position.steps) : position;
+  }
+
+  /**
+   * Runs `traversal` to its result. The traversals waiting on the result of
+   * another are held in a stack here rather than on the JavaScript stack, so
+   * the traversal's own recursion takes no JavaScript stack for each level of
+   * the data: a chain of documents each linking to the next, or a value nested
+   * far deeper than the stack would hold if each level took stack frames of
+   * its own. They run in the order nested calls would, and an exception
+   * propagates through each waiting traversal as it would through nested
+   * calls. A traversal yields another only while `NATIVE_DEPTH` or more
+   * positions are in progress, and `nativeDepthHandoffs` counts each one it
+   * yields.
+   */
+  #runTraversal(traversal: Traversal): TraverseResult<FabricValue> {
+    let waiting: Traversal[] | undefined;
+    let current = traversal;
+    let resumeWith: TraverseResult<FabricValue> | undefined;
+    let thrown: { error: unknown } | undefined;
+    for (;;) {
+      let step: IteratorResult<Traversal, TraverseResult<FabricValue>>;
+      try {
+        // A traversal starts with `next()`, and resumes with its child's result.
+        step = thrown !== undefined
+          ? current.throw(thrown.error)
+          : resumeWith === undefined
+          ? current.next()
+          : current.next(resumeWith);
+      } catch (error) {
+        const caller = waiting?.pop();
+        if (caller === undefined) throw error;
+        current = caller;
+        resumeWith = undefined;
+        thrown = { error };
+        continue;
+      }
+      thrown = undefined;
+      if (step.done) {
+        const caller = waiting?.pop();
+        if (caller === undefined) return step.value;
+        current = caller;
+        resumeWith = step.value;
+      } else {
+        (waiting ??= []).push(current);
+        this.#nativeDepthHandoffs++;
+        current = step.value;
+        resumeWith = undefined;
+      }
+    }
   }
 
   /**
@@ -5243,7 +5311,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     link?: NormalizedFullLink,
   ): TraverseResult<FabricValue> {
     const position = this.#traversePosition(doc, schema, link, true);
-    return "steps" in position ? runTraversal(position.steps) : position;
+    return "steps" in position ? this.#runTraversal(position.steps) : position;
   }
 
   /**
@@ -5290,9 +5358,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
           steps: this.#finishPosition(branch, doc, schema, link, inner.steps),
         };
       }
-      let result = "steps" in inner ? runTraversal(inner.steps) : inner;
+      let result = "steps" in inner ? this.#runTraversal(inner.steps) : inner;
       if (branch.depth === this.#positionDepth && this.#rounds !== undefined) {
-        result = runTraversal(
+        result = this.#runTraversal(
           this.#settleRounds(
             doc,
             schema,
@@ -6318,7 +6386,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
           // element shallower than `NATIVE_DEPTH`, so the JavaScript stack
           // stays bounded.
           result = "steps" in position
-            ? runTraversal(position.steps)
+            ? this.#runTraversal(position.steps)
             : position;
         }
         if (result.error === undefined) newValue[propKey] = result.ok;

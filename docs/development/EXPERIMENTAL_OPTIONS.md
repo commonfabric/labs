@@ -1253,9 +1253,9 @@ source-varying material-risk caveats an llm sink exists to process. Building
 that mechanism is planned in
 [`docs/plans/cfc-llm-sink-admission.md`](../plans/cfc-llm-sink-admission.md).
 And `sqliteQuery`, whose request is a read handed to the provider holding a
-space's replicas: the bound it wants is the database's own SPACE, which a
-clause list cannot express, so the sqlite builtin refuses a request carrying
-confidentiality for a database in another space before staging it. A
+space's replicas, in this space or another: every space is served by an
+attested runtime applying the same access rules, and the rows' labels decide
+what each reader is shown. A
 deployment that wants a confidentiality gate on sqlite reads declares a
 ceiling for the sink, which the seam then applies.
 The bundle names no enforcement mode, so a runtime taking it keeps the core's
@@ -1935,6 +1935,18 @@ the per-epic implementation notes).
 >   session. Only the server advertises it; a client reads it from `hello.ok`
 >   and never offers it. A server that omits it parses as `false`, and
 >   `SpaceInviteClient` then sends administration over HTTP. It is permanent.
+> - **`spaceInvitesRevision`** is a build-inherent capability, hardwired to
+>   `true`. It advertises that the server's invitation service moves a space's
+>   invitation ledger revision document, `of:space-invites-revision`, on the
+>   space's default branch with every change to the ledger, and tells its own
+>   sessions on the space of the move (the memory protocol chapter's section
+>   4.1.1). It does not depend on `inviteHost`, since the ledger also changes
+>   through the host's HTTP routes. Only the server advertises it; a client
+>   reads it from `hello.ok` on the connection its session is on, for a
+>   session on the default branch (`ISpaceReplica.invitesRevisionWatchable()`),
+>   and never offers it. Older servers omit it, which parses as `false`, and a
+>   client then reads the ledger again itself to learn of a change it did not
+>   make. It is permanent.
 > - **`servedRequests`** is a configuration-derived capability, neither an
 >   experimental toggle nor build-inherent. A memory server advertises it
 >   exactly while its host has installed a served-request handler through
@@ -2493,16 +2505,31 @@ the per-epic implementation notes).
   records, judges each eligible cold root, and loads every root regardless:
   `currency.servable` counts the roots the store could have served, and
   `currency.falseClean` counts the pieces that were held clean and then
-  wrote a vouched output again with no input changed, each one a judgment
-  that would have served a stale value. A root may rest on a slice that
+  wrote a vouched output again, to a value other than the one it held, with
+  no input changed, each one a judgment that would have served a stale
+  value. A root may rest on a slice that
   read another space the same memory server holds: that space is asked
   what changed before the judgment, and tells the reading space of its next
   change, which has a loop that left such a root unstarted judge it again.
+  A loop that keeps the index also carries demand into the spaces its
+  started pieces' runs read, for the actors those runs were made for, where
+  that space's index does not prove the instance current: `currency.carried`
+  counts the rows offered now, and `currency.carriedRefused` the rows a
+  space refused, as it does an actor's own instance where the actor may not
+  read the space. A root that is stale only through what is upstream of it,
+  in its own space, is not made current by starting its piece: the loop
+  demands the instances that keep it stale, which starts the pieces that
+  write them, and holds the watermark until the root is judged again.
+  `currency.heldUpstream` counts the roots `skip` left unloaded for that,
+  and `currency.upstreamAbandoned` the pieces the loop gave up waiting on
+  what is upstream of, which loads a root that was held for them.
   `skip` acts on the judgment: a root
   whose piece vouches for every demanded instance of it, in slices that are
   clean, is neither loaded nor started, until an input marks a slice a
-  demanded instance is resolved under or a session's demand reaches an
-  instance the piece does not vouch for
+  demanded instance is resolved under, the record of such a slice expires
+  because it read the interval clock of a wish, which the loop sets a timer
+  for (`currency.expiryWakes`), or a session's demand reaches an instance
+  the piece does not vouch for
   ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §1).
   [The plan](../plans/stored-output-currency.md) carries the design, its
   limits and the stages after this one.

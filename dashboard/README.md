@@ -636,9 +636,11 @@ longer is not a longer tile, it is a page.
 That page is an ordinary drill-down — a route the tile declares, reached through
 the tile's `href` and indicated by the top-right arrow. The tile's `hint` supplies
 the tooltip and accessible link description. `/bench` holds the histories behind
-the benchmark and duration tiles, and `/test-selection` holds the manifest behind
-the two test tiles. A page has the width to spell a test's whole name, so nothing
-on one has to be abbreviated.
+the benchmark and duration tiles, `/bench/tiles.json` and the routes beside it
+serve the benchmark numbers as JSON (see
+[Benchmark data as JSON](#benchmark-data-as-json)), and `/test-selection` holds
+the manifest behind the two test tiles. A page has the width to spell a test's
+whole name, so nothing on one has to be abbreviated.
 
 ### Repository pages
 
@@ -770,9 +772,9 @@ installation with the same permissions; see [Credentials](#credentials).
 | prod errors | SigNoz trace error rate for one service (errored spans / all spans): last-12h headline, with a per-hour sparkline over the retained trace history (~2 weeks) and the last-12h slice that feeds the headline highlighted. Scoped to `PROD_SERVICE` — the same SigNoz holds staging and one-off perf runs, whose rates are not production's. Gray (not red) when SigNoz is unreachable. Pops out to the SigNoz logs explorer | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `SIGNOZ_UI_URL` for the pop-out |
 | cloud spend | BigQuery billing export, after credits, projected to month-end from the available part of a 14-day daily-cost window early in the month. The header shows actual MTD spend. The highlighted part of the 45-day chart shows the days used for the estimate. Its vertical scale uses the highlighted days, so older extremes can extend outside the chart | `GCP_BILLING_TABLE` (+ Workload Identity, or `GCP_SA_KEY` locally), optional `GCP_DAILY_BUDGET` |
 | github spend | the selected organization's or enterprise's whole metered GitHub bill, projected to month-end in USD: every product its billing report carries, added into one figure. Enterprise collection includes usage without a cost center and usage assigned to every cost center. The 45-day chart labels the line with MTD spend, and the header shows the same total. When two or more days are behind the projection, the chart highlights them and its vertical scale uses those days alone, so older extremes can extend outside the chart. The report carries rows for days GitHub is still billing, today included, so the chart and the rate behind the projection stop two days back, once GitHub has had time to finish those days; a partial day at the end of the chart would read as spend falling away. A report that stopped being written more than four days ago is unavailable rather than a run of $0 days. A month whose report cannot be read breaks the line across those days rather than charting them as $0. "What the GitHub figure covers" below says which spend reaches the API | `GH_BILLING_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`; optional `GH_BILLING_ENTERPRISE`, `GH_BILLING_ORG` |
-| all benchmarks | a scale-invariant index of benchmark performance on `benchmarks.yml` main runs, trended over ~45 days (each run vs the last, geometric mean of per-benchmark changes, so every benchmark weighs the same, divided by the same run's machine calibration so a busy host does not read as a code change): red when the most recent run failed or produced no valid data (the main signal), with a `failed (was <trend>)` headline when cached measurements are available and `failed` otherwise; orange only on a broad across-the-board rise from a CPU measured in the preceding twelve hours. Adding or removing a benchmark is a non-event. Drills through to the per-benchmark history | `GH_TOKEN` |
-| key benchmarks | the same index and status rules as all benchmarks, restricted to `topic board/journey` and `topic board scale/100`. Machine calibration still uses the run's calibration measurements. Counts and data availability refer to the selected benchmarks. Opens the per-benchmark history with "key only" checked | `GH_TOKEN` |
-| performance history → `/bench?view=runtime` | runtime benchmark trends, labs or loom CI duration history, and a detailed CI run Gantt. Historical views support windows from 1 through 45 days, date axes, and duration sorting. CI includes end-to-end workflow time, every job, and slowest-shard group lines | `GH_TOKEN` |
+| all benchmarks | a scale-invariant index of benchmark performance on `benchmarks.yml` main runs, trended over ~45 days (each run vs the last, geometric mean of per-benchmark changes, so every benchmark weighs the same, divided by the same run's machine calibration so a busy host does not read as a code change): red when the most recent run failed or produced no valid data (the main signal), with a `failed (was <trend>)` headline when cached measurements are available and `failed` otherwise; orange only on a broad across-the-board rise from a CPU measured in the preceding twelve hours. Adding or removing a benchmark is a non-event. Drills through to the per-benchmark history, and its tooltip names `/bench/tiles.json`, where both benchmark tiles' readings and the processor indices behind them are served as JSON (see [Benchmark data as JSON](#benchmark-data-as-json)) | `GH_TOKEN` |
+| key benchmarks | the same index and status rules as all benchmarks, restricted to `topic board/journey`, `topic board scale/100`, `fabrichat setup/home cold`, `fabrichat setup/home warm`, and `fabrichat setup/room`. Machine calibration still uses the run's calibration measurements. Counts and data availability refer to the selected benchmarks. Opens the per-benchmark history with "key only" checked | `GH_TOKEN` |
+| performance history → `/bench?view=runtime` | runtime benchmark trends, labs or loom CI duration history, and a detailed CI run Gantt. Historical views support windows from 1 through 45 days, date axes, and duration sorting. CI includes end-to-end workflow time, every job, and slowest-shard group lines. The runtime view closes by naming the JSON routes that serve its numbers (see [Benchmark data as JSON](#benchmark-data-as-json)) | `GH_TOKEN` |
 | model spend | OpenAI + Anthropic + OpenRouter usage APIs. Headline is the projected full-month spend (extrapolated from the recent daily rate, spilling into last month when this month is under two weeks old), summed across providers. OpenAI and Anthropic (which expose per-day cost) are charted as one line each over ~45 days, with a recent daily-rate slice highlighted and each line's MTD in the right gutter; OpenRouter (monthly total only, abbreviated "OR") is folded into the totals. The vertical scale uses the highlighted days, so older extremes can extend outside the chart. The subtitle is the bullet-separated key (`OpenAI • Anthropic • OR $0`); the combined MTD sits in the header (the `aside` slot); the span the chart covers is in its bottom-left corner (the `duration` slot). A provider we can't read shows `$???` and drops the tile to gray, but the rest still chart and total; a provider whose cost report stopped being written more than four days ago is one of those | any of `OPENAI_ADMIN_KEY`, the `ANTHROPIC_FEDERATION_*` settings (or `ANTHROPIC_ADMIN_KEY` locally), `OPENROUTER_KEY`; optional `MODEL_MONTHLY_BUDGET` |
 | discord online | Discord gateway presence, team vs visitors over time | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` (Server Members + Presence intents) |
 | dau | distinct people active per UTC day on one named service, counted from the `enduser.id` attribute the memory server sets on the `memory.session.open`, `memory.transact` and `memory.subscriber.sync` spans in SigNoz. The headline is yesterday, the last day that ran to the end (today is still filling, and a part-day always reads as a drop); the sparkline is the retained history. Gray while the named service has sent no spans at all — which is the resting state until a deployment's tracing is switched on — and gray, naming the last day it sent any, when it sent none yesterday, so a deployment that stopped exporting does not show an old count as current. A day the service exported with nobody in it is a zero. Keys that nobody linked by delegation count as separate people; see [dau](#dau) below | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `SIGNOZ_UI_URL` |
@@ -959,6 +961,116 @@ running its selected tests, and the median follows the mix of the two. The
 duration tiles collect every five minutes rather than every thirty seconds,
 since each pull request snapshot costs its own requests and a median of runs
 that take several minutes moves slowly.
+
+### Benchmark data as JSON
+
+Three routes serve the numbers behind the all benchmarks and key benchmarks
+tiles and the runtime view of `/bench` as JSON, for an agent or a script
+tracking down a regression. They serve what the dashboard already holds: each
+tile's last reading, the artifacts it has cached, and the benchmarks.yml run
+list it last read. So a request costs no GitHub requests and never waits for
+one. Each response carries `generatedAt`, when it was assembled, and
+`refreshedAt`, when the artifact history was last brought up to date, or
+`null`. Times are ISO 8601 strings, and timings are nanoseconds. A run's
+`commit` is the commit it measured, from the last run list the dashboard read,
+and is `null` until it has read one since the server started.
+
+- **`/bench/tiles.json`** gives, under `tiles`, what each benchmark tile showed
+  at its last collection: its `label`, its `status`, its `headline` and `sub`
+  line as plain text, and whether a run is `running`. When the tile shows a
+  trend, `headlineProcessor` names the processor whose trend the headline
+  reads and `benchmarks` counts the tile's benchmarks in the newest measured
+  run; otherwise both are `null`. Under `processors`, each processor has:
+  - `processor`, its name, as `headlineProcessor` gives it;
+  - `trend`, as the tile computed it: `pct`, the change as a fraction, so
+    0.22 reads ▲22%, and its `label` and `status`;
+  - `headlineCandidate`, whether it was measured in the twelve hours before
+    now, or before the newest measured run when the newest run failed and
+    the run list could be read, which makes it eligible to set the headline;
+  - `window`, the runs its trend reads: how many (`runs`) and the time they
+    start `from`;
+  - `points`, its index, one run per four-hour bucket across the 45-day
+    window. A point names its run (`runId`, `runAttempt`, `at`, `commit`) and
+    gives the `index`, with the two figures the step from the previous point
+    divides: `productRatio`, the geometric mean change of the tile's
+    benchmarks, and `calibrationRatio`, that of the calibration benchmarks.
+    Either is `null` on the first point, or when the two runs share no such
+    benchmark. Where `productRatio` is `null` the index does not move, and
+    where only `calibrationRatio` is `null` it moves by `productRatio`;
+  - `steps`, the level changes in the whole index, found as `steps.json`
+    finds them, with the `ratio`, `before` and `after` described below. The
+    index has the calibration divided out already, so these carry no
+    `calibrationRatio`.
+
+  Before a tile's first collection, its entry is worked out from the cache
+  alone, with status `unknown` and `not collected yet` as its `sub` line.
+  Without a GitHub credential it reads `set GH_TOKEN`, as the tile does.
+- **`/bench/runs.json`** gives, under `runs`, every run attempt the tiles
+  sampled in the 45-day window, which keep the newest run of each 7.2
+  minutes, oldest first, including those whose artifact held no benchmarks.
+  Each has its `runId`, `runAttempt`, `at`, `commit`, `conclusion` (`null`
+  when the run list names a different attempt or does not name the run),
+  `url` on GitHub, `processor`
+  (`Unknown CPU` when its artifact held no readable report, and `null` for a
+  run cached before processors were recorded), `calibration` (the
+  geometric mean of its calibration benchmarks' 75th percentiles as `p75`, and
+  how many `benchmarks` that mean covers, or `null`), and `benchmarks`, which
+  maps the key of each benchmark the request names to its `min`, `avg`, `p75`,
+  `p99`, `p995`, `p999` and `max`.
+- **`/bench/steps.json`** gives, under `steps`, every level change in one
+  statistic of each benchmark the request names, on each processor, largest
+  first. `stat` picks the statistic, any of the seven, and is `p75` unless
+  given, which is the one the tiles' index compares. Each step names the
+  `benchmark` and `processor` and gives the `ratio` of the later level's
+  median to the earlier one's. `calibrationRatio` is the ratio of the median
+  calibration levels, as `runs.json` gives them, of the same two levels' runs,
+  whatever `stat` is, or `null` when either level has none. A step whose two
+  ratios match is the host moving, not the code. `before` is the last run of
+  the earlier level and `after` the first run of the later one, each with
+  `runId`, `runAttempt`, `at`, `commit`, and how many runs its level holds
+  (`levelRuns`). The commits that could have caused the step are those after
+  `before.commit` up to and including `after.commit`. It reads the runs
+  `runs.json` lists, so a run dispatched by hand to measure one commit
+  narrows the window.
+
+`runs.json` and `steps.json` read only the benchmarks a request names, and
+answer 400 to a request that names none. Each `match` parameter is part of a
+benchmark's key, `<file> > <group>/<name>`, and a benchmark is named when its
+key contains any of them, so `match=topic-board-navigation` names a whole file
+and `match=topic%20board/` a whole group. An empty `match=` names every
+benchmark, which makes `runs.json` tens of megabytes and `steps.json` take a
+few seconds, during which the dashboard serves nothing else. Calibration
+benchmarks are named on the same terms. `key=1` narrows the request to the key
+benchmarks.
+
+The level changes come from `levelChanges` in `trend.ts`. It measures the noise
+as the distance of the runs from the median of their neighbors, at the 90th
+percentile so that a few runs far out of line do not count, or the spread of the
+differences between runs six apart where that is larger. So a series that moves
+between two kinds of host reads as noise, and so does a step in it no larger
+than the gap between the hosts. It proposes a boundary where the six runs from a
+run on sit apart from the six before it, places each boundary on the run where
+the level changed, and keeps it only where the medians of its two whole levels
+sit apart by four standard errors, the rule the trend's change-point search
+applies. A level shorter than six runs that returns to the level before it, or
+that opens the series, is a burst of slow runs, not a step; a short level at the
+newest end is kept, since that is what a fresh regression looks like. It then
+searches again with the spread measured within each level, so a large step does
+not hide a smaller one. A series that a straight line in logs describes better,
+by a tenth, has no steps, but a drift that curves, or that noise hides, can
+still come out as a run of small steps. Noise that stays high or low for many
+runs in a row can read as level changes too, and their `calibrationRatio` says
+whether the host moved.
+
+A regression hunt starts from the tile. `tiles.json` names the processor that
+sets the headline. The steps in its index whose `before.at` falls on or after
+its `window.from` are the ones its trend reads; when there are none, the
+points' `productRatio` and `calibrationRatio` across the window show where it
+moved. `steps.json`, filtered to the tile's benchmarks (`key=1` for the key
+benchmarks tile) or to a whole file or group, then says which benchmarks
+moved, on which processors, and between which two commits. Each processor
+measures only some commits, so the narrowest window is where the windows of
+several processors overlap.
 
 ### Test selection history
 
@@ -1686,8 +1798,10 @@ Notes:
     latest **duration** or **trend**. The mean selector was once labeled
     `p50`, and `?stat=p50` still opens it so that a saved link does not quietly
     fall back to the default column.
-    A "key only" checkbox limits the rows and CPU legend to `topic board/journey`
-    and `topic board scale/100`. The key benchmarks tile opens this view with
+    A "key only" checkbox limits the rows and CPU legend to the key benchmarks:
+    `topic board/journey`, `topic board scale/100`,
+    `fabrichat setup/home cold`, `fabrichat setup/home warm`, and
+    `fabrichat setup/room`. The key benchmarks tile opens this view with
     `key=1` in the URL. Metric, sort, and window changes preserve the filter.
     Clearing it restores the full list. A "hide green" checkbox drops the steady
     ones. A slider from 1

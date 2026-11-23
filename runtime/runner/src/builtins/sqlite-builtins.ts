@@ -123,16 +123,6 @@ type WireParams = SqliteParamsWire | undefined;
 /** The sink every sqlite query request is staged under. */
 export const SQLITE_QUERY_SINK = "sqliteQuery";
 
-/**
- * What a query reads whose request carries confidentiality and whose database
- * lies in another space. The rule and nothing more: which atoms did not fit
- * names the principals that introduced them, and that detail faces the
- * operator rather than the pattern.
- */
-export const SQLITE_FOREIGN_SPACE_REFUSAL =
-  "sqlite: a query whose request carries confidentiality cannot read a " +
-  "database in another space";
-
 /** What a query reads whose request was staged and never sent. */
 export const SQLITE_UNSENT_REFUSAL =
   "sqliteQuery request was refused before it started";
@@ -1383,7 +1373,10 @@ export function sqliteQuery(
       readTx: IExtendedStorageTransaction,
     ): QueryState | undefined =>
       result.withTx(readTx).getRaw({
-        meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+        meta: Object.freeze({
+          ...writeDestinationRead,
+          ...ignoreReadForScheduling,
+        }),
       }) as QueryState | undefined;
     const storedBeforeClaim = storedQueryState(tx);
     // The confidentiality THIS request carries: the transaction's flow join,
@@ -1405,54 +1398,13 @@ export function sqliteQuery(
     // carry, and a value's label does not depend on whether the runtime
     // propagates the join onto writes — prepare's own short-circuit on
     // `flowMode === "off"` is about what it STAMPS, not about what exists.
-    // Keying this on the flow dial would hand a statically labeled parameter
-    // to a foreign space's provider as though it carried nothing.
+    // Keying this on the flow dial would treat a statically labeled
+    // parameter as though it carried nothing.
     let derivedRequestLabel: readonly CfcConfClause[] | undefined;
     const requestConfidentiality = (): readonly CfcConfClause[] =>
       derivedRequestLabel ??= tx.getCfcState().enforcementMode === "disabled"
         ? []
         : deriveFlowJoin(tx).confidentiality;
-    // The bound a sqlite read's egress has, applied where the sink registry
-    // cannot hold it (`cfc/sink-inventory.ts`). A query whose database lies
-    // in another space hands its statement and parameters to whoever holds
-    // THAT space's replicas, who are not the audience this result document's
-    // residency names; a same-space query reaches only the provider that
-    // already holds every byte of that document.
-    //
-    // Ahead of the memo decision, so a labeled request for a foreign
-    // database is refused whether or not an earlier unlabeled one left a
-    // result standing here. A hit sends nothing, so the rule could have been
-    // read as satisfied either way; answering a labeled request out of what
-    // an unlabeled one fetched is the reading that would have to be argued
-    // for, and nobody has argued for it.
-    //
-    // Not gated on the enforcement rung, because it is an egress bound
-    // rather than a writer fit: a sink ceiling refuses a request at every
-    // rung too. A deployment that labels nothing derives an empty join and
-    // never meets it.
-    if (crossSpace && requestConfidentiality().length > 0) {
-      // On the issuing transaction, whose flow join is non-empty by
-      // construction — that is the condition this fires on — so the control
-      // paths this writes carry that join as their derived component. A
-      // pattern rendering "this query was refused" inherits it.
-      //
-      // `nonReactive`, like the claim below: the write machinery's read of
-      // the region it is about to write must not make this action depend on
-      // its own result document.
-      //
-      // No request hash goes with it: recording this one's would make the
-      // next evaluation of the same inputs a memo hit, so a later pass whose
-      // request carries nothing would never ask again. What the pattern
-      // reads is the rule and nothing more — which atoms did not fit names
-      // the principals that introduced them, and that detail faces the
-      // operator.
-      result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set({
-        pending: false,
-        error: SQLITE_FOREIGN_SPACE_REFUSAL,
-        ...correlation,
-      });
-      return;
-    }
     const decision = sqliteQueryMemoDecision({
       stored: storedBeforeClaim,
       hash,
@@ -1598,8 +1550,7 @@ export function sqliteQuery(
             // introduced it — which is what the pattern-facing surface
             // withholds. That detail reaches the operator through the
             // scheduler's report of the dropped write.
-            // No request hash, for the reason the foreign-space refusal
-            // records none: an ending that means the request never went out
+            // No request hash: an ending that means the request never went out
             // is not an answer to it, and a hash here would make the next
             // evaluation of the same inputs a memo hit that never asks
             // again. Nothing spins on it either — this node reads its own
@@ -1723,7 +1674,10 @@ export function sqliteQuery(
             ...store,
             path: [...store.path, "requestHash"],
           }, {
-            meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+            meta: Object.freeze({
+              ...writeDestinationRead,
+              ...ignoreReadForScheduling,
+            }),
           }) as string | undefined;
         };
         // The acting reader at flush time: the CAPTURED run principal for

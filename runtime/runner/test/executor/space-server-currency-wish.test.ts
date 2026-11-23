@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { aclDocId } from "@commonfabric/memory/acl";
 import { scopeOfScopeKey } from "@commonfabric/memory/v2";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { selectCurrencyPiece } from "@commonfabric/memory/v2/currency-index";
@@ -508,6 +509,63 @@ describe("SpaceServer", () => {
       });
     });
 
+    describe("carrying demand into the home space a piece's wish read", () => {
+      /** The rows another space carries into alice's home space. */
+      const carriedIntoHome = () =>
+        server.demandForSpace(home).flatMap((share) => [
+          ...share.rows.values(),
+        ]).filter((row) => row.origin !== undefined);
+
+      /**
+       * Gives alice's home space an access list that names her its owner,
+       * as a home space has: a demand is carried into a space with its
+       * actor's pair only for an actor who may read it.
+       */
+      const ownHome = async () => {
+        await server.writeDocument(home, aclDocId(home), {
+          [aliceSigner.did()]: "OWNER",
+        });
+      };
+
+      it("offers the viewer's demand for what the wish read there, none of which stands while the home space's index proves it current", async () => {
+        await seedHome();
+        await ownHome();
+        host = newHost("record");
+        await watch(wishProgram("{ query: '#favorites' }"));
+        await awaitEach(cycles, () => host!.stats().currency.carried > 0);
+        await host.whenQuiescent();
+
+        expect(host.stats().currency.carriedRefused).toBe(0);
+        expect(carriedIntoHome()).toEqual([]);
+      });
+
+      it("offers what the wish read in a home space with no access list, which refuses none of it", async () => {
+        // A shared instance is read whoever the run is for, so its demand
+        // is taken without the viewer's grant.
+
+        await seedHome();
+        host = newHost("record");
+        await watch(wishProgram("{ query: '#favorites' }"));
+        await awaitEach(cycles, () => host!.stats().currency.carried > 0);
+        await host.whenQuiescent();
+
+        expect(host.stats().currency.carriedRefused).toBe(0);
+      });
+
+      it("counts nothing as carried once the loop has parked", async () => {
+        await seedHome();
+        await ownHome();
+        host = newHost("record");
+        await watch(wishProgram("{ query: '#favorites' }"));
+        await awaitEach(cycles, () => host!.stats().currency.carried > 0);
+        await host.whenQuiescent();
+
+        await host.spaceServer(space)!.park("test-park");
+
+        expect(host.stats().currency.carried).toBe(0);
+      });
+    });
+
     describe("recording a piece whose wish reads nothing outside its space", () => {
       for (
         const [target, options] of [
@@ -604,8 +662,13 @@ describe("SpaceServer", () => {
         };
       };
 
-      /** Resolves once the clock piece's stored `reader` is `expected`. */
-      const readerIs = async (expected: string) => {
+      /**
+       * Resolves once the clock piece's stored `reader` holds a tick at or
+       * after `at`, a time in milliseconds. A piece that is running goes on
+       * ticking, so this waits for a time to be reached and not for one
+       * value.
+       */
+      const readerReached = async (at: number) => {
         const reader = openRuntime(aliceSigner, false);
         const result = reader.getCell<{ reader: string }>(
           space,
@@ -616,70 +679,122 @@ describe("SpaceServer", () => {
         await waitForCellValue(
           reader,
           result.key("reader"),
-          (value: string | undefined) => value === expected,
-          { stuckLabel: `the clock piece's \`reader\` to be ${expected}` },
+          (value: string | undefined) =>
+            value !== undefined && Number(value) >= Number(tickAt(at)),
+          { stuckLabel: `the clock piece's \`reader\` to reach ${tickAt(at)}` },
         );
         await closeLastRuntime();
       };
 
-      it("gives the read of the clock as the reason its slice is not vouched for", async () => {
+      /**
+       * Hands the loop the demand of one viewer who runs nothing, for the
+       * clock piece once `piece.current` names it.
+       */
+      const demandFromAViewerWhoRunsNothing = (
+        piece: {
+          current?: { root: NormalizedFullLink; reader: NormalizedFullLink };
+        },
+      ) => {
+        (server as { demandForSpace: unknown }).demandForSpace = () =>
+          sessionDemandOf(
+            (piece.current === undefined
+              ? []
+              : [piece.current.root, piece.current.reader]).map((link) => ({
+                id: link.id,
+                scope: link.scope ?? "space",
+                scopeKey: "space",
+                root: link === piece.current!.root,
+                identity: {
+                  principal: aliceSigner.did(),
+                  sessionId: "viewer",
+                },
+              })),
+          );
+      };
+
+      it("records the slice that read the clock as expiring at the clock's next tick, and vouches for it", async () => {
         host = newHost("record");
         const { root } = await watch(
           wishProgram(`{ query: '#now/${INTERVAL_SECONDS}' }`),
         );
         await host.whenQuiescent();
 
-        const taken = snapshotOf(root)!;
-        expect(slicesAt(taken, "space")[0].unvouched).toEqual(["clock-read"]);
-        expect(await recordOf(root)).toEqual({ mark: 2, epoch: EPOCH });
+        const [shared] = slicesAt(snapshotOf(root), "space");
+        const interval = INTERVAL_SECONDS * 1000;
+        expect(shared.expiresAt).toBe(
+          (Math.floor(Date.now() / interval) + 1) * interval,
+        );
+        expect(shared.unvouched).toEqual([]);
+        expect(host.stats().currency.unvouched).toEqual({});
       });
 
-      it("starts the piece for a session that runs nothing, once the interval has passed, under `skip`", async () => {
+      it("leaves the piece unstarted within the interval, and starts it when the interval passes while its root is left unstarted, under `skip`", async () => {
         // The session's demand is handed to the loop as rows, so no client
         // runtime holds the wish's timer, and only a start moves the clock.
 
-        let piece:
-          | { root: NormalizedFullLink; reader: NormalizedFullLink }
-          | undefined = undefined;
-        (server as { demandForSpace: unknown }).demandForSpace = () =>
-          sessionDemandOf(
-            (piece === undefined ? [] : [piece.root, piece.reader]).map(
-              (link) => ({
-                id: link.id,
-                scope: link.scope ?? "space",
-                scopeKey: "space",
-                root: link === piece!.root,
-                identity: {
-                  principal: aliceSigner.did(),
-                  sessionId: "viewer",
-                },
-              }),
-            ),
-          );
+        const piece: {
+          current?: { root: NormalizedFullLink; reader: NormalizedFullLink };
+        } = {};
+        demandFromAViewerWhoRunsNothing(piece);
         host = newHost("skip");
         const { root, reader } = await setUpClock();
         await awaitEach(cycles, () => host?.spaceServer(space) !== undefined);
-        piece = { root, reader };
+        piece.current = { root, reader };
         host.spaceServer(space)!.noteDemandChanged();
         await awaitEach(cycles, () => serves(root));
         await host.whenQuiescent();
         await host.spaceServer(space)!.park("test-park");
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore > 0,
+        );
+        await host.whenQuiescent();
+        expect(serves(root)).toBe(false);
 
+        await clock.tick(INTERVAL_SECONDS * 1000);
+        const passed = Date.now();
+
+        await awaitEach(cycles, () => serves(root));
+        await readerReached(passed);
+        expect(host.stats().currency.expiryWakes).toBeGreaterThan(0);
+      });
+
+      it("starts the piece for a session that runs nothing, when the interval passed while no loop served the space, under `skip`", async () => {
+        const piece: {
+          current?: { root: NormalizedFullLink; reader: NormalizedFullLink };
+        } = {};
+        demandFromAViewerWhoRunsNothing(piece);
+        host = newHost("skip");
+        const { root, reader } = await setUpClock();
+        await awaitEach(cycles, () => host?.spaceServer(space) !== undefined);
+        piece.current = { root, reader };
+        host.spaceServer(space)!.noteDemandChanged();
+        await awaitEach(cycles, () => serves(root));
+        await host.whenQuiescent();
+        await host.close();
+        servingRuntimes = [];
         await clock.tick(2 * INTERVAL_SECONDS * 1000);
+
+        const passed = Date.now();
+
+        host = newHost("skip");
         await touchSpace();
 
         await awaitEach(cycles, () => serves(root));
-        await readerIs(tickAt(Date.now()));
+        await readerReached(passed);
         expect(host.stats().currency.servedFromStore).toBe(0);
+        expect(host.stats().currency.refused.marked).toBeGreaterThan(0);
       });
     });
 
     describe("recording a piece with a computation that writes through a cell it was handed", () => {
       it("records the piece clean, with no write row for the cell", async () => {
-        // The cell is in the computation's envelope and not in its write
-        // surface, which is where a record's write rows come from
-        // (docs/plans/stored-output-currency-across-spaces.md, "Computations
-        // that run without demand").
+        // The computation's envelope names the slot that holds the link to
+        // the cell, and its write surface, which is where a record's write
+        // rows come from, names neither
+        // (docs/plans/stored-output-currency-across-spaces.md, "What the
+        // rows for an envelope need").
 
         host = newHost("record");
         let sink: NormalizedFullLink | undefined;

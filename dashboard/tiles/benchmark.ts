@@ -2,11 +2,11 @@
  * Trends one scale-invariant index of benchmark performance per processor on
  * main. Each index changes by the geometric mean of the selected benchmark
  * changes between consecutive runs on that processor. The all benchmarks tile
- * selects every product benchmark. The key benchmarks tile selects
- * `topic board/journey` and `topic board scale/100`. Each selected benchmark
- * carries the same weight regardless of size. `deno bench` samples each benchmark
- * to a fixed time budget, so a performance change moves the per-operation times
- * without materially changing the run's wall-clock time.
+ * selects every product benchmark. The key benchmarks tile selects the ones
+ * `KEY_BENCHMARKS` names. Each selected benchmark carries the same weight
+ * regardless of size. `deno bench` samples each benchmark to a fixed time
+ * budget, so a performance change moves the per-operation times without
+ * materially changing the run's wall-clock time.
  *
  * Each processor has its own colored line, and the headline shows the largest
  * established trend among processors measured in the last twelve hours.
@@ -61,6 +61,14 @@
  * attempts. The drill-down overlays one colored line per processor for each
  * benchmark. The CI duration and Gantt views also live behind /bench, and this
  * tile's collection keeps their history warm.
+ *
+ * The same numbers are served as JSON, from what the process holds and with no
+ * request to GitHub: `/bench/tiles.json` gives what each tile last read and
+ * every processor's index behind it, `/bench/runs.json` gives each sampled
+ * run's commit, conclusion, processor, calibration level and statistics, and
+ * `/bench/steps.json` gives where each benchmark's level changed and between
+ * which two runs. "Benchmark data as JSON" in dashboard/README.md describes
+ * their parameters and fields.
  */
 
 import { maxOf, minOf } from "@commonfabric/collections/math";
@@ -103,6 +111,7 @@ import {
   type GitHubJson,
   humanSpan,
   jsonFromZip,
+  median,
   multiSparkline,
   performanceGithub,
   performanceGithubDownload,
@@ -132,6 +141,7 @@ import {
 } from "../history-page-client.ts";
 import {
   distinctTrendDays,
+  levelChanges,
   trendPct,
   trendPctLabel,
   trendStatus,
@@ -198,6 +208,8 @@ const DEFAULT_LABEL = "p99";
 
 interface Run {
   id: number;
+  /** The commit the run measured. */
+  head_sha: string;
   run_attempt?: number;
   status?: string;
   created_at: string;
@@ -545,7 +557,10 @@ async function loadRun(
   return { cached: true };
 }
 
-function currentBenchmarkRun(run: Run): CachedBenchmarkRun | undefined {
+/** Names one attempt of one run, as a run list or the cache does. */
+type RunAttempt = Pick<Run, "id" | "run_attempt">;
+
+function currentBenchmarkRun(run: RunAttempt): CachedBenchmarkRun | undefined {
   const cached = benchmarkStore.get(run.id);
   return cached && cached.runAttempt >= (run.run_attempt ?? 1)
     ? cached
@@ -628,7 +643,7 @@ function assembleCachedBenchmarkSnapshot(
   };
 }
 
-function assembleBenchmarkSnapshot(runs: Run[]): BenchmarkSnapshot {
+function assembleBenchmarkSnapshot(runs: RunAttempt[]): BenchmarkSnapshot {
   return assembleCachedBenchmarkSnapshot(
     runs.flatMap((run) => {
       const cached = currentBenchmarkRun(run);
@@ -719,7 +734,7 @@ export function sampleBenchmarkRuns<
 
 const benchmarkDrill = {
   href: "/bench?view=runtime&repo=labs",
-  hint: "metrics ↗",
+  hint: "metrics ↗ · as JSON at /bench/tiles.json",
 };
 
 function benchmarkUnavailable(sub: string, aside?: string): TileView {
@@ -782,25 +797,36 @@ function sharedBenchmarkRatio(
   return count ? Math.exp(logSum / count) : undefined;
 }
 
+/** What changed between two neighboring runs of one processor's index. */
+interface BenchmarkStep {
+  /** The selected benchmarks' change, when the runs share any. */
+  product?: number;
+  /** The calibration benchmarks' change, when the runs share any. */
+  machine?: number;
+}
+
+function benchmarkStep(
+  previous: CachedBenchmarkRun,
+  current: CachedBenchmarkRun,
+  select: (key: string) => boolean,
+): BenchmarkStep {
+  return {
+    product: sharedBenchmarkRatio(
+      previous,
+      current,
+      (key) => !isCalibrationKey(key) && select(key),
+    ),
+    machine: sharedBenchmarkRatio(previous, current, isCalibrationKey),
+  };
+}
+
 /**
  * Returns the selected benchmarks' change after machine calibration. A pair
  * without shared positive product measurements leaves the index unchanged.
  * A pair without shared calibration measurements reads uncorrected.
  */
-function benchmarkStepRatio(
-  previous: CachedBenchmarkRun,
-  current: CachedBenchmarkRun,
-  select: (key: string) => boolean,
-): number {
-  const product = sharedBenchmarkRatio(
-    previous,
-    current,
-    (key) => !isCalibrationKey(key) && select(key),
-  );
-  if (product === undefined) return 1;
-  const machine = sharedBenchmarkRatio(previous, current, isCalibrationKey) ?? 1;
-  return product / machine;
-}
+const benchmarkStepRatio = ({ product, machine }: BenchmarkStep): number =>
+  product === undefined ? 1 : product / (machine ?? 1);
 
 const CPU_COLORS = [
   "#6ea8fe",
@@ -885,12 +911,21 @@ function cpuColors(cpus: Iterable<string>): Map<string, string> {
   return colors;
 }
 
+/** One run's place on a processor's index. */
+interface BenchmarkIndexPoint {
+  at: number;
+  index: number;
+  run: CpuBenchmarkRun;
+  /** The change from the point before, absent on the first point. */
+  step?: BenchmarkStep;
+}
+
 interface BenchmarkCpuIndex {
   cpu: string;
   color: string;
-  points: { at: number; index: number }[];
+  points: BenchmarkIndexPoint[];
   windowCount: number;
-  windowPoints: { at: number; index: number }[];
+  windowPoints: BenchmarkIndexPoint[];
   trend: ReturnType<typeof benchmarkTrend>;
 }
 
@@ -927,25 +962,21 @@ function benchmarkCpuIndices(
   now: number,
   select: (key: string) => boolean,
 ): BenchmarkCpuIndex[] {
-  const byCpu = new Map<string, CachedBenchmarkRun[]>();
-  for (const run of cached) {
-    const runs = byCpu.get(run.cpu);
-    if (runs) runs.push(run);
-    else byCpu.set(run.cpu, [run]);
-  }
+  const byCpu = Map.groupBy(cached, (run) => run.cpu);
   const windowCutoff = now - BENCH_TREND_MAX_AGE_DAYS * 86_400_000;
   const colors = cpuColors(byCpu.keys());
   return [...byCpu]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([cpu, sampled]) => {
       const runs = benchmarkTrendRuns(sampled);
-      const points: { at: number; index: number }[] = [];
+      const points: BenchmarkIndexPoint[] = [];
       let index = 1;
       for (let run = 0; run < runs.length; run++) {
-        if (run > 0) {
-          index *= benchmarkStepRatio(runs[run - 1], runs[run], select);
-        }
-        points.push({ at: runs[run].at, index });
+        const step = run > 0
+          ? benchmarkStep(runs[run - 1], runs[run], select)
+          : undefined;
+        if (step) index *= benchmarkStepRatio(step);
+        points.push({ at: runs[run].at, index, run: runs[run], step });
       }
       const inWindow = points.filter((point) =>
         point.at >= windowCutoff
@@ -1056,6 +1087,37 @@ const runInFlight = (runs: Run[]): boolean =>
 const RUNNING_BADGE =
   `<span class="running"><span class="rdot"></span>running</span>`;
 
+/**
+ * The run attempts the last refresh sampled in the window or, when no refresh
+ * is on record, every one the store holds in it, oldest first.
+ */
+function sampledBenchmarkRuns(now: number): CachedBenchmarkRun[] {
+  const cutoff = now - SPARK_DAYS * 86_400_000;
+  return (benchmarkStore.refreshedRuns() ?? benchmarkStore.list(cutoff))
+    .filter((run) => run.at >= cutoff)
+    .sort((a, b) => a.at - b.at);
+}
+
+/** What a benchmark tile reads from the runs, before it is drawn. */
+interface BenchmarkIndexReading {
+  status: Status;
+  /** The headline, as plain text. */
+  value: string;
+  /** The line under the headline, when it says why the tile cannot measure. */
+  sub?: string;
+  /** Whether a run is under way. */
+  running: boolean;
+  /** One index for each processor, in processor order. */
+  indices: BenchmarkCpuIndex[];
+  /** The indices measured recently enough to set the headline. */
+  candidates: BenchmarkCpuIndex[];
+  /**
+   * When the tile shows a trend, the index the headline reads, and how many
+   * selected benchmarks the newest measured run carries.
+   */
+  headline?: { index: BenchmarkCpuIndex; benchmarks: number };
+}
+
 // The grid tile trends a scale-invariant benchmark index over about 45 days.
 // Each processor has its own index and line. Every index starts at one and
 // changes only between runs on that processor. Hardware changes therefore
@@ -1068,19 +1130,18 @@ const RUNNING_BADGE =
 // failure and takes that line the same way, so an unreadable collection costs
 // the count rather than adding a line to it. The tile then keeps its
 // last-known trends gray, or shows a gray dash when no history is cached.
-function benchmarkIndexView(
+function readBenchmarkIndex(
   runs: Run[],
   now: number,
   select: (key: string) => boolean,
   offline?: string,
-): TileView {
-  const cutoff = now - SPARK_DAYS * 86_400_000;
+): BenchmarkIndexReading {
   // The most recent completed run sets the failed state.
   const latestCompleted = latestCompletedRun(runs);
   const failedCi = latestCompleted !== undefined && runFailed(latestCompleted);
   // A run under way is a header badge, and leaves the verdict to the runs that
   // have finished. The badge is what says the tile's color may be about to move.
-  const aside = runInFlight(runs) ? RUNNING_BADGE : undefined;
+  const running = runInFlight(runs);
   // A run that finished green on CI but whose artifact resolved to no readable
   // benchmark data is as good as failed: it ran and produced nothing usable. Only
   // a cached run with an empty result counts — a run still unread (or read-failed)
@@ -1096,42 +1157,36 @@ function benchmarkIndexView(
     : "no benchmark data";
   // The runs with processor identities and readable artifacts in the window,
   // oldest -> newest. The artifact decides, not the run's color.
-  const cached = (benchmarkStore.refreshedRuns() ?? benchmarkStore.list(cutoff))
-    .filter((run): run is CpuBenchmarkRun =>
-      run.at >= cutoff && run.cpu !== undefined &&
-      productMetricCount(run, select) > 0
-    )
-    .sort((a, b) => a.at - b.at);
+  const cached = sampledBenchmarkRuns(now).filter((run): run is CpuBenchmarkRun =>
+    run.cpu !== undefined && productMetricCount(run, select) > 0
+  );
   // A failed headline uses the latest measurements to date its trend window
   // and determine which processors are eligible.
   const trendAt = failed && !offline ? cached.at(-1)?.at ?? now : now;
   const indices = benchmarkCpuIndices(cached, trendAt, select);
+  const unavailable = (sub: string): BenchmarkIndexReading => ({
+    status: "unknown",
+    value: "—",
+    sub,
+    running,
+    indices,
+    candidates: [],
+  });
   if (!indices.length) {
     // A fetch failure with nothing cached to stand on: a gray dash and the reason.
-    if (offline) return benchmarkUnavailable(offline, aside);
-    if (failed) {
-      return {
-        ...benchmarkDrill,
-        status: "bad",
-        value: "failed",
-        sub: failSub,
-        aside,
-      };
-    }
+    if (offline) return unavailable(offline);
+    if (failed) return { ...unavailable(failSub), status: "bad", value: "failed" };
     // A completed fetch with runs but no readable artifacts reports the missing
     // data. A completed fetch with no runs reports the missing run history.
-    return benchmarkUnavailable(
+    return unavailable(
       runs.length ? "benchmark data unavailable" : "no benchmark runs",
-      aside,
     );
   }
-  const headlineCandidates = benchmarkHeadlineCandidates(indices, trendAt);
-  if (!headlineCandidates.length && !offline && !failed) {
-    return benchmarkUnavailable("no recent benchmark data", aside);
+  const candidates = benchmarkHeadlineCandidates(indices, trendAt);
+  if (!candidates.length && !offline && !failed) {
+    return unavailable("no recent benchmark data");
   }
-  const displayCandidates = headlineCandidates.length
-    ? headlineCandidates
-    : indices;
+  const displayCandidates = candidates.length ? candidates : indices;
   const established = displayCandidates.filter((series) =>
     series.trend.label !== "new"
   );
@@ -1140,7 +1195,7 @@ function benchmarkIndexView(
     worst,
     series,
   ) => series.trend.pct > worst.trend.pct ? series : worst);
-  const rising = headlineCandidates.some((series) =>
+  const rising = candidates.some((series) =>
     series.trend.status === "warn" || series.trend.status === "bad"
   );
   // An offline collection keeps the trend but grays it: the run list it would need
@@ -1152,12 +1207,37 @@ function benchmarkIndexView(
     : rising
     ? "warn"
     : "good";
+  return {
+    status,
+    value: status === "bad"
+      ? `failed (was ${headline.trend.label})`
+      : headline.trend.label,
+    // One line sits under the headline. A tile with something to say about why
+    // it cannot measure says that there, in place of the count, rather than
+    // beside it: a second line would grow the tile past the ones it shares a
+    // row with.
+    sub: offline ?? (failed ? failSub : undefined),
+    running,
+    indices,
+    candidates,
+    headline: {
+      index: headline,
+      benchmarks: productMetricCount(cached[cached.length - 1], select),
+    },
+  };
+}
+
+function benchmarkIndexView(reading: BenchmarkIndexReading): TileView {
+  const { status, sub, indices } = reading;
+  const aside = reading.running ? RUNNING_BADGE : undefined;
+  if (!reading.headline) {
+    return { ...benchmarkDrill, aside, status, value: reading.value, sub };
+  }
+  const { index: headline, benchmarks: count } = reading.headline;
   const trendLabel = escapeHtml(headline.trend.label);
   const value = status === "bad"
     ? `failed <span style="font-size:14px">(was ${trendLabel})</span>`
     : trendLabel;
-  const latest = cached[cached.length - 1];
-  const count = productMetricCount(latest, select);
   // Name the highlighted window's span beside the count, like CI duration names its
   // median window — in days (via humanSpan), not "runs", so it does not read as the
   // main-CI run count. Only when a window is actually highlighted; otherwise the
@@ -1165,10 +1245,6 @@ function benchmarkIndexView(
   const windowLabel = headline.windowCount < headline.points.length
     ? ` · last ${humanSpan(spanMs(headline.windowPoints))}`
     : "";
-  // One line sits under the headline. A tile with something to say about why it
-  // cannot measure says that there, in place of the count, rather than beside
-  // it: a second line would grow the tile past the ones it shares a row with.
-  const sub = offline ?? (failed ? failSub : undefined);
   const countLine = sub !== undefined
     ? ""
     : `<div style="font-size:13px;color:var(--text-muted);margin:5px 0 0">${count} benchmark${
@@ -1194,9 +1270,7 @@ function benchmarkIndexView(
     ...benchmarkDrill,
     status,
     value,
-    valueLabel: status === "bad"
-      ? `failed (was ${headline.trend.label})`
-      : undefined,
+    valueLabel: status === "bad" ? reading.value : undefined,
     sub,
     extra: `${countLine}${chart}`,
     duration: chartSpan,
@@ -1467,6 +1541,7 @@ export function forgetBenchmarkRunsForTest(): void {
   benchmarkRuns = new WeakMap();
   benchmarkRunsSaved = false;
   latestBenchmarkRuns = [];
+  latestReadings.clear();
 }
 
 function benchmarkServerContext(): Ctx {
@@ -1514,12 +1589,30 @@ async function collectBenchmarkTileRuns(
   };
 }
 
+/** What each benchmark tile last read, by label. `/bench/tiles.json` serves it. */
+const latestReadings = new Map<string, BenchmarkIndexReading>();
+
+/** A benchmark tile: its label, the benchmarks it trends, and its page. */
+interface BenchmarkSelection {
+  label: string;
+  select: (key: string) => boolean;
+  href: string;
+}
+
+const ALL_SELECTION: BenchmarkSelection = {
+  label: "all benchmarks",
+  select: () => true,
+  href: benchmarkDrill.href,
+};
+
+const KEY_SELECTION: BenchmarkSelection = {
+  label: "key benchmarks",
+  select: isKeyBenchmark,
+  href: `${benchmarkDrill.href}&key=1`,
+};
+
 /** Builds a benchmark tile over the selected product measurements. */
-function makeBenchmarkTile(
-  label: string,
-  select: (key: string) => boolean = () => true,
-  href = benchmarkDrill.href,
-): Tile {
+function makeBenchmarkTile({ label, select, href }: BenchmarkSelection): Tile {
   return {
     label,
     repo: REPO,
@@ -1527,7 +1620,17 @@ function makeBenchmarkTile(
     showOnlyCompletedViews: true,
     async collect(ctx): Promise<TileView> {
       const credential = dashboardGitHubCredential(ctx);
-      if (!credential) return { ...benchmarkUnavailable("set GH_TOKEN"), href };
+      if (!credential) {
+        latestReadings.set(label, {
+          status: "unknown",
+          value: "—",
+          sub: "set GH_TOKEN",
+          running: false,
+          indices: [],
+          candidates: [],
+        });
+        return { ...benchmarkUnavailable("set GH_TOKEN"), href };
+      }
       let collection = benchmarkTileCollections.get(credential);
       if (!collection) {
         collection = collectBenchmarkTileRuns(ctx, credential).finally(() => {
@@ -1536,14 +1639,16 @@ function makeBenchmarkTile(
         benchmarkTileCollections.set(credential, collection);
       }
       const { runs, offline } = await collection;
-      return { ...benchmarkIndexView(runs, Date.now(), select, offline), href };
+      const reading = readBenchmarkIndex(runs, Date.now(), select, offline);
+      latestReadings.set(label, reading);
+      return { ...benchmarkIndexView(reading), href };
     },
   };
 }
 
 /** All product benchmarks, with the shared performance history routes. */
 export const benchmark: Tile = {
-  ...makeBenchmarkTile("all benchmarks"),
+  ...makeBenchmarkTile(ALL_SELECTION),
   routes: [
     {
       path: "/bench",
@@ -1582,15 +1687,20 @@ export const benchmark: Tile = {
       path: "/bench/runtime-progress",
       handler: (_req, url) => benchmarkHistoryProgressResponse(url),
     },
+    { path: "/bench/tiles.json", handler: () => benchmarkTilesResponse() },
+    {
+      path: "/bench/runs.json",
+      handler: (_req, url) => benchmarkRunsResponse(url),
+    },
+    {
+      path: "/bench/steps.json",
+      handler: (_req, url) => benchmarkStepsResponse(url),
+    },
   ] satisfies Route[],
 };
 
-/** Topic board journey and 100-topic load measurements. */
-export const keyBenchmarks: Tile = makeBenchmarkTile(
-  "key benchmarks",
-  isKeyBenchmark,
-  `${benchmarkDrill.href}&key=1`,
-);
+/** The measurements `KEY_BENCHMARKS` names. */
+export const keyBenchmarks: Tile = makeBenchmarkTile(KEY_SELECTION);
 
 export async function benchmarkHistoryResponse(
   url: URL,
@@ -1664,6 +1774,258 @@ export async function benchmarkHistoryCheckResponse(
     { headers: { "cache-control": "no-store" } },
   );
 }
+
+//
+// The JSON endpoints
+//
+// Each serves what the process already holds: the tiles' last readings, the
+// cached artifacts, and the benchmarks.yml run list last read for commits and
+// conclusions. None of them asks GitHub for anything. dashboard/README.md
+// describes their fields.
+//
+
+const isoTime = (at: number): string => new Date(at).toISOString();
+
+/**
+ * The benchmarks a request names: those whose key contains any `match`
+ * parameter, narrowed to the key benchmarks by `key=1`. Undefined when the
+ * request names none.
+ */
+function requestedBenchmarks(
+  url: URL,
+): ((key: string) => boolean) | undefined {
+  const matches = url.searchParams.getAll("match");
+  const keyOnly = url.searchParams.get("key") === "1";
+  if (!matches.length && !keyOnly) return undefined;
+  return (key) =>
+    (!keyOnly || isKeyBenchmark(key)) &&
+    (!matches.length || matches.some((match) => key.includes(match)));
+}
+
+const noBenchmarksNamed = (): Response =>
+  new Response(
+    "name benchmarks with match= (part of a benchmark's key; an empty match= " +
+      "names every benchmark) or key=1",
+    { status: 400 },
+  );
+
+/** A run list by run id. */
+const runsById = (runs: readonly Run[] = []): Map<number, Run> =>
+  new Map(runs.map((run) => [run.id, run]));
+
+/** Names one run attempt, and the commit it measured when the list says. */
+function runReference(run: CachedBenchmarkRun, listed: Map<number, Run>) {
+  return {
+    runId: run.runId,
+    runAttempt: run.runAttempt,
+    at: isoTime(run.at),
+    commit: listed.get(run.runId)?.head_sha ?? null,
+  };
+}
+
+/**
+ * The geometric mean of a run's calibration benchmarks' 75th percentiles, in
+ * nanoseconds, and how many it averages. A slower host reads higher.
+ */
+function calibrationLevel(
+  run: CachedBenchmarkRun,
+): { p75: number; benchmarks: number } | null {
+  let logSum = 0, count = 0;
+  for (const [key, stats] of run.metrics) {
+    if (isCalibrationKey(key) && stats.p75 > 0) {
+      logSum += Math.log(stats.p75);
+      count++;
+    }
+  }
+  return count ? { p75: Math.exp(logSum / count), benchmarks: count } : null;
+}
+
+/**
+ * The level changes in one processor's series of measurements, oldest first,
+ * each with the runs on either side of it. Given each run's calibration level
+ * by run id, a step also carries `calibrationRatio`: the ratio of the median
+ * calibration levels of its two levels' runs. Every value is above zero.
+ */
+function seriesSteps(
+  series: { run: CachedBenchmarkRun; value: number }[],
+  listed: Map<number, Run>,
+  calibration?: Map<number, number>,
+) {
+  const calibrationMedian = (
+    levels: Map<number, number>,
+    from: number,
+    to: number,
+  ): number | undefined => {
+    const measured = series.slice(from, to).flatMap(({ run }) => {
+      const level = levels.get(run.runId);
+      return level === undefined ? [] : [level];
+    });
+    return measured.length ? median(measured) : undefined;
+  };
+  return levelChanges(series.map(({ value }) => value)).map((change) => {
+    const machine = (levels: Map<number, number>) => {
+      const before = calibrationMedian(levels, change.start, change.index);
+      const after = calibrationMedian(levels, change.index, change.end);
+      return before !== undefined && after !== undefined
+        ? after / before
+        : null;
+    };
+    return {
+      ratio: change.ratio,
+      ...(calibration ? { calibrationRatio: machine(calibration) } : {}),
+      before: {
+        ...runReference(series[change.index - 1].run, listed),
+        levelRuns: change.index - change.start,
+      },
+      after: {
+        ...runReference(series[change.index].run, listed),
+        levelRuns: change.end - change.index,
+      },
+    };
+  });
+}
+
+const benchmarkJson = (body: object): Response =>
+  Response.json({
+    generatedAt: isoTime(Date.now()),
+    refreshedAt: benchmarkStore.refreshedAt
+      ? isoTime(benchmarkStore.refreshedAt)
+      : null,
+    ...body,
+  }, { headers: { "cache-control": "no-store" } });
+
+/**
+ * `/bench/tiles.json`: what each benchmark tile last read, and every
+ * processor's index behind it, point by point, with the level changes in each
+ * index.
+ */
+export async function benchmarkTilesResponse(): Promise<Response> {
+  await benchmarkStore.load();
+  const listed = runsById(latestBenchmarkRuns);
+  return benchmarkJson({
+    tiles: [ALL_SELECTION, KEY_SELECTION].map(({ label, select }) => {
+      const reading = latestReadings.get(label) ??
+        readBenchmarkIndex([], Date.now(), select, "not collected yet");
+      return {
+        label,
+        status: reading.status,
+        headline: reading.value,
+        sub: reading.sub ?? null,
+        running: reading.running,
+        benchmarks: reading.headline?.benchmarks ?? null,
+        headlineProcessor: reading.headline?.index.cpu ?? null,
+        processors: reading.indices.map((index) => ({
+          processor: index.cpu,
+          headlineCandidate: reading.candidates.includes(index),
+          trend: index.trend,
+          window: {
+            runs: index.windowCount,
+            from: isoTime(index.windowPoints[0].at),
+          },
+          points: index.points.map((point) => ({
+            ...runReference(point.run, listed),
+            index: point.index,
+            productRatio: point.step?.product ?? null,
+            calibrationRatio: point.step?.machine ?? null,
+          })),
+          // The index has divided the calibration out already.
+          steps: seriesSteps(
+            index.points.map((point) => ({
+              run: point.run,
+              value: point.index,
+            })),
+            listed,
+          ),
+        })),
+      };
+    }),
+  });
+}
+
+/**
+ * `/bench/runs.json`: every run attempt the tiles sampled, oldest first,
+ * with its commit, conclusion, processor, calibration level, and the
+ * statistics of each benchmark the request names.
+ */
+export async function benchmarkRunsResponse(url: URL): Promise<Response> {
+  const select = requestedBenchmarks(url);
+  if (!select) return noBenchmarksNamed();
+  await benchmarkStore.load();
+  const listed = runsById(latestBenchmarkRuns);
+  return benchmarkJson({
+    runs: sampledBenchmarkRuns(Date.now()).map((run) => {
+      const entry = listed.get(run.runId);
+      return {
+        ...runReference(run, listed),
+        conclusion: entry && (entry.run_attempt ?? 1) === run.runAttempt
+          ? entry.conclusion
+          : null,
+        url:
+          `https://github.com/${REPO}/actions/runs/${run.runId}/attempts/${run.runAttempt}`,
+        processor: run.cpu ?? null,
+        calibration: calibrationLevel(run),
+        benchmarks: Object.fromEntries(
+          [...run.metrics].filter(([key]) => select(key)),
+        ),
+      };
+    }),
+  });
+}
+
+/**
+ * `/bench/steps.json`: the level changes in one statistic of each benchmark
+ * the request names, for each processor, largest change first.
+ */
+export async function benchmarkStepsResponse(url: URL): Promise<Response> {
+  const requested = url.searchParams.get("stat") ?? "p75";
+  const stat = STATS.find(({ field }) => field === requested)?.field;
+  if (!stat) {
+    return new Response(
+      `unknown stat ${JSON.stringify(requested)}; use one of ${
+        STATS.map(({ field }) => field).join(", ")
+      }`,
+      { status: 400 },
+    );
+  }
+  const select = requestedBenchmarks(url);
+  if (!select) return noBenchmarksNamed();
+  await benchmarkStore.load();
+  const listed = runsById(latestBenchmarkRuns);
+  const sampled = sampledBenchmarkRuns(Date.now());
+  const calibration = new Map(
+    sampled.flatMap((run) => {
+      const level = calibrationLevel(run);
+      return level ? [[run.runId, level.p75]] : [];
+    }),
+  );
+  const byCpu = Map.groupBy(
+    sampled.filter((run): run is CpuBenchmarkRun => run.cpu !== undefined),
+    (run) => run.cpu,
+  );
+  const steps = [...byCpu].flatMap(([processor, runs]) => {
+    const keys = new Set(
+      runs.flatMap((run) => [...run.metrics.keys()].filter(select)),
+    );
+    return [...keys].flatMap((benchmark) => {
+      const measured = runs.flatMap((run) => {
+        const value = run.metrics.get(benchmark)?.[stat] ?? 0;
+        return value > 0 ? [{ run, value }] : [];
+      });
+      return seriesSteps(measured, listed, calibration)
+        .map((step) => ({ benchmark, processor, ...step }));
+    });
+  });
+  steps.sort((a, b) =>
+    Math.abs(Math.log(b.ratio)) - Math.abs(Math.log(a.ratio)) ||
+    a.benchmark.localeCompare(b.benchmark) ||
+    a.processor.localeCompare(b.processor)
+  );
+  return benchmarkJson({ stat, steps });
+}
+
+//
+// Refresh progress and the /bench page
+//
 
 interface BenchmarkProgressProvider {
   progress(id: string): BenchmarkFetchProgress | null;
@@ -2076,6 +2438,7 @@ export function benchPage(
     ${body}
     ${cpuLegend}
     <p class="note">Successful main runs come from the <a href="https://github.com/${REPO}/actions/workflows/${WORKFLOW}" target="_blank" rel="noopener">${WORKFLOW} runs ↗</a> (deno bench artifacts). Collection keeps enough samples for the shortest window, and charts reduce longer windows to about ${CI_HISTORY_POINT_TARGET} evenly spaced points.</p>
+    <p class="note">The numbers behind this page are served as JSON: <a href="/bench/tiles.json">/bench/tiles.json</a> gives each tile's reading and every processor's index, <a href="/bench/runs.json?key=1">/bench/runs.json</a> gives every run's commit, conclusion, processor, calibration level and statistics, and <a href="/bench/steps.json?key=1">/bench/steps.json</a> gives where each benchmark's level changed and between which commits. The last two read only the benchmarks named with <code>match=</code> (part of a benchmark's key, repeatable) or <code>key=1</code>.</p>
     <p class="handoff"><a href="${
     escapeHtml(handoff.href)
   }" target="_blank" rel="noopener">${

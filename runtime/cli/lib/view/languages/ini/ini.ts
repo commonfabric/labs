@@ -15,13 +15,13 @@
  * without a carriage return before it.
  */
 
-import type { Document, Line, StructureNode, TokenClass } from "../../model.ts";
+import type { Document, Line, TokenClass } from "../../model.ts";
 import { flattenStructure } from "../../model.ts";
 import { linesFromClasses } from "../classes.ts";
 import {
   type LocatedEntry,
-  structureNode,
   structureSource,
+  structureTree,
 } from "../structure.ts";
 
 const HOST_LINE = /^[^\s=]*[^\s=:]\s+(?:[^\s=]+=|#)/;
@@ -189,14 +189,12 @@ export function iniLines(text: string): Line[] {
 export function iniDocument(text: string): Document {
   const scanner = new Scanner(text);
   const source = structureSource(text);
-  const node = (entry: Entry, depth: number): StructureNode =>
-    structureNode(
-      source,
-      entry,
-      depth,
-      (inner) => entry.children.map((child) => node(child, inner)),
-    );
-  const structure = scanner.entries.map((entry) => node(entry, 0));
+  const structure = structureTree(
+    source,
+    scanner.entries,
+    (entry) => entry,
+    (entry) => entry.children,
+  );
   return {
     text,
     lines: linesFromClasses(text, scanner.classes, source.lineStarts),

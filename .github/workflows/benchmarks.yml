@@ -114,6 +114,7 @@ jobs:
             patterns/integration/fabrichat-room.bench.ts \
             patterns/integration/fabrichat-room-scale.bench.ts \
             patterns/integration/fabrichat-send-burst.bench.ts \
+            patterns/integration/fabrichat-setup.bench.ts \
             patterns/integration/piece-grid-stopped.bench.ts \
             > bench-results/results.json \
             2> >(tee bench-results/diagnostics.log >&2)
@@ -121,7 +122,7 @@ jobs:
       # Fail the run when stdout carried anything besides the report, or when
       # the report is missing something the dashboard needs from it: the
       # processor identity, product measurements, the machine calibration, or
-      # the two series the key benchmarks tile trends. Failing here makes each
+      # the series the key benchmarks tile trends. Failing here makes each
       # of those a visible red run. It does not keep the artifact out of the
       # charts, because the dashboard reads a red run's artifact too. What the
       # dashboard does with a report missing one of these differs by which one:

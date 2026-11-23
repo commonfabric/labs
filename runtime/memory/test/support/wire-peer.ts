@@ -18,7 +18,7 @@ import {
   type SessionOpenAuthMetadata,
   type SessionOpenResult,
 } from "../../v2.ts";
-import type { Server } from "../../v2/server.ts";
+import type { Server, ServerConnectOptions } from "../../v2/server.ts";
 
 /** One connection to a server, with what it has been sent and not yet taken. */
 export type WirePeer = {
@@ -40,10 +40,21 @@ let nextRequest = 0;
 /** Returns a request id no other call in this process has returned. */
 export const requestId = (label: string): string => `${label}:${nextRequest++}`;
 
-/** Opens a connection and completes the `hello` exchange on it. */
-export const connectPeer = async (server: Server): Promise<WirePeer> => {
+/**
+ * Opens a connection and completes the `hello` exchange on it. `options`
+ * says what the server is told about the peer, which is a peer in another
+ * process when it says nothing.
+ */
+export const connectPeer = async (
+  server: Server,
+  options: ServerConnectOptions = {},
+): Promise<WirePeer> => {
   const messages: ServerMessage[] = [];
-  const connection = server.connect((message) => messages.push(message));
+  const connection = server.connect(
+    (message) => messages.push(message),
+    undefined,
+    options,
+  );
   await connection.receive(encodeMemoryBoundary({
     type: "hello",
     protocol: MEMORY_PROTOCOL,
@@ -100,18 +111,22 @@ export const request = async <Result>(
 
 /**
  * Opens a session on `space`, signing nothing, and returns the server's
- * result. Throws when the server refuses the open.
+ * result. The invocation names `principal` as its issuer when one is given,
+ * for a server whose test options admit a session as the issuer it names.
+ * Throws when the server refuses the open.
  */
 export const openSession = async (
   peer: WirePeer,
   space: string,
   session: SessionDescriptor = {},
+  principal?: string,
 ): Promise<SessionOpenResult> => {
   const opened = await request<SessionOpenResult>(peer, {
     type: "session.open",
     space,
     session: session as FabricPlainObject,
     invocation: {
+      ...(principal === undefined ? {} : { iss: principal }),
       aud: peer.auth.audience,
       challenge: peer.auth.challenge.value,
     },

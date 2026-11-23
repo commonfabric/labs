@@ -93,7 +93,10 @@ function deleteIndexSlot(
 ): void {
   const link = cell.getAsNormalizedFullLink();
   tx.readValueOrThrow(link, {
-    meta: { ...markReadAsAttemptedWrite, ...allowMutableTransactionRead },
+    meta: Object.freeze({
+      ...markReadAsAttemptedWrite,
+      ...allowMutableTransactionRead,
+    }),
   });
   recordRelevantSchemaWritePolicyInput(tx, link, link.schema ?? cell.schema);
   tx.writeValueOrThrow(link, undefined, { delete: true });

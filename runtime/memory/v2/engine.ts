@@ -89,6 +89,7 @@ import {
   findSyncSchemaRef,
 } from "./sync-schema-ref.ts";
 import { aclDocId, isDeletionTombstone } from "../acl.ts";
+import { SPACE_INVITES_REVISION_DOC_ID } from "../space-invites.ts";
 import { deletionTombstoneOf, readAclHeads } from "./acl-heads.ts";
 import {
   type ApplyOpOperation,
@@ -281,7 +282,8 @@ CREATE TABLE IF NOT EXISTS "commit" (
   -- actually held the lease at admission time.
   holder             TEXT,
   -- Per-write identity annotations WITHIN a derived commit's body
-  -- (protocol.md §1: the addressing/attribution pair, per action run) and
+  -- (protocol.md §1: the addressing/attribution pair, per action run, and
+  -- the action whose run made each write) and
   -- the eventIds the commit consequences (protocol.md §7: consequenceOf,
   -- derived only — bounded by the wave's input, never graph-scaled). JSON
   -- arrays; NULL on every non-derived class. Attribution is recorded, not
@@ -500,8 +502,9 @@ CREATE INDEX IF NOT EXISTS idx_scheduler_basis_entity
 -- One row per recorded slice: the raw id of the piece's result document, the
 -- slice's mark (0 clean, 1 a piece that writes one of its inputs is marked,
 -- 2 one of its own rows is behind or it was not vouched for), whether it has
--- been clean since its record was stored, and the epoch of the build that
--- recorded it. A recorded piece always has a 'space' slice.
+-- been clean since its record was stored, the epoch of the build that
+-- recorded it, and whether its latest record was stored not vouched for. A
+-- recorded piece always has a 'space' slice.
 CREATE TABLE IF NOT EXISTS currency_slice (
   branch    TEXT    NOT NULL,
   slice     TEXT    NOT NULL,
@@ -509,10 +512,26 @@ CREATE TABLE IF NOT EXISTS currency_slice (
   mark      INTEGER NOT NULL,
   was_clean INTEGER NOT NULL,
   epoch     TEXT    NOT NULL,
+  unvouched INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (branch, slice, piece)
 );
 CREATE INDEX IF NOT EXISTS idx_currency_slice_piece
   ON currency_slice (branch, piece);
+-- When a slice stops being current whatever its rows say: the time, in
+-- milliseconds since the epoch, of the next tick of a clock one of its runs
+-- read. No commit marks a slice then, so the index marks it the next time
+-- its marks are brought up to date. A slice with no row holds until a commit
+-- marks it. The time is a REAL: this store's connection reads an INTEGER as
+-- 32 bits, which a time in milliseconds does not fit.
+CREATE TABLE IF NOT EXISTS currency_expiry (
+  branch     TEXT NOT NULL,
+  slice      TEXT NOT NULL,
+  piece      TEXT NOT NULL,
+  expires_at REAL NOT NULL,
+  PRIMARY KEY (branch, slice, piece)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_expiry_time
+  ON currency_expiry (branch, expires_at);
 -- The pieces that enclose a recorded piece: a demand for one of theirs is a
 -- demand for it.
 CREATE TABLE IF NOT EXISTS currency_under (
@@ -521,6 +540,10 @@ CREATE TABLE IF NOT EXISTS currency_under (
   root   TEXT NOT NULL,
   PRIMARY KEY (branch, piece, root)
 );
+-- The pieces a root encloses, which a judgment asks of each root it would
+-- leave unstarted.
+CREATE INDEX IF NOT EXISTS idx_currency_under_root
+  ON currency_under (branch, root, piece);
 -- What a slice read: the document instance, with the seq the slice saw it
 -- at. entity_scope_key = '*' is a read whose instance the recording loop
 -- could not name, which a change to any instance of the document is ahead
@@ -568,6 +591,34 @@ CREATE TABLE IF NOT EXISTS currency_vouch (
 );
 CREATE INDEX IF NOT EXISTS idx_currency_vouch_id
   ON currency_vouch (branch, slice, id);
+-- The document instances at another key that a slice's runs wrote, as the
+-- redirect a run made for one viewer leaves at the user's and the space's
+-- key. What such a slot holds was decided by the run, so its row is filed
+-- under the run's slice, with the key the slot is at and the seq it stood at
+-- when the slice was recorded. A slot several slices' runs wrote has a row
+-- for each, and a row behind the slot's head answers for nothing. seq = -1
+-- is a slot the slice was recorded as holding a later write than its own. A
+-- store whose index was recorded without this table loses those records when
+-- it is opened (dropCurrencyRecordsBeforeDecides).
+CREATE TABLE IF NOT EXISTS currency_decide (
+  branch       TEXT    NOT NULL,
+  slice        TEXT    NOT NULL,
+  piece        TEXT    NOT NULL,
+  id           TEXT    NOT NULL,
+  instance_key TEXT    NOT NULL,
+  seq          INTEGER NOT NULL,
+  PRIMARY KEY (branch, slice, piece, id, instance_key)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_decide_instance
+  ON currency_decide (branch, instance_key, id);
+-- The recorded pieces that record a source origin (serving-loop.md §3e). A
+-- serving loop follows the origin of each before it leaves a demanded root
+-- that rests on the piece unstarted.
+CREATE TABLE IF NOT EXISTS currency_origin (
+  branch TEXT NOT NULL,
+  piece  TEXT NOT NULL,
+  PRIMARY KEY (branch, piece)
+);
 -- The seq the marks are complete through.
 CREATE TABLE IF NOT EXISTS currency_cursor (
   branch TEXT    NOT NULL PRIMARY KEY,
@@ -2549,6 +2600,38 @@ const dropUnslicedCurrencyTables = (database: Database): void => {
   }).immediate();
 };
 
+/**
+ * Drops the records of a currency index laid out before a slice answered
+ * for the slots its runs wrote at another key (`currency_decide`), ahead of
+ * the schema that creates the tables as they are now. Such records file a
+ * redirect under the slice at the redirect's own key, and hold no row that
+ * says whether a slice was stored not vouched for. The index holds nothing a
+ * serving loop does not record again, so such a store loses its records once
+ * and every piece of it starts on its next demand. What the store tells the
+ * spaces that read it stays, as does what it heard from the spaces it reads:
+ * a space that kept its records goes on hearing of a change here, and the
+ * index brings each row it tells up to date the first time it is changed
+ * with no cursor (`advance()` in `currency-index.ts`).
+ */
+const dropCurrencyRecordsBeforeDecides = (database: Database): void => {
+  if (
+    !hasTable(database, "currency_slice") ||
+    hasTable(database, "currency_decide")
+  ) return;
+  database.transaction(() => {
+    database.exec(`
+      DROP TABLE IF EXISTS currency_slice;
+      DROP TABLE IF EXISTS currency_under;
+      DROP TABLE IF EXISTS currency_read;
+      DROP TABLE IF EXISTS currency_write;
+      DROP TABLE IF EXISTS currency_vouch;
+      DROP TABLE IF EXISTS currency_expiry;
+      DROP TABLE IF EXISTS currency_slice_source;
+      DROP TABLE IF EXISTS currency_cursor;
+    `);
+  }).immediate();
+};
+
 export const open = async (
   {
     url,
@@ -2580,6 +2663,7 @@ export const open = async (
   database.exec(NEW_DB_PRAGMAS);
   database.exec(PRAGMAS);
   dropUnslicedCurrencyTables(database);
+  dropCurrencyRecordsBeforeDecides(database);
   database.exec(INIT);
   migrateScopedEntityTables(database);
   migrateHeadCurrentOp(database);
@@ -3605,6 +3689,33 @@ const refuseAuthoredAttentionIndexWrites = (
       throw new ProtocolError(
         `authored write to server-owned attention index ` +
           `"${SERVER_EXECUTION_ATTENTION_DOC_ID}" refused`,
+      );
+    }
+  }
+};
+
+/**
+ * Refuses a write to the invitation service's revision document
+ * (`SPACE_INVITES_REVISION_DOC_ID`) in any commit but a system one. The
+ * document is the service's word that its private ledger moved, written in the
+ * transaction that moves the ledger. A write from anyone else would say the
+ * ledger moved when it had not, and send every client watching the document to
+ * read the ledger for nothing.
+ */
+const refuseInviteRevisionWritesOutsideTheService = (
+  commit: ClientCommit,
+  commitClass: CommitClass,
+): void => {
+  if (commitClass === "system") return;
+  for (const operation of commit.operations) {
+    if (
+      operation.op !== "sqlite" &&
+      operation.id === SPACE_INVITES_REVISION_DOC_ID
+    ) {
+      throw new ProtocolError(
+        `write to the invitation service's revision document ` +
+          `\`${SPACE_INVITES_REVISION_DOC_ID}\` refused: only the invitation ` +
+          `service writes it`,
       );
     }
   }
@@ -8551,6 +8662,7 @@ const applyCommitTransaction = (
     scopeKeyByOpIndex,
   });
 
+  refuseInviteRevisionWritesOutsideTheService(commit, commitClass);
   const eventAppendPlan = validateEventAppends(engine, {
     commit,
     commitClass,

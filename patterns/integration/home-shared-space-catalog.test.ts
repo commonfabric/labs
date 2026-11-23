@@ -29,6 +29,7 @@ import {
   isLink,
   type MemorySpace,
   parseLink,
+  pullFromServer,
   Runtime,
   sendEvent,
 } from "@commonfabric/runner";
@@ -82,6 +83,8 @@ const registration: SharedSpaceRegistration = {
 };
 
 interface HomeSurface {
+  $UI: unknown;
+  socialSpaceCollection: { $UI: unknown };
   sharedSpaces: SharedSpaceInterface;
   sharedSpaceCatalog: SharedSpaceCatalog;
   registerSharedSpace: SharedSpaceRegistration;
@@ -394,6 +397,7 @@ async function withHome(
   ) => Promise<void>,
   decorateWaveCommitSink?: ExecutorHostOptions["decorateWaveCommitSink"],
   connect: (server: Server) => Server = (server) => server,
+  onServingRuntime?: (space: string, runtime: Runtime) => void,
 ) {
   const server = new Server({
     namesInstances: namesInstancesByDefault,
@@ -450,6 +454,7 @@ async function withHome(
             servingPosture: true,
             experimental: { serverExecution: true },
           });
+          onServingRuntime?.(space, runtime);
           return Promise.resolve({
             runtime,
             dispose: async () => {
@@ -2709,6 +2714,215 @@ describe("Home chat manager and a deleted room", () => {
         { stuckLabel: "the forgotten room listed as deleted" },
       );
       expect(deleted[0]).toMatchObject({ kind: "direct", counterpart: BOB });
+    });
+  });
+});
+
+describe("Home chat manager's people", () => {
+  /** How many of `runtime`'s scheduler nodes read the roster of `spaces`. */
+  const rosterReaders = (runtime: Runtime, spaces: readonly string[]) =>
+    runtime.scheduler.getGraphSnapshot().nodes.filter((node) =>
+      (node.reads ?? []).some((read) =>
+        spaces.some((space) => read.startsWith(`${space}/`)) &&
+        read.includes("/roster")
+      )
+    ).length;
+
+  /** How many documents of `spaces` `runtime` holds. */
+  const roomDocuments = (runtime: Runtime, spaces: readonly string[]) =>
+    (runtime.getSizes().storage?.bySpace ?? [])
+      .filter((entry) => spaces.includes(entry.space))
+      .reduce((sum, entry) => sum + entry.documents, 0);
+
+  // Each case compiles Home, and only the first compile in a process is slow.
+  beforeAll(compileHomeOnce);
+
+  it.ignore("runs no reader of a room's roster, and holds none of its documents, in Home's serving runtime while no session has asked for the people", async () => {
+    // A client demands every derivation its runtime builds, so a reader of
+    // each listed room's roster that ran without being asked for would hold
+    // every room's documents in Home's serving runtime. The rooms are created
+    // by a session that runs its own events, so that Home's serving runtime
+    // holds only what its derivations read.
+    //
+    // Ignored because the document count does not hold. The memory server
+    // walks the owner's instances under the owner's identity, so its walk
+    // reaches each listed room's entry and reports the entry's link into the
+    // room's space, and Home's serving runtime loads every link so reported.
+    // TODO(ubik2): Run this again once a serving runtime loads nothing
+    // through a room's entry that no run reads through.
+
+    const serving = new Map<string, Runtime>();
+    await withHome(
+      true,
+      async (runtime, home, fresh) => {
+        await sendReviewed(
+          runtime,
+          home.key("createProfile"),
+          { name: "Ada" },
+          "ProfileCreateSurface",
+          "CreateProfile",
+        );
+        await waitForCellValue<unknown[]>(
+          runtime,
+          home.key("profiles"),
+          (value) => (value?.length ?? 0) > 0,
+          { stuckLabel: "the profile" },
+        );
+        const creator = await fresh(false);
+        const manager = creator.home.key("chatManager");
+        const spaces: string[] = [];
+        for (const name of ["one", "two", "three"]) {
+          const requestId = `g-${name}`;
+          await sendReviewed(
+            creator.runtime,
+            manager.key("createGroup"),
+            { requestId, title: name, members: [] },
+            "ChatStartSurface",
+            "ChatStart",
+          );
+          const outcome = await waitForCellValue<{ status: string }>(
+            creator.runtime,
+            manager.key("requests").key(requestId),
+            (value) => value !== undefined && value.status !== "pending",
+            { stuckLabel: `the ${requestId} request` },
+          );
+          expect(outcome.status).toBe("done");
+          spaces.push(
+            manager.key("requests").key(requestId).key("entry").key("room")
+              .resolveAsCell().space,
+          );
+        }
+        const rooms = home.key("chatManager").key("rooms");
+        await waitForCellValue<unknown[]>(
+          runtime,
+          rooms,
+          (value) => value?.length === spaces.length,
+          { stuckLabel: "every room listed" },
+        );
+        expect(await pullFromServer(runtime, rooms)).toBe(true);
+        const homeRuntime = serving.get(owner.did())!;
+        await homeRuntime.idle();
+
+        expect(rosterReaders(homeRuntime, spaces)).toBe(0);
+        expect(roomDocuments(homeRuntime, spaces)).toBe(0);
+      },
+      undefined,
+      undefined,
+      (space, runtime) => serving.set(space, runtime),
+    );
+  });
+});
+
+describe("Home's Social spaces list", () => {
+  /** Registers a saved entry for each of `spaces`. */
+  async function registerAll(
+    runtime: Runtime,
+    home: Cell<HomeSurface>,
+    spaces: string[],
+  ) {
+    for (const space of spaces) {
+      await invoke(runtime, home.key("registerSharedSpace"), {
+        ...registration,
+        space,
+        offer: { from: "did:key:catalog-sender", id: space },
+      }, `register ${space}`);
+    }
+  }
+
+  /**
+   * The cell bound to the `$value` of the first `cf-tabs` element of the view
+   * `root` holds, following links as {@link renderedText} does.
+   */
+  async function tabsValue(runtime: Runtime, root: Cell<unknown>) {
+    const visit = async (
+      value: unknown,
+      base: Cell<unknown>,
+    ): Promise<Cell<string> | undefined> => {
+      if (isLink(value)) {
+        const cell = runtime.getCellFromLink(parseLink(value, base));
+        await cell.pull();
+        return visit(cell.getRaw(), cell);
+      }
+      if (Array.isArray(value)) {
+        for (const each of value) {
+          const found = await visit(each, base);
+          if (found !== undefined) return found;
+        }
+      } else if (isObjectNotArray(value)) {
+        const props = value.props;
+        if (
+          value.name === "cf-tabs" && isObjectNotArray(props) &&
+          isLink(props.$value)
+        ) {
+          return runtime.getCellFromLink(parseLink(props.$value, base))
+            .asSchema<string>({ type: "string" });
+        }
+        if ("children" in value) return visit(value.children, base);
+      }
+      return undefined;
+    };
+    await root.pull();
+    return await visit(root.getRaw(), root);
+  }
+
+  /** The scheduler nodes `runtime`'s graph holds. */
+  const nodeCount = (runtime: Runtime) =>
+    runtime.scheduler.getGraphSnapshot().nodes.filter((node) =>
+      node.type === "effect" || node.type === "computation"
+    ).length;
+
+  it("holds the same number of serving nodes for one entry and for three while its tab is hidden", async () => {
+    // A client demands Home's whole view, the panels its tabs hide included,
+    // so a row the hidden list derived would cost Home's serving runtime nodes
+    // for every entry.
+
+    const serving = new Map<string, Runtime>();
+    await withHome(
+      true,
+      async (runtime, home) => {
+        const list = home.key("socialSpaceCollection").key("$UI");
+        const spaces = ["one", "two", "three"].map((name) =>
+          `did:key:social-list-${name}`
+        );
+        await registerAll(runtime, home, spaces.slice(0, 1));
+        expect(await pullFromServer(runtime, list)).toBe(true);
+        const homeRuntime = serving.get(owner.did())!;
+        const forOne = nodeCount(homeRuntime);
+        await registerAll(runtime, home, spaces.slice(1));
+        expect(await pullFromServer(runtime, list)).toBe(true);
+        const saved = await home.key("sharedSpaces").key("view").pull();
+
+        expect(saved.status === "ready" ? saved.saved.length : 0).toBe(3);
+        expect(nodeCount(homeRuntime)).toBe(forOne);
+        const text = await renderedText(runtime, list);
+        for (const space of spaces) expect(text).not.toContain(space);
+      },
+      undefined,
+      undefined,
+      (space, runtime) => serving.set(space, runtime),
+    );
+  });
+
+  it("shows a row for every entry once its tab is selected", async () => {
+    await withHome(true, async (runtime, home) => {
+      const list = home.key("socialSpaceCollection").key("$UI");
+      const spaces = ["one", "two", "three"].map((name) =>
+        `did:key:social-list-${name}`
+      );
+      await registerAll(runtime, home, spaces);
+      const tab = await tabsValue(
+        runtime,
+        home.key("$UI"),
+      );
+      expect(tab?.get()).toBe("spaces");
+      const { error } = await runtime.editWithRetry((tx) => {
+        tab!.withTx(tx).set("social-spaces");
+      });
+      expect(error).toBeUndefined();
+      expect(await pullFromServer(runtime, list)).toBe(true);
+      const text = await renderedText(runtime, list);
+
+      for (const space of spaces) expect(text).toContain(space);
     });
   });
 });

@@ -70,6 +70,7 @@ const REQUEST = {
 /** Helper for tests, which reads the id of the job an enqueue added. */
 const idOf = (result: ReturnType<LocalJobStore["enqueue"]>): string => {
   if ("conflict" in result) throw new Error(result.conflict);
+  if ("refusal" in result) throw new Error(result.refusal.error);
   return result.job.id;
 };
 
@@ -478,6 +479,22 @@ describe("local-jobs/lane", () => {
 
       expect(spec.cacheAffinityKey).toBe("loom-brief");
       expect("cacheAffinityKey" in plain).toBe(false);
+    });
+
+    it("hands the harness the profile's model provider, and none where it names none", async () => {
+      const spec = await localJobSpecOf(
+        { request: REQUEST } as LocalJob,
+        { ...ASK, modelProvider: "openai-codex" },
+        {},
+      );
+      const plain = await localJobSpecOf(
+        { request: REQUEST } as LocalJob,
+        ASK,
+        {},
+      );
+
+      expect(spec.modelProvider).toBe("openai-codex");
+      expect("modelProvider" in plain).toBe(false);
     });
 
     it("takes the runner's retrieval file and model where the profile names none, and the profile's over the runner's", async () => {
@@ -924,6 +941,57 @@ describe("local-jobs/lane", () => {
         result: { answer: "Saturn" },
         report: { modelTurns: 3 },
       });
+    });
+
+    it("runs a job on its profile's model provider, whatever provider its request names", async () => {
+      const profiles = new Map([
+        ["pinned", { ...ASK, modelProvider: "openai-codex" as const }],
+        ["ask", ASK],
+      ]);
+      const { store, lane, nextRun, runs } = laneWith({ profiles });
+      const api = createLocalJobApi({
+        store,
+        profiles,
+        token: "test",
+        kick: () => lane.kick(),
+        cancel: (id) => lane.cancel(id),
+      });
+      const enqueue = async (profile: string, modelProvider: string) => {
+        const response = await api(
+          new Request("http://runner/jobs", {
+            method: "POST",
+            headers: { authorization: "Bearer test" },
+            body: JSON.stringify({
+              caller: "cfs:weaver",
+              profile,
+              idempotencyKey: profile,
+              task: REQUEST.task,
+              modelProvider,
+            }),
+          }),
+        );
+        expect(response.status).toBe(201);
+        return (await response.json()).job.id as string;
+      };
+      try {
+        await lane.start();
+        const pinned = await enqueue("pinned", "openai-compatible-gateway");
+        const ask = await enqueue("ask", "openai-codex");
+
+        const first = await nextRun(0);
+        expect(first.spec.modelProvider).toBe("openai-codex");
+        // Background jobs leave a slot free, so the second starts once the
+        // first ends.
+        first.settle({ outcome: "cancelled" });
+        expect("modelProvider" in (await nextRun(1)).spec).toBe(false);
+        for (const id of [pinned, ask]) {
+          expect("modelProvider" in store.get(id)!.request).toBe(false);
+        }
+      } finally {
+        for (const run of runs) run.settle({ outcome: "cancelled" });
+        await lane.stop();
+        store.close();
+      }
     });
 
     it("ends a job whose result was refused with the reason its run gave", async () => {

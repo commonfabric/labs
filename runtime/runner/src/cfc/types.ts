@@ -1244,7 +1244,10 @@ export type CfcTxState = {
   // as `writePolicyInputIdentities` above: attribution must not borrow an
   // identity a later run in the same transaction happens to set. The
   // runtime's own privileged persistence writes are excluded — bookkeeping,
-  // not authorship.
+  // not authorship — and so is a served event's processed claim, which §6.2.2
+  // makes the runtime's write, apart from the handler's: only the claim's own
+  // value, under no identity, at a path the runtime named a claim, which is
+  // the write the join's stamp leaves out too.
   writeIdentity: {
     sawWrite: boolean;
     multiple: boolean;

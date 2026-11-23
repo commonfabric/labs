@@ -172,26 +172,38 @@ import {
   type CurrencyMarked,
   type CurrencyRefusal,
   type CurrencyStored,
+  type CurrencyUpstreamRead,
   dropUnreadCurrencyImports,
+  forgetCurrencyImports,
   forgetCurrencySource,
   judgeCurrencyRoots,
   pullCurrencyExports,
   registerCurrencyReads,
+  selectCurrencyDeriver,
+  selectCurrencyExport,
+  selectCurrencyImports,
+  selectCurrencyNextExpiry,
   selectCurrencyPiece,
   selectCurrencyReadersMoved,
   selectCurrencySourcePosition,
   selectCurrencySources,
+  selectCurrencyWriters,
   storeCurrencyRecords,
+  unregisterCurrencyReads,
 } from "./currency-index.ts";
 import { sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import * as Engine from "./engine.ts";
 import {
-  executeInvite,
+  applyInvite,
   type InviteRequest,
   type InviteResult,
   parseInviteOperation,
 } from "./invites.ts";
-import { type RedeemReceipt, SpaceInviteError } from "../space-invites.ts";
+import {
+  type RedeemReceipt,
+  SPACE_INVITES_REVISION_DOC_ID,
+  SpaceInviteError,
+} from "../space-invites.ts";
 import {
   isGenesisRoot,
   readGenesisRoot,
@@ -217,6 +229,7 @@ import {
   extendTrackedGraph,
   fromDirtyKey,
   fromDocKey,
+  partitionGraphQuery,
   type QueryDocKey,
   type QueryEvaluationCache,
   type QueryEvaluationCacheDiagnostics,
@@ -239,8 +252,6 @@ import {
   buildFullSync,
   cacheKeyForEntity,
   compareSyncAddress,
-  graphWatchesByBranch,
-  groupedQueries,
   holdingsToCacheEntries,
   isEmptySync,
   mergeWatchesById,
@@ -253,10 +264,11 @@ import {
   toWireUpsert,
   trackedAndPieceKeysFromEntries,
   trackedIdsFromEntries,
-  unionQuery,
+  watchGraphGroups,
 } from "./server-sync.ts";
 import {
   authorizationError,
+  carriesOnlySessionOpenProofs,
   verifySessionOpenProofs,
 } from "./session-open-auth.ts";
 import {
@@ -691,10 +703,11 @@ export type SlowQuery = {
    * the delivered snapshots to the wire. */
   rootsElapsedMs?: number;
 
-  /** Query and watch operations: engine document reads across every branch
-   * group. Unlike `rootsVisited`, this exposes roots whose declarations fan
-   * out over many documents, and unlike `slowestRoot.reads`, it accounts for
-   * the complete request rather than only its costliest root. */
+  /** Query and watch operations: engine document reads across every graph
+   * the request evaluates. Unlike `rootsVisited`, this exposes roots whose
+   * declarations fan out over many documents, and unlike
+   * `slowestRoot.reads`, it accounts for the complete request rather than
+   * only its costliest root. */
   managerReads?: number;
 
   /** watch.add, watch.remove, and a refresh by dirty document: changed
@@ -724,7 +737,7 @@ export type SlowQuery = {
   rows?: number;
 };
 
-/** The root attribution accumulated across one request's branch groups. */
+/** The root attribution accumulated across the graphs a request evaluates. */
 type RootAttribution = {
   rootsVisited: number;
   rootsElapsedMs: number;
@@ -759,13 +772,6 @@ const foldRootAttribution = (
   ) {
     into.slowestRoot = stats.slowestRoot;
   }
-};
-
-/** The attribution for a request that evaluated exactly one query. */
-const rootAttributionOf = (stats: QueryTraversalStats): RootAttribution => {
-  const attribution = createRootAttribution();
-  foldRootAttribution(attribution, stats);
-  return attribution;
 };
 
 const slowQueries: SlowQuery[] = [];
@@ -1197,9 +1203,10 @@ function isDeclaredTable(
 
 /**
  * Returns why a session may not create a branch named `name`, or `undefined`
- * when it may. The server keys a session's graphs and its sync cache by
- * branch name, so a name that carries a control character, or that begins
- * as one of those keys does, could stand for another branch's entry there.
+ * when it may. The server builds the keys of a session's graphs and of its
+ * sync cache from branch names, so a name that carries a control character,
+ * or that begins as one of those keys does, could stand for another entry
+ * there.
  */
 const refusedBranchName = (name: string): string | undefined =>
   // deno-lint-ignore no-control-regex
@@ -1580,7 +1587,54 @@ export type DemandedInstanceRow = {
    * root: a piece reached only through a data link (design §2.8 flag 4).
    */
   piece?: true;
+
+  /**
+   * For a row another space carried here (`Server.setCarriedDemand()`),
+   * the client session it is carried for and the space that session is
+   * of. A serving loop that carries the row's pair on names this origin
+   * again. Absent on a row of a session of this space.
+   */
+  origin?: { readonly space: string; readonly sessionId: string };
 };
+
+/**
+ * A demand carried into a space from another (serving-loop.md §3b): an
+ * instance of the space that a run in a reading space read under the actor
+ * of the session `origin` names. The space's demand set holds it as a row
+ * of that session's pair, as if the session watched the instance there.
+ */
+export type CarriedDemandRow = {
+  id: string;
+  scope: CellScope;
+  scopeKey: ScopeKey;
+
+  /**
+   * The client session the demand is carried for, and the space it is a
+   * session of. The row stands while that session does.
+   */
+  origin: {
+    readonly space: string;
+    readonly sessionId: string;
+  };
+};
+
+/** The demand carried for one origin session from one reading space. */
+type CarriedSession = {
+  /** The id the space's demand set and session mirror hold it under. */
+  readonly sessionId: string;
+  readonly origin: CarriedDemandRow["origin"];
+  readonly principal: string | undefined;
+  readonly share: SessionDemand;
+};
+
+/**
+ * The id a carried demand is held under among a space's sessions, which
+ * is not one a client's session is opened under.
+ */
+const carriedSessionId = (
+  reader: string,
+  origin: CarriedDemandRow["origin"],
+): string => `carried\0${reader}\0${origin.space}\0${origin.sessionId}`;
 
 /**
  * One client session's share of a space's demand set: its
@@ -2861,7 +2915,8 @@ class Connection {
           this.#routedOwns !== undefined &&
           (!this.#routedOwns(parsed.space) || parsed.principal === undefined ||
             parsed.invocation !== undefined ||
-            parsed.authorization !== undefined ||
+            (parsed.authorization !== undefined &&
+              !carriesOnlySessionOpenProofs(parsed)) ||
             parsed.session.actingAs !== undefined)
         ) {
           this.#send({
@@ -3857,13 +3912,40 @@ export class Server {
   #serverExecutionObserver: ServerExecutionObserver | undefined;
 
   /**
-   * The spaces each space has told nothing since they last pulled from it,
-   * each with the position that pull returned (serving-loop.md §3b): the
-   * readers it tells of the next change to an instance they registered. It
-   * is held in memory, so after a restart every reader pulls from a source
-   * before it rests on it.
+   * The spaces each space has told nothing since they last pulled from it
+   * (serving-loop.md §3b): the readers it tells of the next change to an
+   * instance they registered. Each is held with the position its pull
+   * returned, and with the time until which it may rest on hearing nothing,
+   * where the space or one it reads holds a slice that expires: no commit
+   * reports an expiry, so the reader pulls again then. It is held in
+   * memory, so after a restart every reader pulls from a source before it
+   * rests on it.
    */
-  readonly #currencyArmed = new Map<string, Map<string, number>>();
+  readonly #currencyArmed = new Map<
+    string,
+    Map<string, { position: number; until?: number }>
+  >();
+
+  /**
+   * The demand carried into each space, by the reading space that carries
+   * it and then by the id it is held under (`carriedSessionId()`). Held in
+   * memory: a reading loop sends its set again when it next serves.
+   */
+  readonly #carriedDemand = new Map<
+    string,
+    Map<string, Map<string, CarriedSession>>
+  >();
+
+  /**
+   * What each reading space offered to carry into each space, by the same
+   * keys: every row `setCarriedDemand()` admitted. `#carriedDemand` holds
+   * the rows of these that stand, which leaves out an instance the space's
+   * currency index proves current (`#refreshCarriedDemand()`).
+   */
+  readonly #carriedOffered = new Map<
+    string,
+    Map<string, Map<string, CarriedSession>>
+  >();
 
   /**
    * The position of each space through which its armed readers were told
@@ -4259,7 +4341,12 @@ export class Server {
       );
     }
     this.#sessions = options.sessions ?? new SessionRegistry();
-    this.#sessions.setObserver((event) => this.#notifySessionChanged(event));
+    this.#sessions.setObserver((event) => {
+      this.#notifySessionChanged(event);
+      if (event.kind === "removed") {
+        this.#dropCarriedDemandOf(event.space, event.sessionId);
+      }
+    });
     this.#store = options.store;
     this.#operationCodecs = options.operationCodecs ??
       createDefaultOperationCodecRegistry();
@@ -5263,6 +5350,9 @@ export class Server {
     }
     this.#revokeDeauthorizedSessions(engine, space, writerSessionId);
     this.#noticeAdmissions(engine, space);
+    // A space that rests on `space` may hold an instance of an actor the
+    // list no longer grants, so each pulls again before it rests on.
+    this.#disarmCurrencyReaders(space);
   }
 
   /**
@@ -5864,7 +5954,11 @@ export class Server {
     }
   }
 
-  /** Executes an authenticated invitation operation with ordinary ACL publication. */
+  /**
+   * Executes an authenticated invitation operation, and publishes what it
+   * committed as any commit is published: a redemption's ACL grant, and the
+   * move of the ledger's revision document (`SPACE_INVITES_REVISION_DOC_ID`).
+   */
   async invite(request: InviteRequest): Promise<InviteResult["result"]> {
     return await this.#withSpacePublicationLock(request.space, async () => {
       if (!(await this.#spaceStoreExists(request.space))) {
@@ -5875,10 +5969,11 @@ export class Server {
         );
       }
       const engine = await this.#openEngine(request.space);
-      const { result, commit } = executeInvite(engine, {
+      const outcome = applyInvite(engine, {
         ...request,
         implicitOwner: this.#isServicePrincipal(request.principal),
       });
+      const { commit, revision } = outcome;
       if (commit !== undefined) {
         this.#invalidateAclCapabilities(request.space);
         this.#accessListChanged(engine, request.space);
@@ -5893,7 +5988,22 @@ export class Server {
           writes: [{ id: aclDocId(request.space), scopeKey: "space" }],
         });
       }
-      return result;
+      // Published before a refusal is thrown, since a refused preview or
+      // redemption can have retired an invitation.
+      if (revision !== undefined) {
+        this.markSpaceDirty(request.space, [
+          toDirtyKey(SPACE_INVITES_REVISION_DOC_ID),
+        ]);
+        this.#notifyCommitAdmitted({
+          space: request.space,
+          seq: revision.seq,
+          class: "system",
+          sessionId: "invite-service",
+          writes: [{ id: SPACE_INVITES_REVISION_DOC_ID, scopeKey: "space" }],
+        });
+      }
+      if ("failure" in outcome) throw new SpaceInviteError(outcome.failure);
+      return outcome.result;
     });
   }
 
@@ -5944,6 +6054,15 @@ export class Server {
       ) {
         throw new Engine.ProtocolError(
           "direct writes may not delete a space",
+        );
+      }
+      // The invitation service moves its revision document in the
+      // transaction that changes its ledger, and a direct write would say the
+      // ledger moved when it had not, which the store refuses of any commit
+      // but a system one (`refuseInviteRevisionWritesOutsideTheService`).
+      if (id === SPACE_INVITES_REVISION_DOC_ID) {
+        throw new Engine.ProtocolError(
+          "direct writes may not move the invitation service's revision document",
         );
       }
       if (this.#aclMode() !== "off") {
@@ -9478,13 +9597,13 @@ export class Server {
         identity,
         { ...context, part: "support", views: views.length },
       );
-    const graphs = new Map([...demand.graphs].map(([branch, graph]) => [
-      views.length === 0 ? branch : `view-demand:${branch}`,
+    const graphs = new Map([...demand.graphs].map(([key, graph]) => [
+      views.length === 0 ? key : `view-demand:${key}`,
       graph,
     ]));
     if (delivery !== demand) {
-      for (const [branch, graph] of delivery.graphs) {
-        graphs.set(`view-support:${branch}`, graph);
+      for (const [key, graph] of delivery.graphs) {
+        graphs.set(`view-support:${key}`, graph);
       }
     }
     return {
@@ -9532,12 +9651,12 @@ export class Server {
           views: session.views.length,
         },
       );
-    const graphs = new Map([...demandGraphs].map(([branch, graph]) => [
-      `view-demand:${branch}`,
+    const graphs = new Map([...demandGraphs].map(([key, graph]) => [
+      `view-demand:${key}`,
       graph,
     ]));
-    for (const [branch, graph] of delivery?.graphs ?? []) {
-      graphs.set(`view-support:${branch}`, graph);
+    for (const [key, graph] of delivery?.graphs ?? []) {
+      graphs.set(`view-support:${key}`, graph);
     }
     return {
       serverSeq: delivery?.serverSeq ?? Engine.serverSeq(engine),
@@ -9650,11 +9769,11 @@ export class Server {
       },
     );
     const graphs = new Map<string, TrackedGraphState>();
-    for (const [branch, graph] of demandGraphs) {
-      graphs.set(`view-demand:${branch}`, graph);
+    for (const [key, graph] of demandGraphs) {
+      graphs.set(`view-demand:${key}`, graph);
     }
-    for (const [branch, graph] of supportGraphs) {
-      graphs.set(`view-support:${branch}`, graph);
+    for (const [key, graph] of supportGraphs) {
+      graphs.set(`view-support:${key}`, graph);
     }
     return {
       serverSeq: Engine.serverSeq(engine),
@@ -9682,8 +9801,8 @@ export class Server {
       session.viewDemandGraphs,
     );
     const graphs = new Map(session.graphs);
-    for (const [branch, graph] of demandGraphs) {
-      graphs.set(`view-demand:${branch}`, graph);
+    for (const [key, graph] of demandGraphs) {
+      graphs.set(`view-demand:${key}`, graph);
     }
     const identity = this.#sessionScopeIdentity(session);
     return {
@@ -9774,10 +9893,10 @@ export class Server {
 
   /**
    * Helper for `#watchRemove()`, which releases the removed watches' roots
-   * from their branches' graphs (`releaseTrackedRoots`): what no remaining
+   * from the graphs tracking them (`releaseTrackedRoots`): what no remaining
    * root or link keeps retires and is retracted, a root a retired record
-   * had covered is walked again on its own, and a branch with no watch
-   * left drops its graph. Nothing else is walked.
+   * had covered is walked again on its own, and a graph with no root left
+   * is dropped. Nothing else is walked.
    */
   async #removeWatchesByRelease(
     message: WatchRemoveRequest,
@@ -9837,57 +9956,78 @@ export class Server {
       const remaining = session.watches.filter((watch) =>
         !removedIds.has(watch.id)
       );
-      const remainingByBranch = graphWatchesByBranch(remaining);
       const identity = this.#sessionScopeIdentity(session);
+      const remainingGroups = watchGraphGroups(remaining, identity);
       const graphs = new StagedMap(session.graphs);
       const graphCommits: Array<() => void> = [];
       const attribution = createRootAttribution();
       // The graphs the release walked roots of again, whose crossings the
       // session may not have been told of.
       const touchedGraphs: TrackedGraphState[] = [];
+      // Those same graphs by key, as the release has left them so far.
+      const stagedGraphs = new Map<string, TrackedGraphState>();
       const updates = new Map<string, SessionCacheEntry>();
       const removes = new Map<string, SessionCacheEntry>();
       const changedInterests = new Set<string>();
       for (
-        const [branch, removedGroup] of graphWatchesByBranch(removedWatches)
+        const { key: graphKey, branch, query: removedQuery }
+          of watchGraphGroups(
+            removedWatches,
+            identity,
+          ).values()
       ) {
-        const existing = graphs.get(branch);
+        const existing = graphs.get(graphKey);
         if (existing === undefined) continue;
+        // A session holds one graph over a branch for each identity its
+        // roots are walked under, so a document this graph lets go of can be
+        // one another still tracks. Only what no other graph of the session
+        // over the branch tracks is retracted.
+        const trackedElsewhere = (docKey: QueryDocKey): boolean => {
+          for (const [otherKey, other] of graphs) {
+            if (otherKey === graphKey || other.branch !== branch) continue;
+            if ((stagedGraphs.get(otherKey) ?? other).tracker.has(docKey)) {
+              return true;
+            }
+          }
+          return false;
+        };
         const retract = (docKey: QueryDocKey) => {
           const { id, scopeKey } = fromDocKey(docKey);
+          changedInterests.add(toDirtyKey(id, scopeKey));
+          if (trackedElsewhere(docKey)) return;
           const entry = session.entities.get(
             cacheKeyForEntity(branch, id, scopeKey),
           );
           if (entry !== undefined) {
             removes.set(cacheKeyForEntity(branch, id, scopeKey), entry);
           }
-          changedInterests.add(toDirtyKey(id, scopeKey));
         };
-        const group = remainingByBranch.get(branch) ?? [];
-        if (group.length === 0) {
+        const remainingGroup = remainingGroups.get(graphKey);
+        if (remainingGroup === undefined) {
           for (const docKey of existing.entities.keys()) retract(docKey);
           for (const [key] of existing.missed) {
             const { id, scopeKey } = fromDocKey(key as QueryDocKey);
             changedInterests.add(toDirtyKey(id, scopeKey));
           }
-          graphs.delete(branch);
+          graphs.delete(graphKey);
           continue;
         }
         // A root two watches share stays while either does.
         const kept = new Set(rootReferrersOf(
           message.space,
-          group.flatMap((watch) => watch.query.roots),
+          remainingGroup.query.roots,
           identity,
         ));
         const released = rootReferrersOf(
           message.space,
-          removedGroup.flatMap((watch) => watch.query.roots),
+          removedQuery.roots,
           identity,
         ).filter((referrer) => !kept.has(referrer));
         if (released.length === 0) continue;
         const staged = stageTrackedGraphState(engine, existing);
         graphCommits.push(staged.commit);
         touchedGraphs.push(staged.value);
+        stagedGraphs.set(graphKey, staged.value);
         const result = releaseTrackedRoots(
           message.space,
           engine,
@@ -10376,7 +10516,7 @@ export class Server {
     engine: Engine.Engine,
     watches: readonly WatchSpec[],
     previous: SessionState["graphs"],
-    keyOf: (branch: string) => string = (branch) => branch,
+    keyOf: (groupKey: string) => string = (groupKey) => groupKey,
   ) {
     const graphs = new Map(previous);
     const identity = this.#sessionScopeIdentity(session);
@@ -10391,19 +10531,19 @@ export class Server {
       );
     };
     const attribution = createRootAttribution();
-    for (const [branch, group] of graphWatchesByBranch(watches)) {
-      const key = keyOf(branch);
+    for (const group of watchGraphGroups(watches, identity).values()) {
+      const key = keyOf(group.key);
       const existing = graphs.get(key);
       if (existing === undefined) {
         const tracked = trackGraph(
           session.space,
           engine,
-          unionQuery(branch, group),
+          group.query,
           undefined,
           {
-            principal: session.principal,
-            sessionId: session.id,
-            evaluationCache: this.#evaluationCacheFor(session.space),
+            principal: group.identity.principal,
+            sessionId: group.identity.sessionId,
+            ...this.#evaluationCacheOption(session.space, group.instance),
           },
         );
         foldRootAttribution(attribution, tracked.stats);
@@ -10424,7 +10564,7 @@ export class Server {
         session.space,
         engine,
         staged,
-        unionQuery(branch, group),
+        group.query,
       );
       foldRootAttribution(attribution, extended.stats);
       for (const [docKey, entity] of extended.updates) {
@@ -10436,15 +10576,15 @@ export class Server {
   }
 
   /**
-   * Moves `previous`, a session's graphs by branch, to the roots of `watches`.
-   * Each branch's graph releases the roots `watches` no longer name
-   * (`releaseTrackedRoots()`) and walks only the roots it adds
-   * (`extendTrackedGraph()`). Roots both sets name keep their coverage,
-   * refreshed by pending dirty documents before the added roots extend it. A
-   * branch `watches` adds is evaluated whole, a branch it leaves drops its
-   * graph, and a clean graph whose roots stay the same is returned as it
-   * stands. A moved graph is a clone, so `previous` is untouched until the
-   * caller installs the result.
+   * Moves `previous`, a session's graphs by graph key
+   * (`watchGraphGroups()`), to the roots of `watches`. Each graph releases
+   * the roots `watches` no longer name (`releaseTrackedRoots()`) and walks
+   * only the roots it adds (`extendTrackedGraph()`). Roots both sets name
+   * keep their coverage, refreshed by pending dirty documents before the
+   * added roots extend it. A graph `watches` adds is evaluated whole, a
+   * graph it leaves no root for is dropped, and a clean graph whose roots
+   * stay the same is returned as it stands. A moved graph is a clone, so
+   * `previous` is untouched until the caller installs the result.
    */
   #moveWatchGraphs(
     session: SessionState,
@@ -10456,18 +10596,20 @@ export class Server {
   ): Map<string, TrackedGraphState> {
     const graphs = new Map<string, TrackedGraphState>();
     const identity = this.#sessionScopeIdentity(session);
-    for (const [branch, group] of graphWatchesByBranch(watches)) {
-      const query = unionQuery(branch, group);
-      const existing = previous.get(branch);
+    for (
+      const { key, branch, query, identity: walker, instance }
+        of watchGraphGroups(watches, identity).values()
+    ) {
+      const existing = previous.get(key);
       if (existing === undefined) {
         const tracked = trackGraph(session.space, engine, query, undefined, {
-          principal: session.principal,
-          sessionId: session.id,
-          evaluationCache: this.#evaluationCacheFor(session.space),
+          principal: walker.principal,
+          sessionId: walker.sessionId,
+          ...this.#evaluationCacheOption(session.space, instance),
         });
         foldRootAttribution(attribution, tracked.stats);
         this.#enforceEvaluationCacheBudget();
-        graphs.set(branch, tracked.state);
+        graphs.set(key, tracked.state);
         continue;
       }
       const referrers = rootReferrersOf(session.space, query.roots, identity);
@@ -10482,7 +10624,7 @@ export class Server {
         released.length === 0 && added.length === 0 &&
         (dirtyIds === undefined || dirtyIds.size === 0)
       ) {
-        graphs.set(branch, existing);
+        graphs.set(key, existing);
         continue;
       }
       const moved = cloneTrackedGraphState(engine, existing);
@@ -10515,7 +10657,7 @@ export class Server {
         });
         foldRootAttribution(attribution, result.stats);
       }
-      graphs.set(branch, moved);
+      graphs.set(key, moved);
     }
     return graphs;
   }
@@ -10704,18 +10846,18 @@ export class Server {
       // a new graph's state, or an extended graph's STAGED state, which is
       // where the extension's crossings sit until it commits.
       const touchedGraphs: TrackedGraphState[] = [];
-      for (const [branch, group] of graphWatchesByBranch(newWatches)) {
-        const existing = graphs.get(branch);
+      for (const group of watchGraphGroups(newWatches, identity).values()) {
+        const existing = graphs.get(group.key);
         if (existing === undefined) {
           const tracked = trackGraph(
             message.space,
             engine,
-            unionQuery(branch, group),
+            group.query,
             undefined,
             {
-              principal: session.principal,
-              sessionId: message.sessionId,
-              evaluationCache: this.#evaluationCacheFor(message.space),
+              principal: group.identity.principal,
+              sessionId: group.identity.sessionId,
+              ...this.#evaluationCacheOption(message.space, group.instance),
             },
           );
           foldRootAttribution(attribution, tracked.stats);
@@ -10723,7 +10865,7 @@ export class Server {
           // failure (or a failing operation-field attachment) must not
           // leave an already-inserted entry over budget.
           this.#enforceEvaluationCacheBudget();
-          graphs.set(branch, tracked.state);
+          graphs.set(group.key, tracked.state);
           touchedGraphs.push(tracked.state);
           this.#addMissedToTrackedIds(addedInterests, [tracked.state]);
           for (const [docKey, entity] of tracked.state.entities) {
@@ -10739,7 +10881,7 @@ export class Server {
           message.space,
           engine,
           staged.value,
-          unionQuery(branch, group),
+          group.query,
         );
         foldRootAttribution(attribution, extended.stats);
         for (const [docKey, entity] of extended.updates) {
@@ -10881,6 +11023,21 @@ export class Server {
     }
   }
 
+  /**
+   * The `evaluationCache` option of a walk of a graph over `space`: the
+   * space's cache for a session's own roots, and none for the roots of the
+   * scope instance `instance`, whose evaluation could be served to no other
+   * identity.
+   */
+  #evaluationCacheOption(
+    space: string,
+    instance: string | undefined,
+  ): { evaluationCache?: QueryEvaluationCache } {
+    return instance === undefined
+      ? { evaluationCache: this.#evaluationCacheFor(space) }
+      : {};
+  }
+
   #evaluationCacheFor(space: string): QueryEvaluationCache {
     let cache = this.#queryEvaluationCaches.get(space);
     if (cache !== undefined) {
@@ -10974,21 +11131,47 @@ export class Server {
       // `stats` is diagnostics, not wire: split it off here so the
       // response carries exactly the declared result shape.
       const queryEngine = engine ?? await this.#openEngine(space);
-      const { stats, ...result } = queryGraph(
-        space,
-        queryEngine,
-        query,
-        reuse,
-        {
-          ...scopeContext,
-          ...(cacheEligible
-            ? { evaluationCache: this.#evaluationCacheFor(space) }
-            : {}),
-        },
-      );
+      const attribution = createRootAttribution();
+      const evaluations: ReturnType<typeof queryGraph>["entities"][] = [];
+      let serverSeq = 0;
+      for (const partition of partitionGraphQuery(query, scopeContext)) {
+        const evaluated = queryGraph(
+          space,
+          queryEngine,
+          partition.query,
+          reuse,
+          {
+            ...scopeContext,
+            principal: partition.identity.principal,
+            sessionId: partition.identity.sessionId,
+            ...(cacheEligible
+              ? this.#evaluationCacheOption(space, partition.instance)
+              : {}),
+          },
+        );
+        foldRootAttribution(attribution, evaluated.stats);
+        serverSeq = evaluated.serverSeq;
+        evaluations.push(evaluated.entities);
+      }
+      let [entities] = evaluations;
+      if (evaluations.length > 1) {
+        // Two graphs can reach one document, which the result holds once. A
+        // query whose roots name an instance is answered with keyed
+        // snapshots, so each instance of a document has a key of its own.
+        const merged = new Map<string, (typeof entities)[number]>();
+        for (const entity of evaluations.flat()) {
+          merged.set(
+            `${entity.scopeKey ?? ""}\0${entity.scope ?? ""}\0${entity.id}`,
+            entity,
+          );
+        }
+        entities = [...merged.values()]
+          .toSorted((left, right) => left.id.localeCompare(right.id));
+      }
+      const result = { serverSeq, entities };
       recordSlowQueryDuration("graph.query", space, startedAt, {
         roots: query.roots.length,
-        ...rootAttributionOf(stats),
+        ...attribution,
       });
       if (query.includeAuthoredSeq === true) {
         return {
@@ -11034,21 +11217,22 @@ export class Server {
     let serverSeq = Engine.serverSeq(resolvedEngine);
 
     const attribution = createRootAttribution();
-    for (const [branch, query] of groupedQueries(watches)) {
+    for (const group of watchGraphGroups(watches, scopeContext).values()) {
       const result = trackGraph(
         space,
         resolvedEngine,
-        query,
+        group.query,
         reuse,
         {
-          ...scopeContext,
-          evaluationCache: this.#evaluationCacheFor(space),
+          principal: group.identity.principal,
+          sessionId: group.identity.sessionId,
+          ...this.#evaluationCacheOption(space, group.instance),
         },
       );
       foldRootAttribution(attribution, result.stats);
       serverSeq = result.serverSeq;
       this.#enforceEvaluationCacheBudget();
-      graphs.set(branch, result.state);
+      graphs.set(group.key, result.state);
     }
 
     recordSlowQueryDuration(record.operation, space, startedAt, {
@@ -11777,7 +11961,7 @@ export class Server {
                   engine,
                   this.#viewSupportWatches(session, session.views),
                   session.graphs,
-                  (branch) => `view-support:${branch}`,
+                  (groupKey) => `view-support:${groupKey}`,
                 );
                 grownGraphs = grown.graphs;
                 for (const [key, entry] of grown.updates) {
@@ -12362,9 +12546,10 @@ export class Server {
     space: string,
     options: { excludePrincipal?: string } = {},
   ): boolean {
-    return this.#sessions.sessionsForSpace(space).some((session) =>
-      !isServingSessionOf(session, options.excludePrincipal)
-    );
+    return this.#carriedDemand.has(space) ||
+      this.#sessions.sessionsForSpace(space).some((session) =>
+        !isServingSessionOf(session, options.excludePrincipal)
+      );
   }
 
   /** Whether ONE specific (principal, sessionId) pair holds a live
@@ -12577,6 +12762,9 @@ export class Server {
       }
       demand.push(share);
     }
+    // What another space carries here is demand of the session it names,
+    // whichever identity the reading loop signs with.
+    for (const { share } of this.#carriedSessions(space)) demand.push(share);
     return demand;
   }
 
@@ -12595,7 +12783,17 @@ export class Server {
     // Prune once for the batch before the targeted, non-pruning lookups.
     this.#sessions.sessionsForSpace(space);
     const demand: SessionDemand[] = [];
+    const carried = new Map(
+      this.#carriedSessions(space).map((
+        session,
+      ) => [session.sessionId, session.share]),
+    );
     for (const sessionId of sessionIds) {
+      const carriedShare = carried.get(sessionId);
+      if (carriedShare !== undefined) {
+        demand.push(carriedShare);
+        continue;
+      }
       const session = this.#sessions.peek(space, sessionId);
       if (
         session === undefined ||
@@ -12688,6 +12886,63 @@ export class Server {
   }
 
   /**
+   * Returns a check of whether the space `source` may tell another space of
+   * an instance of its store: a shared one always, and a user's or a
+   * session's own only while the actor its key names holds READ on
+   * `source` (protocol.md §2). A read that names no one instance is told of
+   * nothing. Each actor is looked up once.
+   */
+  #currencyGrantCheck(
+    sourceEngine: Engine.Engine,
+    source: string,
+  ): (instance: CurrencyInstance) => boolean {
+    const granted = new Map<string, boolean>();
+    return ({ scopeKey }) => {
+      if (scopeKey === "space") return true;
+      const actor = identityOfScopeKey(scopeKey)?.principal;
+      if (actor === undefined) return false;
+      let verdict = granted.get(actor);
+      if (verdict === undefined) {
+        verdict = this.#foreignGrantOn(sourceEngine, source, actor, "READ")
+          .granted;
+        granted.set(actor, verdict);
+      }
+      return verdict;
+    };
+  }
+
+  /**
+   * Forgets what `space`'s index holds of each instance of `source` it may
+   * not be told of any longer, because the actor the instance is the own
+   * of holds no READ on `source` now, and drops `space`'s registration of
+   * it there. Each slice that read one is marked `2`.
+   *
+   * @returns Whether a slice was marked.
+   */
+  #forgetUngrantedCurrencyReads(
+    engine: Engine.Engine,
+    space: string,
+    source: string,
+    sourceEngine: Engine.Engine,
+  ): boolean {
+    const mayBeTold = this.#currencyGrantCheck(sourceEngine, source);
+    const refused = selectCurrencyImports(engine, { space, source }).filter((
+      instance,
+    ) => !mayBeTold(instance));
+    if (refused.length === 0) return false;
+    unregisterCurrencyReads(sourceEngine, {
+      space: source,
+      reader: space,
+      reads: refused,
+    });
+    return forgetCurrencyImports(engine, {
+      space,
+      source,
+      instances: refused,
+    }).length > 0;
+  }
+
+  /**
    * Hands `space`'s serving loop `marked`, the slices its own request
    * marked, with the slices an advance made on another request marked since
    * the loop last asked.
@@ -12729,6 +12984,17 @@ export class Server {
    * change to `space`'s currency index, whose rows are current by then.
    */
   #tellCurrencyReaders(space: string, engine: Engine.Engine): void {
+    try {
+      this.#tellArmedCurrencyReaders(space, engine);
+    } finally {
+      // The index changed, and a reader may have been disarmed: either can
+      // change which demand carried into `space` stands.
+      this.#refreshCarriedDemand(space);
+    }
+  }
+
+  /** Helper for `#tellCurrencyReaders()`, which tells the armed readers. */
+  #tellArmedCurrencyReaders(space: string, engine: Engine.Engine): void {
     const armed = this.#currencyArmed.get(space);
     if (armed === undefined || armed.size === 0) return;
     const moved = selectCurrencyReadersMoved(engine, {
@@ -12738,12 +13004,47 @@ export class Server {
     this.#currencyToldThrough.set(space, moved.position);
     let step: CurrencyTrailStep | undefined;
     for (const { reader, position } of moved.readers) {
-      const pulledAt = armed.get(reader);
+      const pulledAt = armed.get(reader)?.position;
       if (pulledAt === undefined || position <= pulledAt) continue;
       armed.delete(reader);
       step ??= this.#currencyTrailFrom(space);
       this.#triggerCurrencyReader(reader, step);
+      this.#queueFollowForCarriedDemand(reader, space);
     }
+    // A reader armed for longer than `space` now holds was told a later
+    // time, or none, by a pull made before a slice here was recorded as
+    // expiring sooner.
+    const until = this.#currencyRestsUntil(space, engine);
+    if (until === undefined) return;
+    for (const [reader, entry] of [...armed]) {
+      if (entry.until !== undefined && entry.until <= until) continue;
+      armed.delete(reader);
+      this.#triggerCurrencyReader(reader);
+      this.#queueFollowForCarriedDemand(reader, space);
+    }
+  }
+
+  /**
+   * The time until which another space may rest on hearing nothing from
+   * `space`, or `undefined` where no time bounds it: the earliest time a
+   * slice of `space` expires at, or `space`'s own arming with a space it
+   * reads runs out. No commit reports either.
+   */
+  #currencyRestsUntil(
+    space: string,
+    engine: Engine.Engine,
+  ): number | undefined {
+    let until = selectCurrencyNextExpiry(engine, { space });
+    const now = Date.now();
+    for (const source of selectCurrencySources(engine, { space })) {
+      const armed = this.#currencyArmed.get(source)?.get(space)?.until;
+      // An arming that ran out bounds nothing: `space` pulls from that
+      // source again before another space rests on it, except round a
+      // circle of spaces, where the time would never move on.
+      if (armed === undefined || armed <= now) continue;
+      if (until === undefined || armed < until) until = armed;
+    }
+    return until;
   }
 
   /**
@@ -12833,7 +13134,11 @@ export class Server {
     if (armed === undefined || armed.size === 0) return;
     const readers = [...armed.keys()];
     armed.clear();
-    for (const reader of readers) this.#triggerCurrencyReader(reader, step);
+    this.#refreshCarriedDemand(space);
+    for (const reader of readers) {
+      this.#triggerCurrencyReader(reader, step);
+      this.#queueFollowForCarriedDemand(reader, space);
+    }
   }
 
   /**
@@ -12919,7 +13224,8 @@ export class Server {
   /**
    * Helper for `#followCurrencySources()`, which follows one source. A
    * source `space` is armed with has told it nothing since its last pull,
-   * and is not asked. One that cannot be asked, or is held, is forgotten,
+   * and is not asked until the time that arming runs to has come. One that
+   * cannot be asked, or is held, is forgotten,
    * which marks each slice that read it. Any other is pulled from, and arms
    * `space` in the same step. A source that is pulled from or held follows
    * the spaces it reads itself first, so that it hears of a change upstream
@@ -12936,11 +13242,14 @@ export class Server {
     const sourceEngine = await this.#currencySourceEngine(source);
     if (sourceEngine === undefined) {
       armed?.delete(space);
+      this.#refreshCarriedDemand(source);
       return forgetCurrencySource(engine, { space, source }).length > 0;
     }
-    if (armed?.has(space) === true && !this.#currencyHeld(source)) {
-      return false;
-    }
+    const resting = armed?.get(space);
+    if (
+      resting !== undefined && !this.#currencyHeld(source) &&
+      (resting.until === undefined || resting.until > Date.now())
+    ) return false;
     if (!visiting.has(source)) {
       visiting.add(source);
       const marked = await this.#followCurrencySources(
@@ -12955,8 +13264,17 @@ export class Server {
     }
     if (this.#currencyHeld(source)) {
       this.#currencyArmed.get(source)?.delete(space);
+      this.#refreshCarriedDemand(source);
       return forgetCurrencySource(engine, { space, source }).length > 0;
     }
+    // A grant withdrawn since `space` registered an actor's own instance
+    // ends what it may be told of it.
+    const ungranted = this.#forgetUngrantedCurrencyReads(
+      engine,
+      space,
+      source,
+      sourceEngine,
+    );
     const pulled = pullCurrencyExports(sourceEngine, {
       space: source,
       reader: space,
@@ -12974,15 +13292,20 @@ export class Server {
     if (armed.size === 0) {
       this.#currencyToldThrough.set(source, pulled.position);
     }
-    armed.set(space, pulled.position);
+    const until = this.#currencyRestsUntil(source, sourceEngine);
+    armed.set(space, {
+      position: pulled.position,
+      ...(until !== undefined && { until }),
+    });
     // The pull's advance may have moved a row another reader registered.
     this.#tellCurrencyReaders(source, sourceEngine);
-    return applyCurrencyImports(engine, {
+    const applied = applyCurrencyImports(engine, {
       space,
       source,
       entries: pulled.entries,
       position: pulled.position,
     }).length > 0;
+    return applied || ungranted;
   }
 
   /**
@@ -13018,10 +13341,18 @@ export class Server {
       // A read of a space that cannot be asked, or is held, is stored with
       // nothing reported of it, which leaves its slice marked.
       if (sourceEngine === undefined || this.#currencyHeld(source)) continue;
+      // An instance that is a user's or a session's own is read under that
+      // actor's READ grant on the source (protocol.md §2), and what the
+      // source reports of it is told under the same grant. One whose actor
+      // holds none is not registered, and what an earlier record registered
+      // of it is forgotten, which leaves its slice marked too.
+      this.#forgetUngrantedCurrencyReads(engine, space, source, sourceEngine);
+      const mayBeTold = this.#currencyGrantCheck(sourceEngine, source);
+      const admitted = [...instances.values()].filter(mayBeTold);
       const registered = registerCurrencyReads(sourceEngine, {
         space: source,
         reader: space,
-        reads: [...instances.values()],
+        reads: admitted,
       });
       this.#oweCurrencyMarks(source, registered.marked);
       this.#tellCurrencyReaders(source, sourceEngine);
@@ -13056,34 +13387,77 @@ export class Server {
    * sessions as `demandForSpace()` reads them, after bringing the currency
    * index's marks up to the store's head. A root that is no result document
    * is judged as the piece its `result` back-links lead to, which is the
-   * piece a structure load of it starts.
+   * piece a structure load of it starts. A `computed:` root that one
+   * recorded piece writes is judged as that piece without its back-links
+   * being read, so one a session names at an instance narrower than the
+   * space, which the space may hold no instance of, is judged too.
    *
    * A root may rest on a slice that read another space. Each space read by
    * a slice the demand rows are resolved under is followed first: one that
    * `space` is armed with is not asked, and any other is pulled from.
    *
-   * @returns The roots that pass, each with the piece it was judged as, how
-   * many roots each reason refused, and the slices marked since `space`'s
-   * serving loop last asked.
+   * A root that would pass but for slices that are stale only through
+   * what is upstream of them is held: what the store holds of it is not
+   * current, and starting its piece would not make it so. `running` are
+   * pieces `space`'s serving loop runs already, asked about for what is
+   * upstream of them alone.
+   *
+   * @returns The roots that pass, each with the piece it was judged as, the
+   * roots that are held, the reads that keep a held root or a running piece
+   * stale upstream, each with the piece to start for it, how many roots
+   * each reason refused, the slices marked since `space`'s serving loop
+   * last asked, and the earliest time a slice of `space` expires at or its
+   * arming with a space it reads runs out, where either does: the roots are
+   * to be judged again then, since no commit reports it.
    */
   async judgeCurrencyRoots(
     space: string,
     roots: readonly string[],
-    options: { excludePrincipal?: string; epoch: string },
+    options: {
+      excludePrincipal?: string;
+      epoch: string;
+      running?: readonly string[];
+    },
   ): Promise<{
-    servable: Array<{ root: string; piece: string }>;
+    /**
+     * The roots the store can serve, each with its piece and the pieces it
+     * rests on that record a source origin, which the loop follows before
+     * it leaves the root unstarted.
+     */
+    servable: Array<{ root: string; piece: string; origins: string[] }>;
+    held: Array<{ root: string; piece: string; readers: string[] }>;
+    upstream: CurrencyUpstreamRead[];
     refused: Partial<Record<CurrencyRefusal, number>>;
     marked: CurrencyMarked[];
+    nextExpiry?: number;
   }> {
     const engine = await this.#openEngine(space);
     const advanced = advanceCurrencyCursor(engine, { space });
     this.#tellCurrencyReaders(space, engine);
     const marked = this.#takeCurrencyMarks(space, advanced);
     const refused: Partial<Record<CurrencyRefusal, number>> = {};
-    if (roots.length === 0) return { servable: [], refused, marked };
+    /** What every return carries besides the roots that pass. */
+    const found = () => {
+      const nextExpiry = this.#currencyRestsUntil(space, engine);
+      return {
+        refused,
+        marked,
+        ...(nextExpiry !== undefined && { nextExpiry }),
+      };
+    };
+    const running = options.running ?? [];
+    if (roots.length === 0 && running.length === 0) {
+      return { servable: [], held: [], upstream: [], ...found() };
+    }
 
-    /** The recorded piece `root` leads to, if its back-links reach one. */
+    /**
+     * The recorded piece `root` leads to: the one piece recorded as deriving
+     * it where it is a computed document, or else the piece its back-links
+     * reach, if they reach one.
+     */
     const pieceOf = (root: string): string | undefined => {
+      const deriver = selectCurrencyDeriver(engine, { space, id: root });
+      if (deriver !== undefined) return deriver;
       let id = root;
       for (let hops = 0; hops <= CURRENCY_ROOT_HOPS_MAX; hops++) {
         if (selectCurrencyPiece(engine, { piece: id }) !== undefined) {
@@ -13109,17 +13483,32 @@ export class Server {
       if (piece !== undefined) pieces.set(root, piece);
       else refused["no-record"] = (refused["no-record"] ?? 0) + 1;
     }
-    if (pieces.size === 0) return { servable: [], refused, marked };
+    if (pieces.size === 0 && running.length === 0) {
+      return { servable: [], held: [], upstream: [], ...found() };
+    }
     const demand = this.demandForSpace(
       space,
       options.excludePrincipal === undefined
         ? {}
         : { excludePrincipal: options.excludePrincipal },
     );
-    const rows = function* (): Generator<CurrencyInstance> {
+    // Whose view of a slot is asked about decides which slice answers for
+    // it, and the scope key of a row at the space names no pair. So each row
+    // carries the session key of the pair whose session demands it, where
+    // that session names a principal.
+    const rows = function* (): Generator<
+      CurrencyInstance & { demander?: string }
+    > {
       for (const share of demand) {
         for (const row of share.rows.values()) {
-          yield { id: row.id, scopeKey: row.scopeKey };
+          const { principal, sessionId } = row.identity ?? {};
+          yield {
+            id: row.id,
+            scopeKey: row.scopeKey,
+            ...(principal !== undefined && sessionId !== undefined && {
+              demander: resolveScopeKey("session", { principal, sessionId }),
+            }),
+          };
         }
       }
     };
@@ -13141,21 +13530,36 @@ export class Server {
       roots: [...new Set(pieces.values())],
       rows: rows(),
       epoch: options.epoch,
+      running,
     });
     const passing = new Set(judgment.servable);
+    const holding = new Map(
+      judgment.held.map(({ root, readers }) => [root, readers]),
+    );
     const reasons = new Map(
       judgment.refused.map(({ root, reason }) => [root, reason]),
     );
-    const servable: Array<{ root: string; piece: string }> = [];
+    const origins = new Map(
+      judgment.origins.map(({ root, pieces }) => [root, pieces]),
+    );
+    const servable: Array<
+      { root: string; piece: string; origins: string[] }
+    > = [];
+    const held: Array<{ root: string; piece: string; readers: string[] }> = [];
     for (const [root, piece] of pieces) {
       if (passing.has(piece)) {
-        servable.push({ root, piece });
+        servable.push({ root, piece, origins: origins.get(piece) ?? [] });
+        continue;
+      }
+      const readers = holding.get(piece);
+      if (readers !== undefined) {
+        held.push({ root, piece, readers });
         continue;
       }
       const reason = reasons.get(piece);
       if (reason !== undefined) refused[reason] = (refused[reason] ?? 0) + 1;
     }
-    return { servable, refused, marked };
+    return { servable, held, upstream: judgment.upstream, ...found() };
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a
@@ -13217,6 +13621,11 @@ export class Server {
       for (const event of this.#sessions.snapshot()) {
         this.#notifySessionChanged(event);
       }
+      for (const space of this.#carriedDemand.keys()) {
+        for (const event of this.#carriedSnapshot(space)) {
+          this.#notifySessionChanged(event);
+        }
+      }
     }
   }
 
@@ -13225,7 +13634,361 @@ export class Server {
    * up to date, as installing an observer replays them for every space.
    */
   sessionSnapshot(space: string): SessionLifecycleEvent[] {
-    return this.#sessions.snapshot(space);
+    return [...this.#sessions.snapshot(space), ...this.#carriedSnapshot(space)];
+  }
+
+  /** The demands carried into `space`, each as the opening of a session. */
+  #carriedSnapshot(space: string): SessionLifecycleEvent[] {
+    return this.#carriedSessions(space).map(({ sessionId, principal }) => ({
+      kind: "opened" as const,
+      space,
+      sessionId,
+      ...(principal !== undefined && { principal }),
+    }));
+  }
+
+  /** The demands carried into `space`, from every reading space. */
+  #carriedSessions(space: string): CarriedSession[] {
+    const carried: CarriedSession[] = [];
+    for (const sessions of this.#carriedDemand.get(space)?.values() ?? []) {
+      for (const session of sessions.values()) carried.push(session);
+    }
+    return carried;
+  }
+
+  /**
+   * Replaces the demand the reading space `reader` carries into `space`
+   * with `rows` (serving-loop.md §3b): each instance a run of `reader` read
+   * here under the actor of a client session, which then demands it here
+   * as if it watched it. A row for the actor's own instance is admitted
+   * only where the actor holds READ on `space`, as a named scoped read is
+   * (protocol.md §2). A row for a shared instance is admitted without that,
+   * and then stands with no pair, as an anonymous session's does: the
+   * piece that computes it is loaded, and nothing is run for the actor. A
+   * row is refused where its origin is not a live client session on this
+   * server, which a serving session of `excludePrincipal`
+   * (`isServingSessionOf()`) is not; where that session is anonymous, and
+   * so names no actor to carry; where its instance is another actor's; and
+   * where this server cannot ask `space`'s store. A row stands until
+   * `reader` replaces it or its origin session ends.
+   *
+   * `reader` may be `space` itself: its loop then offers the instances its
+   * own index named as stale upstream of what a session demands, so that
+   * the pieces that write them start (serving-loop.md §1, "A root stale
+   * upstream"). Each of those rows stands, and an origin that is a session
+   * of `space` is carried as a pair without the grant being asked.
+   *
+   * @returns How many of `rows` were refused.
+   */
+  async setCarriedDemand(
+    space: string,
+    reader: string,
+    rows: readonly CarriedDemandRow[],
+    options: { excludePrincipal?: string } = {},
+  ): Promise<{ refused: number }> {
+    const engine = rows.length === 0
+      ? undefined
+      : await this.#currencySourceEngine(space);
+    let refused = 0;
+    const next = new Map<
+      string,
+      {
+        origin: CarriedDemandRow["origin"];
+        principal: string | undefined;
+        rows: Map<string, DemandedInstanceRow>;
+      }
+    >();
+    /**
+     * Whether a principal reads `space`, asked once for each, apart for an
+     * origin in `space` and one in another space.
+     */
+    const granted = new Map<string, boolean>();
+    for (const row of rows) {
+      const origin = this.#sessions.peek(
+        row.origin.space,
+        row.origin.sessionId,
+      );
+      const principal = origin?.principal;
+      const actor = row.scopeKey === "space"
+        ? principal
+        : identityOfScopeKey(row.scopeKey)?.principal;
+      let admitted = engine !== undefined && origin !== undefined &&
+        !isServingSessionOf(origin, options.excludePrincipal) &&
+        principal !== undefined && actor === principal;
+      // Whether the actor holds READ here, and so is carried as a pair.
+      let reads = false;
+      if (admitted) {
+        // A session of `space` itself reads it already: its own loop offers
+        // a row for it, for a piece upstream of what it demands.
+        const own = row.origin.space === space;
+        const asked = `${own}\0${principal!}`;
+        let verdict = granted.get(asked);
+        if (verdict === undefined) {
+          verdict = own ||
+            this.#foreignGrantOn(engine!, space, principal!, "READ").granted;
+          granted.set(asked, verdict);
+        }
+        reads = verdict;
+        // A serving loop reads a shared instance of another space whoever
+        // it runs for (protocol.md §2b), so the demand for one stands
+        // without the actor. The actor's own instance is read under the
+        // actor's grant alone, and so is demanded under it.
+        admitted = verdict || row.scopeKey === "space";
+      }
+      if (!admitted) {
+        refused += 1;
+        continue;
+      }
+      const sessionId = carriedSessionId(reader, row.origin);
+      let session = next.get(sessionId);
+      if (session === undefined) {
+        session = {
+          origin: { ...row.origin },
+          principal: reads ? principal : undefined,
+          rows: new Map(),
+        };
+        next.set(sessionId, session);
+      }
+      session.rows.set(toDirtyKey(row.id, row.scopeKey), {
+        id: row.id,
+        scope: row.scope,
+        scopeKey: row.scopeKey,
+        ...(reads && {
+          identity: { principal: principal!, sessionId: row.origin.sessionId },
+        }),
+        root: true,
+        origin: session.origin,
+      });
+    }
+    let offered = this.#carriedOffered.get(space);
+    if (next.size === 0) {
+      offered?.delete(reader);
+      if (offered?.size === 0) this.#carriedOffered.delete(space);
+    } else {
+      if (offered === undefined) {
+        offered = new Map();
+        this.#carriedOffered.set(space, offered);
+      }
+      offered.set(
+        reader,
+        new Map(
+          [...next].map(([sessionId, { origin, principal, rows }]) => [
+            sessionId,
+            { sessionId, origin, principal, share: { sessionId, rows } },
+          ]),
+        ),
+      );
+    }
+    this.#refreshCarriedDemand(space);
+    // What is proven current is proven for a reading space that hears of
+    // the next change, so one that offers demand is armed first. A space
+    // that offers demand to itself asks for what its own index named stale,
+    // and every such row stands.
+    if (next.size > 0 && reader !== space) {
+      await this.#followForCarriedDemand(reader, space);
+    }
+    return { refused };
+  }
+
+  /**
+   * Has `reader` pull from `source`, which arms it, where it offers demand
+   * there and is not armed: `source`'s index can then prove an instance
+   * `reader` read current, and the offered row for it need not stand.
+   */
+  async #followForCarriedDemand(reader: string, source: string): Promise<void> {
+    if (this.#carriedOffered.get(source)?.has(reader) !== true) return;
+    const engine = await this.#currencySourceEngine(reader);
+    if (engine === undefined || this.#closed) return;
+    const marked = await this.#followCurrencySource(
+      engine,
+      reader,
+      source,
+      new Set([reader]),
+    );
+    // The reader's own loop may hold a root unstarted on a slice this
+    // marked.
+    if (marked) this.#notifyCurrencyChanged(reader);
+  }
+
+  /**
+   * Queues a pull by `reader` from `source`, which has just disarmed it,
+   * where `reader` offers demand there (`#followForCarriedDemand()`).
+   */
+  #queueFollowForCarriedDemand(reader: string, source: string): void {
+    if (this.#carriedOffered.get(source)?.has(reader) !== true) return;
+    const following = Promise.resolve().then(() =>
+      this.#followForCarriedDemand(reader, source)
+    ).catch((error) => {
+      console.warn(
+        `memory v2: the pull queued for ${reader} from ${source} failed`,
+        error,
+      );
+    }).finally(() => {
+      this.#currencyAdvancing.delete(following);
+    });
+    this.#currencyAdvancing.add(following);
+  }
+
+  /**
+   * Brings the demand that stands in `space` into line with what the
+   * reading spaces offered, and tells the serving host of each change. An
+   * offered row stands unless `space`'s currency index proves its instance
+   * current: the reading space registered the instance and is armed with
+   * `space` for no limited time, so that it hears of the next change, and
+   * the index holds the instance as one no piece here is behind on. With a
+   * row that stands, stands a row for each piece the index records as
+   * writing its document, for the same pair. Called whenever
+   * what is offered, the index, or the arming may have changed.
+   */
+  #refreshCarriedDemand(space: string): void {
+    const offered = this.#carriedOffered.get(space);
+    let readers = this.#carriedDemand.get(space);
+    if (offered === undefined && readers === undefined) return;
+    const engine = this.#resolvedEngines.get(space);
+    /** What to tell the serving host, once the rows below are in place. */
+    const told: Array<() => void> = [];
+    for (
+      const reader of new Set([
+        ...offered?.keys() ?? [],
+        ...readers?.keys() ?? [],
+      ])
+    ) {
+      const armed = this.#currencyArmed.get(space)?.get(reader);
+      const rests = engine !== undefined && armed !== undefined &&
+        armed.until === undefined && !this.#currencyHeld(space);
+      const held = readers?.get(reader) ?? new Map<string, CarriedSession>();
+      const stands = new Map<string, CarriedSession>();
+      for (const [sessionId, session] of offered?.get(reader) ?? []) {
+        const rows = new Map(
+          [...session.share.rows].filter(([, row]) =>
+            !rests ||
+            selectCurrencyExport(engine, {
+                space,
+                id: row.id,
+                scopeKey: row.scopeKey,
+              })?.stale !== false
+          ),
+        );
+        if (rows.size === 0) continue;
+        // A serving loop starts no piece for a demanded document that a
+        // computation derives, and an instance that is an actor's own may
+        // not exist yet for it to find the piece from. So each piece the
+        // index records as writing a row's document is demanded with it,
+        // for the same pair.
+        if (engine !== undefined) {
+          for (const row of [...rows.values()]) {
+            for (
+              const piece of selectCurrencyWriters(engine, {
+                space,
+                id: row.id,
+              })
+            ) {
+              const key = toDirtyKey(piece, "space");
+              if (rows.has(key)) continue;
+              rows.set(key, {
+                id: piece,
+                scope: "space",
+                scopeKey: "space",
+                ...(row.identity !== undefined && { identity: row.identity }),
+                root: true,
+                origin: session.origin,
+              });
+            }
+          }
+        }
+        stands.set(sessionId, {
+          ...session,
+          share: { sessionId, rows },
+        });
+      }
+      for (const [sessionId, session] of [...held]) {
+        if (stands.has(sessionId)) continue;
+        held.delete(sessionId);
+        told.push(() => {
+          this.#notifySessionChanged({ kind: "removed", space, sessionId });
+          this.#notifyCarriedDemandChanged(space, session);
+        });
+      }
+      for (const [sessionId, session] of stands) {
+        const before = held.get(sessionId);
+        if (
+          before !== undefined &&
+          before.share.rows.size === session.share.rows.size &&
+          [...session.share.rows.keys()].every((key) =>
+            before.share.rows.has(key)
+          )
+        ) continue;
+        held.set(sessionId, session);
+        told.push(() => {
+          if (before === undefined) {
+            this.#notifySessionChanged({
+              kind: "opened",
+              space,
+              sessionId,
+              ...(session.principal !== undefined &&
+                { principal: session.principal }),
+            });
+            this.#notifySessionOpened(space);
+          }
+          this.#notifyCarriedDemandChanged(space, session);
+        });
+      }
+      if (held.size === 0) {
+        readers?.delete(reader);
+      } else {
+        if (readers === undefined) {
+          readers = new Map();
+          this.#carriedDemand.set(space, readers);
+        }
+        readers.set(reader, held);
+      }
+    }
+    if (readers?.size === 0) this.#carriedDemand.delete(space);
+    // The host asks what stands when it is told, so it is told once every
+    // row is in place.
+    for (const tell of told) tell();
+  }
+
+  /**
+   * Drops every demand carried for the session `sessionId` of `origin`,
+   * which has ended, from each space it was carried into.
+   */
+  #dropCarriedDemandOf(origin: string, sessionId: string): void {
+    for (const [space, readers] of [...this.#carriedOffered]) {
+      let dropped = false;
+      for (const [reader, offered] of [...readers]) {
+        for (const [id, session] of [...offered]) {
+          if (
+            session.origin.space !== origin ||
+            session.origin.sessionId !== sessionId
+          ) continue;
+          offered.delete(id);
+          dropped = true;
+        }
+        if (offered.size === 0) readers.delete(reader);
+      }
+      if (readers.size === 0) this.#carriedOffered.delete(space);
+      if (dropped) this.#refreshCarriedDemand(space);
+    }
+  }
+
+  /** Tells the serving host that the demand `session` carries changed. */
+  #notifyCarriedDemandChanged(space: string, session: CarriedSession): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.demandChanged === undefined) return;
+    try {
+      observer.demandChanged(
+        space,
+        "watch",
+        session.principal,
+        session.sessionId,
+      );
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on demandChanged",
+        error,
+      );
+    }
   }
 
   /**

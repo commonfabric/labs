@@ -47,8 +47,7 @@ export function linesFromClasses(
       }
       const segment = text.slice(offset, next);
       if (cls === "bracket") {
-        const opening = segment === "(" || segment === "[" || segment === "{";
-        const bracketDepth = opening
+        const bracketDepth = OPENING_BRACKETS.has(segment)
           ? depth++
           : (depth = Math.max(0, depth - 1));
         spans.push({ col: column, text: segment, cls, bracketDepth });
@@ -82,6 +81,19 @@ export function createRecoloringHighlighter(
     },
   };
 }
+
+/**
+ * Brackets that open a nesting level: the ASCII ones, and the mathematical
+ * angle, white, and double brackets. Every other bracket closes one.
+ */
+export const OPENING_BRACKETS: ReadonlySet<string> = new Set([
+  "(",
+  "[",
+  "{",
+  "⟨",
+  "⦃",
+  "⟦",
+]);
 
 const WHITESPACE = /\s/;
 

@@ -33,6 +33,7 @@ import { internSchema } from "@commonfabric/data-model-schema";
 import {
   fabricAwareEqual,
   hashStringOf,
+  isDeepFrozen,
   isKeyableObjectOrArray,
 } from "@commonfabric/data-model";
 import {
@@ -373,10 +374,13 @@ const WRITER_IDENTITY_VOLATILE_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Return an `ifc` extension with the volatile identity of a `writeAuthorizedBy`
- * writer claim removed, so that neither a recompile of the authorizing module
- * nor a cross-resolver rebuild of the same module reads as a contract change in
- * the semantic-extension comparison below.
+ * Return `schema` with the volatile identity of every writer claim in it
+ * removed, so that neither a recompile of an authorizing module nor a
+ * cross-resolver rebuild of the same module reads as a contract change.
+ * Returns the same object when there is nothing to remove, and otherwise an
+ * interned, deep-frozen copy. The answer for each deep-frozen schema the walk
+ * meets is remembered, so the same schema always gives the same object and a
+ * schema met again is not walked again.
  *
  * A CFC write authorization (`TrustedActionWrite`) lowers to
  * `ifc.writeAuthorizedBy.__ctWriterIdentityOf`, which records the authoring
@@ -387,41 +391,164 @@ const WRITER_IDENTITY_VOLATILE_KEYS: ReadonlySet<string> = new Set([
  * `runtime/runner/src/cfc/prepare.ts`): it re-verifies the live writer's
  * `moduleIdentity` against the claim and never consults `file`. So both the
  * content hash and the file spelling are volatile against anything a caller can
- * depend on — the hash rehashes on any edit to the module, and the file spelling
- * changes with the resolver that compiled it (labs#4772). Removing both here
- * stops the schema diff from reading "the code was edited" or "a different
- * resolver compiled it" as "the contract changed"; it weakens no enforcement,
- * because the runtime holds neither field fixed.
+ * depend on: the hash changes on any edit to the module, and the file spelling
+ * changes with the resolver that compiled it. Removing the
+ * {@link WRITER_IDENTITY_VOLATILE_KEYS} weakens no enforcement, because the
+ * runtime holds none of them fixed.
  *
- * Everything a caller can depend on is kept and still compared: the binding
- * `path` — the coordinate the runtime authorizes against — and the entire
- * `uiContract` (helper/action/surface/role/kind/trustedPattern/
- * requiredEventIntegrity). The builtin `readonly string[]` form of
- * `writeAuthorizedBy` names trusted builtins rather than a compiled module, so
- * it carries no writer identity and is returned unchanged.
+ * Everything a caller can depend on is kept: the binding `path`, which is the
+ * coordinate the runtime authorizes against, and the entire `uiContract`. The
+ * builtin `readonly string[]` form of `writeAuthorizedBy` names trusted
+ * builtins rather than a compiled module, so it carries no writer identity and
+ * is kept as written. So is an `__ctWriterIdentityOf` that is not a plain
+ * object, which no writer identity takes the shape of.
  *
- * This runs wherever an `ifc` is compared, which `keywordValuesEqual` makes one
- * rule: a claim written directly on a property, one behind a `$defs`
- * reference, and one under any keyword that holds schemas — `allOf`, `oneOf`,
- * `if`/`then`, and `not` among them — are all read the same way, so recompiling
- * the authoring module reads as a contract change in none of them.
+ * The claims removed from are each `ifc.writeAuthorizedBy` and the
+ * `writeAuthorizedBy` of each member of each `ifc.writePolicyAnyOf`. The walk
+ * descends each keyword that holds schemas, in any of the three shapes,
+ * including the definition tables a local `$ref` resolves into. It stops at
+ * every keyword that holds a value, so a `default`, a `const`, and an `enum`
+ * entry are kept as written.
+ *
+ * Three parts of the proof look at whole schemas rather than at one keyword: it
+ * reuses one interned copy for schemas whose content is identical, it stops
+ * recursing when it meets a pair of schemas it is already proving, which it
+ * recognizes by object identity, and it gives up on unions nested more than
+ * {@link MAX_SOURCE_UNION_SPLIT_DEPTH} deep. So every entry point of the proof
+ * applies this to the schemas it is given before it validates, resolves, or
+ * interns any of them, and {@link resolveSchema} applies it to what a `$ref`
+ * brings in from another document. None of the three then sees a module hash,
+ * and the verdict, and every issue the proof reports, is the same for any two
+ * schemas this maps to equal content. A content-addressed `$ref` names its document by
+ * a hash of the whole document, writer identity included, so two references
+ * to documents that differ only in writer identity differ themselves, and the
+ * schemas holding them do not map to equal content.
+ *
+ * Exported so that the pattern update gate records and recognizes a contract by
+ * the same content the proof judges.
  */
-const writerClaimWithoutVolatileIdentity = (claim: unknown): unknown => {
-  if (!isObjectNotArray(claim)) {
-    return claim;
+export function schemaWithoutVolatileWriterIdentity(
+  schema: JSONSchema,
+): JSONSchema {
+  return withoutVolatileWriterIdentity(schema) as JSONSchema;
+}
+
+/**
+ * The answers {@link withoutVolatileWriterIdentity} has given for deep-frozen
+ * schemas, each of which keeps its content for as long as it lives.
+ */
+const schemasWithoutVolatileWriterIdentity = new WeakMap<object, unknown>();
+
+/**
+ * Helper for {@link schemaWithoutVolatileWriterIdentity}, at one schema and,
+ * through it, at each schema written inside it.
+ */
+const withoutVolatileWriterIdentity = (schema: unknown): unknown => {
+  if (!isObjectNotArray(schema)) return schema;
+  const known = schemasWithoutVolatileWriterIdentity.get(schema);
+  if (known !== undefined) return known;
+  const mapped = mapOwnValues(
+    schema,
+    (key, value) =>
+      key === "ifc"
+        ? ifcWithoutVolatileWriterIdentity(value)
+        : SUBSCHEMA_KEYS.has(key)
+        ? withoutVolatileWriterIdentity(value)
+        : SUBSCHEMA_LIST_KEYS.has(key) && Array.isArray(value)
+        ? mapEntries(value, withoutVolatileWriterIdentity)
+        : SUBSCHEMA_MAP_KEYS.has(key) && isObjectNotArray(value)
+        ? mapOwnValues(
+          value,
+          (_name, child) => withoutVolatileWriterIdentity(child),
+        )
+        : value,
+  );
+  // Interning freezes the copy in place, together with the subschemas it
+  // shares with `schema`, as `resolveSchema` does to every schema it resolves.
+  const stripped = mapped === schema
+    ? schema
+    : internSchema(mapped as SchemaObject);
+  for (const key of [schema, stripped]) {
+    if (isDeepFrozen(key)) {
+      schemasWithoutVolatileWriterIdentity.set(key, stripped);
+    }
   }
-  const identity = (claim as Record<string, unknown>).__ctWriterIdentityOf;
-  if (!isObjectOrArray(identity)) return claim;
-  const strippedIdentity: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(identity)) {
-    if (WRITER_IDENTITY_VOLATILE_KEYS.has(key)) continue;
-    strippedIdentity[key] = value;
-  }
-  return {
-    ...(claim as Record<string, unknown>),
-    __ctWriterIdentityOf: strippedIdentity,
-  };
+  return stripped;
 };
+
+/** Helper for {@link schemaWithoutVolatileWriterIdentity}, at one `ifc`. */
+const ifcWithoutVolatileWriterIdentity = (ifc: unknown): unknown =>
+  isObjectNotArray(ifc)
+    ? mapOwnValues(
+      ifc,
+      (key, value) =>
+        key === "writeAuthorizedBy"
+          ? writerClaimWithoutVolatileIdentity(value)
+          : key === "writePolicyAnyOf" && Array.isArray(value)
+          ? mapEntries(value, ifcWithoutVolatileWriterIdentity)
+          : value,
+    )
+    : ifc;
+
+/** Helper for {@link schemaWithoutVolatileWriterIdentity}, at one claim. */
+const writerClaimWithoutVolatileIdentity = (claim: unknown): unknown =>
+  isObjectNotArray(claim)
+    ? mapOwnValues(
+      claim,
+      (key, identity) =>
+        key === "__ctWriterIdentityOf" && isObjectNotArray(identity)
+          ? withoutVolatileIdentityKeys(identity)
+          : identity,
+    )
+    : claim;
+
+/** Returns `identity` without the {@link WRITER_IDENTITY_VOLATILE_KEYS}. */
+const withoutVolatileIdentityKeys = (identity: object): object => {
+  const kept: Record<string, unknown> = {};
+  let removed = false;
+  for (const [key, value] of Object.entries(identity)) {
+    if (WRITER_IDENTITY_VOLATILE_KEYS.has(key)) removed = true;
+    else keep(kept, key, value);
+  }
+  return removed ? kept : identity;
+};
+
+/**
+ * Returns `record` with each own value replaced by what `map` returns for it,
+ * or `record` itself when `map` returns every value unchanged. Copies with
+ * {@link keep}, so a `__proto__` key read off the wire remains an own property.
+ */
+function mapOwnValues(
+  record: object,
+  map: (key: string, value: unknown) => unknown,
+): object {
+  const values = record as Record<string, unknown>;
+  let copy: Record<string, unknown> | undefined;
+  for (const key of Object.keys(values)) {
+    const value = values[key];
+    const mapped = map(key, value);
+    if (mapped === value) continue;
+    copy ??= { ...values };
+    keep(copy, key, mapped);
+  }
+  return copy ?? record;
+}
+
+/**
+ * Returns `list` with each entry replaced by what `map` returns for it, or
+ * `list` itself when `map` returns every entry unchanged. A hole stays a hole.
+ */
+function mapEntries(
+  list: readonly unknown[],
+  map: (entry: unknown) => unknown,
+): readonly unknown[] {
+  let copy: unknown[] | undefined;
+  list.forEach((entry, index) => {
+    const mapped = map(entry);
+    if (mapped !== entry) (copy ??= list.slice())[index] = mapped;
+  });
+  return copy ?? list;
+}
 
 /**
  * What each `ifc` key contributes to this comparison.
@@ -439,16 +566,16 @@ const writerClaimWithoutVolatileIdentity = (claim: unknown): unknown => {
  * for the part of a mint that an `ownerPrincipal` beside it turns into
  * authorization evidence, which `comparableIfc` keeps.
  *
- * `writerIdentity` is the write authorization, compared except for the parts of
- * its claim that move without the authorization moving. `writerAlternatives`
- * is a list of such authorizations, each with the contract beside it, and each
- * claim in it is compared the same way.
+ * `writerAlternatives` is a list of complete writer policies, any one of which
+ * admits a write. The list is a set, so its members are compared in an order
+ * their contents decide.
+ *
+ * A write authorization is declared. The parts of its claim that move without
+ * the authorization moving take no part in this comparison, because
+ * {@link schemaWithoutVolatileWriterIdentity} removes them before the proof
+ * begins.
  */
-type IfcKeyRole =
-  | "declared"
-  | "derived"
-  | "writerIdentity"
-  | "writerAlternatives";
+type IfcKeyRole = "declared" | "derived" | "writerAlternatives";
 
 /**
  * A role for every key of {@link IFC_KEYS}. The mapped type is the point: a new
@@ -468,7 +595,7 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
   collection: "declared",
   flowPrecisionClaim: "declared",
   uiContract: "declared",
-  writeAuthorizedBy: "writerIdentity",
+  writeAuthorizedBy: "declared",
   writePolicyAnyOf: "writerAlternatives",
   // `addIntegrity` is the lowered form of the spec's `addedIntegrity`
   // transition annotation, and of the `RepresentsCurrentUser` and
@@ -497,7 +624,7 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
 };
 
 /**
- * Copy one key onto the reduced extension.
+ * Copy one key onto a copy being built of a schema or an `ifc`.
  *
  * Uses `defineProperty` rather than `kept[key] = value`, the same way
  * `stripUndefinedProps` in `@commonfabric/js-values` does, so that a key named
@@ -546,8 +673,9 @@ const representsPrincipalAtoms = (value: unknown): readonly unknown[] => {
 
 /**
  * Return an `ifc` extension reduced to what this comparison decides: the
- * derived per-value keys dropped, and a write authorization's volatile identity
- * normalized. Returns the input unchanged when neither applies.
+ * derived per-value keys dropped, and the members of a `writePolicyAnyOf` put
+ * in an order their contents decide. Returns the input unchanged when neither
+ * applies.
  *
  * `keywordValuesEqual` calls this at every `ifc` it meets, so the reduction has
  * the same reach whether the node is written directly on a property, sits
@@ -582,10 +710,7 @@ const comparableIfc = (ifc: unknown): unknown => {
     const role: IfcKeyRole | undefined = IFC_KEY_ROLES[key as IfcKey] as
       | IfcKeyRole
       | undefined;
-    if (
-      role === "derived" || role === "writerIdentity" ||
-      role === "writerAlternatives"
-    ) {
+    if (role === "derived" || role === "writerAlternatives") {
       handled = true;
       break;
     }
@@ -610,24 +735,13 @@ const comparableIfc = (ifc: unknown): unknown => {
       if (evidence.length > 0) keep(kept, key, evidence);
       continue;
     }
-    if (role === "writerIdentity") {
-      const normalized = writerClaimWithoutVolatileIdentity(value);
-      if (normalized !== value) changed = true;
-      keep(kept, key, normalized);
-      continue;
-    }
     if (role === "writerAlternatives" && Array.isArray(value)) {
       // The alternatives are a set, whose order carries no meaning, so they
       // are compared in an order their contents decide.
-      const normalized = value.map((policy) => {
-        if (!isObjectNotArray(policy)) return policy;
-        const writer = writerClaimWithoutVolatileIdentity(
-          policy.writeAuthorizedBy,
-        );
-        return writer === policy.writeAuthorizedBy
-          ? policy
-          : { ...policy, writeAuthorizedBy: writer };
-      }).map((policy) => ({ policy, order: hashStringOf(policy) }))
+      const normalized = value.map((policy) => ({
+        policy,
+        order: hashStringOf(policy),
+      }))
         .sort((a, b) => a.order < b.order ? -1 : a.order > b.order ? 1 : 0)
         .map(({ policy }) => policy);
       if (normalized.some((policy, index) => policy !== value[index])) {
@@ -702,13 +816,13 @@ const comparableIfc = (ifc: unknown): unknown => {
  * than left to be rediscovered.
  *
  * The semantic-extension keys (`asCell`, `ifc`, `readOnly`, `scope`,
- * `writeOnly`) are compared for exact equality, with two exceptions, both
- * made in the reduction `comparableIfc()` applies before the `ifc`
- * comparison. The members of a `writePolicyAnyOf` are a set, compared in an
- * order their contents decide, so a candidate listing them in another order
- * declares the same contract. And a writer claim's volatile identity, in a
- * `writeAuthorizedBy` or in each member of a `writePolicyAnyOf`, is
- * normalized out. That
+ * `writeOnly`) are compared for exact equality, with exceptions for `ifc`.
+ *
+ * A writer claim's volatile identity, in a `writeAuthorizedBy` or in each
+ * member of a `writePolicyAnyOf`, takes no part in the proof at all:
+ * {@link schemaWithoutVolatileWriterIdentity} removes it from every `ifc` of
+ * both contracts before the proof begins, so two contracts that differ only in
+ * it get the same verdict and the same issues against any third. That
  * identity is the content-addressed module hash (`moduleIdentity`, and the
  * legacy `bundleId`), which rehashes on any edit to the authoring module,
  * together with the source-file spelling (`file`), which changes with the
@@ -719,6 +833,11 @@ const comparableIfc = (ifc: unknown): unknown => {
  * cross-resolver rebuild of an unchanged authorization. The binding `path` and
  * the whole `uiContract` are still compared, and the runtime enforcement is
  * untouched, so this narrows nothing.
+ *
+ * The other exceptions are made in the reduction `comparableIfc()` applies
+ * before each `ifc` comparison. The members of a `writePolicyAnyOf` are a set,
+ * compared in an order their contents decide, so a candidate listing them in
+ * another order declares the same contract.
  *
  * The reduction reaches every `ifc` in the schema, not only one written on the
  * node being checked. A comparison that meets a keyword holding schemas —
@@ -770,20 +889,30 @@ export function patternSchemaIncompatibilities(
   previous: Pattern,
   candidate: Pattern,
 ): SchemaIncompatibility[] {
-  // Both sides are validated as stored. A previous schema that fails here —
-  // one whose `#/$defs/<name>` refs only a `$defs` below the root could
-  // satisfy, for instance — refuses every replacement, and the override is
-  // the way past it: the stored schema is broken, and the update is taken
-  // knowing that.
-  const previousArgumentSchema = previous.argumentSchema;
-  const previousResultSchema = previous.resultSchema;
+  // Both sides are validated as stored, less the writer identity no part of
+  // this proof reads. A previous schema that fails here — one whose
+  // `#/$defs/<name>` refs only a `$defs` below the root could satisfy, for
+  // instance — refuses every replacement, and the override is the way past
+  // it: the stored schema is broken, and the update is taken knowing that.
+  const previousArgumentSchema = schemaWithoutVolatileWriterIdentity(
+    previous.argumentSchema,
+  );
+  const previousResultSchema = schemaWithoutVolatileWriterIdentity(
+    previous.resultSchema,
+  );
+  const candidateArgumentSchema = schemaWithoutVolatileWriterIdentity(
+    candidate.argumentSchema,
+  );
+  const candidateResultSchema = schemaWithoutVolatileWriterIdentity(
+    candidate.resultSchema,
+  );
   const issues: SchemaIncompatibility[] = [];
   for (
     const [label, schema] of [
       ["previous argument", previousArgumentSchema],
-      ["candidate argument", candidate.argumentSchema],
+      ["candidate argument", candidateArgumentSchema],
       ["previous result", previousResultSchema],
-      ["candidate result", candidate.resultSchema],
+      ["candidate result", candidateResultSchema],
     ] as const
   ) {
     const issue = validateSchemaDefinition(schema);
@@ -798,11 +927,11 @@ export function patternSchemaIncompatibilities(
 
   const argumentIssues = schemaSubsetIssues(
     previousArgumentSchema,
-    candidate.argumentSchema,
+    candidateArgumentSchema,
     "argument",
     {
       sourceRoot: previousArgumentSchema,
-      targetRoot: candidate.argumentSchema,
+      targetRoot: candidateArgumentSchema,
       role: "argument",
       activePairs: new WeakMap(),
       sourceUnionSplitDepth: 0,
@@ -816,11 +945,11 @@ export function patternSchemaIncompatibilities(
   for (const issue of argumentIssues) issues.push(issue);
 
   const resultIssues = schemaSubsetIssues(
-    candidate.resultSchema,
+    candidateResultSchema,
     previousResultSchema,
     "result",
     {
-      sourceRoot: candidate.resultSchema,
+      sourceRoot: candidateResultSchema,
       targetRoot: previousResultSchema,
       role: "result",
       resultPropertyNames: [],
@@ -849,10 +978,10 @@ export function patternSchemaIncompatibilities(
  * `FabricPrimitive` class the source admits already has that field: a
  * `FabricPrimitive` is frozen and never receives the default.
  *
- * The `ifc` reduction {@link comparableIfc} performs reaches this proof as
- * well, where the two claims come from two separate pieces and a differing
+ * {@link schemaWithoutVolatileWriterIdentity} applies to this proof as well,
+ * where the two claims come from two separate pieces and a differing
  * `moduleIdentity` names a different authoring module rather than one module
- * recompiled. The reduction stays because this proof is not what decides who
+ * recompiled. The removal stays because this proof is not what decides who
  * may write. That is decided at write time, against the claim in the schema
  * write-policy input recorded at the document a write reaches
  * (`writeAuthorizedByReason`, `runtime/runner/src/cfc/prepare.ts`), and a
@@ -863,15 +992,23 @@ export function patternSchemaIncompatibilities(
  * pattern update.
  */
 export function assertSchemaSubset(
-  source: JSONSchema,
-  target: JSONSchema,
+  sourceInput: JSONSchema,
+  targetInput: JSONSchema,
   label: string = "value",
   options: SchemaSubsetOptions = {},
 ): void {
+  const source = schemaWithoutVolatileWriterIdentity(sourceInput);
+  const target = schemaWithoutVolatileWriterIdentity(targetInput);
+  const sourceRoot = schemaWithoutVolatileWriterIdentity(
+    options.sourceRoot ?? sourceInput,
+  );
+  const targetRoot = schemaWithoutVolatileWriterIdentity(
+    options.targetRoot ?? targetInput,
+  );
   for (
     const [schemaLabel, schema, root] of [
-      ["source", source, options.sourceRoot ?? source],
-      ["target", target, options.targetRoot ?? target],
+      ["source", source, sourceRoot],
+      ["target", target, targetRoot],
     ] as const
   ) {
     const issue = validateSchemaDefinition(schema, root);
@@ -882,8 +1019,8 @@ export function assertSchemaSubset(
     }
   }
   const issue = schemaSubsetIssue(source, target, label, {
-    sourceRoot: options.sourceRoot ?? source,
-    targetRoot: options.targetRoot ?? target,
+    sourceRoot,
+    targetRoot,
     // Argument variance follows the needed source-subset-target direction for
     // object fields. Link materialization may also fill valid target defaults.
     role: "argument",
@@ -912,12 +1049,18 @@ export function assertSchemaSubset(
  * requires `assertSchemaSubset()`, whose default-insertion checks still apply.
  */
 export function schemasHaveSameContract(
-  source: JSONSchema,
-  target: JSONSchema,
+  sourceInput: JSONSchema,
+  targetInput: JSONSchema,
   options: SchemaSubsetOptions = {},
 ): boolean {
-  const sourceRoot = options.sourceRoot ?? source;
-  const targetRoot = options.targetRoot ?? target;
+  const source = schemaWithoutVolatileWriterIdentity(sourceInput);
+  const target = schemaWithoutVolatileWriterIdentity(targetInput);
+  const sourceRoot = schemaWithoutVolatileWriterIdentity(
+    options.sourceRoot ?? sourceInput,
+  );
+  const targetRoot = schemaWithoutVolatileWriterIdentity(
+    options.targetRoot ?? targetInput,
+  );
   if (
     validateSchemaDefinition(source, sourceRoot) !== undefined ||
     validateSchemaDefinition(target, targetRoot) !== undefined
@@ -1057,13 +1200,12 @@ function schemaSubsetIssues(
     // is not mistaken for a node that removed an extension. Extensions
     // declared on branch and descendant nodes remain part of their proofs.
     //
-    // The `ifc` extension is compared for exact equality except for a
-    // `writeAuthorizedBy` writer claim's volatile identity — its content hash
-    // and its resolver-dependent file spelling, which the runtime does not
-    // hold fixed either — and the derived per-value label annotations, which
-    // describe the label a write produces rather than the policy the store
-    // declares. `keywordValuesEqual` applies that reduction, the same one it
-    // applies to an `ifc` nested below a composite keyword.
+    // The `ifc` extension is compared for exact equality except for the
+    // derived per-value label annotations, which describe the label a write
+    // produces rather than the policy the store declares, and the order of a
+    // `writePolicyAnyOf`. `keywordValuesEqual` applies that reduction, the
+    // same one it applies to an `ifc` nested below a composite keyword. A
+    // writer claim's volatile identity was removed before the proof began.
     //
     // One `asCell` change is not a break: in an argument proof, which reads
     // from the previous contract (or the producer) to the candidate (or the
@@ -2703,10 +2845,10 @@ const addsOnlyComparableHandle = (
  *
  * An `ifc` is compared through {@link comparableIfc}, so a nested extension
  * carries the same reduction as one written on the node being checked: the
- * derived per-value keys dropped, and a write authorization's volatile identity
- * normalized. An absent `ifc` and one the reduction empties both come back as
- * `undefined` and compare equal, which is why this keyword is the one whose
- * presence is not compared before its value is.
+ * derived per-value keys dropped, and the members of a `writePolicyAnyOf` put
+ * in an order their contents decide. An absent `ifc` and one the reduction
+ * empties both come back as `undefined` and compare equal, which is why this
+ * keyword is the one whose presence is not compared before its value is.
  *
  * A keyword that holds nested schemas recurses into them. Every other keyword
  * holds a value, and is compared as it stands. So is a keyword that names
@@ -2965,11 +3107,18 @@ function resolveSchema(
     ? resolveCfcSchemaRefRoot(schema, schemaRoot)
     : schemaRoot;
   const resolved = hasRef ? resolveCfcSchemaRefs(schema, schemaRoot) : schema;
+  const resolvedRoot = resolved === undefined || !hasRef
+    ? owningRoot
+    : cfcSchemaResolvedRoot(resolved, owningRoot);
+  // A `$ref` can bring in a document the caller never handed the proof, such
+  // as one from the schema registry, so its writer identity is removed here.
   return {
-    schema: resolved === undefined ? undefined : internSchema(resolved),
-    root: resolved === undefined || !hasRef
-      ? owningRoot
-      : cfcSchemaResolvedRoot(resolved, owningRoot),
+    schema: resolved === undefined
+      ? undefined
+      : internSchema(schemaWithoutVolatileWriterIdentity(resolved)),
+    root: resolvedRoot === schemaRoot
+      ? resolvedRoot
+      : schemaWithoutVolatileWriterIdentity(resolvedRoot),
   };
 }
 
