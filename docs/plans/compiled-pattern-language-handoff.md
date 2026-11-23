@@ -341,6 +341,14 @@ insertion by comparison or the recognition of comparators of the form
 "compare one key of each". `groupBy`, `keyBy` and `lookup` are methods of
 today's runtime and stay, by the same ruling.
 
+**Per-element forms over the members of a record** (trunk; not built).
+`Object.entries(record).map` is built. `Object.keys(x).map`,
+`Object.values(x).map`, and a `filter` or a `flatMap` over the entries of a
+record are evaluated whole. The owner named these on 2026-11-23 as the
+recognition to do before `Object.groupBy`, which is in the plan's section
+"After the launch"; 59 files under `patterns/` call one of the three
+functions.
+
 **Authored `computed` bodies that are not promoted** (all branches).
 `language-subset.md` §6.1 promotes a `computed` whose body is
 expression-shaped and pure, and a per-element construct inside a promoted

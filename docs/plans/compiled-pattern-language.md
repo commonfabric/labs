@@ -17723,6 +17723,29 @@ The open questions each document ends with stay where they are.
   not executed for another reason in each, and the difference is in
   the state of the process in which today's runtime ran.
 
+## After the launch
+
+Work the owner has placed after the launch of the compiled path. An entry
+says what it is, why it waits, and what it needs.
+
+- **`Object.groupBy` and `Map.groupBy` recognized as a collection index**
+  (2026-11-23). `Object.groupBy(xs, fn)` on a collection would be planned
+  as the index of `groupBy`, and `index[k]` or `map.get(k)` as the read of
+  one bucket. It needs the recognition in the crate and a second mode of the
+  index with JavaScript's rules: keys as property strings for
+  `Object.groupBy`, and a `null` or `undefined` key kept as a bucket. There
+  is no JavaScript form of `keyBy`. It waits because no file under
+  `patterns/` uses either function. The owner's words: "let's not do that
+  now, just add it to a post-launch list".
+
+The owner expects a larger gain, earlier, from the per-element forms over
+the members of a record: "I imagine Object.keys and Object.entries and maybe
+Object.values would be a bigger win earlier". `Object.entries(record).map`
+is built. `Object.keys(x).map`, `Object.values(x).map`, and a `filter` or a
+`flatMap` over the entries of a record are not; 59 files under `patterns/`
+call one of the three functions. This is work before the launch, listed
+under "Next work".
+
 ## Next work
 
 1. **The owner rules** on the questions above. A ruling is added to
