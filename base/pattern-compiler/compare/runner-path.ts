@@ -4,7 +4,7 @@
  * from the write that causes it until the runtime is settled (milestone 3
  * of `docs/plans/compiled-pattern-language-integration.md`).
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today] [--case=<part of a name>] [--no-pull] [--rows=in-place] [lengths]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today] [--case=<part of a name>] [--no-pull] [--rows=in-place] [--slots=<n>] [lengths]`
  *
  * Both arms run in a runtime of their own on emulated storage, with
  * `cfcFlowLabels` at `persist` and the input under a schema with one
@@ -46,7 +46,11 @@ import {
 import { diffAndUpdate } from "../../../runtime/runner/src/data-updating.ts";
 import { resolveLocalProgram } from "../../../runtime/runner/src/harness/local-program.deno.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
-import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "../../../runtime/runner/src/storage/cache.deno.ts";
 import type { Artifact } from "../exec/executor.ts";
 import { inputClause } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
@@ -144,6 +148,8 @@ export const running = async (
   arm: Arm,
   /** Whether a pull of the compiled piece's result follows each step. */
   pulls: boolean,
+  /** The limit of the memory server on the slots of one client message. */
+  slots: number | undefined,
   start: (
     runtime: Runtime,
     space: MemorySpace,
@@ -157,7 +163,17 @@ export const running = async (
   // names as an alternative (`scenarioAudience`).
   const signer = await Identity.fromPassphrase("pattern-compiler-compare");
   const space = signer.did();
-  const storageManager = StorageManager.emulate({ as: signer });
+  // With `slots`, the memory server takes client messages that stand for
+  // up to that many array slots and record members: the load of a compiled
+  // piece is one commit, which at 10,000 rows that are documents of their
+  // own is past the default limit.
+  const server = slots === undefined ? undefined : newLoopbackServer({
+    subscriptionRefreshDelayMs: 0,
+    untrustedMessageSlots: slots,
+  });
+  const storageManager = server === undefined
+    ? StorageManager.emulate({ as: signer })
+    : EmulatedStorageManager.connectTo(server, { as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
     storageManager,
@@ -269,6 +285,7 @@ export const running = async (
         await runtime.scheduler.idleWithPendingCommits();
         await runtime.dispose();
         await storageManager.close();
+        await server?.close();
       },
     },
   };
@@ -321,6 +338,7 @@ const growthArm = async (
   length: number,
   pulls: boolean,
   rows: "documents" | "in-place",
+  slots: number | undefined,
 ) => {
   const audience = await scenarioAudience();
   const ifc = { confidentiality: [inputClause("items", audience)] };
@@ -353,6 +371,7 @@ const growthArm = async (
   const { running: run, load } = await running(
     arm,
     pulls,
+    slots,
     async (runtime, space, tx) => {
       for (let index = 0; index < length; index++) {
         held.push(make(runtime, space, tx));
@@ -504,6 +523,7 @@ if (import.meta.main) {
             length,
             !flags.includes("--no-pull"),
             flag("rows") === "in-place" ? "in-place" : "documents",
+            flag("slots") === undefined ? undefined : Number(flag("slots")),
           )),
         });
       }
