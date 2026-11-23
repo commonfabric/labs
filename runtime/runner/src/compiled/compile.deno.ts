@@ -70,8 +70,8 @@ export type PatternCompilerOptions = {
 
 /**
  * The default bound on what the binary prints: 256 MB. The largest
- * artifact of the corpus of this repository is 1.4 MB, and the corpus
- * whole is 23 MB.
+ * module of the corpus of this repository emits 2.1 MB, and the corpus
+ * whole 23 MB.
  */
 export const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
 

@@ -15401,3 +15401,469 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    when the first compartment evaluator is made. Whether anything of the runtime
    relies on a member of them staying writable was not looked for beyond the
    tests.
+
+## Sandbox, second round: what value code can reach, and a pattern started from source
+
+The round of 2026-11-23 on the branch `claude/compiled-pattern-runner-m3`, from
+the commit `e86377cca0`, which holds the first build of all six milestones. It
+closes items that milestone 5 left open (notes 700 to 709) and three of the six
+things note 812 lists before a toolshed may install the loader.
+
+670. **What the round did, by step.**
+     - _The emitter freezes and hardens (step 1), done._ Notes 671 and 672.
+     - _The check refuses what reaches an object the language does not define
+       (step 2), done for what was found._ Notes 672 to 674. One class of member
+       stays covered by nothing: note 673, the rows marked "neither".
+     - _A pattern started from its source through `Runtime.run` (step 3), done
+       with three parts stubbed._ Notes 675 and 676.
+     - _The compile bounded (step 4), done without a bound on time and without a
+       claim between processes._ Note 677.
+     - _A frozen stored value read without a copy (step 5), stubbed with a
+       plan._ What made the read of `Whole` slow was not the copy alone, and the
+       part that was not the copy is removed. Note 678.
+671. **Step 1: the emitted freeze (provisional decision P170).**
+     `language-subset.md` §3.3 says the compiler emits the freeze of each
+     constant of frozen data and the hardening of each authored function.
+     - _What the emitter writes_ (`module_text`, `frozen_code` and
+       `Rewriter::visit_variable_declarator` of `src/emit.rs`). The initializer
+       of each `const` of module scope is wrapped: `$rt.fn(...)` where it is a
+       function written in place, and `$rt.data(...)` otherwise, a builder
+       definition included, whose result is a function of the executor. A
+       literal that is no container is left as it is. A declared function is
+       named to `$rt.fn` in the first line of the text, before any statement
+       runs, since a declared function exists from the start and an initializer
+       may call a function that reaches it. `export default` of a function or of
+       an expression is wrapped the same way. A destructuring declaration wraps
+       what it destructures.
+     - _What the executor answers with_ (`exec/frozen.ts`). `freezeModuleData`
+       freezes an array and a plain record in place with what they hold,
+       replaces a `Map` and a `Set` by a `FrozenMap` and a `FrozenSet` of
+       `@commonfabric/data-model/frozen-builtins`, hardens a function, and
+       freezes any other object without entering it. `hardenFunction` freezes a
+       function and the object its `prototype` names. Both run whatever
+       evaluates the text, `new Function` included (P170): the freeze is part of
+       what the emitted code means and not of the compartment.
+     - _What else is frozen, in the executor._ The exports object of a module,
+       once its text has run (`Instance.#module`); the record a module imports
+       from `commonfabric`, each function of it, the cell constructors, and each
+       factory `pattern` and `handler` return (`commonfabric`); each function of
+       `$rt`, and the host `$rt.nohost` (`Instance.#runtime`, `Instance.#load`).
+     - _`$rt.setups` is gone._ It was the array the executor writes its setup
+       functions into. The body of a pattern compiled in is called with
+       `$rt.inline(context, argument, $h)`.
+     - _Tests._ `tests/emit.rs`,
+       `module_data_is_frozen_and_each_function_of_module_scope_is_hardened`.
+       `runtime/runner/test/compiled/module-freeze.test.ts` over the new fixture
+       `compare/fixtures/module-data.tsx`: seventeen writes that a handler body
+       makes, each put into the emitted text since the check refuses the source,
+       each a `TypeError`: to an array, a record, a nested array, a `Map` (by
+       its method and by `Map.prototype.set.call`) and a `Set` of module data;
+       to a declared function, its prototype, a function held in a constant, a
+       handler, an imported function and an imported cell constructor; to the
+       exports; to a function of `$rt`, to `$rt.nohost`, to a handle and to
+       `$rt.self`. Fifteen of them were seen to succeed before the change; the
+       two on a handle and on `$rt.self` were written with the change of note
+       672.
+     - _The fixtures._ Every `compare/fixtures/<name>.emit.json` is regenerated
+       in a commit of its own. `index-of-rows.emit.json` was behind the crate
+       before the round.
+     - _The corpus._ `compare/runner-corpus.ts` before and after: 239 modules
+       run, 230 start, 200 handle every event, 210 hold the values of the
+       executor in memory, both times. No outcome line differs but that of
+       `apps/reward-spinner`, which draws at random.
+     - _Duplicated._ `exec/frozen.ts` does what `freezeVerifiedPlainData` of
+       `runtime/runner/src/sandbox/plain-data.ts` does for today's bundles, in
+       another package. The executor is in `base/` and cannot import the runner;
+       the runner's function also refuses a value of a class it does not know,
+       where module data of the subset may hold a pattern factory. One of the
+       two should take the other's place when the executor moves.
+672. **Soundness: three ways an accepted source reached the executor, closed
+     (provisional decisions P171 and P172).** Each was reachable by a source the
+     crate's check accepted, compiled with `emit --accepted` and evaluated in
+     the compartment.
+     - _A handle named its position in public members._ `Handle` kept `target`,
+       `slot`, `below`, `declared` and `fixed` as public members. `target` is a
+       `Ref`, which held the identifier of the document and the schema of the
+       position; `declared` is a schema object of the artifact. The compiler
+       keeps one parsed artifact for every piece of a source in a process
+       (`serving.ts`, `compiles`), so a body that set a member of
+       `last.declared` changed the schema that every other piece of that source
+       reads under, in every space the process serves. A body could also set
+       `last.target` and write through the handle to another position. The five
+       are private fields now, read by the executor with `partsOf` and
+       `targetOf`, and a handle, a `Ref` and a `StreamRef` are frozen when made
+       (P171). `IndexHandle` kept `context`, the map of element keys the
+       executor holds, as a public member; it is private the same way
+       (`indexPartsOf`).
+     - _The check accepted any member of a handle._ `last.instance`,
+       `last["instance"]`, `last[key]`, `last.added = 1` and `last.set = f` had
+       no diagnostic. `TypedRules::handle_member` of `src/typed.rs` refuses a
+       member that the table of `language-subset.md` §4.7 does not list
+       (`api::is_handle_member`), read, called or written, with a name or a
+       computed key, and a write to a listed member, under
+       `cell:unsupported-method`. `tests/handle_members.rs`, six cases, five of
+       which failed first. The corpus has no such member: 373 modules are
+       accepted before and after.
+     - _A name the emitter binds could be declared by the source (P172)._ The
+       emitted code wraps authored code in functions whose parameters are `$h`,
+       `$arg`, `$e` and `$s`. A source that declares `const $h = ["plain"]` at
+       module scope and reads `$h.at(0)` in a function written in the reactive
+       tier was accepted, and the emitted text read the host of the call there:
+       `Host.at`, and through `$h.slot(n)` any slot of the plan, a read the plan
+       declares for no body and that no label covers. A free use of `$h` was
+       refused already; a declaration was not. `Checker::reserved_names` of
+       `src/check/mod.rs` refuses every declaration of a module whose name
+       begins with `$`, under `stdlib:unsupported-member`, the identifier the
+       free use has. `tests/reserved_names.rs`, three cases, two of which failed
+       first. No module of the corpus declares such a name. _The document needs
+       a rule and an identifier for this:_ `language-subset.md` has no reserved
+       names, and the catalog test holds the crate to the identifiers of §10, so
+       the round uses an existing one.
+673. **Step 2: what a function body is handed, class by class.** A body of the
+     function tier is given the event, the state or the argument, what it
+     imports, and what its calls return. "Check": the crate refuses the source.
+     "Freeze": the write throws, or the member does not exist. "Neither": open.
+
+     | What the body holds                                                                                            | Members                                                                                                                                                                                      | A read                                                                                                                                                                                     | A write                                                                                                              |
+     | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+     | A plain value: a copy the store made, or module data                                                           | Those of the JavaScript value                                                                                                                                                                | The language's own; the intrinsics are frozen by the compartment                                                                                                                           | Module data: check (`module-scope:frozen-data-write`) and freeze. A copy is the body's own                           |
+     | `Handle`                                                                                                       | `get`, `sample`, `key`, `set`, `update`, `push`, `remove`, `removeAll`, `removeByValue`, `addUnique`, `increment`, `send`, `elementById`, `equals`, `resolveAsCell`, `for`, which §4.7 lists | Allowed                                                                                                                                                                                    | Check (`cell:unsupported-method`) and freeze                                                                         |
+     | `Handle`                                                                                                       | `asSchema`, `withTx`                                                                                                                                                                         | Check at a call (`cell:unsupported-method`); a read that is not called is accepted and gives a function that returns its receiver                                                          | Check and freeze                                                                                                     |
+     | `Handle`                                                                                                       | `refusingWrites`, `constructor`, any other name, a computed key                                                                                                                              | Check                                                                                                                                                                                      | Check and freeze                                                                                                     |
+     | `Handle`                                                                                                       | The instance, the host, the reference, the slot, the path, the schema                                                                                                                        | Freeze: private fields                                                                                                                                                                     | Freeze                                                                                                               |
+     | `Handle`, through `Object.getPrototypeOf`, `Object.keys`, a spread or `Object.assign`                          | The prototype and the class                                                                                                                                                                  | The prototype and the class are frozen and hold no state; the instance has no own member                                                                                                   | Freeze                                                                                                               |
+     | `IndexHandle`                                                                                                  | The collection and the context                                                                                                                                                               | Freeze: private fields                                                                                                                                                                     | Freeze                                                                                                               |
+     | `StreamMarker`                                                                                                 | None                                                                                                                                                                                         | Nothing to read                                                                                                                                                                            | Freeze                                                                                                               |
+     | `Ref`, as the stand-in of a link that is not followed, or in a value                                           | `doc`, `path`, `schema`, `key`, `withSchema`, `withDefault`                                                                                                                                  | Check, where the position has a declared record type (`schema:path-not-in-type`). Neither, where the type is `unknown` narrowed by the body: the body reads the identifier of the document | The instance is frozen. Neither for the array `path` and the object `schema`, which the freeze does not enter        |
+     | An error the executor threw, caught by the body: `Unsupported`, `ReadsFailure`, `MissingKey`, `ComputedOutput` | `kind`, `state`, and those of `Error`                                                                                                                                                        | Neither: after `error instanceof Error` the check accepts any member, so `error.state` gives the error state the executor holds                                                            | Neither for the instance; the classes are frozen                                                                     |
+     | What it imports from `commonfabric`                                                                            | The record, its functions, the cell constructors, the factories                                                                                                                              | Allowed as the language defines them                                                                                                                                                       | Freeze                                                                                                               |
+     | The exports of a module, through a namespace import                                                            | Its members                                                                                                                                                                                  | Allowed                                                                                                                                                                                    | Freeze                                                                                                               |
+     | `$rt`, `$h`, `$arg`, `$e`, `$s`, a `Thunk`, an `Assembled`                                                     | All                                                                                                                                                                                          | Check: no name that begins with `$` is declared, and a free one is refused. The emitted text binds them around authored code, so nothing but the check keeps a body from them              | `$rt` and its functions are frozen. A `Host` is not: its `reads`, `dependencies` and `bound` are public and writable |
+
+     So two things rest on the check alone: the names the emitter binds, and
+     with them the host, whose methods read any slot of the plan; and the
+     members of a caught error. What closes the first without the check is the
+     host as an object with private state that is handed to authored code
+     through no name, which changes the shape of the emitted code and was not
+     started.
+674. **Step 2: `emit` prints no artifact for a refused module.** `emit <file>`
+     printed value code for a module the check refuses, and compile on load
+     depended on passing `--accepted`. `emit` now prints the diagnostics and no
+     artifact unless every module is accepted. `--accepted` asks for the same
+     and is kept for the callers that pass it. `emit --unchecked` prints the
+     artifacts of refused modules, for diagnosis. Thirteen fixtures of
+     `compare/fixtures/` hold forms the check refuses and are emitted with it,
+     and so is the Topics tree of `compare/topics/scale.ts`, whose main file the
+     check refuses. `emit --corpus` is as before: one line per accepted module.
+     `tests/emit_accepted.rs`, two cases added.
+675. **Step 3: a pattern started from its source (provisional decisions P173 to
+     P176).** `runtime/runner/src/compiled/run.ts`.
+     - _The parts._ `runCompiledPatterns(runtime, { compile })` gives a runtime
+       a compiler and sets `Runtime.compiledPatternRunner`. Under the option,
+       `PatternManager.compilePattern` hands the program to it after today's
+       compile (`prepare`), which is where the child process runs, in a call
+       that is asynchronous already; `Runner.run` asks it first (`run`) and
+       returns the result cell where it started a compiled piece; `Runner.stop`
+       and `Runtime.dispose` stop such pieces; and `Runner.start` asks
+       `Runtime.compiledPieceLoader` for a result document that names no
+       pattern, as `ensurePieceRunningVerdict` does. With the option off none of
+       the four is reached, and with no compiler given the runtime imports no
+       executor.
+     - _A refused program runs on today's path, visibly._ `prepare` keeps what
+       the compiler rejected with, logs it as the warning `pattern-not-compiled`
+       with the main file and the diagnostics, which name the construct and its
+       position, calls `fellBack`, and answers `refusalOf(pattern)`. `run` then
+       returns false and `Runner.run` goes on as without the option. A host
+       whose binary is absent (`PatternCompilerMissingError`) is no refusal: the
+       compile rejects.
+     - _A plan that requests `wish` or an effect falls back (P176)._ Nothing
+       answers a request of a compiled piece outside the executor's harness, so
+       a program any pattern of which has such an operation runs on today's
+       path, with that as the reason. This goes when the runner path answers
+       requests.
+     - _How a piece is marked in storage (P173)._ As `setUpCompiledPiece` marks
+       one for a serving runtime (P110): the result document names no pattern
+       identity; the document `compiledPointerOf(result)` holds the entity of
+       the program; that entity holds the program as text. `Runner.run` writes
+       the three in the transaction of the start. One form serves a client under
+       server execution and a runtime that starts the piece itself.
+     - _Which pattern identity a piece names (P174)._ The entity of its program,
+       which is named by the text of the program: the files, the main file and
+       the export. No identity of today's compile is stored (`patternIdentity`),
+       and no compiler build. The identity a plan begins with is derived from
+       the program at each compile.
+     - _A resume whose program is no longer accepted (P175)._ The piece is
+       refused: the loader stores the reason (`compiledFailureOf`, P111), starts
+       nothing, and the stored result stays as it is. It is not run on today's
+       path, which reads none of the documents the executor wrote for the piece
+       and names its state cells otherwise, so a fallback there would run the
+       pattern from its argument with its state lost. Moving a piece between the
+       two paths is a migration and is not built.
+     - _`PatternCompiler.compile` and a default export by name._ The crate names
+       a pattern held in a constant by the constant, also where the module ends
+       in `export default Name;`. The compiler looked for `default` alone and
+       rejected such a module; it now takes the constant the statement names.
+       Found by the corpus run.
+     - _The harness test._ `compare/test/runtime-run.test.ts`, with the release
+       binary, on `fixtures/module-data.tsx`: the pattern run with the option
+       off and with it on holds the same value after one event, and the second
+       is a compiled piece; a source the crate refuses holds the same value on
+       both runtimes, starts no compiled piece and reports the diagnostic; a
+       second runtime on the same storage resumes the piece with `start` and
+       handles an event; and a second runtime whose compiler rejects stores the
+       reason and leaves the result.
+     - _The corpus through that path_ (`compare/runtime-run-corpus.ts`, one run,
+       before steps 4 and 5). Each module that exports a pattern is resolved to
+       its program (`resolveLocalProgram`), compiled and run with a plain
+       argument in a serving-posture runtime on emulated storage. Of 307:
+
+       | Outcome                                                         | Modules |
+       | --------------------------------------------------------------- | ------: |
+       | A compiled piece that started                                   |     199 |
+       | of those, every event handled                                   |     184 |
+       | of those, the values of the executor in memory after the events |     181 |
+       | A compiled piece whose first commit was refused                 |       3 |
+       | The start threw (`table is not a function`)                     |       2 |
+       | Today's path                                                    |     103 |
+       | of those, the result holds what it holds with the option off    |     102 |
+       | of those, the first commit refused the same way both times      |       7 |
+
+       The one module of today's path that differs requests a fetch. Why the 103
+       fell back: 27 request `wish`, 21 an effect, 54 have a module in their
+       program that the check refuses (`any` 15, `var` at module scope 10, a
+       type mismatch 16, an import with no bindings 3, and ten others), 1 has a
+       construct with no value code. Of the 239 modules `runner-corpus.ts` runs
+       from the artifact of one module: 199 start as a compiled piece, 3 have
+       the first commit refused, 2 throw, and 35 run on today's path, all 35
+       with the values of the option off.
+676. **Step 3: what is stubbed or found, with the plan.**
+     - _Scale and structure: `emit --accepted` accepts a program only where
+       every module of it is accepted._ 35 modules that the crate accepts one by
+       one fall back because a module they import is refused, mostly a shared
+       helper. `emit --corpus` judges each module alone, which is why the
+       figures of the corpus so far did not show it. The check should refuse the
+       modules the pattern reaches and no others, or the helpers be brought into
+       the subset.
+     - _A compiled piece whose start throws is not run on today's path._ Two
+       modules call `table`, which the executor does not have, at module scope.
+       `startCompiledPiece` may have committed load transactions before it
+       throws, so `run` cannot fall back after it. The plan: `prepare` evaluates
+       the modules once in a compartment with a host that stores nothing, and
+       treats a throw as a refusal.
+     - _`examples/router/router.tsx` starts from the artifact alone and has its
+       first commit refused through `Runtime.run`_ ("plan-label refused"). The
+       two differ in the three documents of the mark, written in the transaction
+       of the start, and in the program, which here holds the imports. Not
+       traced.
+     - _A second `run` of a result document whose piece runs_ returns the cell
+       and leaves the piece, where today's runner stops the piece, replaces the
+       argument and starts it again. The plan: stop the piece, write the
+       argument document, and resume from the basis, which finds the argument
+       changed.
+     - _`Runner.start` resolves to false for a compiled piece_ that the loader
+       started or resumed: the value says whether a graph of today's runner is
+       installed. A caller that reads it as "the piece runs" is wrong for a
+       compiled piece.
+     - _A pattern made without `compilePattern`_ has no program and runs on
+       today's path with no diagnostic.
+     - _Nothing gives a toolshed's runtime a compiler._ `runCompiledPatterns` is
+       called by the test and the harness alone.
+677. **Step 4: the compile bounded (provisional decisions P177 and P178).**
+     `PatternCompiler` of `compile.deno.ts`.
+     - _Beside the event loop._ The child was awaited with `output()`, which
+       does not block the loop but holds all it prints. It is now spawned and
+       its two streams read as they arrive (`readBounded`).
+     - _A bound on the output._ A stream that holds more than `maxOutputBytes`,
+       256 MB by default, has the child stopped by its handle, the other stream
+       cancelled and the exit awaited, and the compile rejects with
+       `PatternCompilerOutputError`. Nothing is kept in the cache for it. The
+       largest module of the corpus emits 2.1 MB, and the corpus whole 23 MB.
+     - _No bound on time (P177)._ The repository refuses a timeout as an upper
+       bound on work that would have completed. A caller stops a compile with
+       the `signal` it gives the compiler.
+     - _One compile of a source at a time, in one compiler (P178)._ A compile of
+       a source whose compile is under way in the same `PatternCompiler` waits
+       for that one, with or without a cache directory. Two compilers of one
+       process, or two processes, may still both run the binary for one source;
+       they write the same text under two names and rename. A claim between
+       processes needs a wait on another process's file, which is a poll or a
+       lock the shared compile cache has and this cache does not.
+     - _The trees of other binaries are removed._ The first compile of a
+       compiler with a cache directory removes each directory of it whose name
+       is 64 hexadecimal digits and is not the hash of its own binary, and
+       leaves every other entry, so the directory may be the one the shared
+       compile cache keeps `modules` and `claims` in. Two servers with different
+       binaries on one directory remove each other's trees at each start; each
+       then compiles again, and nothing is wrong but the work.
+     - _Tests._ `runtime/runner/test/compiled/compile.test.ts`, six cases added,
+       with the shell script in the place of the binary.
+     - _Not done:_ the compile outside the serving loop's wait
+       (`scheduler-and-serving-loop.md` §10.5), which is in `serving.ts`.
+678. **Step 5: the read of an array of plain values, measured, and the read
+     without a copy stubbed (provisional decision P179).**
+     - _What the read spent._ A profile of `Store.read` on an array of 10,000
+       plain records in place: about 40% in the salted hash of each record, the
+       key of the position. `Store.#copy` gives each member that is a container
+       the address of its key, and asked `keysOf` with the copies it had made.
+       Keys formed from copies were never kept, so each read hashed every
+       record. The keys the store forms without copies are kept and brought up
+       to date at each write (`KeyState`).
+     - _The change._ The copies of a read that left no member out, of an array
+       no position of which is or holds a link, are what the store reads at
+       those positions itself, so the keys formed from them are kept the same
+       way, from the second such read of an array on (P179). From the first read
+       on, a `map` over plain values in place paid for it at the load: the kept
+       keys are brought up to date at each write to the array, which reads the
+       member written, and the load on the runner path at 1,000 rows was 8 to
+       10% slower in three runs. From the second read on it is not. A read under
+       a schema that leaves a member out does not keep its keys
+       (`Store.#leftOut`). `Store.#copy` also makes no reference for the
+       position of a member that is no container.
+     - _Measured._ The machine is an Apple M5 Max with 18 cores, with a load
+       average of 7 to 10 from other work throughout. Three runs each, before
+       and after interleaved, the median, in milliseconds.
+       `compare/sandbox-cost.ts executor`, the arm with a compartment for each
+       instance, the executor in memory:
+
+       | pattern                                                  |   rows | measure                       | before | after |
+       | -------------------------------------------------------- | -----: | ----------------------------- | -----: | ----: |
+       | `Whole`, a `lift` over an array of plain values in place |    100 | load                          |   1.11 |  1.02 |
+       |                                                          |  1,000 | load                          |   8.75 |  8.24 |
+       |                                                          | 10,000 | load                          |   81.8 |  75.2 |
+       |                                                          |    100 | edit of one title             |   0.70 |  0.26 |
+       |                                                          |  1,000 | edit of one title             |   7.18 |  2.23 |
+       |                                                          | 10,000 | edit of one title             |   70.0 |  27.1 |
+       |                                                          | 10,000 | in the store reads of an edit |   55.3 |  14.3 |
+       |                                                          | 10,000 | one read of the array         |   56.8 |  11.9 |
+       | `PerRow`, a `map` over the same array                    | 10,000 | load                          |    623 |   594 |
+       |                                                          | 10,000 | edit of one title             |   0.32 |  0.30 |
+       | `BodyPerRow`, a `lift` per row                           | 10,000 | load                          |    647 |   629 |
+       |                                                          | 10,000 | edit of one title             |   0.34 |  0.33 |
+
+       `compare/runner-path.ts --arms=compiled --case=plain --no-pull
+       --inputs-first --later=5`,
+       a `map` over an array of plain values in place on the runner path:
+
+       |  rows | step                                | before | after |
+       | ----: | ----------------------------------- | -----: | ----: |
+       |   100 | load                                |  106.9 | 108.9 |
+       | 1,000 | load                                |  545.5 | 545.9 |
+       |   100 | edit one field, the mean of 5 later |   25.8 |  26.1 |
+       | 1,000 | edit one field, the mean of 5 later |  184.3 | 188.7 |
+       | 1,000 | append, the mean of 5 later         |  163.7 | 164.3 |
+
+       The runner path has no `lift` over a whole array among its cases, so it
+       shows that the change costs it nothing and not what it gains. The cases
+       over references and over the result of a `filter` were run with the first
+       form of the change alone and were within the spread.
+     - _Scale, open: an edit under `Whole` still follows the array,_ 27 ms at
+       10,000 rows: 14 in the one read, which copies every record and gives each
+       an address, and the rest in `Host.pass`, which copies the argument again,
+       and in the walk of the result.
+     - _Stubbed: the read of a frozen stored value without a copy._ The plan of
+       notes 652 and 666 assumes the store can freeze what it holds.
+       `Store.write`, `Store.splice` and `spliceAt` change the stored containers
+       in place (`holder[last] = value`, `spliceIn`), and the journal and
+       `Instance.restore` put old members back the same way. So before a stored
+       container can be given to a reader: (1) a write copies the containers on
+       the path to what it changes and leaves the others, which makes the cost
+       of a write that of the path and keeps a reader's value as it was; (2) the
+       address of a stored container is kept by the store for its position and
+       not registered at each read, with the keys of an array read from the kept
+       `KeyState`; (3) a read under no schema, of a container that holds no link
+       and needs no default, returns the stored container; (4) a read through a
+       handle in a body stays a copy; (5) the corpus is run both ways. Step (1)
+       changes every write of the store, and is the reason the step was not
+       taken in this round.
+     - _Tests._ `exec/test/store-read.test.ts`, four cases; the first two failed
+       before the change, with two formations of the keys where one was expected
+       and one where none was.
+679. **Structural, scaling and soundness findings of the round.**
+     - _Soundness, closed:_ a body of an accepted source changed a schema object
+       of the artifact that every piece of the source in the process reads
+       under, through `handle.declared`, and could set `handle.target` (note
+       672).
+     - _Soundness, closed:_ a source that declares `$h` read the host of the
+       call in a function written in the reactive tier, and with it any slot of
+       the plan (note 672).
+     - _Soundness, closed:_ the check accepted a write to a member of a handle,
+       a method included (note 672).
+     - _Soundness, closed:_ `emit <file>` printed value code for a refused
+       module (note 674).
+     - _Soundness, open:_ the names the emitter binds, and so the host, are kept
+       from a body by the check alone; a caught error of the executor gives its
+       members; a `Ref` in a value gives the identifier of its document (note
+       673).
+     - _Structure:_ a program is accepted only whole, so 35 of 239 modules that
+       are accepted alone run on today's path (note 676).
+     - _Structure:_ a compiled piece cannot fall back once its start has begun,
+       and two modules throw there (note 676).
+     - _Structure:_ the freeze of module data exists twice, in the executor and
+       in the runner's sandbox (note 671).
+     - _Scale, removed:_ a read of an array of plain values in place hashed
+       every member at each read (note 678).
+     - _Scale, open:_ the store changes stored containers in place, which is
+       what keeps a read a copy (note 678).
+     - _Structure:_ four `plan.json` fixtures (`created`, `rekey-made`,
+       `side-writes`, `value-beside-handle`) are behind the crate; the round did
+       not regenerate them, since `plan` output is not what it changed.
+680. **Provisional decisions of the round, and what was not verified.** P170:
+     the freeze of module data and the hardening of functions are functions of
+     the executor that the emitted text calls, applied under every evaluator
+     (note 671). P171: what a handle and an index handle name is in private
+     fields, and a handle, a reference and a stream reference are frozen when
+     made (note 672). P172: a declaration whose name begins with `$` is refused,
+     under `stdlib:unsupported-member` until the document has an identifier for
+     it (note 672). P173: a piece started through `Runtime.run` is marked in
+     storage as `setUpCompiledPiece` marks one (note 675). P174: the pattern a
+     compiled piece names is the entity of its program text (note 675). P175: a
+     resume whose program is no longer accepted is refused with the reason
+     stored, and does not fall back (note 675). P176: a program whose plan
+     requests `wish` or an effect runs on today's path (note 675). P177: the
+     compile has a bound on its output and a signal, and none on its time (note
+     677). P178: one compile of a source at a time within one compiler, and no
+     claim between processes (note 677). P179: the keys of a whole read of an
+     array without links are kept from the second read on (note 678). _Not
+     verified:_ the corpus through `Runtime.run` was run once, before steps 4
+     and 5, and with a plain argument and no input cells; the events of a
+     pattern on today's path were not sent; the test of a handle's private
+     members and of `$rt.self` did not fail first; the cost of freezing each
+     handle and reference was not measured apart, and the figures of note 678
+     before the change include it; Topics was not run; 10,000 rows on the runner
+     path were not run; no test runs a compile that is stopped by its signal;
+     nothing was run in a browser or on a toolshed.
+
+### CFC questions deferred, sandbox second round
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. A source that declared `$h` read slots of the plan that the plan declares for
+   no body (note 672). The check now refuses the declaration. Whether a read
+   that the plan does not declare can be made by any accepted source is held by
+   the check alone, with no second line in the executor: `Host.slot` reads
+   whatever index it is given and counts it (`slotsNotListed`) without refusing.
+2. A body that narrows a value typed `unknown` and finds a reference stand-in,
+   or holds a `Ref` in a value, reads `doc`, the identifier of a document (note
+   673). Milestone 5 asked the same of `handle.target`, which is closed. Whether
+   the identifier of a document a body was not given the content of is something
+   the body may observe.
+3. A body that catches an error the executor threw reads `error.state`, the
+   error state of the value whose read failed (note 673). Whether the message of
+   a failure of another cone, which the body was about to read anyway, may reach
+   it by this way with no label of that cone's inputs.
+4. The reason a pattern runs on today's path is logged with the compiler's
+   diagnostics, which quote the source (note 675), and a refused resume stores
+   them (P175, as P111). Which label the stored reason has is CFC question 2 of
+   the second round of milestone 6.
+5. The three documents of the mark are written in the transaction of the start
+   of the piece (P173), with no record of a plan, so under the join of that
+   transaction's reads. The first commit of `examples/router/router.tsx` is
+   refused through this path with "plan-label refused" and not from the artifact
+   alone (note 676). Whether the mark belongs in a transaction of its own, and
+   what label the program text has.
+6. With the keys of an array kept from the second whole read (P179), a write to
+   one member has the store read that member to form its key (`#partAt`), a read
+   no body made. It records no read of a host. Whether a key, a salted hash of
+   the content of a position, is derived data that needs the label of that
+   content where a reference by key is stored: the question exists without this
+   change for every kept key, and the change makes more keys kept.
