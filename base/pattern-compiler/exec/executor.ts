@@ -8079,6 +8079,28 @@ export class Instance {
         );
         return;
       }
+      // An array that gained or lost members: the one run of positions
+      // that differs is spliced, and the members before and behind it are
+      // not written again, as a write of today's runtime diffs an array.
+      if (Array.isArray(now) && Array.isArray(held) && held.length > 0) {
+        let head = 0;
+        while (
+          head < now.length && head < held.length &&
+          sameStored(now[head], held[head])
+        ) head += 1;
+        let tail = 0;
+        while (
+          tail < now.length - head && tail < held.length - head &&
+          sameStored(now[now.length - 1 - tail], held[held.length - 1 - tail])
+        ) tail += 1;
+        store.splice(
+          new Ref(doc, [...at]),
+          head,
+          held.length - head - tail,
+          now.slice(head, now.length - tail),
+        );
+        return;
+      }
       if (isRecord(now) && isRecord(held) && !isLink(now) && !isLink(held)) {
         const names = Object.keys(now);
         if (

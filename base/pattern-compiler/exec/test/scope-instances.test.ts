@@ -280,6 +280,39 @@ describe("a per-element construct whose body reads state of the scope `user`", (
     expect(instance.counts.elementEvaluations).toBe(before);
   });
 
+  // An appended note adds one row. The rows of a principal are put into
+  // that principal's instance member by member where they differ: the rows
+  // that stayed are not written again, so they give no record again.
+  it("writes the added row of a principal's rows and no row that stayed", () => {
+    send("ann", "pick", { text: "two" });
+    resultOf("ann");
+    const written: string[] = [];
+    const { store } = instance;
+    const put = store.put.bind(store);
+    const splice = store.splice.bind(store);
+    store.put = (doc, path, value) => {
+      if (doc.endsWith("~user") && acting === "ann") {
+        written.push(path.join("/"));
+      }
+      return put(doc, path, value);
+    };
+    store.splice = (ref, start, removed, members) => {
+      if (ref.doc.endsWith("~user") && acting === "ann") {
+        written.push(`${ref.path.join("/")} splice ${start} ${removed}`);
+      }
+      return splice(ref, start, removed, members);
+    };
+    send("bob", "post", { text: "four" });
+    expect(resultOf("ann").rows.map((row) => row.text)).toEqual([
+      "one",
+      "two",
+      "three",
+      "four",
+    ]);
+
+    expect(written).toEqual(["rows splice 3 0"]);
+  });
+
   it("stores the rows of each principal in the instance of that principal", () => {
     send("ann", "pick", { text: "two" });
     resultOf("ann");
