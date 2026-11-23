@@ -11840,3 +11840,228 @@ to 5.4; a Topics figure is of one process for each board and size.
      transaction's reads keeps the metadata object it was recorded with once a
      boundary pass has asked for the reads, and a site that reads under a
      metadata object of its own freezes it (note 599).
+
+## Milestone 3, fourth round: a keyed join, a grouping, a per-entry construct over a record, and a sort by a key
+
+Notes 610 on are about the fourth round of milestone 3 (2026-11-22). Notes 610
+to 615 are the design, written before any code. Whenever a note says `map`, it
+names the case. `PL` is `plan-and-label-templates.md`, `ES` is
+`execution-and-storage.md`, `LS` is `language-subset.md`.
+
+610. **What the language already has, and what it lacks.** Note 601 proposed
+     `joinBy` and `groupBy` as new functions. The design documents and today's
+     runtime already hold a grouping and a lookup by key: `xs.groupBy((x) =>
+     key)` and `xs.keyBy((x) => key)` build a collection index, and
+     `index.lookup(k)`, `index.keys()` and `index.keyEntries()` read it (LS
+     §4.4, the row of structural operations; PL §3.17; ES §6.3;
+     `IDerivable.groupBy` and `CollectionIndexHandle` of `base/api/index.ts`;
+     `runtime/runner/src/builtins/collection-index.ts`). The crate's checker
+     accepts the five methods (`is_selector_method` of `src/api.rs`), and the
+     plan emitter refuses `groupBy` and `keyBy` (`the method ... in the reactive
+     tier`) and gives the collection over a `lookup` an empty source. The
+     executor has none of them. So two of the three constructs are surface and a
+     label rule the documents decided, with no plan and no execution. A
+     per-entry construct over a record and a sort by a key are in no document.
+     Today's transformer refuses a function written in a pattern body as an
+     argument of an authored function, and a `lift` whose callback captures a
+     function (`Function creation is not allowed in pattern context`, `Callback
+     passed to lift-builder captures callable`), so a library function `joinBy(
+     sources, keysOf, rowOf)` with callbacks in place cannot run on today's
+     runtime; a method of a cell with a callback can, because the transformer
+     lowers it (`groupByWithPattern`).
+611. **The grouping (provisional decisions P67 and P69).**
+     - _Surface (P67)._ `xs.groupBy((x) => key)` in the reactive tier, which
+       gives a `GroupIndex`, and `xs.keyBy((x) => key)`, which gives a
+       `KeyIndex`. The callback has the grammar of a `map` callback. A key is a
+       string, a number, a boolean or a cell; `null` and `undefined` leave the
+       element out. The same source runs on today's runtime, where the
+       transformer lowers the call to `groupByWithPattern`. _Alternative:_
+       `Object.groupBy(xs, f)` inside a promoted `computed`, which TypeScript
+       authors know; today's runtime would run it whole, the result would be a
+       plain record with no `lookup`, and a read `groups[k]` in an element body
+       would need a per-key dependency that a record has no place for.
+     - _What it means, by case._ Over an array of references a bucket holds the
+       references of its members in source order. Over an array of plain values
+       in place a bucket holds a reference by key to each member's position in
+       the source array. Over the result of another per-element construct a
+       bucket holds a reference to the row where the rows are documents of their
+       own (P54), and otherwise the row's value, copied, with what the row's
+       template names joined into the bucket's label (the last item below).
+     - _The plan._ An `Operation` of kind `index` with `mode` `group` or `key`,
+       and a `Collection` of construct `operation` over the receiver whose body
+       cone is the key function, once per element key (PL §1.1, §3.17). The key
+       function's result is observed as `value` for a primitive key and as
+       `identity` for a cell key. The operation's `input` is the template of a
+       bucket's membership.
+     - _The label rule (PL §3.17, decided there)._ The membership of bucket `k`,
+       its count and its order: the source's membership, order included, joined
+       with a `fold` of the key function's template over every element of the
+       source. The fold is over every element and not over those in the bucket:
+       an element that is absent from bucket `k` chose another key, and that is
+       an observation of its key. The set of occupied keys (`keys()`,
+       `keyEntries()`) has the same template. A lookup that misses has the
+       bucket's template joined with the template of the key looked up: it
+       depends on every key. An element of a bucket is the source element passed
+       through, a reference, whose content is labeled where it is stored.
+     - _How it is stored without every member's clause on every bucket (P69)._
+       The index is one state document of the operation (ES §6.3). Its
+       `buckets` member holds a record from the encoded index key to the
+       bucket. The fold is one label for all buckets, so it is stored once, as
+       the entry of the `buckets` member, and no bucket has an entry of its own:
+       a read of a bucket, of a position in it, of its length, or of a key that
+       is absent resolves to that one entry, as a read of a row in place joins
+       the `*` templates of note 572. A change of one member's key changes one
+       label entry and the buckets it left and entered. _Alternative:_ an entry
+       per bucket with the fold instantiated in each, which is what PL §3.17
+       reads as and is `N` entries each as long as the fold. _Cost where each
+       member has a clause of its own (question 352):_ the one entry holds `N`
+       clauses; it is formed again when a member's key label changes; and every
+       reader of any bucket consumes all `N` clauses. A row of a join that
+       holds its bucket as a reference holds none of them; a row whose body
+       reads the bucket's content holds the entry as one input of its record and
+       stores `N` clauses, so `N` rows store `N` squared. Not solved here.
+     - _Incremental execution._ State: for each element key the encoded index
+       key its key function gave; for each index key the element keys of its
+       bucket in source order. A change of one member's key evaluates that
+       member's key function, removes the member from one bucket and inserts it
+       into another by its position, and marks what looked up either key. A
+       change of a member's content that the key function does not read does
+       nothing. A member added evaluates its key function and enters one
+       bucket; a member removed leaves one. A change of the order of the source
+       changes the order within the buckets that hold a moved member. Nothing
+       is evaluated for a member that did not change.
+     - _Storage._ The state document holds `kind`, `mode`, `keys`, `keyEntries`
+       and `buckets`, the members today's `CollectionIndexData` has, so that a
+       reader of today's shape reads it. A change writes the buckets that
+       changed, and `keys` where a bucket came to exist or emptied.
+     - _The crate._ `Emitter::method` of `src/plan.rs` takes `groupBy` and
+       `keyBy` with a callback in place, and `lookup`, `keys` and `keyEntries`
+       on a place that is an index. Refused, each with the existing diagnostic
+       `an element construct with no callback in place` or a new one: a key
+       function passed by name; `lookup` on a place that is no index.
+     - _A copied row._ Where a bucket holds copies of rows, the label of the
+       `buckets` entry is also joined with a `fold` of the row's template over
+       the source, so that the one entry covers what each copy holds. It is an
+       over-label of each bucket by the content of the rows of the others, and
+       it is sound.
+612. **The keyed join (provisional decision P68).**
+     - _Surface._ No construct of its own: a `map` over the rows whose body
+       calls `index.lookup(key)`, as `patterns/apps/lunch-poll/main.tsx` does
+       (`options.map((option) => votesByOption.index.lookup(option.id))`). In
+       `group` mode the lookup is a collection, so the body can pass it on,
+       read its length, or `map` over it. _Alternative:_ `joinBy(sources,
+       (source) => keys, (key, matches) => row)` of note 601, which is new
+       surface that today's transformer refuses (note 610).
+     - _A member that names several keys (P68)._ The key function gives one
+       key. A source that names several, as a topic names the topics it
+       mentions, is first spread into one element for each (source, key) pair
+       with `flatMap`, whose rows the grouping then holds:
+       `topics.flatMap((from) => from.mentions.map((to) => ({ from, to })))
+       .groupBy((pair) => pair.to)`. _Alternative:_ a key function that returns
+       an array of keys, which today's `groupBy` does not take.
+     - _What it means, by case._ The rows are those of the `map`: over an array
+       of references each row is a document of its own where it is a record
+       (P54); over plain values in place or over the result of another
+       per-element construct the rows are in place. The lookup's elements are
+       the bucket's.
+     - _The label rule._ A row has the label of what its body reads of its own
+       element, and for the lookup: the template of the key, joined with the
+       bucket's membership, which is the fold over every source (note 611). So
+       a row whose key no source names still depends on every source's key: an
+       absent match is an observation of all of them. When the match becomes
+       present the row's value changes and its label does not. What the body
+       reads of a matched member is a read through that member's reference and
+       has that member's label. A source that is in no bucket of the row adds
+       its key to the row's label, through the fold, and nothing of its content.
+       This is wider than the rule of note 601, which gave a row the keys of the
+       sources that name it alone and was an under-label.
+     - _Incremental execution._ The body of a row that looked up key `k`
+       depends on bucket `k` alone, by a name of the executor's memo that
+       stands for the bucket (`bucket <index> <key>`), which a change of the
+       bucket marks. A change of one source's key evaluates that source's key
+       function and the bodies of the rows that looked up the key it left and
+       the key it entered. A row that passes the lookup on as a collection is
+       not evaluated: the collection's assembly is.
+     - _Storage._ A row that passes the bucket on holds a reference to the
+       bucket's position in the index's state document, so the row's document
+       is not written when the bucket changes, and a read through it joins the
+       one entry of note 611. A row whose body reads the bucket holds what the
+       body computed, under a record that names the index's entry as an input.
+613. **The per-entry construct over a record (provisional decision P70).**
+     - _Surface._ `Object.entries(record).map(([name, value]) => row)`, with
+       `Object.keys(record).map((name) => row)` and
+       `Object.values(record).map((value) => row)` as the two projections. In a
+       pattern body today's transformer does not lower `Object.entries` of a
+       reactive record, so on today's runtime the expression stands inside a
+       `computed`, which the crate promotes (LS §6.1 already lists `map` and
+       `Object.entries`). _Alternative:_ a method `record.mapEntries(f)` of a
+       cell, which needs a method in `base/api/index.ts` and a lowering in the
+       transformer.
+     - _What it means, by case._ The collection's elements are the entries of
+       the record, and the key of an element is the entry's name, so a row
+       keeps its identity while its name is in the record, whatever is added or
+       removed beside it. Over a record of references `value` is the reference
+       at the entry. Over a record of plain values in place `value` is the
+       value at the entry, referred to by the record and the name. The result
+       of `Object.entries` of a record that the instance computed is a plain
+       array generated from scratch and stays the `map` over such an array that
+       the language has. The rows are in the order of the record's names as
+       the store enumerates them. A row is a document of its own where the
+       record holds references and the row is a record or a view node (P54),
+       and is in place otherwise.
+     - _The plan._ A `Collection` of construct `map` whose `source` is the slot
+       of the record with `entries: true`. The record's slot observes
+       `enumeration`. A slot of root `element` has the path `0` for the name and
+       a path that begins with `1` for the value and below it.
+     - _The label rule._ The membership, the count and the order of the rows:
+       the `enumeration` of the record. The name of an entry, read in a body:
+       the same `enumeration`, since which names exist is what it shows. The
+       value of an entry: the reference observed at the entry, or the value
+       there, as the element slot of a `map` over an array has it. A row: what
+       its body reads. No row depends on another entry.
+     - _Incremental execution._ State: the element table by name. An entry
+       added evaluates one body, an entry removed drops one row, a changed
+       value at an entry evaluates the bodies that read it.
+     - _The crate._ `Emitter::method` recognizes a `map`, `filter` or `flatMap`
+       whose receiver is the call `Object.entries(x)`, `Object.keys(x)` or
+       `Object.values(x)` with `x` a place of a record type that is a slot.
+       Every other receiver stays the expression it is.
+     - _Not designed:_ a record whose entries a handler removes and adds again
+       under one name within a transaction, which the element key cannot tell
+       from an entry that stayed; the row keeps its state, as a re-keyed element
+       does under ruling Z41.
+614. **A sort by a key (provisional decision P71).**
+     - _Surface._ `xs.toSorted((a, b) => key(a) - key(b))`, with the operands
+       exchanged for a descending order, and
+       `key(a).localeCompare(key(b))` for texts, where `key` is one expression
+       over the one parameter. On today's runtime it stands inside a
+       `computed`. The crate takes the call out of the function tier where the
+       comparator has one of these forms and the `computed` is promoted
+       otherwise; any other comparator stays a function body over the whole
+       list. _Alternative:_ a method `xs.sortBy((x) => key)` of a cell, which is
+       shorter, states the rule that the order of two members depends on those
+       two alone, and needs a method in `base/api/index.ts` and a lowering.
+       The method is what the integration plan names; it is the owner's to add.
+     - _The plan._ A `Collection` of construct `sort` (a value of `construct`
+       that PL §1.1 does not list) with `descending` where it is, whose body
+       cone is the key expression, observed as `value`.
+     - _The label rule._ The membership and the count: the source's membership.
+       The order: the source's membership joined with a `fold` of the key's
+       template over every element, as the membership of a `filter` is. An
+       element: the source element passed through. Equal keys keep the source
+       order. So a read of a position depends on every key, and a row's content
+       on its own member alone; with rows as documents the position's link has
+       the fold and the row's document its own label (note 584).
+     - _Incremental execution._ State: the key of each element and the element
+       keys in sorted order. A changed key removes the element at its old place
+       and inserts it by binary search: one evaluation of the key and one
+       splice, which a `map` over the result applies as one row moved.
+     - _Storage._ An array of references in the sorted order; a change writes
+       the positions between the old and the new place.
+615. **The build order and what is stubbed.** The grouping and `lookup` in
+     `group` mode first, since the join is a `map` over it: the crate's plan
+     and value code, the executor's index with a name per bucket, tests of
+     values against today's runtime and of the work per change at two sizes.
+     Then `keyBy`, `keys` and `keyEntries`, the per-entry construct and the
+     sort, each as far as the round reaches; what is not built keeps its design
+     above.
