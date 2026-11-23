@@ -6,7 +6,9 @@
  *
  * Each `<name>.emit.json` is the output of the crate for `<name>.tsx`.
  * Regenerate one from `base/pattern-compiler` with
- * `cargo run --release -- emit compare/fixtures/<name>.tsx > compare/fixtures/<name>.emit.json`.
+ * `cargo run --release -- emit --unchecked compare/fixtures/<name>.tsx > compare/fixtures/<name>.emit.json`.
+ * Thirteen fixtures hold forms the check refuses, so the flag that prints
+ * unchecked value code is given for all.
  *
  * `deno run -A base/pattern-compiler/compare/values-fixtures.ts` prints
  * the table.

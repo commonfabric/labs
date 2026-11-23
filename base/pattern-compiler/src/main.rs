@@ -32,10 +32,13 @@ commands:
       Print, for each pattern of the given modules, the plan together with
       its value code as one JSON artifact: the plan, the JavaScript of each
       module the plan's code is written in, and what an executor needs
-      beside the plan. With --corpus and a patterns directory, print one
-      line of JSON per accepted module. With --accepted, print the
+      beside the plan. Unless every module is accepted, print the
       diagnostics to the standard error and no artifact, and exit with a
-      failure, unless every module is accepted.
+      failure; --accepted asks for the same and is kept for callers that
+      pass it. With --unchecked, for diagnosis, print the artifacts of
+      refused modules too: their value code was not checked and is not
+      to be run where the check is relied on. With --corpus and a patterns
+      directory, print one line of JSON per accepted module.
   bodies <file>...
       Print the bodies of the given modules as JSON.
   time <patterns directory> <manifest> [--iterations=<n>] [--plans]
@@ -257,7 +260,10 @@ fn emit(paths: &[&str], flags: &[&str]) -> std::io::Result<bool> {
     pattern_compiler::emit::request(true);
     let analysis = analyze(&files);
     pattern_compiler::emit::request(false);
-    if flags.contains(&"--accepted") && !accepted(&analysis) {
+    // The value code of a module the check refuses reaches what the
+    // language does not define, so it is printed only where it is asked
+    // for by name.
+    if !corpus && !flags.contains(&"--unchecked") && !accepted(&analysis) {
         return Ok(false);
     }
     let mut modules = plans_json(&analysis, corpus);

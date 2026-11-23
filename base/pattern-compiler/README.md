@@ -1418,7 +1418,7 @@ cargo run --release -- plan --corpus ../../patterns
 cargo run --release -- plan --corpus ../../patterns --json
 cargo run --release -- emit path/to/module.tsx
 cargo run --release -- emit --corpus ../../patterns
-cargo run --release -- emit --accepted path/to/module.tsx
+cargo run --release -- emit --unchecked path/to/module.tsx
 ```
 
 `check` takes the modules of one program: an import between two of them is

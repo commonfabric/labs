@@ -406,7 +406,10 @@ const emitted = async (): Promise<{
 }> => {
   const { success, stdout, stderr } = await new Deno.Command(
     `${repository}base/pattern-compiler/target/release/pattern-compiler`,
-    { args: ["emit", ...TOPICS_FILES], cwd: `${repository}patterns` },
+    {
+      args: ["emit", "--unchecked", ...TOPICS_FILES],
+      cwd: `${repository}patterns`,
+    },
   ).output();
   if (!success) throw new Error(new TextDecoder().decode(stderr));
   const modules = JSON.parse(new TextDecoder().decode(stdout)) as {
