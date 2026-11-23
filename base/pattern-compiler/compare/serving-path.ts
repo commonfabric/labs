@@ -33,6 +33,13 @@
  * first and of the second event after it: the first starts the executor of
  * a compiled piece.
  *
+ * The lists of links of the result are documents of their own, as a
+ * serving runtime stores them by default (`CompiledPieceOptions.lists`), and
+ * a list of more than `LIST_WHOLE` rows is read by a client as an array of
+ * its chunks. A client then watches the whole list and reads the row in its
+ * chunk, which is a read of every chunk. With `SCALE_LISTS=in-place` the
+ * links are in the result document and a client watches the one row.
+ *
  * With `--profile=<file>`, the sampling profile of the process over the
  * appends is written to the file, in the format of the V8 inspector.
  *
@@ -94,6 +101,9 @@ const memoryNow = (): Memory => {
   };
 };
 
+/** Whether the links of the rows are in the result document. */
+const IN_PLACE = Deno.env.get("SCALE_LISTS") === "in-place";
+
 /** The inputs one transaction of the setup holds at most. */
 const ITEMS_PER_TRANSACTION = 1_000;
 
@@ -107,12 +117,21 @@ const visible = (
   at: number,
   label: string,
 ): Promise<number> => {
-  const cell = runtime.getCellFromLink<List>(result.getAsNormalizedFullLink())
-    .key("rows").key(at).key("label");
+  const rows = runtime.getCellFromLink<List>(result.getAsNormalizedFullLink())
+    .key("rows");
+  // A list in chunks is read as an array of chunks: the row is found among
+  // the members of each member that is an array, one level deep.
+  const cell = IN_PLACE ? rows.key(at).key("label") : rows;
+  const labelOf = (value: unknown): unknown =>
+    IN_PLACE
+      ? value
+      : ((value ?? []) as unknown[]).flatMap((member) =>
+        Array.isArray(member) ? member : [member]
+      ).map((row) => (row as { label?: string } | undefined)?.label)[at];
   return new Promise((resolve) => {
     let done = false;
-    const cancel: () => void = cell.sink((value) => {
-      if (done || value !== label) return;
+    const cancel: () => void = (cell as Cell<unknown>).sink((value) => {
+      if (done || labelOf(value) !== label) return;
       done = true;
       resolve(performance.now());
       // The sink calls back before it returns the cancel the first time.
@@ -136,7 +155,10 @@ const measure = async (
   const resumed: ResumedPiece[] = [];
   const serving: CompiledServingMemoryServer =
     await listenCompiledServingMemoryServer({
-      pieces: { resumed: (_result, piece) => resumed.push(piece) },
+      pieces: {
+        resumed: (_result, piece) => resumed.push(piece),
+        ...(IN_PLACE ? { piece: { lists: "in-place" as const } } : {}),
+      },
     });
   const client = () =>
     new Runtime({
