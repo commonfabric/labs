@@ -23,7 +23,13 @@
  * on this thread, and one client with server execution on that sets the
  * piece up (`setUpCompiledPiece`) and appends each event with `Cell.send`
  * on the entity of its stream. The piece is the one the serving runtime
- * runs, and its values are compared as above.
+ * runs, and its values are compared as above. With `--resume` as well,
+ * another serving loop takes the space over after the first half of the
+ * events (`CompiledServingMemoryServer.restart`): the event behind the
+ * takeover wakes the piece in the serving runtime of that loop, whose
+ * replica reads from the store, so the wake leaves the rows it can as
+ * stored (`resumeCompiledPieceByUnits`). The values compared are then what
+ * that runtime derived and, for a row it left, what the storage holds.
  *
  * `run` appends one line per module and leaves out a module the file
  * already has. The inputs are plain values in the argument, so the run
@@ -217,6 +223,7 @@ export const runOne = async (
   if (wishes && (serving || resume)) {
     return { ...base, skipped: "needs `wish`" };
   }
+  const takeover = serving && resume;
 
   // The executor with its documents in memory.
   const stubs = wishes ? homeStubs(await memoryHome()) : undefined;
@@ -251,6 +258,7 @@ export const runOne = async (
         alone,
         artifacts,
         now,
+        takeover,
       );
     } catch (error) {
       return { ...base, started: false, startFailure: categoryOf(error) };
@@ -433,12 +441,17 @@ const runServed = async (
   alone: ExecutorRun,
   artifacts: (id: string) => Artifact | undefined,
   now: number,
+  /** Whether another serving loop takes over after half of the events. */
+  takeover = false,
 ): Promise<Outcome> => {
   const signer = await Identity.fromPassphrase("pattern-compiler-compare");
   const space = signer.did();
   // The piece the serving runtime starts, or why it did not start.
-  const loaded = Promise.withResolvers<CompiledPiece>();
+  let loaded = Promise.withResolvers<CompiledPiece>();
   loaded.promise.catch(() => {});
+  // Whether the loop that took over found the piece current by its basis.
+  let current: boolean | undefined;
+  let resumed: Outcome["resume"];
   const main = `/${base.module.replace(/^\/+/, "")}`;
   const program = {
     main,
@@ -459,6 +472,9 @@ const runServed = async (
       piece: { now },
       started: (piece) => loaded.resolve(piece),
       failed: (_result, error) => loaded.reject(error),
+      resumed: (_result, piece) => {
+        current = piece.current;
+      },
     },
   });
   const client = new Runtime({
@@ -498,7 +514,16 @@ const runServed = async (
     await serving.host.whenQuiescent();
     let handled = 0;
     const failures: string[] = [];
-    for (const { binding, event } of events) {
+    const half = Math.floor(events.length / 2);
+    for (const [index, { binding, event }] of events.entries()) {
+      // The piece the event wakes in the loop that took over.
+      let woken: Promise<CompiledPiece> | undefined;
+      if (takeover && index === half && index > 0) {
+        loaded = Promise.withResolvers<CompiledPiece>();
+        loaded.promise.catch(() => {});
+        woken = loaded.promise;
+        await serving.restart();
+      }
       const stream = piece.instance.streams().find((held) =>
         held.binding === binding && held.instance === undefined &&
         held.elements !== undefined
@@ -536,6 +561,21 @@ const runServed = async (
         continue;
       }
       await appended.promise;
+      if (woken !== undefined) {
+        try {
+          piece = await woken;
+          resumed = { after: index, current };
+        } catch (error) {
+          resumed = { after: index, failure: categoryOf(error).detail };
+          failures.push("the piece did not wake");
+          break;
+        }
+        await serving.host.whenQuiescent();
+        if (piece.counts.events > 0 && piece.counts.eventsRefused === 0) {
+          handled += 1;
+        } else failures.push("the handler did not commit");
+        continue;
+      }
       await serving.host.whenQuiescent();
       const after = piece.counts;
       if (
@@ -555,6 +595,7 @@ const runServed = async (
       refusals: [...piece.refusals].map((reason) => reason.slice(0, 200)),
       equal: difference === undefined,
       ...(difference === undefined ? {} : { difference }),
+      ...(resumed === undefined ? {} : { resume: resumed }),
     };
   } finally {
     await serving.host.close();
