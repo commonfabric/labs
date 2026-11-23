@@ -25,7 +25,7 @@ commits that are not pushed; push it before relying on it.
 | `claude/compiled-pattern-serving-m6` | `compiled-pattern-m6` | Lists of links in chunked documents, the cost of a FabriChat send | none |
 | `claude/compiled-pattern-sandbox-m5` | `compiled-pattern-m5` | The runtime's own `wish` and built-ins, fetch effects, a toolshed that compiles, scopes | none |
 | `claude/compiled-pattern-write-integrity` | `compiled-pattern-write-integrity` | Write policies, write authorizations and the acting principal of a compiled piece | none |
-| `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code (local) | none |
+| `claude/compiled-pattern-carry` | `compiled-pattern-carry` | Review fixes of #9942 carried onto the trunk's code | none |
 | `claude/compiled-pattern-topics-runs` | `compiled-pattern-topics-runs` | The measured Topics boards; the serving branch is merged into it for measurements (local) | none |
 
 Four pull requests against `main` came out of the work and are independent
@@ -155,11 +155,31 @@ every effect other than the four fetch effects are unanswered.
 compiler for the serving loop on the main thread. Open: the loop in Workers,
 and the compile inside the serving loop's wait.
 
-**Review fixes to carry** (carry branch): the four findings of #9942 and the
-missing observation for `Object.fromEntries` (P411). After it lands, rerun
-every agreement figure that `firstDifference` of `compare/values.ts`
-decides; the corpus figures of note 534 (6,013 of 6,107 and 1,484 of 1,584)
-were not rechecked and may be too high.
+**Review fixes carried** (carry branch, pushed; notes 940 to 944). The four
+findings of the first review of #9942 and the missing observation for
+`Object.fromEntries` (P411) are fixed there, and a round of tests for a
+handler that writes, reads and fails found and fixed one soundness defect: a
+cone whose side-write a refused commit took back was never evaluated again
+(`Instance.restore` now drops the memo entries of the cones that wrote a
+restored document). Open from that round:
+
+- `compare/values-corpus.ts run` gives 7,314 of 7,463 values equal on the
+  trunk's code where note 571 has 7,325; the comparator fix does not change
+  the count, and which change lowered it by 11 is not found.
+- The fix for the left operand of `??`, `||` and `&&` on the prototype
+  branch (#9942, `Host.selected`) tests the operand through an `identity`
+  slot; the same form failed the stored-labels soundness check on the
+  trunk (fixture `held-in-place`), where the fix was built differently
+  (`Host.operand`). Check the prototype branch's form against that check.
+- A handle on a kept output in a handler's state reads the result-document
+  position, which only the store step of a derivation writes, so the second
+  event of a batch can read a stale value through it.
+- `new Map(v)` in `src/footprint.rs` records no `value` at `v/*/0`, the gap
+  closed for `Object.fromEntries`.
+- `CompiledPiece.#keepMinted` writes into a transaction a failed handler
+  aborted and logs an uncaught error.
+- `compare/values-fixtures.ts` stops at the first fixture today's runtime
+  refuses to compile and prints no table; run it per fixture.
 
 **Review findings on #9942 not yet addressed** (three, from the review of
 the commit `b11109b6fb`; each is a claim to check with a failing test first,
