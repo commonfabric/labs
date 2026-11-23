@@ -1,0 +1,394 @@
+[
+  {
+    "module": "sorted-rows.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [
+            0,
+            1
+          ],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "sorted-rows.tsx",
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = $rt.data((pattern(\"sha256:60bfe7871ae72d94b4d4d12877841d7d7ec6fc4524db11f50e61279352993f00\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.at($h.slot(0), [\"length\"])));\n{\n$rt.element(0, ($h) => ($h.slot(1)));\n}\n{\n$rt.element(1, ($h) => (({ title: $h.slot(3) })));\n}\nreturn $rt.thunk(($h) => (({ count: $h.output(0), cards: $h.output(3) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            },
+            {
+              "collection": 0,
+              "cone": 1,
+              "output": 1
+            },
+            {
+              "collection": 1,
+              "cone": 2,
+              "output": 3
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 12,
+        "name": "default",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [],
+          "children": [],
+          "closures": [],
+          "collections": [
+            {
+              "construct": "sortBy",
+              "membership": {
+                "op": "shared",
+                "template": 0
+              },
+              "name": "sortBy",
+              "source": {
+                "slot": 0
+              },
+              "within": []
+            },
+            {
+              "construct": "map",
+              "membership": {
+                "op": "output",
+                "output": 1
+              },
+              "name": "map",
+              "source": {
+                "collection": 0,
+                "via": "map"
+              },
+              "within": []
+            }
+          ],
+          "cones": [
+            {
+              "at": {
+                "file": "sorted-rows.tsx",
+                "start": 450
+              },
+              "bodies": [],
+              "entry": "length",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "sorted-rows.tsx",
+                "start": 492
+              },
+              "bodies": [],
+              "entry": "sortBy",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                1,
+                2
+              ],
+              "within": [
+                {
+                  "element": 0
+                }
+              ],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "sorted-rows.tsx",
+                "start": 517
+              },
+              "bodies": [],
+              "entry": "map",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                3
+              ],
+              "within": [
+                {
+                  "element": 1
+                }
+              ],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "count"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 0
+              }
+            },
+            {
+              "collection": 0,
+              "cone": 1,
+              "constraints": [],
+              "interim": "sortBy",
+              "kept": false,
+              "path": [],
+              "template": {
+                "op": "shared",
+                "template": 0
+              }
+            },
+            {
+              "cone": 1,
+              "constraints": [],
+              "interim": "sortBy",
+              "kept": false,
+              "path": [
+                "*"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 2
+              }
+            },
+            {
+              "collection": 1,
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "cards"
+              ],
+              "template": {
+                "op": "output",
+                "output": 1
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "cards",
+                "*"
+              ],
+              "template": {
+                "op": "const"
+              }
+            },
+            {
+              "cone": 2,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "cards",
+                "*",
+                "title"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 3
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:60bfe7871ae72d94b4d4d12877841d7d7ec6fc4524db11f50e61279352993f00"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "rank"
+              ],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "collection": 0,
+                "kind": "element"
+              },
+              "schema": "unhashed:schema/4"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "title"
+              ],
+              "root": {
+                "collection": 1,
+                "kind": "element"
+              }
+            }
+          ],
+          "stateCells": [],
+          "templates": [
+            {
+              "body": {
+                "op": "slot",
+                "slot": 1
+              },
+              "collection": 0,
+              "op": "fold"
+            }
+          ],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "items": {
+                  "asCell": [
+                    "cell"
+                  ],
+                  "items": {
+                    "properties": {
+                      "rank": {
+                        "type": "number"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "rank"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "items"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "cards": {
+                  "items": {
+                    "properties": {
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "count": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "count",
+                "cards"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "items": {
+                "properties": {
+                  "rank": {
+                    "type": "number"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title",
+                  "rank"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "properties": {
+                "rank": {
+                  "type": "number"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "rank"
+              ],
+              "type": "object"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

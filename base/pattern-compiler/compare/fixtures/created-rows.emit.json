@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/created-rows.tsx",
-              "source": "const { \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\n\nconst rowsOf = lift(\n  ({ rows }) => {\n    const made = [];\n    for (const row of Array.from(rows)) {\n      const value = row.get();\n      if (value) {\n        made.push(\n          Writable.for(row).set({ title: value.title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  },\n);\nconst shout = lift(({ text }) => text.toUpperCase());\nconst $default = (pattern(\"sha256:ee4f23c1dbd47a5499cb7558a8b2bc43be6bd58b8262bf3143ab8986cc50e5a3\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => (({ rows }) => {\n    const made = [];\n    for (const row of Array.from(rows)) {\n      const value = row.get();\n      if (value) {\n        made.push(\n          Writable.for(row).set({ title: value.title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  })($a));\n$rt.body(1, ($a) => (({ text }) => text.toUpperCase())($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ rows: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ text: $h.slot(2) }))));\nreturn $rt.thunk(($h) => (({ rows: $h.output(0), noted: $h.output(1) })));\n});"
+              "source": "const { \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\n\nconst rowsOf = $rt.data(lift(\n  ({ rows }) => {\n    const made = [];\n    for (const row of Array.from(rows)) {\n      const value = row.get();\n      if (value) {\n        made.push(\n          Writable.for(row).set({ title: value.title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  },\n));\nconst shout = $rt.data(lift(({ text }) => text.toUpperCase()));\nconst $default = $rt.data((pattern(\"sha256:ee4f23c1dbd47a5499cb7558a8b2bc43be6bd58b8262bf3143ab8986cc50e5a3\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => (({ rows }) => {\n    const made = [];\n    for (const row of Array.from(rows)) {\n      const value = row.get();\n      if (value) {\n        made.push(\n          Writable.for(row).set({ title: value.title.toUpperCase() }),\n        );\n      }\n    }\n    return made;\n  })($a));\n$rt.body(1, ($a) => (({ text }) => text.toUpperCase())($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ rows: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ text: $h.slot(2) }))));\nreturn $rt.thunk(($h) => (({ rows: $h.output(0), noted: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -73,6 +73,7 @@
                     "*"
                   ],
                   "handle": true,
+                  "schema": "unhashed:schema/4",
                   "slot": 1
                 }
               ],
@@ -348,6 +349,23 @@
             "id": "unhashed:schema/3",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "asCell": [
+                "readonly"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "type": "object"
             }
           }
         ],

@@ -1221,8 +1221,37 @@ holds the measurements and the conditions for revisiting.
   `plan-inputs` inputs of the transaction hold. Every other path keeps the
   join. With it off, every `plan-write` and `plan-inputs` input is ignored
   and the preparation and its prepared digest are what they are without the
-  option. The runner path for compiled patterns is to be
-  gated by the same option.
+  option. It also gates the runner path for compiled patterns:
+  `startCompiledPiece()` of `runtime/runner/src/compiled/piece.ts` starts a
+  piece from a plan and its value code, with one event handler of the
+  scheduler for each stream of the piece and one effect for its derivation,
+  and throws with the option off. The value code of such a piece is
+  evaluated in an SES compartment
+  (`runtime/runner/src/compiled/value-code.ts`), and
+  `runtime/runner/src/compiled/compile.deno.ts` compiles a pattern source
+  with the binary of `base/pattern-compiler`. `Runtime` imports none of those
+  modules, so a runtime that starts no compiled piece loads none of them.
+  Under server execution the option also gates where a serving runtime
+  starts such a piece: `ensurePieceRunningVerdict()` asks
+  `Runtime.compiledPieceLoader` for a result document that names no pattern,
+  only with the option on and only where `serveCompiledPieces()` of
+  `runtime/runner/src/compiled/serving.ts` installed one. The loader
+  compiles the source of a pattern that a client wrote, evaluates the value
+  code its own compile gave in a compartment, and reads no artifact from
+  storage. Nothing installs it but `listenCompiledServingMemoryServer()`, a
+  helper for tests whose serving runtimes read their space from the store
+  unless its policy says otherwise, and `runCompiledPatterns()`. The option
+  also gates the
+  start of a pattern from its source: where
+  `runCompiledPatterns()` of `runtime/runner/src/compiled/run.ts` gave the
+  runtime a pattern compiler (`Runtime.compiledPatternRunner`),
+  `PatternManager.compilePattern()` hands the program to that compiler as
+  well, and `Runtime.run()` of the pattern starts a compiled piece where the
+  compiler accepted the program and runs the pattern as without the option
+  where it refused it, with the compiler's diagnostics logged.
+  `Runner.start()` asks `Runtime.compiledPieceLoader` for a result document
+  that names no pattern. Nothing calls `runCompiledPatterns()` but tests and
+  the comparison harness.
 - **Current default and planned end state.** Off by default. A measurement
   only: the specification the template labels rest on is specs pull request
   #91, unmerged, and the deciding sites carry its `SPEC-PENDING` marker. The
@@ -1232,10 +1261,27 @@ holds the measurements and the conditions for revisiting.
 - **Status on 2026-11-19.** Default off, pinned by
   `runtime/runner/test/cfc-runtime-options.test.ts` and
   `runtime/runner/test/experimental-options.test.ts`; the template labels are
-  pinned by `runtime/runner/test/cfc-plan-labels.test.ts`.
+  pinned by `runtime/runner/test/cfc-plan-labels.test.ts`, and the runner
+  path by `runtime/runner/test/compiled/piece.test.ts`,
+  `runtime/runner/test/compiled/row-documents.test.ts`,
+  `runtime/runner/test/compiled/value-code.test.ts` and
+  `runtime/runner/test/compiled/compile.test.ts`. The start from storage, the
+  basis a piece keeps and the serving runtime's loader are pinned by
+  `runtime/runner/test/compiled/resume.test.ts`,
+  `runtime/runner/test/compiled/basis.test.ts` and
+  `runtime/runner/test/compiled/compiled-serving.test.ts`. The start from a
+  source through `Runtime.run()` is pinned by
+  `base/pattern-compiler/compare/test/runtime-run.test.ts`, which runs the
+  crate's release binary.
 - **Path to removal.** Delete the runtime option, its env, authority and
   shell-source entries, `CfcTxState.planLabels`, and either the `plan-write`
-  and `plan-inputs` path or the gate on it.
+  and `plan-inputs` path or the gate on it, and either
+  `runtime/runner/src/compiled/` or the check in `startCompiledPiece()`,
+  and `Runtime.compiledPieceLoader` with the branches of
+  `ensure-piece-running.ts` and `Runner.start()` that ask it, and
+  `Runtime.compiledPatternRunner` with the branches of
+  `PatternManager.compilePattern()`, `Runner.run()`, `Runner.stop()` and
+  `Runtime.dispose()` that ask it.
 
 ## Category 2: Contextual Flow Control enforcement rollout dials
 

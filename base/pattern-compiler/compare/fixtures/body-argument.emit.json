@@ -1,0 +1,559 @@
+[
+  {
+    "module": "body-argument.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "body-argument.tsx",
+              "source": "const { \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst countOpen = $rt.data(lift(({ items }) =>\n  items.filter((item) => !item.done).length\n));\nconst Whole = $rt.data(pattern(\n  \"sha256:988b85937455a20506c581f572dd615ce66b57ab04719660a474a5bba2d51987\",\n));\nconst titleOf = $rt.data(lift((\n  { board, name },\n) =>\n  board.key(\"kind\").get() === \"board\"\n    ? board.key(\"rows\").key(name).key(\"title\").get() ?? \"\"\n    : \"\"\n));\nconst One = $rt.data(pattern(\n  \"sha256:33bc2dd432a292c7699bc4a1673b7c1c87ed02e67daa23c9dbb174da4d5a49d5\",\n));\nObject.defineProperty($exports, \"Whole\", { enumerable: true, get: () => Whole });\nObject.defineProperty($exports, \"One\", { enumerable: true, get: () => One });\n$rt.body(0, ($a) => (({ items }) =>\n  items.filter((item) => !item.done).length)($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ items: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ open: $h.output(0) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 22,
+        "name": "Whole",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "lift",
+              "name": "countOpen",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "items"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "items",
+                    "*",
+                    "done"
+                  ],
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "body-argument.tsx",
+                "start": 710
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "open",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "open"
+              ],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:988b85937455a20506c581f572dd615ce66b57ab04719660a474a5bba2d51987"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "enumeration",
+              "path": [
+                "items"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "items",
+                "*",
+                "done"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "items": {
+                  "items": {
+                    "properties": {
+                      "done": {
+                        "type": "boolean"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "done"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "items"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "open": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "open"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "items": {
+                "properties": {
+                  "done": {
+                    "type": "boolean"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title",
+                  "done"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "unsupported": []
+      },
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {},
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "body-argument.tsx",
+              "source": "const { \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst countOpen = $rt.data(lift(({ items }) =>\n  items.filter((item) => !item.done).length\n));\nconst Whole = $rt.data(pattern(\n  \"sha256:988b85937455a20506c581f572dd615ce66b57ab04719660a474a5bba2d51987\",\n));\nconst titleOf = $rt.data(lift((\n  { board, name },\n) =>\n  board.key(\"kind\").get() === \"board\"\n    ? board.key(\"rows\").key(name).key(\"title\").get() ?? \"\"\n    : \"\"\n));\nconst One = $rt.data(pattern(\n  \"sha256:33bc2dd432a292c7699bc4a1673b7c1c87ed02e67daa23c9dbb174da4d5a49d5\",\n));\nObject.defineProperty($exports, \"Whole\", { enumerable: true, get: () => Whole });\nObject.defineProperty($exports, \"One\", { enumerable: true, get: () => One });\n$rt.body(0, ($a) => ((\n  { board, name },\n) =>\n  board.key(\"kind\").get() === \"board\"\n    ? board.key(\"rows\").key(name).key(\"title\").get() ?? \"\"\n    : \"\")($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ board: $h.slot(0), name: $h.slot(2) }))));\nreturn $rt.thunk(($h) => (({ title: $h.output(0) })));\n});"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [
+            {
+              "cone": 0,
+              "function": true,
+              "output": 0
+            }
+          ],
+          "valuesWithoutOutput": []
+        },
+        "line": 36,
+        "name": "One",
+        "plan": {
+          "argumentSchema": "unhashed:schema/0",
+          "bindings": [],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [
+                {
+                  "handle": {
+                    "slot": 0
+                  }
+                }
+              ],
+              "kind": "lift",
+              "name": "titleOf",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "board"
+                  ],
+                  "handle": true,
+                  "schema": "unhashed:schema/4",
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "board",
+                    "kind"
+                  ],
+                  "slot": 1
+                },
+                {
+                  "at": [
+                    "name"
+                  ],
+                  "slot": 2
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "body-argument.tsx",
+                "start": 1078
+              },
+              "bodies": [
+                0
+              ],
+              "entry": "title",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                0,
+                1,
+                2
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [
+            {
+              "why": {
+                "body": 0,
+                "handle": 0,
+                "kind": "handle"
+              }
+            }
+          ],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "title"
+              ],
+              "template": {
+                "by": {
+                  "body": 0
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 0
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 1
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  },
+                  {
+                    "op": "dynamic",
+                    "reads": 0
+                  }
+                ],
+                "op": "derive"
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:33bc2dd432a292c7699bc4a1673b7c1c87ed02e67daa23c9dbb174da4d5a49d5"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/1",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "identity",
+              "path": [
+                "board"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "board",
+                "kind"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            },
+            {
+              "observes": "value",
+              "path": [
+                "name"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/3"
+            }
+          ],
+          "stateCells": [],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "board": {
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "additionalProperties": {
+                        "properties": {
+                          "done": {
+                            "type": "boolean"
+                          },
+                          "title": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "title",
+                          "done"
+                        ],
+                        "type": "object"
+                      },
+                      "properties": {},
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "rows"
+                  ],
+                  "type": "object"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "board",
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "properties": {
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "rows": {
+                  "additionalProperties": {
+                    "properties": {
+                      "done": {
+                        "type": "boolean"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "done"
+                    ],
+                    "type": "object"
+                  },
+                  "properties": {},
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "rows"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "asCell": [
+                "readonly"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "rows": {
+                  "additionalProperties": {
+                    "properties": {
+                      "done": {
+                        "type": "boolean"
+                      },
+                      "title": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "done"
+                    ],
+                    "type": "object"
+                  },
+                  "properties": {},
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "rows"
+              ],
+              "type": "object"
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

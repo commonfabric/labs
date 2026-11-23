@@ -4980,3 +4980,315 @@ export const P = pattern<{ title: string; rows: string[] }>(({ title, rows }) =>
     );
     assert!(!plan.to_string().contains("$site"), "{plan}");
 }
+
+#[test]
+fn a_handle_entry_of_a_body_names_the_schema_of_the_type_the_body_declares() {
+    // `ReadInput.schema` and `ComputedInput.schema`: the slot's schema is
+    // the type of the place, which names every field of a member; the body
+    // declares a handle to a type that names one.
+    let analysis = program(
+        r#"import { type Default, lift, pattern, type ReadonlyCell, Writable } from "commonfabric";
+interface Item { title: string; note: string }
+interface Row { title: string }
+const rowsOf = lift(
+  ({ sources }: { sources: ReadonlyCell<{ title: string }>[] | Default<[]> }): Row[] =>
+    Array.from(sources).map((source) => ({ title: source.get().title })),
+);
+const titlesOf = lift(
+  ({ rows }: { rows: ReadonlyCell<Row[]> }): number => rows.get()?.length ?? 0,
+);
+export const P = pattern<{ items: Writable<Item[]> }, { rows: Row[]; titles: number }>(
+  ({ items }) => {
+    const rows = rowsOf({ sources: items });
+    return { rows, titles: titlesOf({ rows }) };
+  },
+);
+"#,
+    );
+    let found = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("P"))
+        .expect("the pattern");
+    let document = |name: &Value| -> Value {
+        found
+            .schemas
+            .iter()
+            .find(|(id, _)| json!(id) == *name)
+            .map(|(_, document)| document.clone())
+            .unwrap_or_else(|| panic!("no schema document named {name}"))
+    };
+    let bodies = found.plan["bodies"].as_array().expect("bodies");
+    let handle = bodies[0]["reads"]
+        .as_array()
+        .expect("reads")
+        .iter()
+        .find(|read| read["handle"] == json!(true))
+        .expect("a handle entry");
+    assert_eq!(handle["at"], json!(["sources", "*"]));
+    assert_eq!(
+        document(&handle["schema"])["properties"],
+        json!({ "title": { "type": "string" } })
+    );
+    // The slot of the same entry names the type of the place.
+    let slot = &found.plan["slots"][handle["slot"].as_u64().expect("a slot") as usize];
+    assert!(document(&slot["schema"])["properties"]["note"].is_object());
+    let computed = bodies[1]["computed"]
+        .as_array()
+        .expect("computed")
+        .iter()
+        .find(|input| input["observes"] == json!("identity"))
+        .expect("an identity entry");
+    assert_eq!(
+        document(&computed["schema"])["items"]["properties"],
+        json!({ "title": { "type": "string" } })
+    );
+    // An entry of another class names no schema.
+    assert!(bodies[0]["reads"]
+        .as_array()
+        .expect("reads")
+        .iter()
+        .all(|read| read["handle"] == json!(true) || read.get("schema").is_none()));
+}
+
+/// PL §3.17: the membership of a bucket is the source's membership joined
+/// with a `fold` of the key function's template over every element, and a
+/// `lookup` has the template of its key joined with that of the index.
+#[test]
+fn a_collection_index_has_the_fold_of_its_key_function_and_a_lookup_joins_the_key() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { pattern, type Writable } from "commonfabric";
+interface Item { title: string; tag: string }
+interface Tag { name: string }
+export const Joined = pattern<
+  { items: Writable<Item[]>; tags: Writable<Tag[]> },
+  { rows: { name: string; titles: string[] }[] }
+>(({ items, tags }) => {
+  const byTag = items.groupBy((item) => item.tag);
+  const rows = tags.map((tag) => ({
+    name: tag.name,
+    titles: byTag.lookup(tag.name).map((item) => item.title),
+  }));
+  return { rows };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Joined");
+    let index = &plan["collections"][0];
+    assert_eq!(index["construct"], json!("groupBy"));
+    let fold = &index["membership"];
+    assert_eq!(fold["op"], json!("fold"), "{fold}");
+    assert_eq!(fold["collection"], json!(0));
+    let key = fold["body"]["slot"].as_u64().expect("the slot of the key") as usize;
+    assert_eq!(plan["slots"][key]["path"], json!(["tag"]));
+    assert_eq!(plan["slots"][key]["observes"], json!("value"));
+    // The lookup: an interim output that the collection of the inner `map`
+    // is over, derived from the key and from the index.
+    let over = plan["collections"][2]["source"]["output"]
+        .as_u64()
+        .expect("the output the inner `map` is over") as usize;
+    let lookup = &plan["outputs"][over]["template"];
+    assert_eq!(lookup["op"], json!("derive"), "{lookup}");
+    let inputs = lookup["inputs"].as_array().expect("inputs");
+    assert!(inputs.iter().any(|input| input["op"] == json!("output")
+        && plan["outputs"][input["output"].as_u64().unwrap() as usize]["collection"] == json!(0)));
+    assert!(inputs.iter().any(|input| {
+        input["op"] == json!("slot")
+            && plan["slots"][input["slot"].as_u64().unwrap() as usize]["path"] == json!(["name"])
+    }));
+}
+
+/// A sort by a key (note 614 of `SPEC-NOTES.md`): `sortBy` is a collection
+/// whose body cone is the key function, observed as a value; its order has
+/// the template of a `filter`'s membership, a `fold` of the key's template
+/// over every element; and a `map` over the result is a collection over it.
+#[test]
+fn a_sort_by_a_key_has_the_fold_of_its_key_and_a_map_over_it_is_a_collection_over_it() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { pattern, type Writable } from "commonfabric";
+interface Item { title: string; rank: number }
+export const Sorted = pattern<
+  { items: Writable<Item[]> },
+  { titles: string[] }
+>(({ items }) => {
+  const ordered = items.sortBy((item) => item.rank);
+  return { titles: ordered.map((item) => item.title) };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Sorted");
+    let sort = &plan["collections"][0];
+    assert_eq!(sort["construct"], json!("sortBy"));
+    let fold = &sort["membership"];
+    assert_eq!(fold["op"], json!("fold"), "{fold}");
+    assert_eq!(fold["collection"], json!(0));
+    let key = fold["body"]["slot"].as_u64().expect("the slot of the key") as usize;
+    assert_eq!(plan["slots"][key]["path"], json!(["rank"]));
+    assert_eq!(plan["slots"][key]["observes"], json!("value"));
+    assert_eq!(plan["collections"][1]["construct"], json!("map"));
+    assert_eq!(plan["collections"][1]["source"]["collection"], json!(0));
+}
+
+/// A key that is a cell is observed as the reference it is, in the key
+/// function of an index and in a `lookup` (PL §3.17): the bucket is that
+/// of the position the reference names, and nothing of what the cell
+/// holds is read for the key.
+#[test]
+fn a_cell_key_of_an_index_and_of_a_lookup_is_observed_as_a_reference() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { pattern, type Writable } from "commonfabric";
+interface Topic { title: string; mentions: Writable<Topic>[] }
+export const Inverse = pattern<
+  { topics: Writable<Topic[]> },
+  { rows: { title: string; mentionedBy: string[] }[] }
+>(({ topics }) => {
+  const pairs = topics.flatMap((from) => from.mentions.map((to) => ({ from, to })));
+  const byMentioned = pairs.groupBy((pair: { from: Topic; to: Writable<Topic> }) => pair.to);
+  const rows = topics.map((topic) => ({
+    title: topic.title,
+    mentionedBy: byMentioned.lookup(topic).map((pair) => pair.from.title),
+  }));
+  return { rows };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Inverse");
+    let index = plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .position(|collection| collection["construct"] == json!("groupBy"))
+        .expect("the index");
+    let fold = match &plan["collections"][index]["membership"] {
+        shared if shared["op"] == json!("shared") => {
+            plan["templates"][shared["template"].as_u64().unwrap() as usize].clone()
+        }
+        other => other.clone(),
+    };
+    assert_eq!(fold["op"], json!("fold"), "{fold}");
+    let key = fold["body"]["slot"].as_u64().expect("the slot of the key") as usize;
+    assert_eq!(plan["slots"][key]["path"], json!(["to"]));
+    assert_eq!(plan["slots"][key]["observes"], json!("identity"));
+    // The key of the lookup is the element of the `map` over the topics,
+    // as a reference: no slot reads that element as a value.
+    let rows = plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .position(|collection| collection["name"] == json!("rows"))
+        .expect("the rows");
+    for slot in plan["slots"].as_array().expect("slots") {
+        if slot["root"]["kind"] == json!("element")
+            && slot["root"]["collection"] == json!(rows)
+            && slot["path"] == json!([])
+        {
+            assert_eq!(slot["observes"], json!("identity"), "{slot}");
+        }
+    }
+}
+
+/// The key of an index whose type the crate does not resolve is observed
+/// in neither class: the plan lists it as a construct it does not support.
+#[test]
+fn a_key_of_an_index_whose_type_is_not_resolved_is_reported_as_unsupported() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { pattern, type Writable } from "commonfabric";
+import { keyOf } from "./not-given.ts";
+interface Topic { title: string; mentions: Writable<Topic>[] }
+export const Inverse = pattern<
+  { topics: Writable<Topic[]> },
+  { count: number }
+>(({ topics }) => {
+  const pairs = topics.flatMap((from) => from.mentions.map((to) => ({ from, to })));
+  const byMentioned = pairs.groupBy((pair) => keyOf(pair));
+  return { count: byMentioned.lookup(topics.get()[0]).length };
+});
+"#,
+    );
+    let found = analysis.modules[0]
+        .plans
+        .iter()
+        .find(|plan| plan.name.as_deref() == Some("Inverse"))
+        .expect("the pattern");
+    assert!(
+        found
+            .unsupported
+            .iter()
+            .any(|(kind, _)| kind == "the key of an index whose type is not resolved"),
+        "{:?}",
+        found.unsupported
+    );
+}
+
+/// A `lookup` by a cell in an index that the instance is handed is not
+/// supported: the buckets of a stored index are chosen by a value.
+#[test]
+fn a_lookup_by_a_cell_in_a_handed_index_is_reported_as_unsupported() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { type GroupIndex, pattern, type Writable } from "commonfabric";
+interface Topic { title: string }
+export const Reader = pattern<
+  { index: GroupIndex<Writable<Topic>, Topic>; self: Writable<Topic> },
+  { titles: string[] }
+>(({ index, self }) => ({
+  titles: index.lookup(self).map((topic) => topic.title),
+}));
+"#,
+    );
+    let found = analysis.modules[0]
+        .plans
+        .iter()
+        .find(|plan| plan.name.as_deref() == Some("Reader"))
+        .expect("the pattern");
+    assert!(
+        found
+            .unsupported
+            .iter()
+            .any(|(kind, _)| kind == "a `lookup` by a cell in an index the instance is handed"),
+        "{:?}",
+        found.unsupported
+    );
+}
+
+/// `Object.entries(record).map(f)` over a record that is an input is a
+/// collection over the record's slot, observed as an enumeration, whose
+/// elements are the entries.
+#[test]
+fn a_map_over_the_entries_of_an_input_record_is_a_collection_over_the_record() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { computed, pattern } from "commonfabric";
+interface Item { title: string }
+export const Table = pattern<
+  { byName: Record<string, Item> },
+  { rows: { name: string; title: string }[] }
+>(({ byName }) => {
+  const rows = computed(() =>
+    Object.entries(byName).map(([name, item]) => ({ name, title: item.title }))
+  );
+  return { rows };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Table");
+    let source = &plan["collections"][0]["source"];
+    assert_eq!(source["entries"], json!(true), "{source}");
+    let record = source["slot"].as_u64().expect("the slot of the record") as usize;
+    assert_eq!(plan["slots"][record]["path"], json!(["byName"]));
+    assert_eq!(plan["slots"][record]["observes"], json!("enumeration"));
+    let paths: Vec<&Value> = plan["slots"]
+        .as_array()
+        .expect("slots")
+        .iter()
+        .filter(|slot| slot["root"]["kind"] == json!("element"))
+        .map(|slot| &slot["path"])
+        .collect();
+    assert!(paths.contains(&&json!(["0"])), "{paths:?}");
+    assert!(paths.contains(&&json!(["1", "title"])), "{paths:?}");
+}

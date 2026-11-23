@@ -14,7 +14,7 @@ use oxc_span::{GetSpan, Span};
 use oxc_syntax::scope::ScopeFlags;
 use oxc_syntax::symbol::SymbolId;
 
-use crate::api::{ApiValue, Builder};
+use crate::api::{self, ApiValue, Builder};
 use crate::assign::Verdict;
 use crate::module::{symbol_of, ModuleTier};
 use crate::program::Resolver;
@@ -104,6 +104,63 @@ impl<'a> TypedRules<'_, '_, 'a> {
     fn count(&self, rule: &str, outcome: &str) {
         self.resolver
             .count(self.module, format!("types:rule:{rule}:{outcome}"));
+    }
+
+    /// `cell:unsupported-method` for a member of a cell handle that the
+    /// table of `language-subset.md` §4.7 does not list, read, called or
+    /// written: `name` is the member where it is written as a name or as a
+    /// string literal, and nothing for a computed key. A handle has no
+    /// member that a key computes. The removed `...WithPattern` methods and
+    /// the methods of the runtime's cell object have reports of their own
+    /// at a call.
+    fn handle_member(&self, object: &Expression<'a>, name: Option<&str>, span: Span) {
+        self.handle_member_use(object, name, span, false);
+    }
+
+    /// As `handle_member`, and with `write` for an assignment to the
+    /// member, an update of it or its deletion, which is refused for a
+    /// listed member too: a method of a handle is not replaced.
+    fn handle_member_use(
+        &self,
+        object: &Expression<'a>,
+        name: Option<&str>,
+        span: Span,
+        write: bool,
+    ) {
+        let resolver = self.resolver;
+        let Ok(object) = resolver.typed_at(self.module, object, 0) else {
+            return;
+        };
+        let members = match resolver.shape(object) {
+            Shape::Union(members) => members,
+            _ => vec![object],
+        };
+        let present: Vec<Shape> = members
+            .iter()
+            .map(|member| resolver.shape(*member))
+            .filter(|shape| !matches!(shape, Shape::Null | Shape::Undefined))
+            .collect();
+        let handle = !present.is_empty()
+            && present
+                .iter()
+                .all(|shape| matches!(shape, Shape::Handle(..)));
+        let listed = name.is_some_and(|name| {
+            api::is_handle_member(name)
+                || api::is_with_pattern_method(name)
+                || api::is_undeclared_cell_method(name)
+        });
+        if !handle || (listed && !write) {
+            return;
+        }
+        self.count("handle member", "refused: not a member of a handle");
+        let found = match name {
+            Some(name) if write && listed => {
+                format!("`{name}` of a cell handle is written to; a member of a handle is not replaced")
+            }
+            Some(name) => format!("`{name}` is not a member the API declares on a cell handle"),
+            None => "A cell handle has no member that a key computes; read the cell with `.get()` or name a property with `.key(...)`".to_string(),
+        };
+        self.report("cell:unsupported-method", span, &found);
     }
 
     /// `schema:unknown-type-access`, `schema:path-not-in-type`, and the
@@ -679,13 +736,49 @@ impl<'a> Visit<'a> for TypedRules<'_, '_, 'a> {
     fn visit_assignment_expression(&mut self, it: &AssignmentExpression<'a>) {
         if let AssignmentTarget::StaticMemberExpression(member) = &it.left {
             self.written.push(member.span);
+            let name = member.property.name.as_str();
+            if api::is_handle_member(name) {
+                self.handle_member_use(&member.object, Some(name), member.span, true);
+            }
         }
         walk::walk_assignment_expression(self, it);
     }
 
+    fn visit_update_expression(&mut self, it: &UpdateExpression<'a>) {
+        if let SimpleAssignmentTarget::StaticMemberExpression(member) = &it.argument {
+            let name = member.property.name.as_str();
+            if api::is_handle_member(name) {
+                self.handle_member_use(&member.object, Some(name), member.span, true);
+            }
+        }
+        walk::walk_update_expression(self, it);
+    }
+
+    fn visit_unary_expression(&mut self, it: &UnaryExpression<'a>) {
+        if let (UnaryOperator::Delete, Expression::StaticMemberExpression(member)) =
+            (it.operator, unparen(&it.argument))
+        {
+            let name = member.property.name.as_str();
+            if api::is_handle_member(name) {
+                self.handle_member_use(&member.object, Some(name), member.span, true);
+            }
+        }
+        walk::walk_unary_expression(self, it);
+    }
+
     fn visit_static_member_expression(&mut self, it: &StaticMemberExpression<'a>) {
+        self.handle_member(&it.object, Some(it.property.name.as_str()), it.span);
         self.member_read(it);
         walk::walk_static_member_expression(self, it);
+    }
+
+    fn visit_computed_member_expression(&mut self, it: &ComputedMemberExpression<'a>) {
+        let name = match crate::syntax::unwrap(&it.expression) {
+            Expression::StringLiteral(literal) => Some(literal.value.as_str()),
+            _ => None,
+        };
+        self.handle_member(&it.object, name, it.span);
+        walk::walk_computed_member_expression(self, it);
     }
 
     fn visit_call_expression(&mut self, it: &CallExpression<'a>) {

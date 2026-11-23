@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/handle-of-computed.tsx",
-              "source": "const { \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst named = lift(({ names }) =>\n  names.map((name) => ({ name }))\n);\nconst counted = lift(({ rows }) => {\n  const count = rows.get()?.length ?? 0;\n  return count === 0 ? \"\" : `${count}:${rows.key(0).key(\"name\").get()}`;\n});\nconst $default = (pattern(\"sha256:5e1dff59bd3f6ca7d08ad690487ac5b87c84bd4fa9a601bd5d5f715a9242bf54\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => (({ names }) =>\n  names.map((name) => ({ name })))($a));\n$rt.body(1, ($a) => (({ rows }) => {\n  const count = rows.get()?.length ?? 0;\n  return count === 0 ? \"\" : `${count}:${rows.key(0).key(\"name\").get()}`;\n})($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ names: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ rows: $h.output(0) }))));\nreturn $rt.thunk(($h) => (({ rows: $h.output(0), summary: $h.output(1) })));\n});"
+              "source": "const { \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst named = $rt.data(lift(({ names }) =>\n  names.map((name) => ({ name }))\n));\nconst counted = $rt.data(lift(({ rows }) => {\n  const count = rows.get()?.length ?? 0;\n  return count === 0 ? \"\" : `${count}:${rows.key(0).key(\"name\").get()}`;\n}));\nconst $default = $rt.data((pattern(\"sha256:5e1dff59bd3f6ca7d08ad690487ac5b87c84bd4fa9a601bd5d5f715a9242bf54\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => (({ names }) =>\n  names.map((name) => ({ name })))($a));\n$rt.body(1, ($a) => (({ rows }) => {\n  const count = rows.get()?.length ?? 0;\n  return count === 0 ? \"\" : `${count}:${rows.key(0).key(\"name\").get()}`;\n})($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ names: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ rows: $h.output(0) }))));\nreturn $rt.thunk(($h) => (({ rows: $h.output(0), summary: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -75,6 +75,7 @@
                     "rows"
                   ],
                   "observes": "identity",
+                  "schema": "unhashed:schema/3",
                   "template": {
                     "op": "output",
                     "output": 0
@@ -280,6 +281,26 @@
             "id": "unhashed:schema/2",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "asCell": [
+                "readonly"
+              ],
+              "items": {
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              },
+              "type": "array"
             }
           }
         ],

@@ -14,7 +14,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/reduce-entries.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst cents = (amount) => Math.round((amount || 0) * 100);\nconst $default = (pattern(\n  \"sha256:f2a766111d93781bcec31dbddf4a7a9f482fbc8c405d02c8e9d085ba80c04ae7\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((amount) => Math.round((amount || 0) * 100))($a[\"amount\"]));\n$rt.setup(0, function ($arg, $h) {\n$rt.reduce(0, 0, ($h) => ((0)), 1, ($h) => (($h.v($h.slot(1)) + $h.v($h.invoke(0, {  })))));\n$rt.value(4, ($h) => (($h.v($h.slot(1)) / (100))));\n{\n$rt.element(1, ($h) => ($h.slot(3)));\n}\nreturn $rt.thunk(($h) => (({ total: $h.output(0), rows: $h.output(2) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst cents = $rt.fn((amount) => Math.round((amount || 0) * 100));\nconst $default = $rt.data((pattern(\n  \"sha256:f2a766111d93781bcec31dbddf4a7a9f482fbc8c405d02c8e9d085ba80c04ae7\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((amount) => Math.round((amount || 0) * 100))($a[\"amount\"]));\n$rt.setup(0, function ($arg, $h) {\n$rt.reduce(0, 0, ($h) => ((0)), 1, ($h) => (($h.v($h.slot(1)) + $h.v($h.invoke(0, {  })))));\n$rt.value(4, ($h) => (($h.v($h.slot(1)) / (100))));\n{\n$rt.element(1, ($h) => ($h.slot(3)));\n}\nreturn $rt.thunk(($h) => (({ total: $h.output(0), rows: $h.output(2) })));\n});"
             }
           ],
           "outputsBelow": [],

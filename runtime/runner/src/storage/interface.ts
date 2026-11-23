@@ -2205,6 +2205,17 @@ export interface IStorageTransaction {
   getPotentiallyExternalReadActivities?(): Iterable<IReadActivity> | undefined;
 
   /**
+   * Optional. Freezes every record that
+   * `getPotentiallyExternalReadActivities` lists, so that each keeps the
+   * metadata object it carries; that object stays as open to change as it
+   * was. Returns a count that advances whenever that list gains a record or
+   * is emptied, so two calls that return the same count frame a list of the
+   * same records, each with the same metadata object. Returns `undefined`
+   * where the transaction froze nothing.
+   */
+  freezeReadActivityRecords?(): number | undefined;
+
+  /**
    * Optional ordered log of every applied write attempt, in transaction
    * order, stamped on the same per-transaction activity clock as read
    * activities. Unlike `getWriteDetails` (per-path, last-value upserts,

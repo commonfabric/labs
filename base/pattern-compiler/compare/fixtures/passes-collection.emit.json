@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/passes-collection.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\"sha256:9a255b842cb99c216837968225989c093f6b3a080c933ab66296a06cc25b1b8a\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ((!$h.v($h.slot(1)))));\n}\n$rt.value(2, ($h) => ($h.output(0)));\n{\n$rt.element(1, ($h) => (($h.slot(4) > (0))));\n}\n$rt.value(5, ($h) => ($h.output(3)));\n{\n$rt.element(2, ($h) => (($h.v($h.slot(6)) + (\"!\"))));\n}\n{\n$rt.element(3, ($h) => (($h.v($h.slot(7)) + (\"!\"))));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(6), words: $h.output(8) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst $default = $rt.data((pattern(\"sha256:9a255b842cb99c216837968225989c093f6b3a080c933ab66296a06cc25b1b8a\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ((!$h.v($h.slot(1)))));\n}\n$rt.value(2, ($h) => ($h.output(0)));\n{\n$rt.element(1, ($h) => (($h.slot(4) > (0))));\n}\n$rt.value(5, ($h) => ($h.output(3)));\n{\n$rt.element(2, ($h) => (($h.v($h.slot(6)) + (\"!\"))));\n}\n{\n$rt.element(3, ($h) => (($h.v($h.slot(7)) + (\"!\"))));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(6), words: $h.output(8) })));\n});"
             }
           ],
           "outputsBelow": [],

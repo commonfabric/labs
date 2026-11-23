@@ -4498,7 +4498,10 @@ export class Runner {
     // decides nothing written; the pinned limit is in
     // `sub-pattern-update-labels.test.ts`.
     const previousResult = writableResultCell.getRaw({
-      meta: { ...ignoreReadForScheduling, ...writeDestinationRead },
+      meta: Object.freeze({
+        ...ignoreReadForScheduling,
+        ...writeDestinationRead,
+      }),
     });
     const storedName = options.preserveName && !isCellLink(result) &&
         isObjectOrArray(previousResult) && !isCellLink(previousResult)
@@ -4707,11 +4710,15 @@ export class Runner {
     for (const slot of Object.keys(top as object)) {
       if (skip.has(slot)) continue;
       const position = { ...document, path: [...document.path, slot] };
-      const reference = readStoredReference(tx, position, {
-        ...linkResolutionProbe,
-        ...machineryRead,
-        ...ignoreReadForScheduling,
-      });
+      const reference = readStoredReference(
+        tx,
+        position,
+        Object.freeze({
+          ...linkResolutionProbe,
+          ...machineryRead,
+          ...ignoreReadForScheduling,
+        }),
+      );
       stored[slot] = reference !== undefined && isCellLink(reference)
         ? reference
         : tx.readValueOrThrow(position, { meta: ignoreReadForScheduling });
@@ -8270,6 +8277,19 @@ export class Runner {
         return this.#doStart(nextCell, seenDocs, attempt);
       }
 
+      // A result document that names no pattern can be that of a piece
+      // from a compiled pattern, which the loader the runtime was given
+      // starts from what the storage holds.
+      const loadCompiled = this.#runtime.experimental.compiledPatterns === true
+        ? this.#runtime.compiledPieceLoader
+        : undefined;
+      if (loadCompiled !== undefined) {
+        const { space, id, scope } = rootCell.getAsNormalizedFullLink();
+        return loadCompiled({ space, id, scope }).then((served) => {
+          if (!served) throw new Error(`Cannot start: no pattern identity`);
+          return true;
+        });
+      }
       return Promise.reject(
         new Error(`Cannot start: no pattern identity`),
       );
@@ -10239,6 +10259,19 @@ export class Runner {
     resultCell: Cell<R>,
     options: RunnerRunOptions = {},
   ): Cell<R> {
+    // Under the experimental option `compiledPatterns`, a runtime that was
+    // given a pattern compiler starts a compiled piece for a pattern whose
+    // program that compiler accepted.
+    if (
+      patternOrModule !== undefined &&
+      this.#runtime.experimental.compiledPatterns === true &&
+      this.#runtime.compiledPatternRunner?.run(
+        providedTx,
+        patternOrModule,
+        argument,
+        resultCell as Cell<unknown>,
+      )
+    ) return resultCell;
     // A run given no transaction starts in one the runner makes, which holds
     // none of the reads that chose the pattern, so it is not an asking one.
     if (providedTx !== undefined) {
@@ -12882,6 +12915,12 @@ export class Runner {
    * @param resultCell - The result doc or cell to stop.
    */
   stop<T>(resultCell: Cell<T>): void {
+    // A piece from a compiled pattern has no graph of this runner.
+    if (
+      this.#runtime.compiledPatternRunner?.stop(resultCell as Cell<unknown>)
+    ) {
+      return;
+    }
     // An unresolved link start does not know its target yet, so it cannot be
     // indexed under the target's key. An explicit stop records the target on
     // every active attempt that has not discovered it; an attempt that later

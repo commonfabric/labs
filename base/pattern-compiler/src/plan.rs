@@ -72,7 +72,7 @@ pub struct PatternPlan {
 }
 
 /// Moves the schema documents of a plan beside it: `Slot.schema`,
-/// `Binding.eventSchema`,
+/// `ReadInput.schema`, `ComputedInput.schema`, `Binding.eventSchema`,
 /// `Plan.argumentSchema` and `Plan.resultSchema` hold the identifier of
 /// the document, and an output has no schema member (PL §1.1).
 fn name_schemas(
@@ -103,6 +103,15 @@ fn name_schemas(
     for slot in plan["slots"].as_array_mut().into_iter().flatten() {
         if let Some(document) = slot.get("schema").cloned() {
             slot["schema"] = name(&document);
+        }
+    }
+    for body in plan["bodies"].as_array_mut().into_iter().flatten() {
+        for input in ["reads", "computed"] {
+            for read in body[input].as_array_mut().into_iter().flatten() {
+                if let Some(document) = read.get("schema").cloned() {
+                    read["schema"] = name(&document);
+                }
+            }
         }
     }
     for output in plan["outputs"].as_array_mut().into_iter().flatten() {
@@ -481,6 +490,11 @@ struct Emitter<'r, 'm, 'a> {
     /// The declared type of each formal input of the body whose record
     /// is being written.
     formal_types: HashMap<String, TypeId>,
+    /// The type of each formal input the body being recorded declares
+    /// with a destructuring pattern, which `formal_types` does not hold:
+    /// the type a handle of such an input is declared with
+    /// (`ReadInput.schema`).
+    pattern_formal_types: HashMap<String, TypeId>,
     /// For each collection, the membership of what it iterates.
     iterated: Vec<Option<Value>>,
     /// Where each entry of `collections` is written.
@@ -1243,6 +1257,19 @@ impl<'a> Emitter<'_, '_, 'a> {
             | Shape::Opaque(_)
             | Shape::Code(_) => "shape",
             _ => "value",
+        }
+    }
+
+    /// The class the key of a collection index is observed in (PL §3.17):
+    /// `value` for a scalar and `identity` for a cell, and nothing where
+    /// the type of the key is not resolved, since the two classes file a
+    /// member under different keys.
+    fn key_class(&self, expression: &Expression<'a>) -> Option<&'static str> {
+        let ty = self.resolver.typed_at(self.module, expression, 0).ok()?;
+        let ty = self.resolver.present(ty);
+        match self.resolver.shape(ty) {
+            Shape::Unresolved(_) => None,
+            _ => Some(self.branch_class(expression)),
         }
     }
 
@@ -3246,6 +3273,22 @@ impl<'a> Emitter<'_, '_, 'a> {
                         return place;
                     }
                 }
+                // `Object.entries(record).map(f)` over a record that is an
+                // input: a collection whose elements are the entries of the
+                // record, each keyed by its name. The record is observed
+                // for which names it has, and an entry is read by the body
+                // that reads it.
+                if name == "map" {
+                    let function = arguments.first().and_then(|first| FunctionLike::of(first));
+                    if let (Some(record), Some(function)) =
+                        (self.entries_of_record(&member.object, hint), function)
+                    {
+                        let collection = self.collections.len();
+                        let place = self.collection(call, &record, name, function, hint, at);
+                        self.collections[collection]["source"]["entries"] = json!(true);
+                        return place;
+                    }
+                }
                 let receiver = self.eval(&member.object, hint);
                 self.method(call, &receiver, name, &arguments, hint)
             }
@@ -3392,6 +3435,70 @@ impl<'a> Emitter<'_, '_, 'a> {
                         Place::Unknown
                     }
                 }
+            }
+            // A collection index (PL §3.17): the key function is the body
+            // of a collection of its own, once per element key, and the
+            // index has the template of a bucket's membership.
+            // A sort by a key (note 614 of `SPEC-NOTES.md`) is a collection
+            // of the same kind: the key function is its body, and the
+            // result holds the elements of the source in the order of
+            // their keys.
+            "groupBy" | "keyBy" | "sortBy" => {
+                match arguments.first().and_then(|first| FunctionLike::of(first)) {
+                    Some(function) => self.collection(call, receiver, name, function, hint, at),
+                    None => {
+                        self.unsupported("an element construct with no callback in place", at);
+                        Place::Unknown
+                    }
+                }
+            }
+            // `index.lookup(k)`: the bucket of `k`, whose label is the
+            // template of `k` joined with the membership of a bucket,
+            // which is the template of the index (PL §3.17).
+            // `index.lookup(k)` on an index that the instance is handed: a
+            // read of the bucket the stored index holds under the key, a
+            // chosen child of its `buckets` (PL §3.18). Its label is what
+            // the store holds there, which is the index's one entry.
+            "lookup" if arguments.len() == 1 && matches!(receiver, Place::Slot(..)) => {
+                // The buckets of a stored index are members of a record,
+                // which a `pick` chooses by a value. A key that is a cell
+                // names its bucket by the address of the cell, which no
+                // value at the key's position holds.
+                if self.key_class(arguments[0]) != Some("value") {
+                    self.unsupported(
+                        "a `lookup` by a cell in an index the instance is handed",
+                        at,
+                    );
+                    return Place::Unknown;
+                }
+                let key = self.eval(arguments[0], hint);
+                let buckets = Self::extend(receiver, "buckets");
+                self.reported_pick(call.span, |emitter| emitter.pick(&buckets, &key, hint, at))
+            }
+            "lookup" if arguments.len() == 1 && self.index_of_place(receiver).is_some() => {
+                let receiver = receiver.clone();
+                // A key that is a scalar is observed as a value, and a key
+                // that is a cell as the reference it is (PL §3.17): the
+                // bucket is that of the position the reference names.
+                let by_identity = match self.key_class(arguments[0]) {
+                    Some(class) => class == "identity",
+                    None => {
+                        self.unsupported("the key of an index whose type is not resolved", at);
+                        false
+                    }
+                };
+                if by_identity {
+                    self.facts.cell_key((call.span.start, call.span.end));
+                }
+                let key = self.eval(arguments[0], hint);
+                self.derived(hint, at, |emitter, _| {
+                    if by_identity {
+                        emitter.pass(&key);
+                    } else {
+                        emitter.consume(&key);
+                    }
+                    emitter.pass(&receiver);
+                })
             }
             "reduce" => match arguments.first().and_then(|first| FunctionLike::of(first)) {
                 Some(function) => {
@@ -3680,6 +3787,54 @@ impl<'a> Emitter<'_, '_, 'a> {
         (source, iterated)
     }
 
+    /// The record of `Object.entries(record)`, where the expression is
+    /// that call and the record is a path of an input, written as a name
+    /// or as a member of one.
+    fn entries_of_record(&mut self, expression: &Expression<'a>, hint: &str) -> Option<Place> {
+        let Expression::CallExpression(call) = unwrap(expression) else {
+            return None;
+        };
+        let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
+            return None;
+        };
+        let Expression::Identifier(object) = unwrap(&member.object) else {
+            return None;
+        };
+        let global = self
+            .resolver
+            .parsed(self.module)
+            .is_some_and(|parsed| symbol_of(parsed.semantic.scoping(), object).is_none());
+        if !global || object.name != "Object" || member.property.name != "entries" {
+            return None;
+        }
+        let [argument] = call.arguments.as_slice() else {
+            return None;
+        };
+        let argument = argument.as_expression()?;
+        if !matches!(
+            unwrap(argument),
+            Expression::Identifier(_) | Expression::StaticMemberExpression(_)
+        ) {
+            return None;
+        }
+        let place = self.eval(argument, hint);
+        matches!(place, Place::Slot(..)).then_some(place)
+    }
+
+    /// The collection of the index a place holds, where the place is
+    /// the result of `groupBy` or `keyBy`.
+    fn index_of_place(&self, place: &Place) -> Option<usize> {
+        let Place::Value(value, path) = place else {
+            return None;
+        };
+        let collection = self.values[*value].collection.filter(|_| path.is_empty())?;
+        matches!(
+            self.collections[collection]["construct"].as_str(),
+            Some("groupBy" | "keyBy")
+        )
+        .then_some(collection)
+    }
+
     /// An element construct: a collection, and the cone of its body.
     fn collection(
         &mut self,
@@ -3778,8 +3933,25 @@ impl<'a> Emitter<'_, '_, 'a> {
                 })
             })
         });
+        let index = matches!(via, "groupBy" | "keyBy");
         let tests = scan || via == "filter";
         let class = match (tests, returned) {
+            // The key of an index is observed as a value where it is a
+            // scalar, and as the reference it is where it is a cell (PL
+            // §3.17).
+            (_, Some(returned)) if index => match self.key_class(returned) {
+                Some(class) => class,
+                None => {
+                    self.unsupported(
+                        "the key of an index whose type is not resolved",
+                        function.span().start,
+                    );
+                    "value"
+                }
+            },
+            _ if index => "value",
+            // The key of a sort is compared, so it is observed as a value.
+            _ if via == "sortBy" => "value",
             (true, Some(returned)) => self.test_class(returned),
             (true, None) => "value",
             (false, _) => "identity",
@@ -3813,7 +3985,15 @@ impl<'a> Emitter<'_, '_, 'a> {
             // `pred`, joined with the source's membership", and "an
             // element of the result is the source element, passed
             // through".
-            "filter" => (
+            // PL §3.17: the membership of a bucket is "the source's
+            // membership, order included, joined with a `fold` of the key
+            // function's template over every element", and an element of a
+            // bucket is the source element, passed through.
+            // A sort by a key: the order is the source's membership
+            // joined with a `fold` of the key's template over every
+            // element, and an element is the source element, passed
+            // through (note 614 of `SPEC-NOTES.md`).
+            "filter" | "groupBy" | "keyBy" | "sortBy" => (
                 joined(fold(body, None), &iterated),
                 Some(source_element(self)),
                 None,
@@ -4928,7 +5108,9 @@ impl<'a> Emitter<'_, '_, 'a> {
         let mut reads: Vec<(usize, Vec<String>)> = Vec::new();
         // The entries of `reads` at a position the body declares as a
         // handle (provisional decision P40).
-        let mut handle_reads: BTreeSet<(usize, Vec<String>)> = BTreeSet::new();
+        // `ReadInput.schema`: the schema of the type the body declares for
+        // each such handle, where the emitter knows the type.
+        let mut handle_reads: BTreeMap<(usize, Vec<String>), Option<Value>> = BTreeMap::new();
         let mut computed_inputs: Vec<Value> = Vec::new();
         let mut names: Names = HashMap::new();
         // The `value` entries, for an operand that names a space.
@@ -4993,7 +5175,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                                     *input == entry.input && *path == entry.path
                                 });
                         if handle {
-                            handle_reads.insert((slot, at_path.clone()));
+                            let declared = self
+                                .formal_types
+                                .get(&entry.input)
+                                .or_else(|| self.pattern_formal_types.get(&entry.input))
+                                .and_then(|ty| self.entry_type(*ty, &entry.path))
+                                .map(|ty| self.resolver.schema_of(ty));
+                            handle_reads
+                                .entry((slot, at_path.clone()))
+                                .or_insert(declared);
                         }
                         if !reads.contains(&(slot, at_path.clone())) {
                             reads.push((slot, at_path));
@@ -5074,6 +5264,25 @@ impl<'a> Emitter<'_, '_, 'a> {
                     };
                     if let Some(template) = template {
                         input.insert("template".to_string(), template);
+                    }
+                    // `ComputedInput.schema`: the schema of the type the
+                    // body declares for a handle at the entry, as
+                    // `ReadInput.schema` is.
+                    if matches!(entry.class, Class::Identity | Class::Resolved)
+                        && record
+                            .detail
+                            .handles_at
+                            .iter()
+                            .any(|(input, path)| *input == entry.input && *path == entry.path)
+                    {
+                        if let Some(ty) = self
+                            .formal_types
+                            .get(&entry.input)
+                            .or_else(|| self.pattern_formal_types.get(&entry.input))
+                            .and_then(|ty| self.entry_type(*ty, &entry.path))
+                        {
+                            input.insert("schema".to_string(), self.resolver.schema_of(ty));
+                        }
                     }
                     placed.push((entry.clone(), Err(computed_inputs.len())));
                     computed_inputs.push(Value::Object(input));
@@ -5401,8 +5610,14 @@ impl<'a> Emitter<'_, '_, 'a> {
                     // `ReadInput.handle`: the body declares a handle at
                     // `at`, which the slot's schema, the type of the
                     // place, does not say (provisional decision P40).
-                    if handle_reads.contains(&(*slot, at.clone())) {
+                    // `ReadInput.schema`: the schema of the type the body
+                    // declares for the handle, under which a read through
+                    // the handle is made.
+                    if let Some(declared) = handle_reads.get(&(*slot, at.clone())) {
                         entry["handle"] = json!(true);
+                        if let Some(declared) = declared {
+                            entry["schema"] = declared.clone();
+                        }
                     }
                     entry
                 })
@@ -5547,6 +5762,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         // The type each formal input is declared with, where it is one
         // name.
         let mut types: HashMap<String, TypeId> = HashMap::new();
+        let mut pattern_types: HashMap<String, TypeId> = HashMap::new();
         for (formal, parameter) in formals.iter().zip(&function.params().items) {
             if let BindingPattern::BindingIdentifier(identifier) = &parameter.pattern {
                 if let Some(Ok(ty)) = identifier
@@ -5556,11 +5772,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                 {
                     types.insert(formal.clone(), ty);
                 }
+            } else if let Ok(ty) = self.resolver.formal_parameter_type(home, parameter) {
+                pattern_types.insert(formal.clone(), ty);
             }
         }
         let saved_types = std::mem::replace(&mut self.formal_types, types);
+        let saved_pattern_types = std::mem::replace(&mut self.pattern_formal_types, pattern_types);
         let body = self.body_record(plan_kind, &name, &record, &inputs, prefix, start, true);
         self.formal_types = saved_types;
+        self.pattern_formal_types = saved_pattern_types;
         if made {
             self.cone = None;
         }
@@ -5887,7 +6107,12 @@ impl<'a> Emitter<'_, '_, 'a> {
                 if let (Some(collection), false) = (computed.collection, computed.scan) {
                     // The result of a `filter` is an array the instance
                     // made, of the elements of its source.
-                    if below && self.collections[collection]["construct"] == "filter" {
+                    if below
+                        && matches!(
+                            self.collections[collection]["construct"].as_str(),
+                            Some("filter" | "sortBy")
+                        )
+                    {
                         return match self.source_origin(collection) {
                             Origin::Stored | Origin::Reference => Origin::Reference,
                             other => other,
@@ -5922,7 +6147,10 @@ impl<'a> Emitter<'_, '_, 'a> {
             return self.origin_of(&Place::Value(value as usize, Vec::new()), true);
         }
         if let Some(inner) = source["collection"].as_u64() {
-            if self.collections[inner as usize]["construct"] == "filter" {
+            if matches!(
+                self.collections[inner as usize]["construct"].as_str(),
+                Some("filter" | "sortBy")
+            ) {
                 return match self.source_origin(inner as usize) {
                     Origin::Stored | Origin::Reference => Origin::Reference,
                     other => other,
@@ -7109,7 +7337,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         for (index, collection) in collections.iter().enumerate() {
             if !matches!(
                 collection["construct"].as_str(),
-                Some("map" | "filter" | "flatMap")
+                Some("map" | "filter" | "flatMap" | "sortBy")
             ) {
                 continue;
             }
@@ -8404,6 +8632,7 @@ pub fn emit_module<'a>(
             opaque: false,
             body_dynamic: Vec::new(),
             formal_types: HashMap::new(),
+            pattern_formal_types: HashMap::new(),
             iterated: Vec::new(),
             collection_starts: Vec::new(),
             hints: Vec::new(),

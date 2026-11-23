@@ -266,6 +266,21 @@ An entry of `Body.reads` of the plan holds the slot and the path in the body's
 argument at which the slot's value is placed (PL §1.1, `ReadInput`), and the
 executor builds the slot part of the argument from those entries.
 
+Where the body declares a handle at the entry's place, the entry holds
+`handle: true` and, where the crate has the type, `schema`: the schema of the
+type the body declares for the handle, which is narrower than the slot's schema,
+the type of the place, wherever the body names fewer fields. An `identity` entry
+of `Body.computed` holds `schema` the same way. A read through the handle is
+made under that schema: a member of a record that the schema does not declare is
+left out, and the positions of the declared members are the ones read where the
+record holds another member, so a change of a field the body's type does not
+name evaluates nothing (`Store.locate`, `members`). The read of an `enumeration`
+slot gives the members of its container as references, and reads none, where no
+slot of the cone reads a child as a value or a shape, or where every body handed
+the container is handed a handle at each child (`Host.slot`):
+`items.get().length` and a `lift` over an array of references then depend on the
+members the array has and not on what a member holds.
+
 A path of the argument of a pattern compiled in that the call leaves out is
 bound to the default the callee's argument type declares for it, as a constant:
 the setup function holds it, and the state of a binding that captures it has it
@@ -996,17 +1011,19 @@ the hook `read` with the body and the entry of its `Body.handles`
 the positions the body read through that handle before the write. The executor
 keeps none of this when it is given no hooks.
 
-`compare/runtime-transactions.ts` implements the hooks with the runtime's own
-transactions (`Runtime.edit()`): each read is read through the transaction, each
-change is written into it as it is made, and the transaction commits with the
-runtime's commit and its CFC preparation, or is aborted where the executor did
-not commit. A document of the executor is the entity `of:<identifier>`, and a
-link is written as the runtime's link. An instance the executor makes of another
-artifact, one a function body instantiates or one of a pattern compiled alone,
-gives write records of that artifact's plan: the executor names the instance and
-its artifact to the hook `instantiated`, and the adapter registers the artifact
-and records the instance's write records under it, with a table of inputs per
-compiled pattern. `RuntimeTransactions.stored()` reads the documents back, and
+`runtime/runner/src/compiled/transactions.ts` (which
+`compare/runtime-transactions.ts` re-exports for the harnesses here) implements
+the hooks with the runtime's own transactions (`Runtime.edit()`): each read is
+read through the transaction, each change is written into it as it is made, and
+the transaction commits with the runtime's commit and its CFC preparation, or is
+aborted where the executor did not commit. A document of the executor is the
+entity `of:<identifier>`, and a link is written as the runtime's link. An
+instance the executor makes of another artifact, one a function body
+instantiates or one of a pattern compiled alone, gives write records of that
+artifact's plan: the executor names the instance and its artifact to the hook
+`instantiated`, and the adapter registers the artifact and records the
+instance's write records under it, with a table of inputs per compiled pattern.
+`RuntimeTransactions.stored()` reads the documents back, and
 `compare/test/runtime-transactions.test.ts` checks that they are the executor's,
 that one runtime transaction commits for each of the executor's, and that a
 handler that reads a labeled input commits labels on what it writes.
@@ -1025,6 +1042,233 @@ deno run -A --no-check base/pattern-compiler/compare/integrated.ts run values.js
 deno run -A --no-check base/pattern-compiler/compare/integrated.ts report integrated.jsonl run.jsonl
 ```
 
+## A compiled piece in the runner
+
+Milestone 3 of the same plan runs a compiled pattern as a piece of the runtime,
+behind the experimental option `compiledPatterns`.
+`startCompiledPiece(runtime, tx, artifact, argument, resultCell)` of
+`runtime/runner/src/compiled/piece.ts` is the call beside `Runtime.run`: the
+entity of `resultCell` is the result document, every other document of the
+executor is an entity of the same space, and the caller commits `tx`. The runner
+imports `exec/` by relative path, and `exec/` imports nothing of the runtime.
+
+- **The load.** The creation and the first derivation are written in bounded
+  transactions (`RuntimeTransactions.within` with `loadRows`). The piece commits
+  the documents the instance makes for itself first, in a transaction that makes
+  the reads the caller had made in `tx`. It then commits each row document whose
+  write records name stored positions alone and include one for the row whole,
+  in transactions of at most `CompiledPieceOptions.loadRows` rows, 250 unless
+  given. Everything else, the links to the rows among it, is written into `tx`.
+  Until the caller commits `tx`, the storage holds row documents that nothing
+  links to, each under the label it has when the load is done. A load whose `tx`
+  the caller wrote into before the start is written into `tx` whole, since a
+  position staged there is readable there alone, and so is one with `loadRows`
+  set to `Infinity`. The documents a `lift` writes for its rows stay in `tx`.
+
+- **Events.** A stream of the executor is stored as a link to an entity that
+  holds the runtime's stream marker, and the piece registers an event handler of
+  the scheduler for it. `Cell.send` on the member of the result queues an event,
+  and the handler runs the compiled handler in the scheduler's transaction
+  (`Instance.handleEvent`), which the scheduler commits. An event a handler
+  sends to a stream of the piece is queued with the scheduler as well
+  (`Instance.takeQueued`). No event is appended to a stream document.
+- **The derivation.** One action of the scheduler, an effect, runs
+  `Instance.settle()` in the scheduler's transaction. The piece invalidates it
+  after an event, after a change by another writer, when a commit of another
+  writer changed a label the executor read, and after a refused commit.
+  `Runtime.idle()` therefore resolves when the piece is up to date. The action
+  opts out of the scheduler's delay for actions that are slow on average. Where
+  a handler made instances, the action first derives those alone
+  (`Instance.settleMade`), and runs again for the rest in a transaction of its
+  own: a `lift` over a list then finds the labels of a new member stored and
+  gives no record again for the rows of the members before.
+- **Labels that change.** The label of a write record is formed again when a
+  label that its inputs read changed and the record was not given again, whether
+  or not a value changed with the label (`Instance.labelsChanged`). The store
+  says for each change whether a read at a position consumes the label it
+  consumed before (`LabelChange.unchanged`), so an entry added under the label
+  of its ancestor forms no label again. The row documents a `lift` writes are
+  such readers too, and a row that holds what it held under the labels the
+  `lift` had read is given no record when the `lift` runs again.
+- **The store.** The executor keeps its documents in memory. A document it did
+  not make, such as an input cell the argument links to, is read from the
+  replica when a reference first leads to it (`Store` option `load`), and a
+  commit of another writer replaces what it changed: the piece subscribes to the
+  storage notifications and applies each change, a change of the members of an
+  array as the one splice that makes it, which marks the readers.
+- **Rows as documents.** For a `map` in no element body over a slot whose schema
+  declares the array or its members as cells, whose rows are records or view
+  nodes (`rowDocumentCollections` of `exec/row-documents.ts`), each row is an
+  entity of its own, named by the array and the key of the row, and the array
+  holds links, which the runtime follows. The array can stand below a member of
+  an array, as the rows among the children of a view node do.
+  `CompiledPieceOptions.rows` set to `in-place` keeps the rows in the array. The
+  rows of every other collection stay in place. A member added at the end of
+  such an array writes the number of members and one link; any other change of
+  the members writes the array of links whole. A write by another writer into
+  the document of a row is applied to the row the executor holds; a write of the
+  array of links is reported (`CompiledPiece.refusals`) and not applied.
+- **A refused commit.** The executor has gone on when a commit of the piece is
+  refused. The piece then takes, for each document the transaction wrote, what
+  the storage holds in place of what the executor holds (`Instance.restore`),
+  and derives again. The result document of an instance is taken with the rows
+  of its collections left out, and the next derivation stores every row again.
+
+- **Value code in a compartment.** The executor makes the functions of a
+  module's text with the evaluator it is given (`ModuleEvaluator`, the option
+  `evaluate` of `Instance`), by default `new Function` (`evaluateWithFunction`).
+  A compiled piece gives it `compartmentEvaluator()` of
+  `runtime/runner/src/compiled/value-code.ts`: one SES compartment with a frozen
+  global object and the globals a module of today's bundles has, in a realm that
+  is locked down. A handler runs under a frame of a handler, so the gated `Date`
+  and `Math` give it the time of its event, to the second, and a random draw;
+  the derivation and the code of module scope have neither.
+  `CompiledPieceOptions.evaluate` takes another evaluator, which the harnesses
+  use to measure what the compartment costs. A handle keeps the instance in
+  private fields, and the classes of what a function body is given are frozen.
+  The names `$rt` and `$h` are kept from a pattern by the crate's check alone.
+- **Compile on load.** `PatternCompiler` of
+  `runtime/runner/src/compiled/compile.deno.ts` writes the files of a program to
+  a directory of their own, runs the crate's release binary there with
+  `emit --accepted`, and returns the artifacts. With a cache directory it keeps
+  what the binary printed under the hash of the binary and the hash of the
+  source. An absent binary is `PatternCompilerMissingError`, and a program the
+  crate refuses is `PatternCompileError` with the diagnostics. Nothing in the
+  runtime calls it: a harness compiles and hands the artifact to
+  `startCompiledPiece`.
+
+`compare/runner-path.ts` starts today's piece and the compiled piece with the
+same calls of the runtime over the lists of `fixtures/runner-lists.tsx`, makes
+each change through a cell, and reports what a change costs each from the write
+until the scheduler is idle with no commit pending:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/runner-path.ts 100 1000
+deno run -A --no-check base/pattern-compiler/compare/runner-path.ts --arms=compiled --case=declared --rows=in-place 100 1000
+deno run -A --no-check base/pattern-compiler/compare/runner-path.ts --arms=alone --case=declared --no-pull 100 1000
+deno run -A --no-check base/pattern-compiler/compare/runner-path.ts --arms=compiled --case=declared --no-pull --inputs-first 100 1000 10000
+```
+
+The arm `alone` starts no piece and makes the same changes: its time is that of
+the harness's own writes, which a change of the members of a long array is most
+of. With `--inputs-first` the inputs are committed before the piece is started,
+which is what lets the piece load in bounded transactions.
+
+`compare/runner-corpus.ts` runs each module of the corpus as a compiled piece
+with the generated inputs and events, and beside it on the executor with its
+documents in memory, and reports how many pieces start, handle every event, have
+no commit refused and hold the values the executor in memory holds:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run runner.jsonl
+deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts report runner.jsonl
+```
+
+`compare/sandbox-cost.ts` measures the evaluators, one call of a value function,
+the patterns of `fixtures/sandbox-cost.tsx` on the executor in memory, and the
+crate's binary beside today's compile; `runner-path.ts` and `runner-corpus.ts`
+take `--evaluate=function` for the same comparison on the runner path:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/sandbox-cost.ts calls
+deno run -A --no-check base/pattern-compiler/compare/sandbox-cost.ts executor --arm=function
+deno run -A --no-check base/pattern-compiler/compare/sandbox-cost.ts compile
+```
+
+The tests are in `runtime/runner/test/compiled/`: `piece.test.ts`,
+`row-documents.test.ts`, which holds those of the load in bounded transactions,
+`layout-labels.test.ts`, which compares what a read consumes with rows as
+documents and in place, `refused-commit.test.ts`, and `created-members.test.ts`
+for an instance that a handler makes, `value-code.test.ts` for the compartment,
+and `compile.test.ts` for `PatternCompiler`, with a shell script in the place of
+the binary. They load the artifacts of `compare/fixtures/`, so they need no
+build of the crate. `compare/test/compile-on-load.test.ts` and
+`compare/test/serving-compile.test.ts` run the release binary. Notes 579 on of
+`SPEC-NOTES.md` have what is stubbed and the figures.
+
+## A compiled piece under server execution
+
+Milestone 6 of the same plan runs a compiled piece in the serving runtime of its
+space, and starts one from what the storage holds.
+
+- **The basis.** A piece keeps a document that records the documents its
+  derivation read and does not derive, its sources, with the sequence number
+  each had when the stored result was derived from it
+  (`runtime/runner/src/compiled/basis.ts`). A source the piece itself wrote,
+  whose commit the replica has not confirmed, is listed apart: the transaction
+  that writes the basis reads it, and it counts as unchanged while its head is
+  not behind the head of the basis. The basis also lists the documents the piece
+  made that are no rows.
+- **Resume.** `resumeCompiledPieceFromBasis(runtime, artifact, resultCell)` of
+  `runtime/runner/src/compiled/resume.ts` brings the basis and the sources it
+  names, without what they link to, and compares the numbers. Where they match
+  it evaluates nothing, reads no row, starts no executor and commits nothing,
+  and the returned `ResumedPiece` waits until it is woken: by its caller before
+  an event, or by a commit that changes a source. Where they do not match, and
+  at a wake, `resumeCompiledPiece` brings the documents of the piece and of its
+  inputs, evaluates the whole derivation again against the stored argument and
+  the stored state cells, and writes the paths whose value differs, in one
+  transaction. The executor keeps which cone instances are current in memory
+  alone, so that evaluation is made whole.
+- **The documents of a piece.** Each document the executor makes carries the
+  `result` link to the result document. A resumed piece tells by it a document
+  the executor named from one that exists outside the piece, and the serving
+  loop finds the piece of a document by it. The counts that the names of handler
+  runs and of the documents handlers make are formed from are kept in a document
+  of the piece, and a resume goes on from them.
+- **Setup by a client.**
+  `setUpCompiledPiece(runtime, tx, program, argument, resultCell)` of
+  `compiled/setup.ts` writes the source of the pattern (the files of the program
+  and the name of the main file), the document that names it for the result
+  document, and the argument document. A client with server execution on then
+  appends events with `Cell.send` and runs nothing of the piece.
+- **The serving runtime.** `serveCompiledPieces(runtime)` of
+  `compiled/serving.ts` installs `Runtime.compiledPieceLoader`, which
+  `ensurePieceRunningVerdict` asks for a result document that names no pattern.
+  The loader compiles the source the storage names for the piece with the
+  compiler it was given (`ServeCompiledPiecesOptions.compile`, for which
+  `listenCompiledServingMemoryServer()` takes one `PatternCompiler`), keeps what
+  the compiler gave by the document of the source, and starts the piece from the
+  storage: a load where the result document is empty, and otherwise a resume
+  from the basis, which starts no executor for a piece that is only read. The
+  value code is evaluated in a compartment. Where the document names no source,
+  or the compiler refuses it, nothing is evaluated and the reason is written
+  into the document `compiledFailureOf(result)`, which the client reads. The
+  handlers and the derivation are the scheduler's, so the loop's event drain
+  reaches the handlers and its waves hold what they write. A wave that is
+  rejected takes its writes back from the replica, and the piece then restores
+  the documents the withdrawn transactions wrote from the storage.
+  `listenCompiledServingMemoryServer()` of
+  `compiled/serving-memory-server.deno.ts` gives a test a memory server on a
+  websocket with such a serving loop.
+
+Nothing but the helper for tests installs the loader. Note 812 of
+`SPEC-NOTES.md` lists what a toolshed needs before it may.
+
+```sh
+COMPILED_PIECE_STORAGE=socket deno test --no-check -A runtime/runner/test/compiled/
+deno run -A --no-check base/pattern-compiler/compare/runner-path.ts --server=socket --no-pull --inputs-first --case=declared 100 1000
+deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run resume.jsonl --resume
+deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run serving.jsonl --serving
+deno run -A --no-check base/pattern-compiler/compare/serving-path.ts --events=7 100 1000
+deno run -A --no-check base/pattern-compiler/compare/serving-path.ts --arms=compiled --events=7 10000
+deno run -A --no-check base/pattern-compiler/compare/serving-path.ts --arms=compiled --events=7 --profile=appends.cpuprofile 1000
+```
+
+`COMPILED_PIECE_STORAGE=socket` runs the tests of a compiled piece against a
+memory server reached over a websocket of the process, and `--server=socket`
+does the same for `runner-path.ts`. `runner-corpus.ts --resume` hands each
+module to a second runtime after half of its events, which resumes it from its
+basis and then wakes it, and `--serving` runs each under the serving loop with
+one client. `serving-path.ts` times one event of `fixtures/serving-list.tsx`
+from the send on a client until that client and a second one read the result,
+for a compiled piece and for today's piece of the same pattern, and then what
+another serving loop reads and evaluates when it takes the space over. The tests
+are `resume.test.ts`, `basis.test.ts` and `compiled-serving.test.ts` in
+`runtime/runner/test/compiled/`, and `compare/test/resume-corpus.test.ts`. Notes
+800 on of `SPEC-NOTES.md` have what is stubbed, where the serving loop differs
+from the specification, and the figures.
+
 ## Topics
 
 Topics (`patterns/apps/topics/`) is the target both tracks of the integration
@@ -1038,7 +1282,7 @@ deno run -A --no-check base/pattern-compiler/compare/corpus.ts run labels.jsonl 
 ```
 
 `compare/topics/scale.ts` runs the board at a size of 100, 1,000 or 2,000
-topics, on one of four arms, in a process of its own: the load, three edits of
+topics, on one of its arms, in a process of its own: the load, three edits of
 one topic by a writer outside the board, and three creates through `addTopic`,
 each timed until the board is up to date and the read of its result apart, with
 the facts of the result the arms are compared on. The arms are `executor`, the
@@ -1046,7 +1290,9 @@ executor with its documents in memory; `storage`, the executor with its
 documents in the runtime's storage, the experimental option `compiledPatterns`
 on, and each topic and each input of the board under a schema with a clause;
 `today`, today's runtime with no label stored; and `today-labeled`, today's
-runtime with the same clauses and `cfcFlowLabels` at `persist`. The arm
+runtime with the same clauses and `cfcFlowLabels` at `persist`. On the branch
+that holds the boards the crate emits, the arm `runner` runs the board as a
+compiled piece in the runner with the calls of the arm `today-labeled`. The arm
 `storage` reports per step the commits, the preparations and their time, the
 write records and their size, the label entries of the documents the step
 changed, the bounds, and the time in each hook of the storage apart from the
@@ -1086,6 +1332,31 @@ same snapshot in today's runtime as a runner would, reading the board's result
 (`pull`) or starting the stored board piece (`start`), and reports the memory it
 keeps; with `BOARD_LOAD_HOLD` set it waits for `SIGUSR2` at each measuring
 point, so that an inspector snapshot can be taken there.
+
+## FabriChat and Home
+
+`compare/fabrichat/` and `compare/home/` hold copies of the 26 modules of the
+programs of `patterns/system/fabrichat/room.tsx`,
+`patterns/system/fabrichat/manager.tsx` and `patterns/system/home/home.tsx`,
+changed where the language refuses a form or the crate does not translate one.
+Both programs pass `check`, and `emit` gives every pattern value code with
+nothing unsupported. Notes 720 to 731 of `SPEC-NOTES.md` list each change and
+what it stands in for.
+
+`compare/fabrichat/scale.ts` starts the room, the manager and Home on the
+executor in memory and as a compiled piece in the runner, sends messages into
+the room and reads them back. It hands the instance what the runtime answers and
+the executor does not: the outcome of each `wish` (the option `wishes`), and the
+built-ins that read the acting principal, the owner of a profile and the access
+list of a space (the option `builtins`), each answered for one fixed user. It
+removes the write policies from the schemas, which the preparation of Contextual
+Flow Control refuses in the form the crate emits. So its runs say what the
+executor evaluates and how long that takes, and nothing of labels or of access.
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/fabrichat/scale.ts runner room 10,100
+deno run -A --no-check base/pattern-compiler/compare/fabrichat/scale.ts executor home
+```
 
 ## The parser
 
@@ -1172,6 +1443,7 @@ cargo run --release -- plan --corpus ../../patterns
 cargo run --release -- plan --corpus ../../patterns --json
 cargo run --release -- emit path/to/module.tsx
 cargo run --release -- emit --corpus ../../patterns
+cargo run --release -- emit --unchecked path/to/module.tsx
 ```
 
 `check` takes the modules of one program: an import between two of them is
@@ -1190,3 +1462,36 @@ The crate follows `language-subset.md` as it stands at commit `8bc4a3001a`.
 `cargo test` fails when the document's catalog and the copy differ. To follow a
 change of the catalog, edit `catalog-ids.txt` and the table in `src/catalog.rs`
 together.
+
+## Collection indexes and the entries of a record
+
+The plan emitter takes `xs.groupBy((x) => key)` and `xs.keyBy((x) => key)` as a
+collection whose body is the key function, and `index.lookup(k)` as a read of
+one bucket (`plan-and-label-templates.md` §3.17). The executor keeps the index
+by element key and by bucket, brings it up to date from the changes of its
+source, and has what looked up a key depend on that one bucket
+(`exec/executor.ts`, `Index`, `Host.lookup`). A keyed join is a `map` whose body
+calls `lookup` (`compare/fixtures/keyed-join.tsx`); an index a pattern returns
+is stored in the shape of today's index data, and another instance that is
+handed it looks up a key by reading that bucket
+(`compare/fixtures/kept-index.tsx`). `Object.entries(record).map(f)` over a
+record that is an input is a collection keyed by the entry's name
+(`compare/fixtures/record-entries.tsx`), and its rows are documents of their own
+where the record declares its values as cells
+(`compare/fixtures/names-table.tsx`).
+
+The key of an index, and the key of a `lookup` in an index of the same instance,
+is observed as a value where its type is a scalar and as the reference it is
+where its type is a cell. A key whose type the crate does not resolve, and a
+`lookup` by a cell in an index the instance is handed, are listed as
+unsupported. The members of a bucket that a `lookup` gave are elements with the
+keys they have in the index's source, so a per-element construct over a bucket
+forms no key of its own. A kept index over rows that are documents holds a
+reference by key to each row (`Instance` option `rowDocuments`), and holds a
+copy of the row otherwise. `compare/fixtures/crossref.tsx` is the inverse of a
+relation of references built from these: a `flatMap` into pairs, a `groupBy` of
+the pairs by a cell, a `map` that looks up each member, and an index of the rows
+that the result keeps.
+
+`keys()`, `keyEntries()`, a sort by a key and one label entry for all buckets of
+an index are not built (`SPEC-NOTES.md`, notes 610 to 635).

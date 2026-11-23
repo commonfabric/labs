@@ -332,7 +332,7 @@ export const P = pattern<{ title: string }>(({ title }) => {
     // The constant of the argument is given to the setup function, and
     // the slot is not: the callee reads it by its place.
     assert!(
-        text.contains("$rt.setups[1]({ \"mark\": \"!\" }, $h);"),
+        text.contains("$rt.inline(1, { \"mark\": \"!\" }, $h);"),
         "{text}"
     );
     assert!(
@@ -846,7 +846,10 @@ export default pattern<{ note: string }>(({ note }) => {
     let written = source(&code);
     assert_ne!(row["patterns"][0], plan["patterns"][0]);
     assert!(
-        written.contains(&format!("const Row = pattern({});", row["patterns"][0])),
+        written.contains(&format!(
+            "const Row = $rt.data(pattern({}));",
+            row["patterns"][0]
+        )),
         "{written}"
     );
     assert!(
@@ -949,7 +952,10 @@ export const P = pattern<{ index: number }>(({ index }) => {
         ])
     );
     assert!(text.contains("JSON.parse($rt.dataFile(0))"), "{text}");
-    assert!(text.contains("const NOTE = $rt.dataFile(1);"), "{text}");
+    assert!(
+        text.contains("const NOTE = $rt.data($rt.dataFile(1));"),
+        "{text}"
+    );
 }
 
 /// The outputs that the code reads through `$h.output` and that no value
@@ -1223,4 +1229,85 @@ export const P = pattern<{ id: string }>(({ id }) => {
         text.contains("$rt.request(2, ($h) => ([({ url: $h.slot("),
         "{text}"
     );
+}
+
+#[test]
+fn module_data_is_frozen_and_each_function_of_module_scope_is_hardened() {
+    let (_, code) = emitted(
+        r#"import { lift, pattern } from "commonfabric";
+const GLAZES = ["plain", "sugar"] as const;
+const PRICES: ReadonlyMap<string, number> = new Map([["plain", 2]]);
+const { first } = { first: GLAZES[0] };
+function labelOf(glaze: string): string {
+  return `${glaze} donut`;
+}
+export const priceOf = (glaze: string): number => PRICES.get(glaze) ?? 0;
+const describe = lift(({ glaze }: { glaze: string }) => {
+  const local = [labelOf(glaze), priceOf(glaze), first];
+  return local.join();
+});
+export const P = pattern<{ glaze: string }>(({ glaze }) => {
+  return { shown: describe({ glaze }) };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    // A declared function is hardened before the first statement.
+    assert!(text.starts_with("$rt.fn(labelOf);\n"), "{text}");
+    assert!(
+        text.contains("const GLAZES = $rt.data([\"plain\", \"sugar\"]);"),
+        "{text}"
+    );
+    assert!(
+        text.contains("const PRICES = $rt.data(new Map([[\"plain\", 2]]));"),
+        "{text}"
+    );
+    assert!(
+        text.contains("const { first } = $rt.data({ first: GLAZES[0] });"),
+        "{text}"
+    );
+    assert!(
+        text.contains("const priceOf = $rt.fn((glaze) => PRICES.get(glaze) ?? 0);"),
+        "{text}"
+    );
+    // The result of a builder is a function of the executor.
+    assert!(text.contains("const describe = $rt.data(lift("), "{text}");
+    // A constant of a function body is no module data.
+    assert!(
+        text.contains("const local = [labelOf(glaze), priceOf(glaze), first];"),
+        "{text}"
+    );
+}
+
+/// A conditional written in the state of a handler binding is a value the
+/// instance computes, so it has a value function as one bound to a name
+/// has: the binding reads the output, and nothing else renders the
+/// expression.
+#[test]
+fn a_conditional_in_the_state_of_a_binding_has_a_value_function() {
+    let (plan, code) = emitted(
+        r#"import { type Cell, handler, pattern, type Stream } from "commonfabric";
+const bump = handler<unknown, { target?: Cell<{ n: number }> }>(
+  (_event, { target }) => {
+    if (target === undefined) return;
+    target.set({ n: target.get().n + 1 });
+  },
+);
+export const Bound = pattern<
+  { own: boolean; counter: Cell<{ n: number }> },
+  { go: Stream<unknown> }
+>(({ own, counter }) => ({
+  go: bump({ target: own ? undefined : counter }),
+}));
+"#,
+        "Bound",
+    );
+    assert_eq!(
+        plan["bindings"][0]["state"][0]["place"],
+        json!({ "output": 0 })
+    );
+    assert_eq!(code["values"][0]["output"], json!(0));
+    assert_eq!(code["values"][0]["function"], json!(true), "{code}");
+    assert!(source(&code).contains("$rt.value(0, "), "{}", source(&code));
 }

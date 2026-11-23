@@ -6,7 +6,9 @@
  *
  * Each `<name>.emit.json` is the output of the crate for `<name>.tsx`.
  * Regenerate one from `base/pattern-compiler` with
- * `cargo run --release -- emit compare/fixtures/<name>.tsx > compare/fixtures/<name>.emit.json`.
+ * `cargo run --release -- emit --unchecked compare/fixtures/<name>.tsx > compare/fixtures/<name>.emit.json`.
+ * Thirteen fixtures hold forms the check refuses, so the flag that prints
+ * unchecked value code is given for all.
  *
  * `deno run -A base/pattern-compiler/compare/values-fixtures.ts` prints
  * the table.
@@ -31,6 +33,27 @@ const WRITTEN: Record<string, Written[]> = {
       items: [{ title: "a", done: false }, { title: "b", done: true }],
     },
   })),
+  // A keyed join over plain values in place: two items share a tag, one
+  // has a tag of its own, and one tag no item has.
+  "keyed-join": [{
+    argument: {
+      items: [
+        { title: "a", tag: "x" },
+        { title: "b", tag: "y" },
+        { title: "c", tag: "x" },
+      ],
+      tags: [{ name: "x" }, { name: "y" }, { name: "z" }],
+    },
+  }],
+  // A `map` over the entries of a record of plain values in place.
+  "record-entries": [{
+    argument: {
+      byName: {
+        first: { title: "a", note: "n" },
+        second: { title: "b", note: "m" },
+      },
+    },
+  }],
   "is-edited": [true, false].map((edited) => ({
     argument: {
       message: { body: "hello", sentAt: 1, ...(edited ? { editedAt: 2 } : {}) },

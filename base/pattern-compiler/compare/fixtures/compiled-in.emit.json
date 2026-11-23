@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/compiled-in.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst Row = pattern(\"sha256:e4a86c181bbe7be7abf0a720f43a5fe41533387029240dd475503d3873f9967e\");\nconst $default = (pattern(\"sha256:88ce48faba3cd2f980739e23b70cbce5a69e20668aa415d170ce245308f93f20\"));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\nreturn $rt.thunk(($h) => (({ shout: $h.output(0) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst Row = $rt.data(pattern(\"sha256:e4a86c181bbe7be7abf0a720f43a5fe41533387029240dd475503d3873f9967e\"));\nconst $default = $rt.data((pattern(\"sha256:88ce48faba3cd2f980739e23b70cbce5a69e20668aa415d170ce245308f93f20\")));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\nreturn $rt.thunk(($h) => (({ shout: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -142,7 +142,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/compiled-in.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst Row = pattern(\"sha256:e4a86c181bbe7be7abf0a720f43a5fe41533387029240dd475503d3873f9967e\");\nconst $default = (pattern(\"sha256:88ce48faba3cd2f980739e23b70cbce5a69e20668aa415d170ce245308f93f20\"));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\nreturn $rt.thunk(($h) => (({ shout: $h.output(0) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({  }, $h);\nconst row = $rt.thunk(($h) => ($rt.force($s1, $h)));\nreturn $rt.thunk(($h) => (({ row: $rt.force(row, $h) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst Row = $rt.data(pattern(\"sha256:e4a86c181bbe7be7abf0a720f43a5fe41533387029240dd475503d3873f9967e\"));\nconst $default = $rt.data((pattern(\"sha256:88ce48faba3cd2f980739e23b70cbce5a69e20668aa415d170ce245308f93f20\")));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\nreturn $rt.thunk(($h) => (({ shout: $h.output(0) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.inline(1, {  }, $h);\nconst row = $rt.thunk(($h) => ($rt.force($s1, $h)));\nreturn $rt.thunk(($h) => (({ row: $rt.force(row, $h) })));\n});"
             }
           ],
           "outputsBelow": [],

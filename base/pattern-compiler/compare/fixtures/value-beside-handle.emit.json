@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/value-beside-handle.tsx",
-              "source": "const { \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst touch = lift(\n  (state) =>\n    state.author.get() === undefined ? 0 : 1,\n);\nconst named = lift(({ author }) =>\n  author && author.name.trim() ? author : { kind: \"person\", name: \"\" }\n);\nconst $default = (pattern(\"sha256:454781cfc61c2ff61eb80879a80e77d5e7e0bdbc8bce79f24a10ff7efc0f5c5d\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((state) =>\n    state.author.get() === undefined ? 0 : 1)($a));\n$rt.body(1, ($a) => (({ author }) =>\n  author && author.name.trim() ? author : { kind: \"person\", name: \"\" })($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ author: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ author: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ present: $h.output(0), shown: $h.output(1) })));\n});"
+              "source": "const { \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst touch = $rt.data(lift(\n  (state) =>\n    state.author.get() === undefined ? 0 : 1,\n));\nconst named = $rt.data(lift(({ author }) =>\n  author && author.name.trim() ? author : { kind: \"person\", name: \"\" }\n));\nconst $default = $rt.data((pattern(\"sha256:454781cfc61c2ff61eb80879a80e77d5e7e0bdbc8bce79f24a10ff7efc0f5c5d\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((state) =>\n    state.author.get() === undefined ? 0 : 1)($a));\n$rt.body(1, ($a) => (({ author }) =>\n  author && author.name.trim() ? author : { kind: \"person\", name: \"\" })($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ author: $h.slot(0) }))));\n$rt.value(1, ($h) => ($h.invoke(1, ({ author: $h.slot(0) }))));\nreturn $rt.thunk(($h) => (({ present: $h.output(0), shown: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -54,6 +54,7 @@
                     "author"
                   ],
                   "handle": true,
+                  "schema": "unhashed:schema/2",
                   "slot": 0
                 },
                 {
@@ -270,6 +271,34 @@
                 "name"
               ],
               "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "name"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "asCell": [
+                "cell"
+              ]
             }
           }
         ],

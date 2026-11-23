@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/push-under-condition.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst addBoth = handler(\n  (event, { note, words }) => {\n    if (note === \"n\") words.push(\"noted\");\n    words.push(event.word);\n  },\n);\nconst $default = (pattern(\"sha256:e56b7a5af5a0005886181ff6533318f6e4715ee63bca3be49ca48940a1cf2de0\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ words: $h.slot(4), count: $h.slot(5), addBoth: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { note, words }) => {\n    if (note === \"n\") words.push(\"noted\");\n    words.push(event.word);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst addBoth = $rt.data(handler(\n  (event, { note, words }) => {\n    if (note === \"n\") words.push(\"noted\");\n    words.push(event.word);\n  },\n));\nconst $default = $rt.data((pattern(\"sha256:e56b7a5af5a0005886181ff6533318f6e4715ee63bca3be49ca48940a1cf2de0\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ words: $h.slot(4), count: $h.slot(5), addBoth: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { note, words }) => {\n    if (note === \"n\") words.push(\"noted\");\n    words.push(event.word);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],

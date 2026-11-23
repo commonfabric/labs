@@ -1,0 +1,272 @@
+[
+  {
+    "module": "compare/fixtures/module-data.tsx",
+    "patterns": [
+      {
+        "code": {
+          "dataFiles": [],
+          "elements": [],
+          "handlers": {
+            "0": {
+              "captures": [],
+              "named": true
+            }
+          },
+          "main": 0,
+          "modules": [
+            {
+              "module": 0,
+              "path": "compare/fixtures/module-data.tsx",
+              "source": "$rt.fn(labelOf);\nconst { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst GLAZES = $rt.data([\"plain\", \"sugar\"]);\nconst MENU = $rt.data({ sizes: [1, 2, 3] });\nconst PRICES = $rt.data(new Map([[\"plain\", 2], [\"sugar\", 3]]));\nconst SEASONAL = $rt.data(new Set([\"pumpkin\"]));\nfunction labelOf(glaze) {\n  return `${glaze} donut`;\n}\nconst priceOf = $rt.fn((glaze) => PRICES.get(glaze) ?? 0);\nconst summaryOf = $rt.fn((glaze) =>\n  [\n    labelOf(glaze),\n    priceOf(glaze),\n    GLAZES.length,\n    MENU.sizes.length,\n    SEASONAL.size,\n  ].join());\nconst record = $rt.data(handler(\n  (event, { last }) => {\n    last.set(summaryOf(event.glaze));\n  },\n));\n\nconst $default = $rt.data((pattern(\"sha256:54bcc5ced50d7cbe6e41305108fd9f45b6ab592835a3ea2242a5dbeff9d74b03\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ last: $h.slot(2), record: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { last }) => {\n    last.set(summaryOf(event.glaze));\n  })($e, $s));"
+            }
+          ],
+          "outputsBelow": [],
+          "reduces": [],
+          "states": [],
+          "unlistedReads": [],
+          "unsupported": [],
+          "values": [],
+          "valuesWithoutOutput": []
+        },
+        "line": 35,
+        "name": "default",
+        "plan": {
+          "bindings": [
+            {
+              "eventSchema": "unhashed:schema/3",
+              "handler": {
+                "body": 0
+              },
+              "name": "record",
+              "state": [
+                {
+                  "capture": "link",
+                  "path": [
+                    "last"
+                  ],
+                  "place": {
+                    "slot": 2
+                  },
+                  "template": {
+                    "op": "slot",
+                    "slot": 2
+                  }
+                }
+              ],
+              "within": []
+            }
+          ],
+          "bodies": [
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "handler",
+              "name": "record",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "event",
+                    "glaze"
+                  ],
+                  "slot": 0
+                },
+                {
+                  "at": [
+                    "binding",
+                    "last"
+                  ],
+                  "handle": true,
+                  "slot": 1
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "handle",
+                    "path": [],
+                    "slot": 1
+                  },
+                  "template": {
+                    "by": {
+                      "body": 0
+                    },
+                    "inputs": [
+                      {
+                        "op": "slot",
+                        "slot": 0
+                      },
+                      {
+                        "op": "slot",
+                        "slot": 1
+                      }
+                    ],
+                    "op": "derive"
+                  }
+                }
+              ]
+            }
+          ],
+          "children": [],
+          "closures": [],
+          "collections": [],
+          "cones": [
+            {
+              "at": {
+                "file": "compare/fixtures/module-data.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2
+              ],
+              "within": [],
+              "writes": []
+            }
+          ],
+          "constraints": [],
+          "dynamicReads": [],
+          "edges": [],
+          "operations": [],
+          "outputs": [
+            {
+              "cone": 0,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "last"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 2
+              }
+            }
+          ],
+          "patterns": [
+            "sha256:54bcc5ced50d7cbe6e41305108fd9f45b6ab592835a3ea2242a5dbeff9d74b03"
+          ],
+          "picks": [],
+          "resultSchema": "unhashed:schema/0",
+          "selectors": [],
+          "slots": [
+            {
+              "observes": "value",
+              "path": [
+                "glaze"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "event"
+              },
+              "schema": "unhashed:schema/1"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "last"
+              ],
+              "root": {
+                "handler": 0,
+                "kind": "binding"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [],
+              "root": {
+                "cell": 0,
+                "kind": "state"
+              }
+            }
+          ],
+          "stateCells": [
+            {
+              "name": "last",
+              "schema": "unhashed:schema/4",
+              "scope": "space",
+              "within": []
+            }
+          ],
+          "templates": [],
+          "version": 1
+        },
+        "schemas": [
+          {
+            "id": "unhashed:schema/0",
+            "schema": {
+              "properties": {
+                "last": {
+                  "type": "string"
+                },
+                "record": {
+                  "asCell": [
+                    "stream"
+                  ],
+                  "properties": {
+                    "glaze": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "glaze"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "last",
+                "record"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/1",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/2",
+            "schema": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "id": "unhashed:schema/3",
+            "schema": {
+              "properties": {
+                "glaze": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "glaze"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "id": "unhashed:schema/4",
+            "schema": {
+              "default": ""
+            }
+          }
+        ],
+        "unsupported": []
+      }
+    ]
+  }
+]

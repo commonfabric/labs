@@ -57,7 +57,16 @@ export type SlotBinding =
     members?: { container: Address; count: number; groups: number }[];
   }
   | { staged: Address }
-  | { output: number }
+  | {
+    output: number;
+    /**
+     * The positions a read of the value went through, where the output
+     * holds a reference and the slot reads what the reference names: the
+     * label of the slot is that of the output joined with the label of
+     * this read.
+     */
+    through?: Extract<SlotBinding, { chain: Address[] }>;
+  }
   /** A constant of the plan, which contributes no label. */
   | { constant: true };
 

@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/constant-state.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst copy = handler(\n  (_, { result, message }) => {\n    result.set(message);\n  },\n);\nconst $default = (pattern(\"sha256:7d41e9ada3e118fbe45010e57c7d0e08f646ac43dcd38fd071b1485b9d551fd7\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ title: $h.slot(3), result: $h.slot(2), copy: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { result, message }) => {\n    result.set(message);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst copy = $rt.data(handler(\n  (_, { result, message }) => {\n    result.set(message);\n  },\n));\nconst $default = $rt.data((pattern(\"sha256:7d41e9ada3e118fbe45010e57c7d0e08f646ac43dcd38fd071b1485b9d551fd7\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ title: $h.slot(3), result: $h.slot(2), copy: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { result, message }) => {\n    result.set(message);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],

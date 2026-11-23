@@ -2862,6 +2862,15 @@ export class StorageManager implements IStorageManager {
     this.#storeReadThroughs.set(space, read);
   }
 
+  /**
+   * Whether the replica of `space` reads a document it does not hold from
+   * the store (`installStoreReadThrough`), so that a read through a
+   * transaction gives what the store holds with no sync before it.
+   */
+  readsThroughStore(space: MemorySpace): boolean {
+    return this.#storeReadThroughs.has(space);
+  }
+
   /** @inheritDoc */
   installForeignScopedReadGrant(grant: ForeignScopedReadGrant): void {
     this.#foreignScopedReadGrant = grant;

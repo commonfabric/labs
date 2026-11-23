@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/unchanged-write.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst raise = handler(\n  (_, { floor, level }) => {\n    level.set(Math.max(level.get(), floor));\n  },\n);\nconst $default = (pattern(\n  \"sha256:5ec9b992ae83e5d395588e63d9adb9ea9321b161eb3c6325a90a20cb7b087c9f\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => ((`level ${$h.v($h.slot(0))}`)));\nreturn $rt.thunk(($h) => (({ level: $h.slot(5), text: $h.output(0), raise: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { floor, level }) => {\n    level.set(Math.max(level.get(), floor));\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst raise = $rt.data(handler(\n  (_, { floor, level }) => {\n    level.set(Math.max(level.get(), floor));\n  },\n));\nconst $default = $rt.data((pattern(\n  \"sha256:5ec9b992ae83e5d395588e63d9adb9ea9321b161eb3c6325a90a20cb7b087c9f\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => ((`level ${$h.v($h.slot(0))}`)));\nreturn $rt.thunk(($h) => (({ level: $h.slot(5), text: $h.output(0), raise: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { floor, level }) => {\n    level.set(Math.max(level.get(), floor));\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],

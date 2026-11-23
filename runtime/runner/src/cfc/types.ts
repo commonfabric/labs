@@ -871,7 +871,9 @@ export type WritePolicyInput =
  * the plan, whose label the slot takes, instantiated from the inputs that
  * `outputs` of the same place or of an enclosing one reports for it: the
  * slot of an element of the result of another per-element construct, which
- * reads the output of the upstream element and has no stored address. An
+ * reads the output of the upstream element and has no stored address, with
+ * `through` where that output holds a reference and the slot reads the
+ * value the reference names. An
  * address path may hold the segment `*` at an element position, which
  * resolves to the join over the entries it covers.
  */
@@ -908,7 +910,17 @@ export type SlotBinding =
     readonly staged?: true;
   }
   | { readonly staged: CfcAddress }
-  | { readonly output: number }
+  | {
+    readonly output: number;
+    /**
+     * The read of the value that a reference the output holds names: the
+     * positions it went through and the class it read the last one in.
+     * The label of the slot is that of the output, which says which
+     * reference the upstream element holds, joined with the label of this
+     * read.
+     */
+    readonly through?: Extract<SlotBinding, { readonly chain: unknown }>;
+  }
   /**
    * A slot whose value is a constant of the plan, such as a literal a
    * handler binding gives its state: it contributes no label.

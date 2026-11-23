@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/binding-output.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst bump = handler(\n  (_, { log, doubled }) => {\n    log.push(doubled);\n  },\n);\nconst $default = (pattern(\n  \"sha256:4c653facd49f8412492639a987039816bbc2d994a2c63548e01cefbff4678b1e\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) * (2))));\nreturn $rt.thunk(($h) => (({ log: $h.slot(3), bump: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { log, doubled }) => {\n    log.push(doubled);\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst bump = $rt.data(handler(\n  (_, { log, doubled }) => {\n    log.push(doubled);\n  },\n));\nconst $default = $rt.data((pattern(\n  \"sha256:4c653facd49f8412492639a987039816bbc2d994a2c63548e01cefbff4678b1e\",\n)));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) * (2))));\nreturn $rt.thunk(($h) => (({ log: $h.slot(3), bump: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { log, doubled }) => {\n    log.push(doubled);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],

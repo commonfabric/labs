@@ -250,7 +250,7 @@ pub fn is_element_method(name: &str) -> bool {
 pub fn is_selector_method(name: &str) -> bool {
     matches!(
         name,
-        "count" | "sum" | "min" | "max" | "minBy" | "maxBy" | "groupBy" | "keyBy"
+        "count" | "sum" | "min" | "max" | "minBy" | "maxBy" | "groupBy" | "keyBy" | "sortBy"
     )
 }
 
@@ -298,6 +298,16 @@ fn is_reactive_handle_method(name: &str) -> bool {
             | "asScope"
             | "inSpace"
     )
+}
+
+/// Whether `name` is a member that §4.7 lists for some handle type, in any
+/// tier. The table is the whole surface of a handle: any other member is
+/// one of the object the runtime makes for the handle, and no part of the
+/// language.
+pub fn is_handle_member(name: &str) -> bool {
+    is_reactive_handle_method(name)
+        || is_function_handle_method(name)
+        || is_handle_collection_method(name)
 }
 
 /// The handle methods of §4.7 that are legal in the function tier only.

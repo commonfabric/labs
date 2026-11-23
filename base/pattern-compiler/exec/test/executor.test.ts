@@ -1,6 +1,7 @@
 import {
   type FabricValue,
   hashOf,
+  isDeepFrozen,
   toCompactDebugString,
   toIndentedDebugString,
 } from "@commonfabric/data-model";
@@ -11,7 +12,13 @@ import {
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { type Artifact, Handle, Host, Instance } from "../executor.ts";
+import {
+  type Artifact,
+  Handle,
+  Host,
+  Instance,
+  targetOf,
+} from "../executor.ts";
 import {
   argumentOf as argumentDocument,
   ComputedOutput,
@@ -2193,7 +2200,7 @@ describe("an element that is a plain value in place", () => {
 
     const members = stops.get() as Handle[];
 
-    expect(members.map((member) => (member.target as Ref).path)).toEqual([
+    expect(members.map((member) => (targetOf(member) as Ref).path)).toEqual([
       ["stops", keySegment(keyOf(instance, "a", 1))],
       ["stops", keySegment(keyOf(instance, "b", 2))],
       ["stops", keySegment(keyOf(instance, "c", 3))],
@@ -2216,7 +2223,7 @@ describe("an element that is a plain value in place", () => {
 
     const members = stops.get() as Handle[];
 
-    expect(members.map((member) => (member.target as Ref).path)).toEqual([
+    expect(members.map((member) => (targetOf(member) as Ref).path)).toEqual([
       ["stops", "0"],
       ["stops", "1"],
       ["stops", "2"],
@@ -3551,13 +3558,15 @@ describe("a stream a function body returns into the result", () => {
         path.join("/"),
         elements,
       ]),
+      // In the order the result document holds its members in, which is
+      // that of the storage.
     ).toEqual([
       [0, "inc", []],
-      [0, "wrapped/again", []],
-      [1, "rows/0/again", [0]],
-      [1, "rows/1/again", [1]],
       [2, "labels/0/again", [0]],
       [2, "labels/1/again", [1]],
+      [1, "rows/0/again", [0]],
+      [1, "rows/1/again", [1]],
+      [0, "wrapped/again", []],
     ]);
   });
 });
@@ -3909,6 +3918,16 @@ describe("the stream of a binding of an inner `map` that a `flatMap` callback re
 // references is keyed by its cells, and declared key fields change
 // nothing for it.
 describe("the key of a plain value", () => {
+  /** The address that `member`, a container in what a read gave, carries. */
+  const addressIn = (store: Store, read: object, member: object): Ref => {
+    const below = new Map<object, Ref>();
+    const handed = store.handed.get(read);
+    if (handed !== undefined) store.addressesBelow(read, handed, below);
+    return (store.addresses.get(member) ?? below.get(member))!;
+  };
+  const addressOfFirst = (store: Store, read: object[]): Ref =>
+    addressIn(store, read, read[0]);
+
   const SECRET = "the secret of the space";
   const repo = (id: number, name: string) => ({
     id,
@@ -4167,9 +4186,10 @@ describe("the key of a plain value", () => {
   it("forms the keys of an array that is read whole with the key fields that the schema of the array declares beside `items`", () => {
     const store = start();
     const first = (schema: Schema) =>
-      store.addresses.get(
-        (store.read(new Ref("d", ["saved"], schema)) as object[])[0],
-      )!;
+      addressOfFirst(
+        store,
+        store.read(new Ref("d", ["saved"], schema)) as object[],
+      );
 
     expect(first(arrayByKey("id")).path).toEqual(["saved", SEVEN]);
     expect(first(arrayByKey("name")).path).toEqual([
@@ -4221,9 +4241,10 @@ describe("the key of a plain value", () => {
       },
     });
     const first = (name: string, schema: Schema) =>
-      store.addresses.get(
-        (store.read(new Ref("holder", [name], schema)) as object[])[0],
-      )!.path;
+      addressOfFirst(
+        store,
+        store.read(new Ref("holder", [name], schema)) as object[],
+      ).path;
 
     expect(first("keyed", arrayByKey())).toEqual(["saved", SEVEN]);
     expect(first("outer", arrayByKey())).toEqual(["saved", SEVEN]);
@@ -4251,7 +4272,10 @@ describe("the key of a plain value", () => {
     const read = store.read(
       new Ref("above", [], { properties: { saved: arrayByKey() } }),
     ) as { saved: object[] };
-    expect(store.addresses.get(read.saved[0])!.path).toEqual(["saved", SEVEN]);
+    expect(addressIn(store, read, read.saved[0]).path).toEqual([
+      "saved",
+      SEVEN,
+    ]);
   });
 
   it("re-keys the element on a write to a key field and on no other write, and counts equal values of the fields", () => {
@@ -6416,9 +6440,12 @@ describe("a debug renderer", () => {
       entry,
     });
 
+    // The value code reads the members of the record in the order of the
+    // storage, which is that of their names (`membersInOrder`).
+    const read = { tags: entry.tags, title: entry.title };
     expect(instance.result()).toEqual({
-      compact: toCompactDebugString(entry),
-      indented: `entry: ${toIndentedDebugString(entry)}`,
+      compact: toCompactDebugString(read),
+      indented: `entry: ${toIndentedDebugString(read)}`,
     });
   });
 });
@@ -6549,5 +6576,20 @@ describe("a state path declared as a handle or `undefined`", () => {
     expect(instance.send(0, {})).toMatchObject({ committed: true });
 
     expect(instance.result()).toMatchObject({ out: "a" });
+  });
+});
+
+describe("the schemas of an artifact", () => {
+  it("are frozen with all they hold once an instance was made of the artifact", async () => {
+    const artifact = await artifactOf("scale");
+    const instance = new Instance(artifact, { groups: [], rows: [] });
+
+    const schemas = artifact.schemas.filter(({ schema }) =>
+      schema !== undefined
+    );
+    expect(schemas.length).toBeGreaterThan(0);
+    for (const { id } of schemas) {
+      expect(isDeepFrozen(instance.schemaOf(id))).toBe(true);
+    }
   });
 });

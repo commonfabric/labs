@@ -1530,7 +1530,31 @@ describe("TransactionHooks for a write that leaves the value as it was", () => {
     }]);
   });
 
-  it("gives no record again after labels changed with their values", async () => {
+  it("gives the record of each output that read it again after a label changed with the values of positions the output did not read", async () => {
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("unchanged-write"),
+      { floor: 3, level: 3 },
+      { transactions: recorder },
+    );
+
+    // The store does not say that no value changed, and no value the
+    // outputs read did: nothing evaluates them again.
+    recorder.labelsChanged?.([{ doc: instance.argument, paths: [["level"]] }]);
+    instance.dispatch();
+
+    expect(recorder.left.map(({ cause, writes }) => ({
+      cause,
+      targets: writes.map(({ target, relabel }) =>
+        `${relabel ? "label of " : ""}${target.path.join("/")}`
+      ).sort(),
+    }))).toEqual([{
+      cause: "derivation",
+      targets: ["label of level", "label of text"],
+    }]);
+  });
+
+  it("gives no record of the label alone for an output that is given again with its value", async () => {
     const recorder = new Recorder();
     const instance = new Instance(
       await artifactOf("unchanged-write"),
@@ -1539,9 +1563,15 @@ describe("TransactionHooks for a write that leaves the value as it was", () => {
     );
 
     recorder.labelsChanged?.([{ doc: instance.argument, paths: [["level"]] }]);
+    instance.writeArgument(["level"], 5);
     instance.dispatch();
 
-    expect(recorder.left).toEqual([]);
+    const again = recorder.left.flatMap(({ writes }) =>
+      writes.map(({ target, relabel }) =>
+        `${relabel ? "label of " : ""}${target.path.join("/")}`
+      )
+    );
+    expect(again).not.toContain("label of text");
   });
 
   it("reports a change, and no such write, where the value differs", async () => {
@@ -1740,5 +1770,117 @@ describe("the slot of a count of an array of references", () => {
       chain: [{ doc: instance.argument, path: ["items"] }],
       observes: "enumeration",
     }]);
+  });
+});
+
+describe("the records of the row documents a `lift` writes", () => {
+  /**
+   * `created-rows.tsx` over `size` items, each a document of its own, all
+   * labeled "plain" but those `labels` names. `rows(from)` gives the
+   * records given for row documents since the mark `from`, each as the
+   * title its row holds, with `label of ` before it where the record forms
+   * the label alone again.
+   */
+  const started = async (size: number) => {
+    const labels = new Map<string, string>();
+    const recorder = new Recorder((doc) => labels.get(doc) ?? "plain");
+    const documents = Array.from({ length: size }, (_, index) => ({
+      id: `item-${index}`,
+      kind: "input",
+      value: { title: `t${index}` },
+    }));
+    const instance = new Instance(
+      await artifactOf("created-rows"),
+      {
+        items: documents.map(({ id }) => ({ $link: { doc: id, path: [] } })),
+        other: "o",
+      },
+      { transactions: recorder, documents },
+    );
+    const rows = (from: number) =>
+      recorder.left.slice(from).flatMap(({ writes }) => writes).filter((
+        { record },
+      ) => "body" in record).map(({ target, relabel }) =>
+        `${relabel ? "label of " : ""}${
+          (instance.store.peek(target.doc, target.path) as { title: string })
+            .title
+        }`
+      ).sort();
+    const enter = (index: number) => {
+      instance.store.create(`item-${index}`, "input", { title: `t${index}` });
+      instance.store.splice(new Ref(instance.argument, ["items"]), index, 0, [
+        { $link: { doc: `item-${index}`, path: [] } },
+      ]);
+      instance.settle();
+    };
+    return { instance, recorder, labels, rows, enter };
+  };
+
+  it("gives a record for each row when the `lift` first runs", async () => {
+    const { rows } = await started(3);
+
+    expect(rows(0)).toEqual(["T0", "T1", "T2"]);
+  });
+
+  it("gives a record for the one row whose value changed when the `lift` runs again", async () => {
+    const { instance, recorder, rows } = await started(3);
+    const mark = recorder.left.length;
+
+    instance.store.write(new Ref("item-1", ["title"]), "edited");
+    instance.settle();
+
+    expect(rows(mark)).toEqual(["EDITED"]);
+  });
+
+  it("gives a record for the row of a member that enters under a label the `lift` had read, and for no other row", async () => {
+    const { recorder, rows, enter } = await started(3);
+    const mark = recorder.left.length;
+
+    enter(3);
+
+    expect(rows(mark)).toEqual(["T3"]);
+  });
+
+  it("gives a record for every row when a member enters under a label the `lift` had not read", async () => {
+    const { recorder, labels, rows, enter } = await started(3);
+    const mark = recorder.left.length;
+    labels.set("item-3", "secret");
+
+    enter(3);
+
+    expect(rows(mark)).toEqual(["T0", "T1", "T2", "T3"]);
+  });
+
+  it("gives no record when a member leaves whose label the members that stayed share", async () => {
+    const { instance, recorder, rows } = await started(3);
+    const mark = recorder.left.length;
+
+    instance.store.splice(new Ref(instance.argument, ["items"]), 2, 1, []);
+    instance.settle();
+
+    // The one clause is still read through the members that stayed, and
+    // the rows hold what they held.
+    expect(rows(mark)).toEqual([]);
+  });
+
+  it("forms the label of every row again when a label the `lift` read changes while no value does", async () => {
+    const { instance, recorder, labels, rows } = await started(3);
+    const mark = recorder.left.length;
+
+    labels.set("item-1", "secret");
+    recorder.labelsChanged?.([{ doc: "item-1", paths: [[]] }], true);
+    instance.dispatch();
+
+    expect(rows(mark)).toEqual(["label of T0", "label of T1", "label of T2"]);
+  });
+
+  it("forms no label again when a label changes that the `lift` did not read", async () => {
+    const { instance, recorder, rows } = await started(3);
+    const mark = recorder.left.length;
+
+    recorder.labelsChanged?.([{ doc: "unread", paths: [[]] }], true);
+    instance.dispatch();
+
+    expect(rows(mark)).toEqual([]);
   });
 });

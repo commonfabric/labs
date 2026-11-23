@@ -130,7 +130,10 @@ import type { CompileClaims } from "./harness/compile-interleave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { ModuleCompiler } from "./harness/module-compile.ts";
-import type { CompiledModuleArtifact } from "./harness/types.ts";
+import type {
+  CompiledModuleArtifact,
+  RuntimeProgram,
+} from "./harness/types.ts";
 import {
   immutableCellsFor,
   liveImmutableSnapshotCount,
@@ -1520,6 +1523,41 @@ export function writeOverrideBanner(
 }
 
 /**
+ * What a runtime with a pattern compiler does for `PatternManager` and
+ * `Runner` under the experimental option `compiledPatterns`
+ * (`Runtime.compiledPatternRunner`).
+ */
+export type CompiledPatternRunner = {
+  /**
+   * Compiles `program`, the source `pattern` was made from. Resolves where
+   * the compiler accepted or refused it, and rejects where the host has no
+   * compiler to run.
+   */
+  prepare(pattern: object, program: RuntimeProgram): Promise<void>;
+  /**
+   * What the compiler refused the program of `pattern` with, or nothing
+   * where it accepted the program or was not asked.
+   */
+  refusalOf(pattern: object): string | undefined;
+  /**
+   * Starts a compiled piece of `pattern` at `resultCell` and returns true,
+   * or returns false where the pattern has no accepted compiled form. The
+   * caller commits `tx`; with none, the piece commits a transaction of its
+   * own.
+   */
+  run(
+    tx: IExtendedStorageTransaction | undefined,
+    pattern: object,
+    argument: unknown,
+    resultCell: Cell<unknown>,
+  ): boolean;
+  /** Stops the piece `run` started at `resultCell`, and says whether one ran. */
+  stop(resultCell: Cell<unknown>): boolean;
+  /** Stops every piece `run` started. */
+  stopAll(): void;
+};
+
+/**
  * Main Runtime class that orchestrates all services in the runner package.
  *
  * This class eliminates the singleton pattern by providing a single entry point
@@ -1758,6 +1796,30 @@ export class Runtime {
    * SpaceServer's own runtime. Gates the Phase-2 speculation-overlay
    * default (a serving runtime never speculates). */
   readonly servingPosture: boolean;
+
+  /**
+   * Starts the piece whose result document is at `root` from a compiled
+   * pattern, where the storage names one for it, and says whether it is
+   * served. `why.forEvent` says that an event to a stream of the piece
+   * waits for its handler.
+   * `serveCompiledPieces()` of `compiled/serving.ts` installs it; the
+   * runtime asks it only under the experimental option `compiledPatterns`,
+   * for a result document that names no pattern.
+   */
+  compiledPieceLoader:
+    | ((
+      root: Pick<NormalizedFullLink, "space" | "id" | "scope">,
+      why?: { forEvent?: boolean },
+    ) => Promise<boolean>)
+    | undefined;
+
+  /**
+   * Compiles the program of a pattern beside today's compile and starts a
+   * compiled piece in `run()` where the compiler accepted the program.
+   * `runCompiledPatterns()` of `compiled/run.ts` installs it; the runtime
+   * asks it only under the experimental option `compiledPatterns`.
+   */
+  compiledPatternRunner: CompiledPatternRunner | undefined;
 
   readonly userIdentityDID: DID;
 
@@ -2901,6 +2963,7 @@ export class Runtime {
       }
       this.#queues.clear();
       // Stop all running docs
+      this.compiledPatternRunner?.stopAll();
       this.runner.stopAll();
 
       // The speculation overlay dies with the runtime (speculation.md §1:

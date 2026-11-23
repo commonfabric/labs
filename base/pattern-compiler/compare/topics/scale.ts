@@ -5,12 +5,20 @@
  *
  * `deno run -A --no-check base/pattern-compiler/compare/topics/scale.ts <arm> [sizes | --seed <seed>]`
  *
- * `<arm>` is `executor`, `storage`, `today` or `today-labeled`, and each
+ * `<arm>` is `executor`, `storage`, `runner`, `serving`, `serving-today`,
+ * `today` or `today-labeled`, and each
  * run prints one line of JSON per measured step. The arms run in processes
  * of their own, one after the other, so that no two timed runs share a
  * machine at once.
  *
  * - `executor`: the executor with its documents in memory.
+ * - `runner`: the board as a compiled piece in the runner
+ *   (`startCompiledPiece` of `runtime/runner/src/compiled/piece.ts`), with
+ *   the experimental option `compiledPatterns` on. Every call of the runtime
+ *   is that of the arm `today-labeled`: the topics and the inputs are cells
+ *   written with `Cell.set` under the same schemas, an edit is a `Cell.set`
+ *   of a topic's title, a create is `Cell.send` on `addTopic`, and a step
+ *   ends when the scheduler is idle with no commit pending.
  * - `storage`: the executor with its documents in the runtime's storage
  *   (`../runtime-transactions.ts`), in a runtime that serves the space with
  *   the experimental option `compiledPatterns` on. Each topic and each
@@ -24,6 +32,11 @@
  *   With `SCALE_REORDER` set, a step `reorder` follows the edits: a writer
  *   outside the board writes the `lastActivityAt` of the topic filed first,
  *   which makes it the one last active.
+ * - `serving` and `serving-today`: the board under the serving loop, as a
+ *   compiled piece and as today's piece, timed on two clients
+ *   (`./serving.ts`). With `SCALE_SERVING_LABELS` set, the topics and the
+ *   inputs are written under the clauses the arm `runner` writes them
+ *   under, in the space of the same identity.
  * - `today`: today's runtime, with no label stored.
  * - `today-labeled`: today's runtime with `cfcFlowLabels` at `persist` and
  *   the same clauses on the topics and the inputs.
@@ -85,9 +98,38 @@
  * its label in place. The file grows with the square of the board where
  * each topic has a clause of its own, so it is for boards of a few topics.
  *
+ * With `SCALE_CONSUMED` set to the path of a file, the arm `runner` appends
+ * to that file, after each step, one line of JSON for each path of the
+ * result document with the clauses a read of the value there consumes in
+ * the runtime's own resolution. Two runs of one board and size, one with
+ * `SCALE_ROWS=in-place`, are compared line by line: a clause that only the
+ * rows in place give is an under-label of the rows as documents. The run
+ * is a check of correctness and its times are no measurement.
+ *
+ * With `SCALE_WRITE_ALONE` set, the arms of the runtime's own calls
+ * (`runner`, `today`, `today-labeled`) time, before each edit, a write of
+ * a field of the same topic that the board does not read (`write alone`):
+ * what the write itself costs, the memory server's handling included.
+ *
+ * With `SCALE_LOAD_ROWS` set to a number, the arm `runner` loads the board
+ * with at most that many row documents in one transaction
+ * (`CompiledPieceOptions.loadRows`), and with `Infinity` in one transaction.
+ *
+ * With `SCALE_FIELD_EDITS` set, the arms of the runtime's own calls time,
+ * after the edits of a title, an edit of the mentions, of the `shortName`
+ * and of the `lastActivityAt` of the middle topic.
+ *
  * With `SCALE_CPU_PROFILE` set to the path of a file, the run is sampled
  * every half millisecond and the profile of the whole process is written
- * there when the arm has run, in the format of the V8 inspector.
+ * there when the arm has run, in the format of the V8 inspector. With
+ * `SCALE_PROFILE_STEP` naming a step, the profile is of that step alone;
+ * naming several steps separated by commas, each has a profile of its own
+ * at the path followed by the step's name and `.cpuprofile`.
+ *
+ * With `SCALE_COMMITS` set, each step of the arms of the runtime's own
+ * calls lists its commits (`commitLog`): how many documents each changed,
+ * the size of those documents as JSON after the commit, and the four
+ * largest with the number of paths that changed in each.
  */
 import { Identity } from "@commonfabric/identity";
 import { fromFileUrl } from "@std/path";
@@ -110,8 +152,13 @@ import {
   labelForConsumedEntries,
 } from "../../../../runtime/runner/src/cfc/consumed-label.ts";
 import { readStoredCfcMetadata } from "../../../../runtime/runner/src/cfc/metadata.ts";
+import { deriveFlowJoin } from "../../../../runtime/runner/src/cfc/prepare.ts";
 import { diffAndUpdate } from "../../../../runtime/runner/src/data-updating.ts";
 import { resolveLocalProgram } from "../../../../runtime/runner/src/harness/local-program.deno.ts";
+import {
+  type CompiledPiece,
+  startCompiledPiece,
+} from "../../../../runtime/runner/src/compiled/piece.ts";
 import type { NormalizedFullLink } from "../../../../runtime/runner/src/link-types.ts";
 import { createSigilLinkFromParsedLink } from "../../../../runtime/runner/src/link-utils.ts";
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
@@ -129,6 +176,7 @@ import { identifierOf, isLink, Ref } from "../../exec/store.ts";
 import { generateInputs, inputClause } from "../generate.ts";
 import { scenarioAudience } from "../harness.ts";
 import { RuntimeTransactions } from "../runtime-transactions.ts";
+import { runServing } from "./serving.ts";
 
 const repository = fromFileUrl(new URL("../../../../", import.meta.url));
 
@@ -240,7 +288,7 @@ export type Facts = {
 };
 
 /** The arms of a run. */
-type Arm = "executor" | "storage" | "today" | "today-labeled";
+type Arm = "executor" | "storage" | "runner" | "today" | "today-labeled";
 
 /** One measured step. */
 export type Step = {
@@ -365,7 +413,10 @@ const emitted = async (): Promise<{
 }> => {
   const { success, stdout, stderr } = await new Deno.Command(
     `${repository}base/pattern-compiler/target/release/pattern-compiler`,
-    { args: ["emit", ...TOPICS_FILES], cwd: `${repository}patterns` },
+    {
+      args: ["emit", "--unchecked", ...TOPICS_FILES],
+      cwd: `${repository}patterns`,
+    },
   ).output();
   if (!success) throw new Error(new TextDecoder().decode(stderr));
   const modules = JSON.parse(new TextDecoder().decode(stdout)) as {
@@ -495,6 +546,18 @@ const labeledSigner = () => Identity.fromPassphrase("pattern-compiler-compare");
 
 /** The schema a topic is written under: the clause of topic `index`. */
 const topicSchemaOf = (index: number, audience: unknown): JSONSchema => ({
+  // `SCALE_TOPIC_SCHEMA=mentions-as-cells` declares the mentions of a
+  // topic as references. A schema that declares a label and no structure
+  // has the memory server follow every link of a written topic when it
+  // brings the queries that reach the topic up to date.
+  ...(Deno.env.get("SCALE_TOPIC_SCHEMA") === "mentions-as-cells"
+    ? {
+      type: "object",
+      properties: {
+        mentions: { type: "array", items: { asCell: true } },
+      },
+    }
+    : {}),
   ifc: {
     confidentiality: [
       inputClause(
@@ -1154,6 +1217,16 @@ const count = (name: string): number => {
 
 /** A step of today's runtime, with its preparations where it stores labels. */
 export type TodayStep = Step & {
+  /**
+   * On the arm `runner`: the time of a pull of the result behind the step,
+   * until the runtime is settled again, in milliseconds. It is no part of
+   * `settle`.
+   */
+  pull?: number;
+  /** On the arm `runner`: what the compiled piece did in the step. */
+  compiled?: Record<string, number>;
+  /** On the arm `runner`: the cones the step evaluated, where asked for. */
+  evaluated?: Record<string, number>;
   /** The preparations of Contextual Flow Control, and their time. */
   preparations: number;
   prepareMs: number;
@@ -1162,14 +1235,39 @@ export type TodayStep = Step & {
    * after it, and the size of those entries as JSON.
    */
   labelEntries?: { documents: number; entries: number; bytes: number };
+  /** With `SCALE_COMMITS` set: the commits of the step. */
+  commitLog?: CommitOfStep[];
+};
+
+/** A document one commit changed, as `SCALE_COMMITS` reports it. */
+type DocumentOfCommit = {
+  id: string;
+  paths: number;
+  bytes: number;
+  /** The first three paths that changed. */
+  at?: string[];
+};
+
+/** One commit of a step, as `SCALE_COMMITS` reports it. */
+type CommitOfStep = {
+  documents: number;
+  /** The size as JSON, after the commit, of the documents it changed. */
+  bytes: number;
+  largest: DocumentOfCommit[];
 };
 
 const runToday = async (
   { topics, names }: Board,
   labeled: boolean,
+  /**
+   * Whether the board runs as a compiled piece (`startCompiledPiece`), in
+   * place of today's piece (`Runtime.run`): the arm `runner`. Every other
+   * call of the runtime is the same.
+   */
+  asCompiledPiece = false,
 ): Promise<(Baseline | TodayStep)[]> => {
   const size = topics.length;
-  const arm = labeled ? "today-labeled" : "today";
+  const arm = asCompiledPiece ? "runner" : labeled ? "today-labeled" : "today";
   const signer = labeled
     ? await labeledSigner()
     : await Identity.fromPassphrase(`topics-scale ${size}`);
@@ -1180,30 +1278,65 @@ const runToday = async (
     apiUrl: new URL(import.meta.url),
     storageManager,
     ...(labeled ? { cfcFlowLabels: "persist" as const } : {}),
+    ...(asCompiledPiece
+      ? { experimental: { compiledPatterns: true }, servingPosture: true }
+      : {}),
   });
+  let piece: CompiledPiece | undefined;
   const changed = new Set<string>();
+  // With `SCALE_COMMITS` set: for each commit since `commitLog` was
+  // cleared, each document it changed, with the paths that changed and
+  // the size of the document as JSON after the commit.
+  const logCommits = Deno.env.get("SCALE_COMMITS") !== undefined;
+  const commitLog: CommitOfStep[] = [];
   storageManager.subscribe({
     // deno-lint-ignore no-explicit-any
     next(notification: any) {
       if (notification.type !== "commit") return undefined;
-      for (const { address } of notification.changes) {
+      const documents = new Map<string, DocumentOfCommit>();
+      for (const { address, after } of notification.changes) {
         changed.add(JSON.stringify([address.id, address.scope]));
+        if (!logCommits) continue;
+        const document = documents.get(address.id) ?? {
+          id: address.id,
+          paths: 0,
+          bytes: after === undefined ? 0 : JSON.stringify(after).length,
+        };
+        document.paths++;
+        if (document.paths <= 3) {
+          (document.at ??= []).push((address.path ?? []).join("/"));
+        }
+        documents.set(address.id, document);
+      }
+      if (logCommits) {
+        commitLog.push({
+          documents: documents.size,
+          bytes: [...documents.values()].reduce(
+            (sum, { bytes }) => sum + bytes,
+            0,
+          ),
+          largest: [...documents.values()].sort((a, b) => b.bytes - a.bytes)
+            .slice(0, 4),
+        });
       }
       return undefined;
     },
   });
   const steps: (Baseline | TodayStep)[] = [];
   try {
-    const program = await resolveLocalProgram(
-      (resolver) => runtime.harness.resolve(resolver),
-      {
-        main: `${repository}patterns/${BOARD}`,
-        root: repository,
-      },
-    );
-    const compiled = await runtime.patternManager.compilePattern(program, {
-      space,
-    });
+    const emittedBoard = asCompiledPiece ? await emitted() : undefined;
+    const compiled = asCompiledPiece
+      ? undefined
+      : await runtime.patternManager.compilePattern(
+        await resolveLocalProgram(
+          (resolver) => runtime.harness.resolve(resolver),
+          {
+            main: `${repository}patterns/${BOARD}`,
+            root: repository,
+          },
+        ),
+        { space },
+      );
     record(steps, {
       arm,
       size,
@@ -1255,13 +1388,39 @@ const runToday = async (
     const result = runtime.getCell<Record<string, unknown>>(
       space,
       "topics scale",
-      compiled.resultSchema,
+      compiled?.resultSchema,
     );
-    const settle = async () => {
-      await result.pull();
+    // Today's piece computes what a reader demands, so the step pulls the
+    // result, which reads all of it. The compiled piece derives without a
+    // reader, and the pull of its result is timed apart (`TodayStep.pull`).
+    const settle = async (pull = piece === undefined) => {
+      if (pull) await result.pull();
       await runtime.settled();
+      // The commits the scheduler made are counted to the step that
+      // caused them, on every arm of this function.
+      await runtime.scheduler.idleWithPendingCommits();
+      if (piece !== undefined && piece.refusals.length > 0) {
+        throw new Error(
+          `The storage refused a commit of the piece: ${piece.refusals[0]}`,
+        );
+      }
     };
+    // The result of the compiled piece as the executor holds it, under the
+    // schema of the result: the runtime's own read does not follow a link
+    // whose path crosses an array by key.
+    const heldByExecutor = () =>
+      piece!.instance.store.read(
+        new Ref(piece!.instance.id, []),
+        undefined,
+        false,
+        piece!.instance.schemaOf(emittedBoard!.board.plan.resultSchema),
+      ) as Record<string, unknown>;
     const read = () => {
+      if (piece !== undefined) {
+        const value = heldByExecutor();
+        JSON.stringify(value);
+        return value;
+      }
       const tx = runtime.edit();
       try {
         const value = result.withTx(tx).get();
@@ -1272,6 +1431,7 @@ const runToday = async (
       }
     };
     const facts = (): Facts => {
+      if (piece !== undefined) return factsOf(heldByExecutor());
       const tx = runtime.edit();
       try {
         const plain = (path: string) => result.withTx(tx).key(path).get();
@@ -1311,28 +1471,182 @@ const runToday = async (
     const measure = async (step: string, change: () => Promise<void>) => {
       resetAllTimingStats();
       changed.clear();
+      commitLog.length = 0;
+      const before = piece === undefined ? undefined : {
+        transactions: piece.instance.transactions.length,
+        records: piece.transactions.counts,
+        piece: piece.counts,
+        evaluations: piece.instance.counts.evaluations,
+      };
+      // `SCALE_PROFILE_STEP` names the one step that `SCALE_CPU_PROFILE` is
+      // a profile of, in place of the whole run.
+      const profiledSteps = Deno.env.get("SCALE_PROFILE_STEP")?.split(",") ??
+        [];
+      const stopStepProfile = profiledSteps.includes(step)
+        ? await startProfile(
+          profiledSteps.length === 1
+            ? Deno.env.get("SCALE_CPU_PROFILE") ?? ""
+            : `${Deno.env.get("SCALE_CPU_PROFILE")}.${
+              step.replaceAll(" ", "-")
+            }.cpuprofile`,
+        )
+        : undefined;
       const began = performance.now();
       await change();
       await settle();
       const settled = performance.now();
+      await stopStepProfile?.();
       read();
       const done = performance.now();
       const preparations = timed("extended-storage-transaction/prepareCfc");
+      const after = piece?.transactions.counts;
+      const commitsOfStep = count("storage.v2.transaction/commit/commitNative");
+      const documentsOfStep = changed.size;
+      const workOfStep = count("scheduler/scheduler/run/action");
+      // A reader of the whole result of the compiled piece, as the pull of
+      // today's piece is one: its time, apart from the step's.
+      let pull: number | undefined;
+      if (piece !== undefined && Deno.env.get("SCALE_NO_PULL") === undefined) {
+        const began = performance.now();
+        await settle(true);
+        pull = round(performance.now() - began);
+      }
       record(steps, {
         arm,
         size,
         step,
         settle: round(settled - began),
         read: round(done - settled),
-        work: count("scheduler/scheduler/run/action"),
-        commits: count("storage.v2.transaction/commit/commitNative"),
-        documents: changed.size,
+        ...(piece === undefined || after === undefined ? {} : {
+          compiled: {
+            evaluations: piece.instance.counts.evaluations -
+              (before?.evaluations ?? 0),
+            events: piece.counts.events - (before?.piece.events ?? 0),
+            derivations: piece.counts.derivations -
+              (before?.piece.derivations ?? 0),
+            changesByOthers: piece.counts.changesByOthers -
+              (before?.piece.changesByOthers ?? 0),
+            ownMs: round(piece.counts.ownMs - (before?.piece.ownMs ?? 0)),
+            reads: after.reads - (before?.records.reads ?? 0),
+            writes: after.writes - (before?.records.writes ?? 0),
+            recordsGiven: after.recordsGiven -
+              (before?.records.recordsGiven ?? 0),
+            recordsRecorded: after.recordsRecorded -
+              (before?.records.recordsRecorded ?? 0),
+            recordBytes: after.recordBytes -
+              (before?.records.recordBytes ?? 0),
+          },
+          // With `SCALE_EVALUATED` set: the cones the step evaluated, each
+          // with how many times.
+          ...(Deno.env.get("SCALE_EVALUATED") === undefined ? {} : {
+            evaluated: piece.instance.transactions.slice(
+              before?.transactions ?? 0,
+            ).flatMap(({ evaluated }) => evaluated).reduce(
+              (counts, cone) => ({
+                ...counts,
+                [cone]: (counts[cone] ?? 0) + 1,
+              }),
+              {} as Record<string, number>,
+            ),
+          }),
+        }),
+        ...(pull === undefined ? {} : { pull }),
+        ...(logCommits ? { commitLog: commitLog.slice() } : {}),
+        work: workOfStep,
+        commits: commitsOfStep,
+        documents: documentsOfStep,
         facts: facts(),
         heap: heapAfterCollection(arm, size, step),
         preparations: preparations.count,
         prepareMs: round(preparations.ms),
         ...(labeled ? { labelEntries: labelEntries() } : {}),
       });
+      consumedAfter(step);
+      if (Deno.env.get("SCALE_RESULT_SHAPE") === "entries") {
+        const tx = runtime.edit();
+        try {
+          const { space, id, scope } = result.getAsNormalizedFullLink();
+          const metadata = readStoredCfcMetadata(
+            tx,
+            { space, id, path: [], scope } as NormalizedFullLink,
+          );
+          for (const entry of metadata?.labelMap.entries ?? []) {
+            console.error(
+              JSON.stringify({ entryAfter: step, entry }),
+            );
+          }
+        } finally {
+          tx.abort();
+        }
+      }
+    };
+    // With `SCALE_CONSUMED` naming a file, on the arm `runner`: after each
+    // step, one line of JSON for each path of the result document, down to
+    // each leaf and each link, with the clauses of the inputs that a read
+    // of the value at that path consumes. The read is made through a cell
+    // in a transaction of its own, every link followed, and the clauses are
+    // those of the join the runtime derives from what the transaction read.
+    const consumedAfter = (step: string) => {
+      const file = Deno.env.get("SCALE_CONSUMED");
+      if (piece === undefined || file === undefined) return;
+      const paths: string[][] = [];
+      const walk = (value: unknown, path: string[]) => {
+        paths.push(path);
+        if (isLink(value) || typeof value !== "object" || value === null) {
+          return;
+        }
+        for (const [name, member] of Object.entries(value)) {
+          walk(member, [...path, name]);
+        }
+      };
+      walk(piece.instance.store.docs.get(piece.instance.id)?.value, []);
+      const lines = paths.map((path) => {
+        const tx = runtime.edit();
+        try {
+          // deno-lint-ignore no-explicit-any
+          let cell: any = result.withTx(tx);
+          for (const segment of path) cell = cell.key(segment);
+          JSON.stringify(cell.get());
+          const text = JSON.stringify(deriveFlowJoin(tx).confidentiality);
+          return JSON.stringify({
+            step,
+            path: path.join("/"),
+            clauses: [...new Set(text.match(/input:[A-Za-z0-9-]+/g) ?? [])]
+              .sort(),
+          });
+        } finally {
+          tx.abort();
+        }
+      });
+      // The label entries the result document stores at its root and one
+      // or two segments below it, which a read of any path below consumes
+      // where no entry nearer to the path replaces them.
+      const reader = runtime.edit();
+      try {
+        const { space, id, scope } = result.getAsNormalizedFullLink();
+        const metadata = readStoredCfcMetadata(
+          reader,
+          { space, id, scope },
+        );
+        for (const entry of metadata?.labelMap.entries ?? []) {
+          if (entry.path.length > 2) continue;
+          lines.push(JSON.stringify({
+            step,
+            entry: entry.path.join("/"),
+            origin: entry.origin,
+            observes: entry.observes,
+            clauses: [
+              ...new Set(
+                JSON.stringify(entry.label).match(/input:[A-Za-z0-9-]+/g) ??
+                  [],
+              ),
+            ].sort(),
+          }));
+        }
+      } finally {
+        reader.abort();
+      }
+      Deno.writeTextFileSync(file, `${lines.join("\n")}\n`, { append: true });
     };
     const commit = async (write: (tx: ReturnType<Runtime["edit"]>) => void) => {
       const tx = runtime.edit();
@@ -1343,12 +1657,124 @@ const runToday = async (
     };
     await measure("load", () =>
       commit((tx) => {
-        runtime.run(tx, compiled, argument, result.withTx(tx));
+        if (emittedBoard === undefined) {
+          runtime.run(tx, compiled, argument, result.withTx(tx));
+          return;
+        }
+        piece = startCompiledPiece(
+          runtime,
+          tx,
+          emittedBoard.board,
+          argument,
+          result.withTx(tx),
+          {
+            artifacts: emittedBoard.artifacts,
+            now: 1_000_000,
+            secret: "the secret of the comparison",
+            countRecordBytes: true,
+            // `SCALE_ROWS=in-place` keeps the rows of every collection in
+            // the result; otherwise the rows of a `map` over references
+            // are documents of their own.
+            ...(Deno.env.get("SCALE_ROWS") === "in-place"
+              ? { rows: "in-place" as const }
+              : {}),
+            // `SCALE_LOAD_ROWS` is the most row documents one transaction
+            // of the load holds; `Infinity` loads in one transaction.
+            ...(Deno.env.get("SCALE_LOAD_ROWS") === undefined
+              ? {}
+              : { loadRows: Number(Deno.env.get("SCALE_LOAD_ROWS")) }),
+          },
+        );
       }));
+    // With `SCALE_RECORDS` set: the write records of each commit of the
+    // piece after the load, each with the document and path it names and
+    // its size as JSON, on the error stream.
+    if (Deno.env.get("SCALE_RECORDS") !== undefined && piece !== undefined) {
+      const { transactions } = piece as CompiledPiece;
+      transactions.onRecorded((writes) => {
+        for (const write of writes) {
+          console.error(JSON.stringify({
+            step: steps.length,
+            record: write.record,
+            ...(write.unchanged ? { unchanged: true } : {}),
+            ...(write.relabel ? { relabel: true } : {}),
+            at: `${transactions.documentOf(write.target.id).slice(0, 12)}/${
+              write.target.path.join("/")
+            }`,
+            bytes: JSON.stringify(write).length,
+            ...(Deno.env.get("SCALE_RECORDS") === "full" ? { write } : {}),
+          }));
+        }
+      });
+    }
+    // With `SCALE_RESULT_SHAPE` set: the size as JSON of each member of the
+    // result document, and how many label entries it stores below each, on
+    // the error stream.
+    if (Deno.env.get("SCALE_RESULT_SHAPE") !== undefined) {
+      const tx = runtime.edit();
+      try {
+        const { space, id, scope } = result.getAsNormalizedFullLink();
+        const metadata = readStoredCfcMetadata(
+          tx,
+          { space, id, path: [], scope } as NormalizedFullLink,
+        );
+        const entries: Record<string, { entries: number; bytes: number }> = {};
+        for (const entry of metadata?.labelMap.entries ?? []) {
+          const member = String(entry.path[0] ?? "(root)");
+          entries[member] ??= { entries: 0, bytes: 0 };
+          entries[member].entries++;
+          entries[member].bytes += JSON.stringify(entry).length;
+        }
+        const value = tx.readValueOrThrow(
+          { space, id, path: [], scope } as NormalizedFullLink,
+        ) as Record<string, unknown>;
+        console.error(JSON.stringify({
+          resultShape: Object.fromEntries(
+            Object.entries(value ?? {}).map(([name, member]) => [
+              name,
+              JSON.stringify(member)?.length ?? 0,
+            ]),
+          ),
+          labelEntries: entries,
+        }));
+      } finally {
+        tx.abort();
+      }
+    }
+    // With `SCALE_WRITE_ALONE` set, a step `write alone` precedes each
+    // edit: the same writer writes a field of the same topic that the
+    // board does not read, so the step is what the write itself costs on
+    // this arm, with no derivation behind it.
+    const writeAlone = Deno.env.get("SCALE_WRITE_ALONE") !== undefined;
     for (const at of edited(size)) {
+      if (writeAlone) {
+        await measure(`write alone ${at}`, () =>
+          commit((tx) => {
+            cells[at].withTx(tx).key("unreadByTheBoard").set(`Written ${at}`);
+          }));
+      }
       await measure(`edit topic ${at}`, () =>
         commit((tx) => {
           cells[at].withTx(tx).key("title").set(`Edited topic ${at}`);
+        }));
+    }
+    // With `SCALE_FIELD_EDITS` set, a writer outside the board then writes,
+    // on the middle topic, each field that a whole-list `lift` of the board
+    // reads: its mentions (to the first topic alone), its `shortName` and
+    // its `lastActivityAt`.
+    if (Deno.env.get("SCALE_FIELD_EDITS") !== undefined) {
+      const at = Math.floor(size / 2);
+      await measure(`edit mentions ${at}`, () =>
+        commit((tx) => {
+          cells[at].withTx(tx).key("mentions").set([cells[0]]);
+        }));
+      await measure(`edit shortName ${at}`, () =>
+        commit((tx) => {
+          cells[at].withTx(tx).key("shortName").set(`renamed-${at}`);
+        }));
+      await measure(`edit lastActivityAt ${at}`, () =>
+        commit((tx) => {
+          cells[at].withTx(tx).key("lastActivityAt").set(4_000_000_000_000);
         }));
     }
     for (let turn = 0; turn < 3; turn++) {
@@ -1359,6 +1785,7 @@ const runToday = async (
         }));
     }
   } finally {
+    piece?.stop();
     await runtime.dispose();
     await close();
   }
@@ -1369,9 +1796,16 @@ const runToday = async (
  * Starts the sampling profiler of the process where `SCALE_CPU_PROFILE`
  * names a file, and returns what stops it and writes the profile there.
  */
-const profiled = async (): Promise<() => Promise<void>> => {
+const profiled = (): Promise<() => Promise<void>> => {
   const file = Deno.env.get("SCALE_CPU_PROFILE");
-  if (file === undefined) return () => Promise.resolve();
+  if (file === undefined || Deno.env.get("SCALE_PROFILE_STEP") !== undefined) {
+    return Promise.resolve(() => Promise.resolve());
+  }
+  return startProfile(file);
+};
+
+/** Starts the sampling profiler and returns what writes its profile. */
+const startProfile = async (file: string): Promise<() => Promise<void>> => {
   const session = new inspector.Session();
   session.connect();
   const post = (method: string, params?: object) =>
@@ -1395,6 +1829,19 @@ const profiled = async (): Promise<() => Promise<void>> => {
 if (import.meta.main) {
   const [arm, ...given] = Deno.args;
   const stopProfile = await profiled();
+  // With `SCALE_SERVING_LABELS` set, the serving arms write the topics and
+  // the inputs under the labels the arm `runner` writes them under.
+  const servingAudience = Deno.env.get("SCALE_SERVING_LABELS") === undefined
+    ? undefined
+    : await scenarioAudience();
+  const servingLabels = servingAudience === undefined ? undefined : {
+    signer: await labeledSigner(),
+    topic: (index: number) => topicSchemaOf(index, servingAudience),
+    input: (name: string) =>
+      ({
+        ifc: { confidentiality: [inputClause(name, servingAudience)] },
+      }) as JSONSchema,
+  };
   const boards = given[0] === "--seed" && given[1] !== undefined
     ? [await seeded(given[1])]
     : (given.length > 0 ? given.map(Number) : [100, 1_000, 2_000]).map(
@@ -1407,10 +1854,26 @@ if (import.meta.main) {
       ? await runStorage(board)
       : arm === "today" || arm === "today-labeled"
       ? await runToday(board, arm === "today-labeled")
+      : arm === "runner"
+      ? await runToday(board, true, true)
+      : arm === "serving" || arm === "serving-today"
+      ? await runServing(
+        {
+          module: BOARD,
+          files: TOPICS_FILES,
+          topics: board.topics,
+          names: board.names,
+          created: CREATED,
+          edited: edited(board.topics.length),
+          ...(servingLabels === undefined ? {} : { labels: servingLabels }),
+        },
+        arm,
+        (step) => console.log(JSON.stringify(step)),
+      ).then(() => [])
       : undefined;
     if (steps === undefined) {
       console.error(
-        "usage: scale.ts executor|storage|today|today-labeled [sizes | --seed <seed>]",
+        "usage: scale.ts executor|storage|runner|serving|serving-today|today|today-labeled [sizes | --seed <seed>]",
       );
       Deno.exit(2);
     }

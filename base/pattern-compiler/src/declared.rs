@@ -80,7 +80,7 @@ impl Origin {
 /// The outcome for one expression: a declared type, or why there is none.
 pub type Declared = Result<TypeId, Origin>;
 
-const MAX_DEPTH: u32 = 12;
+const MAX_DEPTH: u32 = 24;
 
 impl<'a> Resolver<'_, 'a> {
     /// The label the measurement files an outcome under.
@@ -165,10 +165,19 @@ impl<'a> Resolver<'_, 'a> {
                         })
                         .map_err(|_| Origin::PropertyOfInferred)
                 }
-                Expression::NumericLiteral(_) => self
+                Expression::NumericLiteral(position) => self
                     .typed_at(module, &member.object, next)
                     .map(|object| match self.shape(object) {
                         Shape::Object(_, Some(index)) => index,
+                        // A position a tuple declares has that element's
+                        // type.
+                        Shape::Tuple(elements)
+                            if position.value.fract() == 0.0
+                                && position.value >= 0.0
+                                && (position.value as usize) < elements.len() =>
+                        {
+                            elements[position.value as usize]
+                        }
                         _ => self
                             .element_of(object)
                             .unwrap_or_else(|| self.add_unresolved()),

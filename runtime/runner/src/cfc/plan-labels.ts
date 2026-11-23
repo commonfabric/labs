@@ -826,7 +826,28 @@ export const instantiatePlanLabels = (
           : bindingAt(write, index);
         if (binding !== undefined && "output" in binding) {
           const label = self.outputLabel(binding.output);
-          return label === NEUTRAL ? table.empty : label;
+          if (binding.through === undefined) {
+            return label === NEUTRAL ? table.empty : label;
+          }
+          // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+          // The slot reads the value that a reference in an upstream
+          // element names. The label of the output is that of the
+          // reference: which position the element points at. The value
+          // read there has the label of the read's own chain, so the slot
+          // has the join of the two: the confidentiality of both, and the
+          // integrity that both carry. An output with no label of its own
+          // leaves the label of the read as it is.
+          const read = slotLabel(binding.through, slot);
+          if (label === NEUTRAL) return read;
+          return table.intern({
+            confidentiality: [
+              ...label.confidentiality,
+              ...read.confidentiality,
+            ],
+            integrity: read.integrity.filter((atom) =>
+              label.integrity.includes(atom)
+            ),
+          });
         }
         if (binding !== undefined) return slotLabel(binding, slot);
         if (enclosing !== undefined) return enclosing.slotLabel(slot);

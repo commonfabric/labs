@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/state-to-component.tsx",
-              "source": "const { \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst Field = pattern(\n  \"sha256:225cbb9424aa90708e0a8d3f97106648aebb132df792027b2452046ce6a7b19b\",\n);\nconst $default = (pattern(\"sha256:0287a50129aaf28b868dbb48a2abbf82f86674af764a06efeda67761ada6c8bc\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($rt.h(\"cf-input\", { \"$value\": $h.slot(0) }, [])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0) })));\n});"
+              "source": "const { \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst Field = $rt.data(pattern(\n  \"sha256:225cbb9424aa90708e0a8d3f97106648aebb132df792027b2452046ce6a7b19b\",\n));\nconst $default = $rt.data((pattern(\"sha256:0287a50129aaf28b868dbb48a2abbf82f86674af764a06efeda67761ada6c8bc\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($rt.h(\"cf-input\", { \"$value\": $h.slot(0) }, [])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -160,7 +160,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/state-to-component.tsx",
-              "source": "const { \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst Field = pattern(\n  \"sha256:225cbb9424aa90708e0a8d3f97106648aebb132df792027b2452046ce6a7b19b\",\n);\nconst $default = (pattern(\"sha256:0287a50129aaf28b868dbb48a2abbf82f86674af764a06efeda67761ada6c8bc\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(0, ($h) => ($rt.h(\"cf-input\", { \"$value\": $h.slot(0) }, [])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({  }, $h);\n$rt.value(1, ($h) => ($rt.force($s1, $h)));\nreturn $rt.thunk(($h) => (({ title: $h.slot(1), controls: $h.output(2) })));\n});"
+              "source": "const { \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst Field = $rt.data(pattern(\n  \"sha256:225cbb9424aa90708e0a8d3f97106648aebb132df792027b2452046ce6a7b19b\",\n));\nconst $default = $rt.data((pattern(\"sha256:0287a50129aaf28b868dbb48a2abbf82f86674af764a06efeda67761ada6c8bc\")));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(0, ($h) => ($rt.h(\"cf-input\", { \"$value\": $h.slot(0) }, [])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(0) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.inline(1, {  }, $h);\n$rt.value(1, ($h) => ($rt.force($s1, $h)));\nreturn $rt.thunk(($h) => (({ title: $h.slot(1), controls: $h.output(2) })));\n});"
             }
           ],
           "outputsBelow": [],

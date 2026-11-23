@@ -11,6 +11,7 @@ import { spliceAll } from "@commonfabric/collections/splice";
 import {
   debugStr,
   type FabricHash,
+  FabricPrimitive,
   type FabricValue,
   hashOf,
   isValidFabricValue,
@@ -21,6 +22,7 @@ import {
   jsonFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 
+import { utf8Compare, utf8SortedKeysOf } from "@commonfabric/text/utf8";
 import { PartedDocuments, type PartsOptions } from "./parts.ts";
 
 /** The members of a JSON schema the executor reads. */
@@ -70,6 +72,19 @@ export const spliceIn = <T>(
       array,
       ([start, count] as unknown[]).concat(members) as [number, number],
     ) as T[];
+
+/**
+ * A copy of a frozen array that is not frozen. At 10,000 members
+ * `Object.values` takes 7 us, in a realm that is locked down and in one
+ * that is not; a spread takes 1 us in a realm that is not locked down and
+ * 110 us in one that is, and `slice` 160 us in both. `Object.values`
+ * leaves out a position that holds nothing, so an array with one is copied
+ * by `concat`, which keeps it.
+ */
+const copyOfArray = <T>(array: readonly T[]): T[] => {
+  const copy = Object.values(array);
+  return copy.length === array.length ? copy : array.concat();
+};
 
 const linked = new WeakSet<object>();
 
@@ -136,6 +151,21 @@ const containerOf = (schema: Schema | undefined): Schema | undefined =>
     ) ?? schema
     : schema;
 
+/**
+ * The members a read under `schema` takes of a record: the properties the
+ * schema declares, where it declares some and admits no other. `undefined`
+ * where the read takes every member the record holds.
+ */
+export const declaredMembers = (
+  schema: Schema | undefined,
+): string[] | undefined => {
+  const outer = containerOf(schema);
+  return typeof outer === "object" && outer.properties !== undefined &&
+      !outer.additionalProperties
+    ? Object.keys(outer.properties)
+    : undefined;
+};
+
 /** The schema of a member of what a schema describes. */
 export const schemaBelow = (
   schema: Schema | undefined,
@@ -161,7 +191,7 @@ export const withDefaults = (
   if (value === undefined) {
     return schema.default === undefined
       ? undefined
-      : structuredClone(schema.default);
+      : copyOfData(schema.default);
   }
   if (isRecord(value) && schema.properties !== undefined) {
     let filled: Record<string, unknown> | undefined;
@@ -186,12 +216,57 @@ export const withDefaults = (
   return value;
 };
 
+/**
+ * The names of the members of a record in the order every reader of the
+ * storage finds them in: the storage keeps a record with its names in the
+ * order of their UTF-8 bytes (`JsonEncodeAct.encodePlainObject`), and the
+ * process that wrote a record holds the names as they were written until
+ * the stored document replaces its own. Value code that reads which names
+ * a record holds is handed this order in every process, so that what it
+ * derives from the order is the same before and after a restart. A record
+ * that is built from the names in this order holds a name that is an array
+ * index before every other, as every record of the language does.
+ */
+export const membersInOrder = (record: object): readonly string[] =>
+  utf8SortedKeysOf(record);
+
 const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value) &&
   (Object.getPrototypeOf(value) === Object.prototype ||
     Object.getPrototypeOf(value) === null);
 
-/** A value as a string, with the members of each record in one order. */
+/**
+ * Whether a value is a primitive of the data model, such as a
+ * `FabricEpochNsec`: an immutable object that the storage keeps whole. The
+ * executor stores one as it is, never copies it, and compares two by the
+ * text of the JSON codec of fabric values.
+ */
+export const isDataPrimitive = (value: unknown): value is FabricPrimitive =>
+  value instanceof FabricPrimitive;
+
+/**
+ * A copy of stored data: of each array and each plain record in it, with
+ * every primitive of the data model in it kept. `structuredClone` makes a
+ * plain record of such a primitive, which loses what it holds.
+ */
+export const copyOfData = <T>(value: T): T => {
+  if (typeof value !== "object" || value === null) return value;
+  if (isDataPrimitive(value)) return value;
+  if (Array.isArray(value)) return value.map(copyOfData) as T;
+  if (isPlainRecord(value)) {
+    const copy: Record<string, unknown> = {};
+    for (const name of Object.keys(value)) copy[name] = copyOfData(value[name]);
+    return copy as T;
+  }
+  return structuredClone(value);
+};
+
+/**
+ * A value as a string, with the members of each record in one order, and a
+ * primitive of the data model as the text the JSON codec of fabric values
+ * gives it: its text as plain JSON is `{}`, whatever it holds. A `bigint`,
+ * which plain JSON refuses, is its digits.
+ */
 export const canonical = (value: unknown): string =>
   JSON.stringify(
     value,
@@ -200,8 +275,84 @@ export const canonical = (value: unknown): string =>
         ? Object.fromEntries(
           Object.entries(member).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
         )
+        : isDataPrimitive(member)
+        ? { $primitive: jsonFromFabricValue(member) }
+        : typeof member === "bigint"
+        ? { $bigint: `${member}` }
         : member,
   ) ?? "undefined";
+
+/**
+ * Whether the name of a member is an array index. A record holds such a
+ * name before every other, in the order of the numbers.
+ */
+const isIndexName = (name: string): boolean => {
+  const first = name.charCodeAt(0);
+  if (first < 48 || first > 57) return false;
+  return /^(0|[1-9]\d*)$/.test(name) && Number(name) < 4_294_967_295;
+};
+
+/**
+ * Whether the names of a record are in the order that a record built from
+ * `membersInOrder` holds them in: the names that are no array index in
+ * the order of their UTF-8 bytes.
+ */
+const inStorageOrder = (names: readonly string[]): boolean => {
+  for (let at = 1; at < names.length; at++) {
+    if (isIndexName(names[at - 1])) continue;
+    if (utf8Compare(names[at - 1], names[at]) > 0) return false;
+  }
+  return true;
+};
+
+/**
+ * Whether two values in stored form are written as the same JSON text
+ * where the members of each record are taken in one order. Two values
+ * that are one object are the same without a look at what they hold, so
+ * the comparison of a value with a copy that shares most of its
+ * containers does the work of the containers that differ. A primitive of
+ * the data model is the same as another of the same text of the JSON codec
+ * of fabric values (`canonical`) and as nothing else: it has no member
+ * that holds what it stands for. A `bigint`, which plain JSON refuses, is
+ * the same as an equal `bigint` only.
+ */
+export const sameStored = (a: unknown, b: unknown): boolean => {
+  if (a === b) return true;
+  if (typeof a === "bigint" || typeof b === "bigint") return false;
+  const left = typeof a === "object" && a !== null;
+  const right = typeof b === "object" && b !== null;
+  if (!left || !right) {
+    return !left && !right && JSON.stringify(a) === JSON.stringify(b);
+  }
+  if (isDataPrimitive(a) || isDataPrimitive(b)) {
+    return isDataPrimitive(a) && isDataPrimitive(b) &&
+      canonical(a) === canonical(b);
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false;
+    }
+    for (let index = 0; index < a.length; index++) {
+      // A position that holds nothing is written as `null`.
+      if (!sameStored(a[index] ?? null, b[index] ?? null)) return false;
+    }
+    return true;
+  }
+  const [one, other] = [a, b] as Record<string, unknown>[];
+  let members = 0;
+  for (const name of Object.keys(one)) {
+    // A member that holds nothing is not written.
+    if (one[name] === undefined) continue;
+    members += 1;
+    if (!Object.hasOwn(other, name) || !sameStored(one[name], other[name])) {
+      return false;
+    }
+  }
+  for (const name of Object.keys(other)) {
+    if (other[name] !== undefined) members -= 1;
+  }
+  return members === 0;
+};
 
 /** Whether a value can be the value of a key field: a string or a number. */
 const isKeyValue = (value: unknown): value is string | number =>
@@ -300,11 +451,35 @@ export const nameText = (name: Name): string =>
  * the serialization of a record.
  */
 export const recordOfKey = (key: string): Record<string, FabricValue> => {
+  const known = decodedKeys.get(key);
+  if (known !== undefined && known !== null) return known;
   const parts = fabricFromJsonValue(key);
   if (!isValueRecord(parts)) {
     throw new Error(debugStr`Not an element key: $quote${key}`);
   }
+  noteDecoded(key, parts);
   return parts;
+};
+
+/**
+ * What the codec read of each text that was asked about as a key: the
+ * record of a text that is the serialization of one, which the codec gives
+ * frozen, and `null` for any other text. A key is asked about at each read
+ * and each write through a reference that holds it, and reading its text
+ * costs many times a lookup. What the table holds for a text is a function
+ * of the text alone, so the stores of one process share it with no effect
+ * on any of them. It is emptied when it holds `DECODED_KEYS` texts, so it
+ * holds no more than that many.
+ */
+const decodedKeys = new Map<string, Record<string, FabricValue> | null>();
+const DECODED_KEYS = 100_000;
+
+const noteDecoded = (
+  text: string,
+  record: Record<string, FabricValue> | null,
+): void => {
+  if (decodedKeys.size >= DECODED_KEYS) decodedKeys.clear();
+  decodedKeys.set(text, record);
 };
 
 /** A path of a document in `Store.#changes`. */
@@ -401,14 +576,17 @@ export const keyOfSegment = (
   segment: string,
 ): Record<string, FabricValue> | undefined => {
   if (!segment.startsWith(CODEC_TEXT)) return undefined;
-  let decoded: FabricValue;
-  try {
-    decoded = fabricFromJsonValue(segment);
-  } catch {
-    // A text that the codec does not read is a property name.
-    return undefined;
+  let decoded: FabricValue | null | undefined = decodedKeys.get(segment);
+  if (decoded === undefined) {
+    try {
+      decoded = fabricFromJsonValue(segment);
+    } catch {
+      // A text that the codec does not read is a property name.
+      decoded = null;
+    }
+    noteDecoded(segment, isValueRecord(decoded) ? decoded : null);
   }
-  if (!isValueRecord(decoded)) return undefined;
+  if (decoded === null || !isValueRecord(decoded)) return undefined;
   const isKey = ("element" in decoded && "occurrence" in decoded) ||
     ("source" in decoded && "member" in decoded);
   return isKey ? decoded : undefined;
@@ -417,6 +595,15 @@ export const keyOfSegment = (
 /** Whether a segment of a path names an element by its key. */
 export const isKeySegment = (segment: string): boolean =>
   keyOfSegment(segment) !== undefined;
+
+/**
+ * A text for the document and the path of a reference, the same for two
+ * references where both are the same: what a reference is held under in a
+ * set or a table of one store. It is no address: `Store.addressText` gives
+ * the text that names what a reference names.
+ */
+const positionText = (ref: Ref): string =>
+  `${ref.doc}\n${JSON.stringify(ref.path)}`;
 
 /** Whether two paths have the same segments. */
 const samePath = (a: readonly string[], b: readonly string[]): boolean =>
@@ -446,7 +633,11 @@ export class Ref {
      * (`execution-and-storage.md` §2.2).
      */
     readonly schema?: Schema,
-  ) {}
+  ) {
+    // Value code is handed a reference inside a value, and sets no member
+    // of it.
+    Object.freeze(this);
+  }
 
   key(...segments: string[]): Ref {
     return segments.reduce(
@@ -494,7 +685,9 @@ export class StreamRef {
     readonly binding: number,
     readonly keys: readonly string[],
     readonly instance = "",
-  ) {}
+  ) {
+    Object.freeze(this);
+  }
 }
 
 /**
@@ -550,10 +743,20 @@ export type Position = {
    * observed the link as a reference and nothing at its target.
    */
   stopped?: true;
+  /**
+   * The read found which position a reference names and read nothing of
+   * what that position holds: it is the read of the links crossed on the
+   * way and of whether the last position holds a link. A write at the
+   * position changes what the read found; a write below it does not.
+   */
+  own?: true;
   keyed?: {
     ref: Ref;
     seen: string;
-    /** The key, and the array that the read found it in. */
+    /**
+     * The key, and the array that the read found it in, as what stands
+     * for the array through its changes (`Store.lineageOf`).
+     */
     key: string;
     array?: object;
     /** The positions outside the array that the read went through. */
@@ -602,6 +805,22 @@ export type Located = {
   fallback: unknown;
 };
 
+/**
+ * Where a read gave a stored container as the object the store holds
+ * (`Store.handed`): the address the container was read from, in the form
+ * that names it, and what the read was made under, which the keys of the
+ * arrays below it are formed with.
+ */
+export type Handed = {
+  at: Ref;
+  /** The schema the read was made under at the container. */
+  shape: Schema | undefined;
+  /** The schema that a link the read resolved through holds for it. */
+  given: Schema | undefined;
+  /** Whether the read was made under `shape` (`Store.read`, `bound`). */
+  bounded: boolean;
+};
+
 type StoredLink = { $link: { doc: string; path: string[]; schema?: Schema } };
 type StoredStream = {
   $stream: { binding: number; keys: string[]; instance?: string };
@@ -614,11 +833,19 @@ export type StreamPosition = {
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+  typeof value === "object" && value !== null && !Array.isArray(value) &&
+  !isDataPrimitive(value);
 
 export const isLink = (value: unknown): value is StoredLink =>
   isRecord(value) && isRecord(value.$link) &&
   typeof value.$link.doc === "string";
+
+/** Whether a stored value is a link or holds one at any depth. */
+const holdsLink = (value: unknown): boolean =>
+  isLink(value) ||
+  (Array.isArray(value)
+    ? value.some(holdsLink)
+    : isRecord(value) && Object.values(value).some(holdsLink));
 
 export const isStream = (value: unknown): value is StoredStream =>
   isRecord(value) && isRecord(value.$stream) &&
@@ -681,7 +908,7 @@ export const OUTPUT = "output";
  * What one change of a document replaced: the whole document, what a
  * path held, or the members that a splice of an array removed and how
  * many it put in their place. A value in it is the one the document
- * held, and no copy: a change replaces a value and mutates none.
+ * held, and no copy: a change replaces a value and changes none in place.
  */
 export type Undo =
   | {
@@ -707,6 +934,7 @@ type KeyState = {
   /** The reference that the keys were formed through. */
   at: Ref;
   fields: readonly string[];
+  /** The array, which is another object after each change below it. */
   held: readonly unknown[];
   keys: string[];
   /** The element part of each position, and its text. */
@@ -728,6 +956,58 @@ type KeyState = {
 
 /** The longest chain of links a read follows before it gives up. */
 const MAX_LINKS = 64;
+
+/**
+ * The documents of a store by identifier. A document it does not hold is
+ * asked of `load` once, where the store was given one, and held from then
+ * on: a later change of it outside the store is the store's to be told of.
+ */
+class Documents extends Map<string, { kind: string; value: unknown }> {
+  /** The identifiers `load` gave no document for. */
+  readonly #absent = new Set<string>();
+  readonly #load:
+    | ((id: string) => { kind: string; value: unknown } | undefined)
+    | undefined;
+  /** Gives a value as the store holds one (`Store.#keep`). */
+  readonly #keep: (value: unknown) => unknown;
+
+  constructor(
+    keep: (value: unknown) => unknown,
+    load?: (id: string) => { kind: string; value: unknown } | undefined,
+  ) {
+    super();
+    this.#keep = keep;
+    this.#load = load;
+  }
+
+  override get(id: string): { kind: string; value: unknown } | undefined {
+    const held = super.get(id);
+    if (held !== undefined || this.#load === undefined) return held;
+    if (this.#absent.has(id)) return undefined;
+    const loaded = this.#load(id);
+    if (loaded === undefined) {
+      this.#absent.add(id);
+      return undefined;
+    }
+    this.set(id, loaded);
+    return loaded;
+  }
+
+  override has(id: string): boolean {
+    return super.has(id) || this.get(id) !== undefined;
+  }
+
+  override set(id: string, document: { kind: string; value: unknown }): this {
+    this.#absent.delete(id);
+    document.value = this.#keep(document.value);
+    return super.set(id, document);
+  }
+
+  /** Asks `load` again for an identifier it gave no document for. */
+  forget(id: string): void {
+    this.#absent.delete(id);
+  }
+}
 
 export class Store {
   /**
@@ -760,8 +1040,14 @@ export class Store {
       keys?: "kept" | "formed";
       /** How the documents are laid out in parts; `false` for no parts. */
       parts?: PartsOptions | false;
+      /**
+       * Gives a document the store does not hold, by its identifier: one
+       * that a store outside holds. It is asked once for each identifier.
+       */
+      load?: (id: string) => { kind: string; value: unknown } | undefined;
     } = {},
   ) {
+    this.docs = new Documents((value) => this.#keep(value), options.load);
     this.#secret = options.secret ?? crypto.randomUUID();
     this.#space = options.space;
     this.#kept = (options.keys ?? "kept") === "kept";
@@ -784,6 +1070,32 @@ export class Store {
    * collection under their element keys names them here.
    */
   readonly rowKeys = new Map<string, () => readonly string[]>();
+
+  /**
+   * The collection of the plan of the instance whose result holds each
+   * array of `rowKeys`, by the same text.
+   */
+  readonly rowCollections = new Map<string, number>();
+
+  /** The position of each key of a list of row keys, by the list. */
+  readonly #rowPositions = new WeakMap<
+    readonly string[],
+    Map<string, number>
+  >();
+
+  /**
+   * The position of the row of `key` among the rows whose keys are
+   * `keys`, or -1. The positions of a list are found once, so a lookup is
+   * no scan of the rows.
+   */
+  #rowPosition(keys: readonly string[], key: string): number {
+    let positions = this.#rowPositions.get(keys);
+    if (positions === undefined) {
+      positions = new Map(keys.map((each, index) => [each, index]));
+      this.#rowPositions.set(keys, positions);
+    }
+    return positions.get(key) ?? -1;
+  }
 
   /** The key of the row at a position of a stored array, where known. */
   #rowKey(
@@ -816,7 +1128,566 @@ export class Store {
    */
   readonly #kept: boolean;
 
-  readonly docs = new Map<string, { kind: string; value: unknown }>();
+  /**
+   * The documents by identifier. The value of a document is frozen with
+   * every container in it, and no change is made in place: a change
+   * replaces each container on the way to what it changes with a copy
+   * that holds the new member, and leaves every other container the
+   * object it was. So a value that was read from a document stays what it
+   * was read as, and what a change costs is the length of its path.
+   */
+  readonly docs: Map<string, { kind: string; value: unknown }>;
+
+  /**
+   * For each container that the store holds or held: how many of its
+   * members are a link, a stream or an error state, or hold one at any
+   * depth. A container with an entry is frozen with every container in it,
+   * and each record in it holds its members in the order of the storage
+   * (`inStorageOrder`).
+   */
+  readonly #linksIn = new WeakMap<object, number>();
+
+  /** How many containers the changes copied to replace a member of one. */
+  copiedByWrites = 0;
+
+  /** How many containers the reads copied. */
+  copiedByReads = 0;
+
+  /**
+   * Whether a value is a link, a stream or an error state, or a container
+   * that holds one.
+   */
+  #holdsLinks(value: unknown): boolean {
+    return typeof value === "object" && value !== null &&
+      (this.#linksIn.get(value) ?? 1) > 0;
+  }
+
+  /**
+   * Whether a value is a container the store holds or held with no link, no
+   * stream and no error state at any depth. Such a container is frozen
+   * with all it holds, and a read of it replaces nothing in it.
+   */
+  plain(value: unknown): value is object {
+    return typeof value === "object" && value !== null &&
+      this.#linksIn.get(value) === 0;
+  }
+
+  /** Whether a value is a container the store holds or held. */
+  holds(value: unknown): boolean {
+    return typeof value === "object" && value !== null &&
+      this.#linksIn.has(value);
+  }
+
+  /**
+   * Where the last read that gave a stored container as the object the
+   * store holds read it from, by the container. A read gives such a
+   * container where it would copy it member for member: the container is
+   * `plain`, the read is no read through a handle, and the schema of the
+   * read leaves no member out and fills in no default. The containers
+   * below it carry no address of their own: `addressesBelow` gives them.
+   */
+  readonly handed = new WeakMap<object, Handed>();
+
+  /**
+   * For each stored array and each schema of its elements: whether a read
+   * under a schema with those `items` leaves no member of an element out
+   * (`#nothingLeftOut`), and whether it fills in no default
+   * (`#noDefaults`). An array has an entry for a schema once a read asked,
+   * and the copy that replaces the array after a change gets the entries
+   * that hold for the members the change put in (`#replaced`).
+   */
+  readonly #wholeUnder = new WeakMap<object, Map<Schema, boolean>>();
+  readonly #fullUnder = new WeakMap<object, Map<Schema, boolean>>();
+
+  /**
+   * How many members of stored arrays the reads examined one by one to
+   * find whether a read gives the array as the store holds it.
+   */
+  membersExamined = 0;
+
+  /**
+   * Whether `holds` is true of each member of a stored array. A loop by
+   * position: `every` of a frozen array costs several times as much.
+   */
+  #everyMember(
+    array: readonly unknown[],
+    holds: (member: unknown) => boolean,
+  ): boolean {
+    for (let index = 0; index < array.length; index++) {
+      this.membersExamined += 1;
+      if (!holds(array[index])) return false;
+    }
+    return true;
+  }
+
+  /** Notes what a check of an array under a schema of its elements found. */
+  #noteChecked(
+    table: WeakMap<object, Map<Schema, boolean>>,
+    array: object,
+    items: Schema,
+    holds: boolean,
+  ): boolean {
+    let known = table.get(array);
+    if (known === undefined) {
+      known = new Map();
+      table.set(array, known);
+    }
+    // A reader that makes a schema for each read leaves an entry for each.
+    if (known.size >= 8) known.delete(known.keys().next().value!);
+    known.set(items, holds);
+    return holds;
+  }
+
+  /**
+   * Whether a read of the plain container `value` under `shape` leaves no
+   * member out: each record in it holds only members that the schema at
+   * its place declares, where that schema declares some and admits no
+   * other (`declaredMembers`).
+   */
+  #nothingLeftOut(value: unknown, shape: Schema | undefined): boolean {
+    if (typeof value !== "object" || value === null) return true;
+    const outer = containerOf(shape);
+    if (typeof outer !== "object") return true;
+    if (Array.isArray(value)) {
+      const { items } = outer;
+      if (
+        typeof items !== "object" ||
+        (items.properties === undefined && items.items === undefined &&
+          items.anyOf === undefined)
+      ) return true;
+      const known = this.#wholeUnder.get(value)?.get(items);
+      if (known !== undefined) return known;
+      return this.#noteChecked(
+        this.#wholeUnder,
+        value,
+        items,
+        this.#everyMember(
+          value,
+          (member) => this.#nothingLeftOut(member, items),
+        ),
+      );
+    }
+    if (outer.properties === undefined) return true;
+    const declared = declaredMembers(shape);
+    const record = value as Record<string, unknown>;
+    for (const name of Object.keys(record)) {
+      if (declared !== undefined && !declared.includes(name)) return false;
+      if (!this.#nothingLeftOut(record[name], outer.properties[name])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Whether `withDefaults` fills in nothing for the plain container or the
+   * scalar `value` under `schema`.
+   */
+  #noDefaults(value: unknown, schema: Schema | undefined): boolean {
+    if (typeof schema !== "object") return true;
+    if (value === undefined) return schema.default === undefined;
+    if (typeof value !== "object" || value === null) return true;
+    if (Array.isArray(value)) {
+      const { items } = schema;
+      if (
+        typeof items !== "object" ||
+        (items.properties === undefined && items.items === undefined &&
+          items.default === undefined)
+      ) return true;
+      const known = this.#fullUnder.get(value)?.get(items);
+      if (known !== undefined) return known;
+      return this.#noteChecked(
+        this.#fullUnder,
+        value,
+        items,
+        this.#everyMember(
+          value,
+          (member) => this.#noDefaults(member, items),
+        ),
+      );
+    }
+    if (schema.properties === undefined) return true;
+    const record = value as Record<string, unknown>;
+    for (const [name, member] of Object.entries(schema.properties)) {
+      if (!this.#noDefaults(record[name], member)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Gives the entries of `#wholeUnder` and `#fullUnder` that hold for the
+   * array `from` to `next`, the copy that replaces it, where they hold for
+   * each of `put`, the members the change put into the copy.
+   */
+  #checkedStill(from: object, next: object, put: readonly unknown[]): void {
+    const tables = [
+      [
+        this.#wholeUnder,
+        (member: unknown, items: Schema) => this.#nothingLeftOut(member, items),
+      ],
+      [
+        this.#fullUnder,
+        (member: unknown, items: Schema) => this.#noDefaults(member, items),
+      ],
+    ] as const;
+    for (const [table, check] of tables) {
+      const known = table.get(from);
+      if (known === undefined) continue;
+      for (const [items, holds] of known) {
+        if (!holds || !put.every((member) => check(member, items))) continue;
+        this.#noteChecked(table, next, items, true);
+      }
+    }
+  }
+
+  /**
+   * Names the address of `member`, the member at `segment` of `parent`,
+   * where `parent` is a container that a read gave as the object the
+   * store holds and `member` is a container too: the address `handed`
+   * then holds for `member` is the one `addressesBelow` gives it. Whoever
+   * steps from a value to one of its members calls this, so that the
+   * member carries its address as the value does.
+   */
+  handMember(parent: object, segment: string, member: unknown): void {
+    if (typeof member !== "object" || member === null) return;
+    if (!this.#linksIn.has(member)) return;
+    const handed = this.handed.get(parent);
+    if (handed === undefined) return;
+    const { shape, given, bounded } = handed;
+    const outer = bounded ? containerOf(shape) : shape;
+    if (!Array.isArray(parent)) {
+      this.handed.set(member, {
+        at: new Ref(handed.at.doc, [...handed.at.path, segment]),
+        shape: schemaBelow(outer, segment),
+        given: schemaBelow(given, segment),
+        bounded,
+      });
+      return;
+    }
+    if (!/^\d+$/.test(segment)) return;
+    const declared = keyFieldsOf(shape);
+    const keys = this.#keysOf(
+      parent,
+      new Ref(handed.at.doc, handed.at.path),
+      parent,
+      declared.length > 0 ? declared : keyFieldsOf(given),
+      true,
+    );
+    this.handed.set(member, {
+      at: new Ref(handed.at.doc, [
+        ...handed.at.path,
+        keySegment(keys[Number(segment)]),
+      ]),
+      shape: typeof outer === "object" ? outer.items : undefined,
+      given: typeof given === "object" ? given.items : undefined,
+      bounded,
+    });
+  }
+
+  /**
+   * Adds to `into` the address of each container below `root`, a
+   * container that a read gave as the object the store holds (`handed`):
+   * what a read that copies registers for each copy as it makes it. A
+   * member of a record has the path of the record and its name, and a
+   * member of an array the path of the array and the key of the member,
+   * formed with the key fields the read declares for the array.
+   */
+  addressesBelow(root: object, handed: Handed, into: Map<object, Ref>): void {
+    const walk = (
+      value: object,
+      // The address with a position for each array crossed below the root,
+      // and the address in the form that names the container.
+      here: Ref,
+      named: Ref,
+      shape: Schema | undefined,
+      given: Schema | undefined,
+    ): void => {
+      const outer = handed.bounded ? containerOf(shape) : shape;
+      if (Array.isArray(value)) {
+        let containers = false;
+        for (let index = 0; index < value.length && !containers; index++) {
+          containers = typeof value[index] === "object" &&
+            value[index] !== null;
+        }
+        if (!containers) return;
+        const declared = keyFieldsOf(shape);
+        const keys = this.keysOf(
+          value,
+          here,
+          value,
+          declared.length > 0 ? declared : keyFieldsOf(given),
+          true,
+        );
+        const items = typeof outer === "object" ? outer.items : undefined;
+        for (let index = 0; index < value.length; index++) {
+          const member = value[index];
+          if (typeof member !== "object" || member === null) continue;
+          const at = named.key(keySegment(keys[index]));
+          into.set(member, at);
+          walk(
+            member,
+            here.key(`${index}`),
+            at,
+            items,
+            typeof given === "object" ? given.items : undefined,
+          );
+        }
+        return;
+      }
+      const record = value as Record<string, unknown>;
+      for (const name of Object.keys(record)) {
+        const member = record[name];
+        if (typeof member !== "object" || member === null) continue;
+        const at = named.key(name);
+        into.set(member, at);
+        walk(
+          member,
+          here.key(name),
+          at,
+          schemaBelow(outer, name),
+          schemaBelow(given, name),
+        );
+      }
+    };
+    const at = new Ref(handed.at.doc, handed.at.path);
+    walk(root, at, at, handed.shape, handed.given);
+  }
+
+  /**
+   * A value as the store holds one: frozen with every container in it, and
+   * each record with its members in the order of the storage. A container
+   * is frozen where it stands, and a record is replaced by a copy where its
+   * members are in another order, as is a container that was frozen
+   * already and holds such a record. A container that the store holds
+   * already is returned as it is, with no look at what it holds. The schema
+   * of a link is left as it is: a plan shares it.
+   */
+  #keep(value: unknown): unknown {
+    if (typeof value !== "object" || value === null) return value;
+    if (this.#linksIn.has(value)) return value;
+    if (isLink(value)) {
+      Object.freeze(value.$link.path);
+      Object.freeze(value.$link);
+      this.#linksIn.set(Object.freeze(value), 1);
+      return value;
+    }
+    if (isStream(value)) {
+      Object.freeze(value.$stream.keys);
+      Object.freeze(value.$stream);
+      this.#linksIn.set(Object.freeze(value), 1);
+      return value;
+    }
+    if (isErrorState(value)) {
+      Object.freeze(value.$error);
+      this.#linksIn.set(Object.freeze(value), 1);
+      return value;
+    }
+    if (Array.isArray(value)) {
+      let kept: unknown[] = value;
+      let links = 0;
+      for (let index = 0; index < value.length; index++) {
+        const member = value[index];
+        if (typeof member !== "object" || member === null) continue;
+        const held = this.#keep(member);
+        if (held !== member) {
+          if (kept === value && Object.isFrozen(value)) {
+            kept = copyOfArray(value);
+          }
+          kept[index] = held;
+        }
+        if (this.#holdsLinks(held)) links += 1;
+      }
+      this.#linksIn.set(Object.freeze(kept), links);
+      return kept;
+    }
+    // An object of a class is left as it is, and a read of what holds it
+    // copies as a read of a link does. A primitive of the data model is
+    // such an object and a value of a document: it is immutable from its
+    // construction, and a copy of what holds it holds the same object
+    // (`#copy`).
+    if (!isPlainRecord(value)) return value;
+    const names = Object.keys(value);
+    let kept: Record<string, unknown> = value;
+    // A record with no prototype is held as one with the prototype of a
+    // record: what takes a stored value from the store takes it as a
+    // record like any other.
+    if (!inStorageOrder(names) || Object.getPrototypeOf(value) === null) {
+      kept = {};
+      for (const name of names.sort(utf8Compare)) kept[name] = value[name];
+    }
+    let links = 0;
+    for (const name of names) {
+      const member = kept[name];
+      if (typeof member !== "object" || member === null) continue;
+      const held = this.#keep(member);
+      if (held !== member) {
+        if (kept === value && Object.isFrozen(value)) kept = { ...value };
+        kept[name] = held;
+      }
+      if (this.#holdsLinks(held)) links += 1;
+    }
+    this.#linksIn.set(Object.freeze(kept), links);
+    return kept;
+  }
+
+  /**
+   * What stands for a stored array through its changes: an object that the
+   * array has from when it is first asked for, and that each copy that
+   * replaces the array after a change below it has too. A reader of a key
+   * of the array is registered under it, so a change of another member of
+   * the array leaves the registration where it is.
+   */
+  readonly #lineage = new WeakMap<object, object>();
+
+  /** What stands for a stored array through its changes (`#lineage`). */
+  lineageOf(array: object): object {
+    let lineage = this.#lineage.get(array);
+    if (lineage === undefined) {
+      lineage = {};
+      this.#lineage.set(array, lineage);
+    }
+    return lineage;
+  }
+
+  /**
+   * What stands for an array through its changes where something asked
+   * for it before, and nothing otherwise.
+   */
+  lineageHeld(array: object): object | undefined {
+    return this.#lineage.get(array);
+  }
+
+  /**
+   * Freezes `next`, the copy that replaces the container `from` of a
+   * document, and gives it what the store keeps for `from`: the count of
+   * its members that hold a link, and for an array its keys, what stands
+   * for it through its changes, and whether a whole read formed its keys.
+   */
+  #replaced(
+    from: object,
+    next: object,
+    links: number,
+    /** The members the change put into the copy. */
+    put: readonly unknown[],
+  ): void {
+    this.#linksIn.set(Object.freeze(next), links);
+    this.copiedByWrites += 1;
+    if (!Array.isArray(from) || !Array.isArray(next)) return;
+    this.#checkedStill(from, next, put);
+    const states = this.#states.get(from);
+    if (states !== undefined) {
+      this.#states.delete(from);
+      this.#states.set(next, states);
+      for (const state of states.values()) state.held = next;
+    }
+    const lineage = this.#lineage.get(from);
+    if (lineage !== undefined) this.#lineage.set(next, lineage);
+    if (this.#readWhole.has(from)) this.#readWhole.add(next);
+  }
+
+  /** How many members of a container hold a link (`#linksIn`). */
+  #linksOf(container: object): number {
+    const known = this.#linksIn.get(container);
+    if (known !== undefined) return known;
+    let links = 0;
+    for (const member of Object.values(container)) {
+      if (this.#holdsLinks(member)) links += 1;
+    }
+    return links;
+  }
+
+  /**
+   * Puts `value`, a value as the store holds one, at `path` of a document
+   * in the place of what the path holds, or with `remove` takes the member
+   * at `path` out of the record that holds it. Each container on the way
+   * is replaced by a copy that holds the new member, and every other
+   * container stays the object it was. Returns whether each container on
+   * the way exists; where one does not, nothing is changed.
+   */
+  #setAt(
+    document: { kind: string; value: unknown },
+    path: readonly string[],
+    value: unknown,
+    remove = false,
+  ): boolean {
+    if (path.length === 0) {
+      document.value = value;
+      return true;
+    }
+    const holders: Record<string, unknown>[] = [];
+    let holder = document.value;
+    for (const segment of path) {
+      if (typeof holder !== "object" || holder === null) return false;
+      holders.push(holder as Record<string, unknown>);
+      holder = (holder as Record<string, unknown>)[segment];
+    }
+    let next = value;
+    let removed = remove;
+    for (let index = path.length - 1; index >= 0; index--) {
+      const from = holders[index];
+      const name = path[index];
+      let links = this.#linksOf(from) - (this.#holdsLinks(from[name]) ? 1 : 0);
+      let copy: Record<string, unknown>;
+      if (Array.isArray(from)) {
+        copy = copyOfArray(from) as unknown as Record<string, unknown>;
+        copy[name] = next;
+      } else {
+        copy = { ...from };
+        if (removed) {
+          delete copy[name];
+        } else if (Object.hasOwn(from, name) || isIndexName(name)) {
+          copy[name] = next;
+        } else {
+          // A name the record gets is put where the order of the storage
+          // has it.
+          const names = Object.keys(from);
+          const last = names[names.length - 1];
+          copy[name] = next;
+          if (
+            last !== undefined && !isIndexName(last) &&
+            utf8Compare(last, name) > 0
+          ) {
+            const ordered: Record<string, unknown> = {};
+            for (const each of Object.keys(copy).sort(utf8Compare)) {
+              ordered[each] = copy[each];
+            }
+            copy = ordered;
+          }
+        }
+      }
+      if (!removed && this.#holdsLinks(next)) links += 1;
+      this.#replaced(from, copy, links, removed ? [] : [next]);
+      next = copy;
+      removed = false;
+    }
+    document.value = next;
+    return true;
+  }
+
+  /**
+   * Replaces the stored array `held` at `path` of a document by a copy with
+   * a splice applied: `removed` members from `start` on give way to
+   * `members`. Returns the members the splice took out.
+   */
+  #spliced(
+    document: { kind: string; value: unknown },
+    path: readonly string[],
+    held: readonly unknown[],
+    start: number,
+    removed: number,
+    members: readonly unknown[],
+  ): unknown[] {
+    const next = copyOfArray(held);
+    const kept = members.map((member) => this.#keep(member));
+    const taken = spliceIn(next, start, removed, kept);
+    let links = this.#linksOf(held);
+    for (const member of taken) if (this.#holdsLinks(member)) links -= 1;
+    for (const member of kept) if (this.#holdsLinks(member)) links += 1;
+    this.#replaced(held, next, links, kept);
+    this.#setAt(document, path, next);
+    return taken;
+  }
+
   /**
    * The places that hold nothing until a write: a state cell has no
    * document when it is created, and a read of it reads the default of
@@ -854,7 +1725,7 @@ export class Store {
       const found: StreamPosition[] = [];
       const walk = (held: unknown, at: string[]) => {
         if (isStream(held)) {
-          found.push({ path: at, stream: structuredClone(held.$stream) });
+          found.push({ path: at, stream: copyOfData(held.$stream) });
         } else if (Array.isArray(held)) {
           held.forEach((member, index) => walk(member, [...at, `${index}`]));
         } else if (isRecord(held)) {
@@ -917,7 +1788,9 @@ export class Store {
    * change is in no array, and otherwise says, for each array on the way
    * to the path and for an array at it, which keys changed what they
    * hold or whether a position holds them: `keys` is absent where every
-   * key may have, and `now` is the array that replaced `array`.
+   * key may have. `array` is what stands for the array through its
+   * changes (`lineageOf`), and `now` is what stands for the array that a
+   * write of the whole array put in its place.
    */
   onChange:
     | ((
@@ -1055,9 +1928,7 @@ export class Store {
       from = this.#adding;
     } else if (
       Array.isArray(old) && Array.isArray(now) && old.length < now.length &&
-      old.every((member, index) =>
-        JSON.stringify(member) === JSON.stringify(now[index])
-      )
+      old.every((member, index) => sameStored(member, now[index]))
     ) from = old.length;
     if (from !== undefined) {
       if (!appended.has(key)) appended.set(key, from);
@@ -1132,7 +2003,7 @@ export class Store {
       }
     }
     let copy: { value: unknown } | undefined = {
-      value: structuredClone(
+      value: copyOfData(
         top.reduce(
           (value: unknown, segment) => child(value, segment),
           this.docs.get(doc)?.value,
@@ -1145,13 +2016,13 @@ export class Store {
       if ("whole" in undo) {
         copy = undo.old === undefined
           ? undefined
-          : { value: structuredClone(undo.old.value) };
+          : { value: copyOfData(undo.old.value) };
         continue;
       }
       if (copy === undefined || !isPrefix(top, undo.path)) continue;
       const rest = undo.path.slice(top.length);
       if (rest.length === 0 && !("splice" in undo)) {
-        copy.value = structuredClone(undo.old);
+        copy.value = copyOfData(undo.old);
         continue;
       }
       let holder = copy as unknown as Record<string, unknown>;
@@ -1169,13 +2040,13 @@ export class Store {
             array,
             undo.splice.start,
             undo.splice.inserted,
-            structuredClone(undo.splice.removed),
+            copyOfData(undo.splice.removed),
           );
         }
       } else if (undo.old === undefined && !Array.isArray(holder)) {
         delete holder[name];
       } else {
-        holder[name] = structuredClone(undo.old);
+        holder[name] = copyOfData(undo.old);
       }
     }
     if (copy === undefined) return { existed: false, value: undefined };
@@ -1213,16 +2084,14 @@ export class Store {
       }
       this.docs.set(doc, { kind, value });
     } else {
-      let holder = held.value as Record<string, unknown>;
-      for (const segment of path.slice(0, -1)) {
-        const next = holder?.[segment];
-        if (typeof next !== "object" || next === null) return;
-        holder = next as Record<string, unknown>;
-      }
-      const last = path[path.length - 1];
+      const holder = this.peek(doc, path.slice(0, -1));
       if (typeof holder !== "object" || holder === null) return;
-      if (value === undefined && !Array.isArray(holder)) delete holder[last];
-      else holder[last] = value;
+      this.#setAt(
+        held,
+        path,
+        this.#keep(value),
+        value === undefined && !Array.isArray(holder),
+      );
     }
     this.#changed(doc, [...path], old);
   }
@@ -1246,18 +2115,12 @@ export class Store {
         this.#changed(undo.doc, [], now);
         continue;
       }
-      let holder = held as unknown as Record<string, unknown>;
-      let name = "value";
-      for (const segment of undo.path) {
-        const next = holder?.[name];
-        if (typeof next !== "object" || next === null) break;
-        holder = next as Record<string, unknown>;
-        name = segment;
-      }
       if ("splice" in undo) {
-        const array = holder[name];
+        const array = this.peek(undo.doc, undo.path);
         if (Array.isArray(array)) {
-          const taken = spliceIn(
+          const taken = this.#spliced(
+            held,
+            undo.path,
             array,
             undo.splice.start,
             undo.splice.inserted,
@@ -1271,12 +2134,15 @@ export class Store {
         }
         continue;
       }
-      const now = holder[name];
-      if (undo.old === undefined && !Array.isArray(holder)) {
-        delete holder[name];
-      } else {
-        holder[name] = undo.old;
-      }
+      const holder = this.peek(undo.doc, undo.path.slice(0, -1));
+      if (typeof holder !== "object" || holder === null) continue;
+      const now = this.peek(undo.doc, undo.path);
+      this.#setAt(
+        held,
+        undo.path,
+        undo.old,
+        undo.old === undefined && !Array.isArray(holder),
+      );
       this.#changed(undo.doc, undo.path, now);
     }
   }
@@ -1331,9 +2197,10 @@ export class Store {
 
   /**
    * The keys of each stored array whose keys were formed, by the array
-   * and the key fields. An array is changed in place by a write below
-   * it and by a splice, and its keys are then brought up to date for
-   * the positions that the change touched (`#touch`).
+   * and the key fields. A write below an array and a splice of it replace
+   * the array with a copy, which gets the keys (`#replaced`), and the keys
+   * are then brought up to date for the positions that the change touched
+   * (`#touch`).
    */
   readonly #states = new WeakMap<object, Map<string, KeyState>>();
 
@@ -1396,14 +2263,37 @@ export class Store {
     return this.#kept && this.locate(state.at, true).value === state.held;
   }
 
-  /** Notes what forming a part read of other documents. */
-  #others(state: KeyState, reads: readonly Position[]): void {
+  /**
+   * Notes what forming a part read of other documents: each document
+   * whole for the reads of a member that is a plain value, and for the
+   * reads that found what a member that is a link names (`named`) the
+   * positions themselves, since the key of such a member is the address
+   * the link names and nothing of what is stored there. Each is noted
+   * once.
+   */
+  #others(
+    state: KeyState,
+    reads: readonly Position[],
+    named: readonly Position[] = [],
+  ): void {
     const array = this.locate(state.at, true).ref;
+    const known = new Set(
+      state.others.map(({ doc, path, own }) =>
+        own ? JSON.stringify([doc, path]) : doc
+      ),
+    );
     for (const { doc, path } of reads) {
       if (doc === array.doc && isPrefix(array.path, path)) continue;
-      if (!state.others.some((known) => known.doc === doc)) {
-        state.others.push({ doc, path: [] });
-      }
+      if (known.has(doc)) continue;
+      known.add(doc);
+      state.others.push({ doc, path: [] });
+    }
+    for (const { doc, path } of named) {
+      if (doc === array.doc && isPrefix(array.path, path)) continue;
+      const text = JSON.stringify([doc, path]);
+      if (known.has(doc) || known.has(text)) continue;
+      known.add(text);
+      state.others.push({ doc, path: [...path], own: true });
     }
   }
 
@@ -1433,7 +2323,7 @@ export class Store {
         all = true;
         continue;
       }
-      const id = this.addressText(state.at);
+      const id = positionText(state.at);
       const reads: Position[] = [];
       let parts: ElementPart[];
       this.#keying.add(id);
@@ -1526,7 +2416,7 @@ export class Store {
     for (const segment of path) {
       if (Array.isArray(value)) {
         keyed.push({
-          array: value,
+          array: this.lineageOf(value),
           keys: /^\d+$/.test(segment)
             ? this.#memberSet(value, Number(segment))
             : this.#dropped(value),
@@ -1537,7 +2427,7 @@ export class Store {
     if (splice !== undefined) {
       if (Array.isArray(value)) {
         keyed.push({
-          array: value,
+          array: this.lineageOf(value),
           keys: this.#respliced(
             value,
             splice.start,
@@ -1554,28 +2444,27 @@ export class Store {
     const states = this.#states.get(old);
     if (states === undefined || !Array.isArray(value) || !this.#kept) {
       keyed.push({
-        array: old,
-        ...(Array.isArray(value) ? { now: value } : {}),
+        array: this.lineageOf(old),
+        ...(Array.isArray(value) ? { now: this.lineageOf(value) } : {}),
       });
       return keyed;
     }
-    const same = (a: unknown, b: unknown) =>
-      a === b || JSON.stringify(a) === JSON.stringify(b);
     let head = 0;
     while (
-      head < old.length && head < value.length && same(old[head], value[head])
+      head < old.length && head < value.length &&
+      sameStored(old[head], value[head])
     ) head += 1;
     let tail = 0;
     while (
       tail < old.length - head && tail < value.length - head &&
-      same(old[old.length - 1 - tail], value[value.length - 1 - tail])
+      sameStored(old[old.length - 1 - tail], value[value.length - 1 - tail])
     ) tail += 1;
     this.#states.delete(old);
     this.#states.set(value, states);
     for (const state of states.values()) state.held = value;
     keyed.push({
-      array: old,
-      now: value,
+      array: this.lineageOf(old),
+      now: this.lineageOf(value),
       keys: this.#respliced(
         value,
         head,
@@ -1622,6 +2511,34 @@ export class Store {
       }
     }
     return this.#salted(value);
+  }
+
+  /**
+   * A stored plain value with each link in it replaced by a record of the
+   * address the link names. `namings` gets the reads that found what each
+   * link names.
+   */
+  #linksNamed(value: unknown, namings: Position[]): unknown {
+    if (isLink(value)) {
+      const { named } = this.locate(
+        new Ref(value.$link.doc, value.$link.path),
+        true,
+        namings,
+        true,
+      );
+      return { $named: this.addressOf(named) };
+    }
+    if (Array.isArray(value)) {
+      return value.map((member) => this.#linksNamed(member, namings));
+    }
+    if (isRecord(value)) {
+      return Object.fromEntries(
+        Object.entries(value).map((
+          [name, member],
+        ) => [name, this.#linksNamed(member, namings)]),
+      );
+    }
+    return value;
   }
 
   /** The key of a plain value at an occurrence count. */
@@ -1696,14 +2613,23 @@ export class Store {
    * and not by its whole value: a change of another member changes no
    * key (rulings Z44, Z45 and Z49). A position that holds a link is
    * keyed by its cell with or without declared fields.
+   *
+   * With `whole`, `copies` hold every member of what the positions hold:
+   * a read under no schema gave them, or one under a schema that left no
+   * member out. Where no position then is a link or holds one, the keys
+   * are those the store forms from the array alone, and from the second
+   * such read of an array on it keeps them and brings them up to date as
+   * it does those: a third read of the array forms no key. The keys of a
+   * read that left a member out are not kept.
    */
   keysOf(
     held: readonly unknown[],
     at: Ref,
     copies?: readonly unknown[],
     fields: readonly string[] = [],
+    whole = false,
   ): string[] {
-    return [...this.#keysOf(held, at, copies, fields)];
+    return [...this.#keysOf(held, at, copies, fields, whole)];
   }
 
   /**
@@ -1715,8 +2641,9 @@ export class Store {
     at: Ref,
     copies?: readonly unknown[],
     fields: readonly string[] = [],
+    whole = false,
   ): string[] {
-    const id = this.addressText(at);
+    const id = positionText(at);
     // An element that holds a reference by key into its own array is
     // keyed by its position while the keys of that array are formed.
     const reentered = this.#keying.has(id);
@@ -1737,6 +2664,8 @@ export class Store {
     this.#keying.add(id);
     this.keyings += 1;
     const reads: Position[] = [];
+    // The reads that found what a member that is a link names.
+    const namings: Position[] = [];
     try {
       const parts = held.map((member, index): ElementPart => {
         if (isLink(member)) {
@@ -1745,12 +2674,20 @@ export class Store {
           const { named } = this.locate(
             new Ref(member.$link.doc, member.$link.path),
             true,
-            reads,
+            namings,
             true,
           );
           return this.addressOf(named);
         }
         if (reentered) return { position: index };
+        // A plain member that holds links is keyed by its own content with
+        // each link as the address of what it names: nothing the links
+        // lead to is read, so the work is the size of the member and not
+        // of everything reachable from it, and a change of a document a
+        // link leads to forms no key.
+        if (copies === undefined && holdsLink(member)) {
+          return this.partOf(this.#linksNamed(member, namings), fields);
+        }
         return this.partOf(
           copies === undefined
             ? this.read(at.key(`${index}`), reads)
@@ -1759,7 +2696,19 @@ export class Store {
         );
       });
       const keys = keysOfParts(parts);
-      if (!reentered && copies === undefined && this.clock === clock) {
+      // Copies of a read under no schema, of positions that hold no link,
+      // are what the store reads at those positions itself.
+      // Kept keys are brought up to date at each write to the array, which
+      // reads the member written. That pays for an array that is read
+      // whole again and again, and costs for one that is read once and
+      // then written member by member, so the keys of copies are kept
+      // from the second such read of an array on.
+      let kept = copies === undefined;
+      if (!kept && whole && !reentered && !held.some(holdsLink)) {
+        kept = this.#readWhole.has(held);
+        this.#readWhole.add(held);
+      }
+      if (!reentered && kept && this.clock === clock) {
         // What was read beside the array: each other document whole. A
         // write to one of them forms the keys again.
         const texts = parts.map(textOf);
@@ -1779,7 +2728,7 @@ export class Store {
           ops: [],
           dropped: 0,
         };
-        this.#others(state, reads);
+        this.#others(state, reads, namings);
         const states = this.#states.get(held) ?? new Map<string, KeyState>();
         states.set(named, state);
         this.#states.set(held, states);
@@ -1809,6 +2758,16 @@ export class Store {
     reads?: Position[],
     /** Stop at a key: the reference is named and no key is resolved. */
     names = false,
+    /**
+     * The members a read under a schema takes of a record at the position
+     * (`declaredMembers`). Where the position holds a record with a member
+     * that is none of these, and the path crossed no key, the positions of
+     * these members are the ones read, and the position of the record is
+     * not: a change of another member of the record is no change of what
+     * the read gave. A change at the position or above it is one of every
+     * member.
+     */
+    members?: readonly string[],
   ): Located {
     let doc = ref.doc;
     this.#refresh(doc);
@@ -1881,7 +2840,20 @@ export class Store {
             fallback,
           };
         }
-        if (reads !== undefined && !this.#plain.has(reads)) {
+        // The rows of a collection that are stored under their element
+        // keys are found by those keys (`rowKeys`), and no key is formed
+        // from what a row holds. Such a key does not follow what the row
+        // holds, so the read keeps no copy of the row to find a change of
+        // the key by: it reads the position that holds the row now.
+        const rows = this.rowKeys.get(JSON.stringify([doc, at]));
+        if (
+          rows === undefined && reads !== undefined &&
+          this.#beforeKeys.has(reads)
+        ) {
+          reads = undefined;
+        } else if (
+          rows === undefined && reads !== undefined && !this.#plain.has(reads)
+        ) {
           const keyed = new Ref(doc, [...named_, segment, ...rest]);
           const inner: Position[] = [];
           this.#plain.add(inner);
@@ -1893,7 +2865,7 @@ export class Store {
               ref: keyed,
               seen,
               key: segment,
-              ...(Array.isArray(value) ? { array: value } : {}),
+              ...(Array.isArray(value) ? { array: this.lineageOf(value) } : {}),
               others: inner.filter((read) =>
                 read.doc !== doc || !isPrefix(at, read.path)
               ),
@@ -1907,12 +2879,14 @@ export class Store {
         const held = value;
         const here = new Ref(doc, at);
         const indexOf = (key: string) =>
-          Array.isArray(held)
-            ? this.#positionOf(
+          !Array.isArray(held)
+            ? -1
+            : rows !== undefined
+            ? this.#rowPosition(rows(), key)
+            : this.#positionOf(
               this.#keysOf(held, here, undefined, fieldsOfKey(key)),
               key,
-            )
-            : -1;
+            );
         let index = indexOf(key);
         for (let hops = 0; index < 0 && hops < MAX_LINKS; hops++) {
           const next = this.#rekeyed(doc, named_, key);
@@ -1938,8 +2912,19 @@ export class Store {
       at = [...at, segment];
       named_ = [...named_, segment];
     }
-    reads?.push({ doc, path: at });
-    this.#read(doc, at);
+    if (
+      members !== undefined && crossed.length === 0 && !missing &&
+      isRecord(value) && !isLink(value) && !isStream(value) &&
+      Object.keys(value).some((name) => !members.includes(name))
+    ) {
+      for (const name of members) {
+        reads?.push({ doc, path: [...at, name] });
+        this.#read(doc, [...at, name]);
+      }
+    } else {
+      reads?.push({ doc, path: at });
+      this.#read(doc, at);
+    }
     return {
       ref: new Ref(doc, at, schema),
       value,
@@ -1951,6 +2936,21 @@ export class Store {
       fallback,
     };
   }
+
+  /**
+   * `locate`, for a caller that takes the position found and the positions
+   * the read went through, and nothing of a read by key: where `locate`
+   * would put one read by key in the place of the positions from a key on,
+   * `crossed` gets nothing from the key on, and the element the key names
+   * is not read to keep what it holds.
+   */
+  locateCrossed(ref: Ref, through: boolean, crossed: Position[]): Located {
+    this.#beforeKeys.add(crossed);
+    return this.locate(ref, through, crossed);
+  }
+
+  /** The lists of reads that end at the first key (`locateCrossed`). */
+  readonly #beforeKeys = new WeakSet<Position[]>();
 
   /** Reports a position a read went through (`onRead`, `reader`). */
   #read(doc: string, path: string[]): void {
@@ -2089,6 +3089,13 @@ export class Store {
    * does not declare is left out, and a link at a position the schema
    * types `unknown` is given as a reference stand-in, an object with no
    * member that carries the address, and not followed.
+   *
+   * A read without `copies` gives a container that holds no link, no
+   * stream and no error state as the frozen object the store holds, where
+   * the schema of the read leaves no member of it out and fills in no
+   * default. The work of such a read does not follow the size of the
+   * container. Its address is in `handed`, and those of the containers
+   * below it are what `addressesBelow` gives.
    */
   read(ref: Ref, reads?: Position[], copies = false, bound?: Schema): unknown {
     const outer = this.#reached;
@@ -2115,13 +3122,37 @@ export class Store {
     copies: boolean,
     bound?: Schema,
   ): unknown {
-    const located = this.locate(ref, true, reads);
-    const id = this.addressText(located.ref);
+    const located = this.locate(
+      ref,
+      true,
+      reads,
+      false,
+      declaredMembers(bound),
+    );
+    const id = positionText(located.ref);
     if (open.has(id)) return undefined;
     const reached = this.#reached?.get(bound);
     if (reached?.has(id)) return reached.get(id);
     if (located.value === undefined && isStreamSchema(located.ref.schema)) {
       return { $stream: true };
+    }
+    const shape = bound ?? located.ref.schema;
+    if (
+      !copies && this.plain(located.value) &&
+      (bound === undefined || this.#nothingLeftOut(located.value, shape)) &&
+      this.#noDefaults(located.value, shape)
+    ) {
+      this.handed.set(located.value, {
+        at: located.named,
+        shape,
+        given: located.given,
+        bounded: bound !== undefined,
+      });
+      if (this.#reached !== undefined) {
+        if (!this.#reached.has(bound)) this.#reached.set(bound, new Map());
+        this.#reached.get(bound)!.set(id, located.value);
+      }
+      return located.value;
     }
     open.add(id);
     const copied = copies && located.inPlace;
@@ -2129,7 +3160,7 @@ export class Store {
     // it was read from.
     const value = withDefaults(
       located.value === undefined && located.fallback !== undefined
-        ? structuredClone(located.fallback)
+        ? copyOfData(located.fallback)
         : this.#copy(
           located.value,
           reads,
@@ -2159,6 +3190,15 @@ export class Store {
     }
     return value;
   }
+
+  /** The stored arrays whose keys a whole read has formed from its copies. */
+  readonly #readWhole = new WeakSet<object>();
+
+  /**
+   * How many members the reads under a schema left out of their copies,
+   * in all: a read that leaves it as it was copied every member.
+   */
+  #leftOut = 0;
 
   /**
    * `copied`: the value is a plain value in place that a function body
@@ -2224,8 +3264,11 @@ export class Store {
         );
       const outer = bounded ? containerOf(shape) : shape;
       const items = typeof outer === "object" ? outer.items : undefined;
+      const leftOut = this.#leftOut;
+      // A member that is no container, no link and no stream is given as
+      // it is, and no reference to its position is made for it.
       const copy = value.map((member, index) =>
-        this.#copy(
+        typeof member !== "object" || member === null ? member : this.#copy(
           member,
           reads,
           open,
@@ -2244,6 +3287,9 @@ export class Store {
           here,
           copy,
           declared.length > 0 ? declared : keyFieldsOf(given),
+          // The copies hold every member of what is stored where the read
+          // is under no schema, or under one that left no member out.
+          !bounded || this.#leftOut === leftOut,
         );
         copy.forEach((member, index) => {
           if (isLink(value[index])) return;
@@ -2254,36 +3300,41 @@ export class Store {
           );
         });
       }
+      this.copiedByReads += 1;
       if (copied) this.copies.add(copy);
       else this.addresses.set(copy, here);
       return copy;
     }
     if (isRecord(value)) {
       const outer = bounded ? containerOf(shape) : shape;
-      const declared = bounded && typeof outer === "object" &&
-          outer.properties !== undefined && !outer.additionalProperties
-        ? outer.properties
-        : undefined;
+      const declared = bounded ? declaredMembers(shape) : undefined;
+      // The members in the order of the storage, whatever order the
+      // process that wrote the record holds them in (`membersInOrder`).
       const copy = Object.fromEntries(
-        Object.entries(value).filter(([name]) =>
-          declared === undefined || Object.hasOwn(declared, name)
-        ).map((
-          [name, member],
-        ) => [
+        membersInOrder(value).filter((name) => {
+          if (declared === undefined || declared.includes(name)) return true;
+          this.#leftOut += 1;
+          return false;
+        }).map((name) => [
           name,
-          this.#copy(
-            member,
-            reads,
-            open,
-            here.key(name),
-            copies,
-            copied,
-            bounded ? schemaBelow(outer, name) ?? {} : schemaBelow(shape, name),
-            schemaBelow(given, name),
-            bounded,
-          ),
+          typeof value[name] !== "object" || value[name] === null
+            ? value[name]
+            : this.#copy(
+              value[name],
+              reads,
+              open,
+              here.key(name),
+              copies,
+              copied,
+              bounded
+                ? schemaBelow(outer, name) ?? {}
+                : schemaBelow(shape, name),
+              schemaBelow(given, name),
+              bounded,
+            ),
         ]),
       );
+      this.copiedByReads += 1;
       if (copied) this.copies.add(copy);
       else this.addresses.set(copy, here);
       return copy;
@@ -2318,9 +3369,12 @@ export class Store {
    * Stores a value at a reference. The value is in stored form: a
    * reference in it is a link already. A link at a segment on the way is
    * followed, and so is a link at the last segment unless the value
-   * written is itself a link.
+   * written is itself a link. The store holds the value that it is given,
+   * frozen with every container in it (`#keep`): the caller changes
+   * nothing of it afterwards.
    */
-  write(ref: Ref, value: unknown): void {
+  write(ref: Ref, given: unknown): void {
+    const value = this.#keep(given);
     const located = this.locate(ref, !isLink(value) && !isStream(value));
     // A write through a reference by key whose key no position holds is
     // refused (`plan-and-label-templates.md` §1.3, assumed there under
@@ -2338,12 +3392,10 @@ export class Store {
       this.journal?.push({ doc, whole: true, old: undefined });
       document = {
         kind: declared.kind,
-        value: path.length === 0
-          ? undefined
-          : structuredClone(declared.default),
+        value: path.length === 0 ? undefined : copyOfData(declared.default),
       };
       this.docs.set(doc, document);
-    } else if (JSON.stringify(located.value) === JSON.stringify(value)) {
+    } else if (sameStored(located.value, value)) {
       this.onUnchanged?.(doc, path, located.ref.schema);
       return;
     } else {
@@ -2359,22 +3411,25 @@ export class Store {
       let covers: readonly string[] | undefined;
       if (!isRecord(document.value) && !Array.isArray(document.value)) {
         this.journal?.push({ doc, path: [], old: document.value });
-        document.value = {};
+        document.value = this.#keep({});
         covers = [];
       }
       let holder = document.value as Record<string, unknown>;
       for (let index = 0; index < path.length - 1; index++) {
         const next = (holder as Record<string, unknown>)[path[index]];
         if (typeof next !== "object" || next === null) {
-          this.journal?.push({
-            doc,
-            path: path.slice(0, index + 1),
-            old: next,
-          });
-          holder[path[index]] = /^\d+$/.test(path[index + 1]) ? [] : {};
-          covers ??= path.slice(0, index + 1);
+          const above = path.slice(0, index + 1);
+          this.journal?.push({ doc, path: above, old: next });
+          this.#setAt(
+            document,
+            above,
+            this.#keep(/^\d+$/.test(path[index + 1]) ? [] : {}),
+          );
+          covers ??= above;
+          holder = this.peek(doc, above) as Record<string, unknown>;
+        } else {
+          holder = next as Record<string, unknown>;
         }
-        holder = holder[path[index]] as Record<string, unknown>;
       }
       const reported = {
         ...(covers === undefined ? {} : { covers }),
@@ -2386,16 +3441,19 @@ export class Store {
       if (Array.isArray(holder) && last === "length") {
         // The array is stored without the positions past the length.
         const length = value as number;
+        const taken = this.#spliced(
+          document,
+          path.slice(0, -1),
+          holder,
+          length,
+          holder.length - length,
+          [],
+        );
         this.journal?.push({
           doc,
           path: path.slice(0, -1),
-          splice: {
-            start: length,
-            inserted: 0,
-            removed: (holder as unknown[]).slice(length),
-          },
+          splice: { start: length, inserted: 0, removed: taken },
         });
-        const taken = (holder as unknown[]).splice(length);
         this.#changed(doc, path.slice(0, -1), taken, {
           start: length,
           removed: taken.length,
@@ -2404,7 +3462,7 @@ export class Store {
       } else {
         old = holder[last];
         this.journal?.push({ doc, path, old });
-        holder[last] = value;
+        this.#setAt(document, path, value);
         this.#changed(doc, path, old, undefined, reported);
       }
     }
@@ -2436,9 +3494,10 @@ export class Store {
   }
 
   /**
-   * Changes the members of a stored array in place: removes `removed`
-   * members from `start` on and puts `members`, in stored form, in
-   * their place, as one change of the array (`PatchOp` in
+   * Changes the members of a stored array: removes `removed` members
+   * from `start` on and puts `members`, in stored form, in their place,
+   * as one change of the array, which a copy with the change then stands
+   * for (`PatchOp` in
    * `runtime/memory/v2.ts`; `execution-and-storage.md` §4.2). Where the
    * reference names no stored array, the whole value is written.
    */
@@ -2474,7 +3533,7 @@ export class Store {
     }
     if (removed === 0 && members.length === 0) return;
     this.onWrite?.(doc, path);
-    const taken = spliceIn(held, start, removed, members);
+    const taken = this.#spliced(document, path, held, start, removed, members);
     this.journal?.push({
       doc,
       path,
@@ -2493,25 +3552,79 @@ export class Store {
    * result document is. A value that the path holds already is not
    * written.
    */
-  put(doc: string, path: readonly string[], value: unknown): void {
+  put(doc: string, path: readonly string[], given: unknown): void {
     const document = this.docs.get(doc);
     if (document === undefined) return;
     const old = this.peek(doc, path);
-    if (old === value || JSON.stringify(old) === JSON.stringify(value)) return;
+    const value = this.#keep(given);
+    if (sameStored(old, value)) return;
     this.onWrite?.(doc, path);
     if (path.length === 0) {
       this.journal?.push({ doc, path, old });
       document.value = value;
     } else {
-      let holder = document.value as Record<string, unknown>;
-      for (const segment of path.slice(0, -1)) {
-        holder = holder?.[segment] as Record<string, unknown>;
-      }
+      const holder = this.peek(doc, path.slice(0, -1));
       if (typeof holder !== "object" || holder === null) return;
       this.journal?.push({ doc, path, old });
-      holder[path[path.length - 1]] = value;
+      // A record that is put nothing at a member holds no such member.
+      this.#setAt(
+        document,
+        path,
+        value,
+        value === undefined && !Array.isArray(holder),
+      );
     }
     this.#changed(doc, path, old);
+  }
+
+  /**
+   * Takes `value` as what a document holds at a path, where a store
+   * outside the executor holds it there already: nothing is told of it as
+   * a change, the clock stands, and no reader is marked. Does nothing
+   * where a segment on the way does not exist.
+   */
+  adopt(doc: string, path: readonly string[], value: unknown): void {
+    const document = this.docs.get(doc);
+    if (document === undefined) return;
+    this.#setAt(document, path, this.#keep(value));
+  }
+
+  /**
+   * Holds `keys` as the keys of the stored array `held`, formed with
+   * `fields` through `at`, as `keysOf` holds the keys it forms: `parts` is
+   * the element part of each position. For a caller that knows the part
+   * of each position without a read of what the position leads to. The
+   * keys then stand until the array changes, and the store brings them up
+   * to date with each change of it.
+   */
+  adoptKeys(
+    held: readonly unknown[],
+    at: Ref,
+    fields: readonly string[],
+    parts: ElementPart[],
+    keys: string[],
+  ): void {
+    const named = JSON.stringify(fields);
+    const known = this.#states.get(held)?.get(named);
+    const texts = parts.map(textOf);
+    const counts = new Map<string, number>();
+    for (const text of texts) counts.set(text, (counts.get(text) ?? 0) + 1);
+    const states = this.#states.get(held) ?? new Map<string, KeyState>();
+    states.set(named, {
+      at,
+      fields: [...fields],
+      held,
+      keys,
+      parts,
+      texts,
+      counts,
+      clock: this.clock,
+      others: [],
+      formed: (known?.formed ?? 0) + 1,
+      ops: [],
+      dropped: 0,
+    });
+    this.#states.set(held, states);
   }
 
   /** The splice of `splice`, at a path of a document, with no link followed. */
@@ -2522,11 +3635,12 @@ export class Store {
     removed: number,
     members: readonly unknown[],
   ): void {
+    const document = this.docs.get(doc);
     const held = this.peek(doc, path);
-    if (!Array.isArray(held)) return;
+    if (document === undefined || !Array.isArray(held)) return;
     if (removed === 0 && members.length === 0) return;
     this.onWrite?.(doc, path);
-    const taken = spliceIn(held, start, removed, members);
+    const taken = this.#spliced(document, path, held, start, removed, members);
     this.journal?.push({
       doc,
       path,
@@ -2597,7 +3711,7 @@ export class Store {
       while (node !== undefined) {
         this.changeNodesVisited += 1;
         if (depth === position.path.length) {
-          if (node.below > since) return true;
+          if ((position.own ? node.at : node.below) > since) return true;
           break;
         }
         if (node.at > since) return true;

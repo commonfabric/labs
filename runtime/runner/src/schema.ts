@@ -1069,7 +1069,10 @@ function readValueAtResolvedLink(
   // Read without telling the scheduler. Whatever materializes this value —
   // the traverser or a view — registers its own reads as it walks.
   const meta = {
-    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    meta: Object.freeze({
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+    }),
   };
   const value = tx.readOrThrow(address, meta);
   if (value !== undefined || link.path.at(-1) !== "length") return value;
