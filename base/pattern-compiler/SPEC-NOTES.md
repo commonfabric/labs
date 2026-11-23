@@ -15401,3 +15401,326 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    when the first compartment evaluator is made. Whether anything of the runtime
    relies on a member of them staying writable was not looked for beyond the
    tests.
+
+## Crate round: FabriChat and Home
+
+The round of 2026-11-23 on the checker and the translation, from the commit
+`e86377cca0`. Its tables are in the folder of the round, `r9-crate/`.
+
+720. **What the checker refused, classed.** Note 809 counted 39 errors in the
+     program of Home. The count is 38: 33 in the 16 modules of FabriChat and 5
+     more in the other 10 (`subset-type:any` 3 in `agent-queue.tsx`,
+     `subset-type:mismatch` 1 each in `favorites-manager.tsx` and
+     `shared-space-interface.ts`). By class:
+
+     | Diagnostic and site                                                                                                                                        | Errors | Class                                                                                                         |
+     | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------- |
+     | `schema:unknown-type-access`, `commitAttach` of `room-records.tsx`                                                                                         | 5      | Defect of the crate: the type parameter of `attachRequests` was not bound (note 721)                          |
+     | `subset-type:mismatch`, `changeSharedSpaceMembershipIn` of `shared-space-catalog.ts`                                                                       | 3      | Defect of the crate: narrowing (note 722)                                                                     |
+     | `subset-type:mismatch`, `sharedSpaceProfileViewOf` of `shared-space-interface.ts`                                                                          | 1      | Defect of the crate: narrowing (note 722)                                                                     |
+     | `subset-type:any`, `profile-home.tsx` 8, `shared-space-catalog.ts` 3, `agent-queue.tsx` 3                                                                  | 14     | The language has no `any` (`language-subset.md` §7.8). The pattern changes                                    |
+     | `subset-type:overload`, `manager.tsx` 5, `private-inbox.tsx` 1                                                                                             | 6      | The language has no overload. The pattern changes as §12.4 says                                               |
+     | `opaque-get:invalid-call`, `takesOffers` of `manager.tsx`                                                                                                  | 1      | A `Stream` has no `get`. The pattern changes as §12.9 says                                                    |
+     | `subset-type:mismatch`, a `Cell<T>` where `Cell<T \| undefined>` is declared or the reverse: `room.tsx` 3, `room-records.tsx` 1, `favorites-manager.tsx` 1 | 5      | Rule of the language (§7.5.1, §7.5.2, §7.5.4, which names the site of `ensureFileStore`). The pattern changes |
+     | `subset-type:mismatch`, a cell where `{ get(): T }` is declared, `rosterProfiles`                                                                          | 1      | Rule of the language (§7.5.1). The pattern changes                                                            |
+     | `subset-type:mismatch`, a `Cell<Message>` where a `Cell` of a view of it is declared, `room-records.tsx`                                                   | 2      | Rule of the language (§7.5.1). The pattern changes                                                            |
+
+     So 9 of the 38 were defects of the crate, and 29 are forms the language
+     does not have or refuses by rule. The untranslated constructs of the
+     emitter, by site and not by pattern (note 809 counted each once for each
+     pattern that holds it):
+
+     | Construct                                                                                                                      | Sites | Class                                                                                     |
+     | ------------------------------------------------------------------------------------------------------------------------------ | ----- | ----------------------------------------------------------------------------------------- |
+     | A guard in the block body of the callback of a collection method of a promoted `computed` ("a statement in the reactive tier") | 3     | Gap of the crate: §6.1 admits the body. Not built, the copies changed (note 724)          |
+     | `resolveAsCell` in a promoted `computed`                                                                                       | 2     | Gap of the crate: §4.7 and §6.1 admit it in tier R. Not built, the copies changed         |
+     | `elementById` with a constant key in a promoted `computed`                                                                     | 1     | The same                                                                                  |
+     | `P.asScope("user")(...)` in the body of a `map` ("a call form in the reactive tier")                                           | 3     | Gap of the crate: `builtin-inventory.md` names these sites. Not built, the copies changed |
+     | A call of a function with no footprint record                                                                                  | 2     | Follows from the overloads, and is gone with them                                         |
+     | A dynamic read of kind `space` whose operand the emitter cannot name                                                           | 3     | Gap of the crate, in the records of labels. Left as it is (deferred question 4)           |
+     | A write through a handle the emitter cannot name (new, after the overload of `inboxOf` is gone)                                | 1     | The same (deferred question 5)                                                            |
+
+721. **The walk of a type gave up at 12 steps.** `typed_at` of `src/declared.rs`
+     counts the steps from the expression asked for to the declaration that
+     types it, and returned no type past 12. In `commitAttach` the argument of
+     `attachRequests` is a name whose initializer is
+     `event?.detail?.files ?? []`, and the result is read two steps further on,
+     which is 13: the type parameter stayed unbound and each read of a file was
+     `schema:unknown-type-access`. The limit is 24 (P190). It is a limit of
+     depth and not a guard against a cycle, so a type still depends on how
+     deeply its initializer is nested, at a depth no module of the corpus
+     reaches. The corpus has 13 errors fewer and none more: the 5 of FabriChat,
+     3 in `showcase/wordsearch/generator.ts`, and with the fixes of note 722 the
+     4 of the shared space and one in `apps/food-recipe/recipe-logic.ts`. With
+     types evaluated further, two false refusals appeared that the limit had
+     hidden, and both are closed: the left operand of `&&` gives the result the
+     part of its type that can be falsy and the left operand of `||` the part
+     that can be truthy (`deciding_part` of `src/infer.rs`, P193), and a literal
+     position of a tuple has that element's type. The fixture test
+     `a_key_of_an_index_whose_type_is_not_resolved_is_reported_as_unsupported`
+     of `tests/plan.rs` had a key that was unresolved only by the limit, and now
+     has one from a module that is not given. The fixtures `crossref` and
+     `index-of-rows` now emit with nothing unsupported; their emitted files in
+     `compare/fixtures/` were not regenerated.
+722. **Three forms of narrowing** (`src/narrow.rs`, tests in
+     `tests/round9_gaps.rs`). An optional read of a discriminant compared with a
+     literal, `c?.status === "unavailable"`, narrows the union as the plain read
+     does, removes `undefined` in the true branch and keeps it in the false one
+     (`assume_equal`). A strict comparison of an ordinary value typed `unknown`
+     with `undefined` or `null` gives that type in the true branch, and not on a
+     data position (`assume_value`, P191), which is what the false branch of
+     `last !== undefined && (!isAction(last) || ...)` needs. A type predicate
+     narrows a value to the asserted type where no member of the value's type is
+     assignable to the asserted type and the asserted type is assignable to a
+     member (`assume_call`, P192): a `Record<string, unknown>` narrows to the
+     record type the predicate names, which `readSharedSpaceCatalog` needs once
+     its storage type has no `any`.
+723. **The copies.** `compare/fabrichat/` holds the 16 modules of the program of
+     FabriChat and `compare/home/` the other 10 of the program of Home, each in
+     the directory it has under `patterns/system/`, first unchanged but for the
+     imports between the two. The patterns under `patterns/` are untouched. Each
+     change is a commit that names what it stands in for. Both programs pass
+     `check` with no error. The changes for the rules of the language:
+     - No `any`: a stored reference is declared `unknown`, an open record
+       `Record<string, unknown>`, the records of the acting profiles
+       `Record<string, SharedSpaceProfileRecord>`, an instantiation takes
+       `.for(cause)` with no cast, and the result of the agent queue declares
+       the types its cells hold.
+     - No overload: `inboxLinkOf` and `roomLinkOf` are deleted and the instance
+       is assigned to the declared cell type, `aboutRecordOf` keeps one
+       signature, and for `linkedRoom`, `joinStreamOf` and `inboxOf` the
+       position is declared with the type that is read: `room` positions are
+       `Cell<ChatRoomLink>`, `ChatRoomLink` declares `addParticipant`, and
+       `ShareInboxPiece` declares `receive`.
+     - A stream's presence is tested through
+       `ReadonlyCell<{ receive?: unknown }>`.
+     - A handle of `T | undefined` is declared so on both sides (the drafts of
+       the composers, the record of a thread's title), `ensureRootFileStore`
+       takes the handle `key` gives for the optional record, and the state of
+       `onRemoveFavorite` declares `favorites` optional.
+     - `rosterProfiles` declares `ReadonlyCell`.
+     - A link to a replied message is declared `Cell<MessageRecord>`, the type
+       the cell has. The type is recursive through the cell, which the checker
+       accepts. Not verified: that the copies still compile and run on today's
+       runtime. `P(...).for(tag)` with no cast is what the comment in
+       `profile-home.tsx` says the published typings refuse.
+724. **What the copies change because the crate does not translate it yet.**
+     Each stands in for a construct the language has:
+     - A guard in the callback of a collection method of a promoted `computed`
+       is written as a conditional expression (3 sites). The plan: `statements`
+       of `src/plan.rs` handles the block of such a callback and knows no `if`,
+       while `code_block` gives the block of the `computed` itself a `select`
+       for each guard. The callback needs the same, with the place of what it
+       returns in place of a template, and `src/emit.rs` the conditional it
+       renders for it.
+     - `elementById` and `resolveAsCell` in a promoted `computed` are called in
+       an authored function (`titleSetIn`, `resolvedMessage`, `resolvedKeyOf`),
+       which is a body with a footprint of its own. The label of the result is
+       then that of the whole body. The plan: `elementById` with a constant key
+       is a path projection by key, as `key` is, and `resolveAsCell` an
+       observation of class `identity` of the place its receiver names.
+     - `RoomRoster` and `NoticeTold` are instantiated with no `asScope("user")`.
+       The state the instance declares is then of the space and not of the user,
+       which is the same with one user and wrong with two. The plan: the
+       modifier sets `Child.scope` on the call-site record, which the plan has
+       for a call outside an element body.
+     - The room's result holds the stream `tellJoined` (note 727).
+     - `pattern` is given no schema made by hand (`agent-queue.tsx`,
+       `home.tsx`): the language has no such argument. After these, `emit` gives
+       every pattern of both programs value code with nothing unsupported, and
+       the plans of `FabriChatManager`, `FabriChatManagerCore` and `Home` keep 4
+       entries for 4 sites of the manager: 3 dynamic reads of kind `space` and 1
+       write through a handle, each with an operand that an authored function
+       returned.
+725. **A value written in the state of a binding had no function.** The state of
+     a handler applied in the reactive tier is read by the places of the plan,
+     so `src/emit.rs` rendered none of its expressions, and a conditional
+     written there, `container: ownSpace ? undefined : container`, had an output
+     and no value function. The first event of the room failed with "an output
+     that no value function computes". `binding_state` renders each member of
+     the state that is a value with no function yet
+     (`a_conditional_in_the_state_of_a_binding_has_a_value_function` of
+     `tests/emit.rs`, `exec/test/handler-state-conditional.test.ts`).
+726. **The executor and the values of the data model.** FabriChat stores every
+     time as a `FabricEpochNsec` and its policy as `FabricDurationNsec`. The
+     executor refused one as "a value that is no plain data". Once admitted, a
+     copy by `structuredClone` made the plain record `{}` of it, and its text as
+     JSON, by which the executor compares values, is `{}` whatever it holds:
+     every two times were equal. Now a primitive of the data model is a leaf
+     (P194): `stored` of `exec/executor.ts` keeps it, `copyOfData` of
+     `exec/store.ts` copies arrays and plain records alone and stands where
+     `structuredClone` stood, the walks of the store do not enter it, and
+     `canonical` gives it the text of the JSON codec of fabric values and a
+     `bigint` its digits. The adapter writes both to the storage as they are
+     (`#encode` of `runtime/runner/src/compiled/transactions.ts`). Not done: the
+     other places of the executor that form a text with `JSON.stringify` (41 in
+     `exec/executor.ts`) were not read one by one, so a comparison or a key
+     formed there from a value that holds a time may still see `{}`, and a
+     `bigint` there throws.
+727. **The built-ins of the runtime, and `wish`, are handed in.** The copies
+     import 25 names of `commonfabric` that the executor does not have. Some are
+     pure (`isWellFormedDID`, `parseDID`, `joinSpaceMembers`, the classes of the
+     data model) and the harness hands the runtime's own. The others read what
+     the runtime holds: the acting principal and the key of the event
+     (`currentPrincipal`, `eventKey`), the owner a label attests
+     (`profileOwnerOf`, `principalOf`, `writtenPrincipalOf`, `resultOwnerOf`),
+     and the access list of a space (`spaceAccess`, `spaceMembers`,
+     `spaceDeleted`, `spaceOfLink`). The option `builtins` of the instance
+     (P195), which `CompiledPieceOptions` passes on, answers a name the executor
+     lacks, and `compare/fabrichat/scale.ts` answers these for one fixed user
+     who owns every space. A `wish` is answered by the table of
+     `compare/wish-home.ts` through the option `wishes`, which
+     `CompiledPieceOptions` now passes on as well: `#profile` is a reference to
+     a seeded profile, and `#default` and `#chatManager` have no answer and hold
+     an error. This is the stub the brief allows, and nothing of the runtime's
+     own `wish` runs. The plan for the real thing:
+     - `wish`: the piece resolves the operands in its derivation transaction
+       with the functions `runtime/runner/src/builtins/wish.ts` resolves a
+       target with (`parseWishTarget`, the resolution of a space target and of a
+       home target), stores the outcome in the operation's state document with
+       the reads the resolution made as the entry of `dynamicReads`, and
+       launches a sidecar as the `Child` the plan already has for it
+       (`callee: { compiled: null }` today: the two sidecar patterns are not
+       compiled into the program).
+     - The built-ins: each is an observation with a class of its own in
+       `builtin-inventory.md`. The executor needs the acting principal and the
+       key of the event from the transaction it runs in, which the adapter has,
+       and for the others a read of the label or of the access list through the
+       adapter, recorded as a dynamic read.
+     - A document of another space: the profile of the seeded home is in a space
+       of its own, and a compiled piece on the runner path reads no document of
+       another space, so the send was refused with "Your profile hasn't loaded
+       yet". The harness seeds the profile in the room's space. The adapter has
+       `external(doc, space)` for a document of another space that it is handed,
+       and `load` reads the piece's own space alone: `load` needs the space of
+       the link it follows.
+     - A stream that the state of a binding alone holds: the room's send sends
+       to `tellJoined`, which no stored value links to, so the storage has no
+       marker of it and the piece throws "A handler sent an event to a stream
+       the storage has no marker of". The copy holds the stream in its result.
+       The piece needs to make the marker when a handler first sends to such a
+       stream, inside the transaction of that handler.
+728. **FabriChat and Home run, with those stand-ins.** `scale.ts` starts the
+     room, sends and reads back, and starts the manager and Home. On the
+     executor in memory and as a compiled piece in the runner (emulated storage,
+     value code in a compartment), one run of each cell, on an Apple M5 Max with
+     18 cores at a load of about 6 from other work:
+
+     | Arm      | Messages held | Start, ms | Send, ms (3)     | Evaluations | Element bodies | Positions read | Writes staged | Records given |
+     | -------- | ------------- | --------- | ---------------- | ----------- | -------------- | -------------- | ------------- | ------------- |
+     | executor | 10            | 31        | 8.0, 8.5, 9.1    | 27          | 11             |                |               |               |
+     | executor | 100           | 7         | 44.6, 44.6, 44.4 | 27          | 11             |                |               |               |
+     | executor | 1,000         | 10        | 299, 295, 292    | 27          | 11             |                |               |               |
+     | runner   | 10            | 162       | 179, 186, 179    | 27          | 11             | 91 to 101      | 10            | 145 to 155    |
+     | runner   | 100           | 71        | 938, 981, 999    | 27          | 11             | 541 to 551     | 208 to 210    | 797 to 807    |
+
+     The start is of an empty room, and the messages are sent one by one before
+     the timed sends: 75 ms, 2.5 s and 155 s on the executor, 1.7 s and 27 s in
+     the runner. A send evaluates the same 27 cones and 11 element bodies at
+     every size, and its time grows with the room in both arms. On the executor
+     it is about 0.3 ms for each message held. In the runner it is about 9 ms
+     for each message held, of which the piece's own handlers and derivation are
+     four fifths (`ownMs` 767 to 810 of 938 to 999 ms at 100), and each message
+     held adds 5 positions read, 2 writes staged and 7 write records to a send.
+     Which part of this is the body of `facts`, which walks every message by the
+     pattern's design, and which the executor's and the adapter's, was not
+     measured: no profile was taken. The runner arm was not run at 1,000, where
+     the sends that fill the room would take about an hour at this slope.
+     Today's runtime was not run beside it: the original patterns need the
+     runtime's `wish`, a home and a profile, which the pattern tests set up and
+     this harness does not.
+
+     The manager starts in 27 ms on the executor and 115 ms in the runner (38
+     evaluations, 20 members of the result). Home starts in 34 ms and 258 ms
+     (101 evaluations, 16 element bodies, 43 members), with two cones in an
+     error state on both arms, `$UI` and one `map`, because the stand-in for
+     `SELF` is a key the result does not hold. One event that adds a space to
+     Home's list commits on both arms and evaluates 4 cones: 4.8 ms on the
+     executor, and 690 ms in the runner, 643 ms of them in the piece, for 4
+     writes staged, 6 positions read and 63 write records in 3 transactions.
+     That event's time is not explained by what it writes and was not profiled.
+729. **Three refusals of Contextual Flow Control that the harness steps
+     around.** With the schemas as the crate emits them, no send of the room
+     commits and Home's first commit is refused: a write policy names its
+     handler as `{ body: { binding, module } }`, which the preparation refuses
+     as "malformed writePolicyAnyOf"; integrity of the current principal
+     "requires the run's actor", which an event this harness queues does not
+     carry; and `writeAuthorizedBy` is an "unsupported trust-sensitive claim".
+     `scale.ts` gives the schemas without those three members unless
+     `SCALE_POLICIES` is `keep` (P196). They are deferred questions 1 to 3.
+730. **The corpus on the runner path.** `compare/runner-corpus.ts` answers a
+     `wish` from the seeded home through `wishes` (P197) and no longer leaves a
+     module out for having one, except under `--resume` and `--serving`, where
+     nothing hands the table to the piece that takes over. Against the run of
+     milestone 6 (`corpus-plain-final.jsonl` of its folder), 194 modules start,
+     take every event and hold the values of the executor in memory, where 183
+     did. Of the 40 modules that were left out for a `wish`, 28 now start: 11
+     take every event and hold equal values, and 17 start and either differ from
+     the executor in memory, at `$UI` in most, or have an event with no stored
+     stream or one whose handler did not commit. Of the other 12, 6 are left out
+     because they request an effect, 1 because the home does not simulate
+     `#summaryIndex`, and 5 do not start, 2 of them for the built-in
+     `spaceMembers`. Why the 17 differ was not looked into: the executor in
+     memory reads the home from documents it is given and the piece from the
+     storage, under other identifiers. Outside those 40 one line changed:
+     `apps/redactor/vault.tsx` holds the same refusal of writer fit 3 times
+     where it held it once, and its events and values are as before. The cause
+     was not looked for. Two modules have a line where they had none, both
+     "exports no pattern": `showcase/wordsearch/generator.ts` and
+     `system/shared-space/shared-space-interface.ts`, which the crate now
+     accepts. The lines that changed are in `corpus-changes.txt` of the folder
+     of the round.
+731. **Provisional decisions of the round.** P190: the walk of a type gives up
+     at 24 steps (note 721). P191: a strict comparison of an ordinary `unknown`
+     with `undefined` or `null` narrows it, and a data position is left as it is
+     (note 722). P192: a type predicate narrows to the asserted type where it is
+     assignable to the value's (note 722). P193: the left operand of `&&` and
+     `||` gives the result the part of its type that decides (note 721). P194: a
+     primitive of the data model is a leaf of the executor's values, compared by
+     the text of the JSON codec, and a `bigint` by its digits (note 726). P195:
+     the instance takes built-ins from the harness under names it does not have,
+     and never in place of one it has (note 727). P196: the harness of FabriChat
+     runs with the write policies, the added integrity and the write
+     authorizations removed from the schemas (note 729). P197: the corpus run
+     answers a `wish` from a table (note 730). Not done: the three constructs of
+     note 724 in the emitter; the runtime's own `wish`, the built-ins that read
+     a label or an access list, a read of another space and a send to a stream
+     no value links (note 727); today's runtime beside the harness, the runner
+     arm at 1,000 messages and a profile of a send (note 728); the remaining
+     texts of JSON in the executor (note 726).
+
+### CFC questions deferred, crate round
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. A write policy of a compiled pattern names the handler that may write as the
+   module and the binding of its body. The preparation reads the form today's
+   compiler emits and refuses this one as malformed. Which identity of a
+   compiled handler a policy names, and how the preparation checks a commit of a
+   compiled piece against it (`builtin-inventory.md`, "The send gate").
+2. A schema that adds integrity of the current principal needs the actor of the
+   run. An event queued for a compiled piece on a runtime in the serving posture
+   carries none in this harness. Which actor a handler of a compiled piece runs
+   under on the runner path, and where the piece takes it from.
+3. Home's first commit declares `writeAuthorizedBy`, which the preparation
+   refuses as an unsupported trust-sensitive claim for a compiled piece.
+4. A suspected under-label. Three bodies of the manager read the access list of
+   a space whose operand an authored function returned (`deliverOffers`, and
+   `performManagerAct` through `commitStart` and `commitManager`). The emitter
+   cannot name the operand, so the plan has no entry of `dynamicReads` for the
+   read, and what the body writes has a label without it.
+5. The same for a write: `deliverOffers` sends through
+   `pointer.resolveAsCell().key("receive")`, where `pointer` is an element of
+   what `distinctInboxes()` returned. The plan has no write target for it, so no
+   template covers the write.
+6. `profileOwnerOf`, `principalOf`, `writtenPrincipalOf` and `resultOwnerOf`
+   read what a label attests, and `spaceAccess`, `spaceMembers` and
+   `spaceDeleted` read an access list. The harness answers each with a constant.
+   What each observes, in the classes of `plan-and-label-templates.md`, and what
+   the label of its result is.
+7. With `asScope("user")` removed, the copies keep per-user state of the manager
+   in the space. That is a copy's stand-in and no proposal, and a run with two
+   users would show one user's rosters to the other.
+8. A `computed` whose body moved into an authored function (note 724) has the
+   label of the whole body where the promoted form had one for each path of its
+   result. That is an over-label, and the paths it widens were not listed.

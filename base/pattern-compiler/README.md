@@ -1333,6 +1333,31 @@ same snapshot in today's runtime as a runner would, reading the board's result
 keeps; with `BOARD_LOAD_HOLD` set it waits for `SIGUSR2` at each measuring
 point, so that an inspector snapshot can be taken there.
 
+## FabriChat and Home
+
+`compare/fabrichat/` and `compare/home/` hold copies of the 26 modules of the
+programs of `patterns/system/fabrichat/room.tsx`,
+`patterns/system/fabrichat/manager.tsx` and `patterns/system/home/home.tsx`,
+changed where the language refuses a form or the crate does not translate one.
+Both programs pass `check`, and `emit` gives every pattern value code with
+nothing unsupported. Notes 720 to 731 of `SPEC-NOTES.md` list each change and
+what it stands in for.
+
+`compare/fabrichat/scale.ts` starts the room, the manager and Home on the
+executor in memory and as a compiled piece in the runner, sends messages into
+the room and reads them back. It hands the instance what the runtime answers and
+the executor does not: the outcome of each `wish` (the option `wishes`), and the
+built-ins that read the acting principal, the owner of a profile and the access
+list of a space (the option `builtins`), each answered for one fixed user. It
+removes the write policies from the schemas, which the preparation of Contextual
+Flow Control refuses in the form the crate emits. So its runs say what the
+executor evaluates and how long that takes, and nothing of labels or of access.
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/fabrichat/scale.ts runner room 10,100
+deno run -A --no-check base/pattern-compiler/compare/fabrichat/scale.ts executor home
+```
+
 ## The parser
 
 The crate parses with the [`oxc`](https://oxc.rs) crates and does not tokenize
