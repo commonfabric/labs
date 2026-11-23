@@ -642,6 +642,13 @@ export const isLink = (value: unknown): value is StoredLink =>
   isRecord(value) && isRecord(value.$link) &&
   typeof value.$link.doc === "string";
 
+/** Whether a stored value is a link or holds one at any depth. */
+const holdsLink = (value: unknown): boolean =>
+  isLink(value) ||
+  (Array.isArray(value)
+    ? value.some(holdsLink)
+    : isRecord(value) && Object.values(value).some(holdsLink));
+
 export const isStream = (value: unknown): value is StoredStream =>
   isRecord(value) && isRecord(value.$stream) &&
   typeof value.$stream.binding === "number";
@@ -1748,6 +1755,34 @@ export class Store {
     return this.#salted(value);
   }
 
+  /**
+   * A stored plain value with each link in it replaced by a record of the
+   * address the link names. `namings` gets the reads that found what each
+   * link names.
+   */
+  #linksNamed(value: unknown, namings: Position[]): unknown {
+    if (isLink(value)) {
+      const { named } = this.locate(
+        new Ref(value.$link.doc, value.$link.path),
+        true,
+        namings,
+        true,
+      );
+      return { $named: this.addressOf(named) };
+    }
+    if (Array.isArray(value)) {
+      return value.map((member) => this.#linksNamed(member, namings));
+    }
+    if (isRecord(value)) {
+      return Object.fromEntries(
+        Object.entries(value).map((
+          [name, member],
+        ) => [name, this.#linksNamed(member, namings)]),
+      );
+    }
+    return value;
+  }
+
   /** The key of a plain value at an occurrence count. */
   keyOf(value: unknown, fields: readonly string[] = [], count = 0): string {
     return textOf({ element: this.partOf(value, fields), occurrence: count });
@@ -1877,6 +1912,14 @@ export class Store {
           return this.addressOf(named);
         }
         if (reentered) return { position: index };
+        // A plain member that holds links is keyed by its own content with
+        // each link as the address of what it names: nothing the links
+        // lead to is read, so the work is the size of the member and not
+        // of everything reachable from it, and a change of a document a
+        // link leads to forms no key.
+        if (copies === undefined && holdsLink(member)) {
+          return this.partOf(this.#linksNamed(member, namings), fields);
+        }
         return this.partOf(
           copies === undefined
             ? this.read(at.key(`${index}`), reads)
