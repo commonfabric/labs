@@ -2405,7 +2405,7 @@ export const FabriChatManagerCore = pattern<
     // Each listed room's roster, each read on its own and per user, as
     // `roomsForUser` is: a room's space is read under the reader's access.
     const rostersForUser = roomsForUser.map((entry) =>
-      RoomRoster({ room: entry.room })
+      RoomRoster.asScope("user")({ room: entry.room })
     );
     // The people the listed rooms' rosters hold, per user, as `roomsForUser`
     // is: a profile attests no one to a reader its space refuses. Its
@@ -2437,7 +2437,7 @@ export const FabriChatManagerCore = pattern<
       peopleAskedForSession.get() === true ? [...roomsForUser] : []
     );
     const rostersForSession = roomsAskedForSession.map((entry) =>
-      RoomRoster({ room: entry.room })
+      RoomRoster.asScope("user")({ room: entry.room })
     );
     const peopleForSession = computed(
       (): PerSession<Record<string, ManagerProfileCell[]>> =>
@@ -2543,7 +2543,7 @@ export const FabriChatManagerCore = pattern<
       ...((outgoingNotices.get() ?? []) as ChatManagerNotice[]),
     ]);
     const toldForUser = noticesHeldForUser.map((notice) =>
-      NoticeTold({
+      NoticeTold.asScope("user")({
         id: notice.id,
         room: notice.room,
         recipient: notice.recipient,
