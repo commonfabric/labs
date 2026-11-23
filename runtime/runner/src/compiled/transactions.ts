@@ -310,6 +310,8 @@ export class RuntimeTransactions implements TransactionHooks {
   #created: string[] = [];
   /** What hears of the write records of each commit that settled. */
   #onCommitted: ((writes: readonly RecordedPlanWrite[]) => void) | undefined;
+  /** What hears of the write records of each transaction as recorded. */
+  #onRecorded: ((writes: readonly RuntimePlanWrite[]) => void) | undefined;
   /** Removes this adapter from the readers of the storage manager. */
   readonly #stopReading: (() => void) | undefined;
   /**
@@ -2201,7 +2203,16 @@ export class RuntimeTransactions implements TransactionHooks {
       this.#counts.recordsGiven += writes.length;
       this.#counts.recordsRecorded += merged.length;
       for (const write of merged) record({ kind: "plan-write", ...write });
+      this.#onRecorded?.(writes);
     }
+  }
+
+  /**
+   * Has `listener` hear the write records of each transaction as they are
+   * recorded with the runtime, before any is merged with another.
+   */
+  onRecorded(listener: (writes: readonly RuntimePlanWrite[]) => void): void {
+    this.#onRecorded = listener;
   }
 
   /**
