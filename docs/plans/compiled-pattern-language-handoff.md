@@ -339,7 +339,7 @@ sorted collection the trunk built for `sortBy(key)`, which is removed. The
 executor keeps order by a key today, so a comparator needs either an
 insertion by comparison or the recognition of comparators of the form
 "compare one key of each". `groupBy`, `keyBy` and `lookup` are methods of
-today's runtime and stay until the owner decides otherwise.
+today's runtime and stay, by the same ruling.
 
 **Authored `computed` bodies that are not promoted** (all branches).
 `language-subset.md` §6.1 promotes a `computed` whose body is

@@ -6626,9 +6626,9 @@ is relitigated.
   the sorted collection for it. `groupBy`, `keyBy` and the reads `lookup`,
   `keys` and `keyEntries` are methods of today's runtime
   (`groupByWithPattern` and `keyByWithPattern` in
-  `runtime/runner/src/cell.ts`), so the build did not add them; whether they
-  also move, to `Object.groupBy` or `Map.groupBy` with a member read as the
-  lookup, is asked of the owner and not decided. Not built.
+  `runtime/runner/src/cell.ts`), so the build did not add them, and they
+  stay: the owner's words, "keep main's methods". The move of `sortBy` is
+  not built.
 
 ## Provisional decisions awaiting the owner's ratification
 
