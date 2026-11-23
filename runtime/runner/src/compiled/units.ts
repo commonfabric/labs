@@ -101,6 +101,8 @@ export class PieceUnits<Tx extends object> implements StoredUnits {
     Tx,
     { doc: string; id: string; listed: Listed | undefined }[]
   >();
+  /** The parts that each transaction wrote whole, as parts with no document. */
+  readonly #wroteWhole = new WeakMap<Tx, number[]>();
   /** Whether each collection is plain, as far as this runtime was told. */
   readonly #plain = new Map<number, boolean>();
   /** What the document of the units holds, where that is known. */
@@ -283,8 +285,14 @@ export class PieceUnits<Tx extends object> implements StoredUnits {
       if (entries !== undefined) delete entries[id];
       if (!this.#dirty.get(doc)?.has(id)) this.#note(doc, id, listed);
     }
+    // A part that the transaction wrote whole has no document, and the
+    // document of the units is the one the storage holds: both are read
+    // again, so that the next record writes the part whole and names it
+    // beside the parts the document names.
+    for (const part of this.#wroteWhole.get(tx) ?? []) this.#parts.delete(part);
+    this.#wroteWhole.delete(tx);
     this.#stored = undefined;
-    this.#storedRead = true;
+    this.#storedRead = false;
   }
 
   /**
@@ -346,6 +354,12 @@ export class PieceUnits<Tx extends object> implements StoredUnits {
       wrote += 1;
     }
     if (recorded.length > 0) this.#recorded.set(tx, recorded);
+    if (fresh.size > 0) {
+      this.#wroteWhole.set(tx, [
+        ...this.#wroteWhole.get(tx) ?? [],
+        ...fresh.keys(),
+      ]);
+    }
     // The document of the units: every collection this runtime was told of
     // with whether it is plain, and what the storage held for the others,
     // where it is of the same compiled pattern.
