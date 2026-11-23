@@ -76,6 +76,31 @@ const DRAFT_PROGRAM: RuntimeProgram = {
 };
 
 /**
+ * A piece that encloses another whose result is each session's own: the
+ * inner pattern is instantiated at the session's scope, so every session
+ * holds an instance of its result document.
+ */
+const NESTED_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern } from 'commonfabric';",
+      "const Inner = pattern<{ value: number }, { doubled: number }>(",
+      "  ({ value }) => ({ doubled: computed(() => value * 2) }),",
+      ");",
+      "export default pattern<",
+      "  { value: number },",
+      "  { inner: { doubled: number }; tripled: number }",
+      ">(({ value }) => ({",
+      "  inner: Inner.asScope('session')({ value }),",
+      "  tripled: computed(() => value * 3),",
+      "}));",
+    ].join("\n"),
+  }],
+};
+
+/**
  * One demanded document: a watch root, or a document a selector reaches, at
  * the space's instance unless `scopeKey` names another, demanded by the
  * session `viewer` of alice unless `session` names another session or
@@ -449,6 +474,71 @@ describe("SpaceServer", () => {
 
         expect(serves(root)).toBe(false);
         expect(host.stats().currency.rearmed).toBe(0);
+        cancel();
+      });
+
+      it("leaves unstarted a settled piece that encloses one whose result is the session's own, under `skip`", async () => {
+        // The session watches the outer piece through its result schema,
+        // which reaches the session's instance of the inner piece's result.
+
+        delete (server as { demandForSpace?: unknown }).demandForSpace;
+        host = newHost("skip");
+        const manager = EmulatedStorageManager.connectTo(server, {
+          as: aliceSigner,
+        });
+        const alice = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          experimental: { serverExecution: true },
+        });
+        opened.push({ runtime: alice, manager });
+        const compiled = await alice.patternManager.compilePattern(
+          NESTED_PROGRAM,
+          { space },
+        );
+        const argument = alice.getCell<{ value: number }>(
+          space,
+          "currency nested argument",
+          compiled.argumentSchema,
+        );
+        const result = alice.getCell<
+          { inner: { doubled: number }; tripled: number }
+        >(
+          space,
+          "currency nested result",
+          compiled.resultSchema,
+        );
+        await argument.sync();
+        await result.sync();
+        const tx = alice.edit();
+        argument.withTx(tx).set({ value: 2 });
+        alice.run(tx, compiled, argument, result);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const cancel = result.sink(() => {});
+        const root = result.getAsNormalizedFullLink();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.recordsStored > 0 && serves(root),
+        );
+        await waitForCellValue(
+          alice,
+          result.key("inner").key("doubled"),
+          (doubled: number | undefined) => doubled === 4,
+          { stuckLabel: "the inner piece's `doubled` to be 4" },
+        );
+        await settled();
+        expect(host.stats().currency.unvouched).toEqual({});
+        await host.spaceServer(space)!.park("test-park");
+
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore > 0,
+        );
+        await settled();
+
+        expect(serves(root)).toBe(false);
+        expect(host.stats().currency.falseClean).toBe(0);
         cancel();
       });
     });

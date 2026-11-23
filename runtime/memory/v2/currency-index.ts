@@ -1535,7 +1535,23 @@ export const storeCurrencyRecords = (
           ) return false;
           continue;
         }
-        if (written.has(row.entity)) continue;
+        if (written.has(row.entity)) {
+          // A piece does not run for a viewer who holds no instance of its
+          // result document. The write that makes the instance is that of
+          // whoever instantiates the piece for them, and it prompts what
+          // the piece then writes.
+          if (
+            row.entity === ref.piece &&
+            row.entity_scope_key !== ANY_INSTANCE &&
+            headOf(row.entity, row.entity_scope_key) > row.seq &&
+            read(engine, {
+                id: row.entity,
+                scopeKey: row.entity_scope_key as ScopeKey,
+                seq: row.seq,
+              }) === null
+          ) return false;
+          continue;
+        }
         if (headOf(row.entity, row.entity_scope_key) > row.seq) return false;
       }
     }

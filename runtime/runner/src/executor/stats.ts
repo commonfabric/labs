@@ -362,8 +362,10 @@ export type ServingLoopStats = {
      * in another space that the snapshot cannot name the instance or the seq
      * of), `foreign-write` (another space), `unattributed-writer` (it read a
      * document whose writer names no piece and is not live, not clean, or
-     * runs once for each viewer), `scoped-root` and `no-pattern`. A record
-     * with two reasons counts under both. */
+     * runs once for each viewer), `scoped-origin` (a piece each viewer
+     * holds an instance of the result document of, one of which records a
+     * source origin) and `no-pattern`. A record with two reasons counts
+     * under both. */
     unvouched: Record<string, number>;
 
     /** Roots put to a judgment, counted at each judgment made. */

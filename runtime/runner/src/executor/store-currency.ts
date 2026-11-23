@@ -464,12 +464,18 @@ export class StoreCurrency {
           space: this.#space,
           id: piece,
           path: [],
-          scope: "space",
+          scope: taken.rootScope,
         }),
       );
       // What keeps the whole piece from being vouched for.
       const reasons: string[] = [...taken.unvouched];
       if (facts === undefined) reasons.push("no-pattern");
+      // An origin is followed through the piece's one result document, so
+      // a piece that holds an instance of it for each viewer, one of which
+      // records an origin, is started rather than followed.
+      else if (taken.rootScope !== "space" && facts.followsOrigin) {
+        reasons.push("scoped-origin");
+      }
       // A reason is counted once for a piece, whether it holds for the
       // piece or for some of its slices.
       const counted = new Set([
@@ -488,7 +494,8 @@ export class StoreCurrency {
         owned: facts?.owned ?? [],
         // The loop follows a recorded origin before it leaves a root that
         // rests on the piece unstarted (serving-loop.md §3e).
-        ...(facts?.followsOrigin === true && { followsOrigin: true }),
+        ...(facts?.followsOrigin === true && taken.rootScope === "space" &&
+          { followsOrigin: true }),
         slices: taken.slices.map((slice) => ({
           key: slice.key,
           vouched: slice.unvouched.length === 0,

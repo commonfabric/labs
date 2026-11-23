@@ -1389,11 +1389,17 @@ executing:
   of the space is carried as a pair without the access list being asked. A
   slice that read what a live, clean writer
   that names no piece wrote, such as a wish's shared hashtag resolver, takes
-  over that writer's reads as its own. Every slice of a record is stored
-  marked when the piece's root is narrower than the space. A record says
+  over that writer's reads as its own. A piece whose result document is
+  declared narrower than the space is recorded as any other: each viewer
+  holds an instance of the document, the piece's computations run for each
+  at that viewer's key, and what the record says of the piece itself is
+  taken over the programs those instances point at. A record says
   whether its piece records a source origin (§3e), and a judgment names,
   with each root the store can serve, the pieces it rests on that record
   one: the loop follows their origins before it leaves the root unstarted.
+  A piece that holds an instance of its result document for each viewer,
+  one of which records an origin, is stored marked instead: an origin is
+  followed through one result document.
   A clean computation vouches for
   the instances its runs wrote: for a run at a fan-out instance, the
   narrower of that instance and the write's declared scope as the run's

@@ -30,8 +30,6 @@ import type { Action, ReactivityLog, TelemetryAnnotations } from "./types.ts";
 
 /** One reason a piece, or one slice of it, cannot be vouched for. */
 export type PieceUnvouchedReason =
-  /** The piece's root is narrower than the space. */
-  | "scoped-root"
   /** A computation of the piece declares a write in another space. */
   | "foreign-write"
   /** A live computation of the slice is not clean. */
@@ -123,12 +121,18 @@ export type PieceCurrencySnapshot = {
   /** The raw id of the piece's result document. */
   piece: string;
 
+  /**
+   * The scope the piece's result document is declared at. Each viewer
+   * holds an instance of their own of one narrower than the space.
+   */
+  rootScope: CellScope;
+
   /** The pieces that enclose this one. */
   under: string[];
 
   /**
-   * Why no slice of the piece can be vouched for, empty when one can: its
-   * root is space-scoped and everything it writes is in its own space.
+   * Why no slice of the piece can be vouched for, empty when one can:
+   * everything it writes is in its own space.
    */
   unvouched: PieceUnvouchedReason[];
 
@@ -307,7 +311,14 @@ export function snapshotPieceCurrency(
   }
   const identity = identityOf(nodes[0].action)!;
   const unvouched = new Set<PieceUnvouchedReason>();
-  if (!identity.pieceId.startsWith("space:")) unvouched.add("scoped-root");
+  // The piece's id is its result document's, after the scope key of the
+  // instance this runtime registered it under.
+  const rootScope = scopeOfScopeKey(
+    identity.pieceId.slice(
+      0,
+      identity.pieceId.length - piece.length - 1,
+    ) as ScopeKey,
+  );
   const under = (identity.demandRootIds ?? []).filter((id) => id !== piece);
   const writes = new Set<string>();
 
@@ -450,6 +461,7 @@ export function snapshotPieceCurrency(
   let readsUnstarted = false;
   const taken: PieceCurrencySnapshot = {
     piece,
+    rootScope,
     under,
     unvouched: [...unvouched],
     writes: [...writes],

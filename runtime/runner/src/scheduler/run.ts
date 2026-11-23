@@ -1388,6 +1388,7 @@ function finalizeReactiveActionCommit(
         discovered: normalizeCellScope(args.tx.getNarrowestReadScope()),
         startGen: args.fanOutRun.startGen,
         log,
+        transaction: args.tx.tx,
       });
     }
     return log;

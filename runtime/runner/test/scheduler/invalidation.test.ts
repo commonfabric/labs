@@ -192,6 +192,7 @@ describe("invalidation", () => {
             discovered: "user",
             startGen,
             log: { reads: [], shallowReads: [], writes: [] },
+            transaction,
           });
         }
         const written = entityNameKey(read);

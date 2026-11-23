@@ -9,6 +9,7 @@ import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
 import type { CellScope } from "../../src/builder/types.ts";
 import type { SchedulerLivenessState } from "../../src/scheduler/dependency-graph.ts";
 import {
+  fanOutRunFinished,
   fanOutRunOpened,
   fanOutSlotChanged,
   newFanOutNodeState,
@@ -71,7 +72,9 @@ describe("piece-currency", () => {
    * each document of another space at, by id. `changed` is the latest
    * change to an instance of `computed:out`: the key the instance is at,
    * and the key of the instance whose run made it, after every instance
-   * ran. Each of `unattributed` is a
+   * ran. `root` is the scope key of the instance of the piece's result
+   * document that the runtime registered the piece under, `space` unless
+   * given. Each of `unattributed` is a
    * computation that names no piece, clean and live unless it says
    * otherwise, with the document it writes and what it read.
    */
@@ -82,6 +85,7 @@ describe("piece-currency", () => {
     >;
     clean?: ScopeKey[];
     changed?: { at: ScopeKey; by: ScopeKey };
+    root?: ScopeKey;
     status?: NodeStatus;
     reads?: Read[];
     clocks?: Record<string, { intervalMs: number; tick?: number }>;
@@ -96,7 +100,7 @@ describe("piece-currency", () => {
     unattributedWriters = [];
     const action: Action & Partial<TelemetryAnnotations> = function writer() {};
     action.schedulerObservationIdentity = {
-      pieceId: `space:${PIECE}`,
+      pieceId: `${options.root ?? "space"}:${PIECE}`,
       pieceRootId: PIECE,
     };
     const node = nodes.register(action, "computation");
@@ -126,11 +130,18 @@ describe("piece-currency", () => {
       if (options.changed !== undefined) {
         const { at, by } = options.changed;
         const transaction = {};
-        node.fanOut.narrowed = true;
-        fanOutRunOpened(node.fanOut, {
+        const run = {
           key: by,
           identity: instances.find(({ key }) => key === by)?.identity ?? ALICE,
-        }, transaction);
+        };
+        node.fanOut.narrowed = true;
+        fanOutRunOpened(node.fanOut, run, transaction);
+        fanOutRunFinished(node.fanOut, run, {
+          discovered: "user",
+          startGen: 0,
+          log: undefined,
+          transaction,
+        });
         fanOutSlotChanged(node.fanOut, at, "computed:out", transaction);
       }
     }
@@ -580,6 +591,30 @@ describe("piece-currency", () => {
       it("is not reported for a read of a document that is no derived one", () => {
         expect(snapshotOf({ reads: [{ id: "of:input" }] }).readsUnstarted)
           .toBe(false);
+      });
+    });
+
+    describe("the scope of the piece's root", () => {
+      it("is the space for a piece registered under the space's instance of its result document", () => {
+        expect(snapshotOf().rootScope).toBe("space");
+      });
+
+      it("is the user's for a piece registered under a user's instance", () => {
+        expect(snapshotOf({ root: user }).rootScope).toBe("user");
+      });
+
+      it("is the session's for a piece registered under a session's instance", () => {
+        expect(snapshotOf({ root: session }).rootScope).toBe("session");
+      });
+
+      it("keeps no slice of the piece from being vouched for", () => {
+        const taken = snapshotOf({
+          root: session,
+          instances: [{ key: session }],
+        });
+
+        expect(taken.unvouched).toEqual([]);
+        expect(sliceOf(taken, session)?.unvouched).toEqual([]);
       });
     });
 

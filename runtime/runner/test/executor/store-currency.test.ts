@@ -175,6 +175,9 @@ describe("StoreCurrency", () => {
       /** The pieces the scheduler reports as changed, once. */
       let changed: string[];
 
+      /** The scope the scheduler reports each piece's root at. */
+      let rootScope: "space" | "session";
+
       /**
        * The instances at another key the scheduler reports each piece's
        * slice as deciding and as holding a later write of, by piece.
@@ -195,6 +198,7 @@ describe("StoreCurrency", () => {
           pieceCurrencySnapshot: (_space: string, piece: string) => {
             const read = reads.get(piece);
             return read === undefined ? undefined : {
+              rootScope,
               under: [],
               unvouched: [],
               writes: [],
@@ -222,6 +226,7 @@ describe("StoreCurrency", () => {
         reads = new Map();
         changed = [];
         slots = new Map();
+        rootScope = "space";
       });
 
       it("records the instances a slice decides and those it holds a later write of, and names neither list for a slice with none", () => {
@@ -302,6 +307,75 @@ describe("StoreCurrency", () => {
             followsOrigin,
           })),
         ).toEqual([{ piece: "of:piece", vouched: true, followsOrigin: true }]);
+      });
+
+      describe("for a piece whose root each viewer holds an instance of", () => {
+        /** The scope of the cell the runner was asked the facts of. */
+        let asked: unknown;
+
+        /** A runtime whose runner reports `facts` for every piece. */
+        const scopedRuntime = (facts: {
+          owned: string[];
+          followsOrigin?: boolean;
+        }) =>
+          ({
+            ...runtime,
+            getCellFromLink: (link: { scope: unknown }) => {
+              asked = link.scope;
+              return {};
+            },
+            runner: { pieceCurrencyFacts: () => facts },
+          }) as unknown as Runtime;
+
+        beforeEach(() => {
+          rootScope = "session";
+          reads.set("of:piece", [{ space: SPACE, id: "of:near" }]);
+          changed = ["of:piece"];
+        });
+
+        it("asks the runner about the root at its own scope, and vouches for the piece", () => {
+          const snapshot = currency.snapshot(
+            scopedRuntime({ owned: ["of:owned"] }),
+            0,
+            [],
+          );
+
+          expect(asked).toBe("session");
+          expect(
+            snapshot?.records.map(({ piece, vouched, owned }) => ({
+              piece,
+              vouched,
+              owned,
+            })),
+          ).toEqual([{
+            piece: "of:piece",
+            vouched: true,
+            owned: ["of:owned"],
+          }]);
+        });
+
+        it("does not vouch for the piece where an instance of its root records a source origin, and records no origin for it", () => {
+          // An origin is followed through one result document, and such a
+          // piece holds one for each viewer.
+
+          const snapshot = currency.snapshot(
+            scopedRuntime({ owned: [], followsOrigin: true }),
+            0,
+            [],
+          );
+
+          expect(
+            snapshot?.records.map(({ piece, vouched, followsOrigin }) => ({
+              piece,
+              vouched,
+              followsOrigin,
+            })),
+          ).toEqual([{
+            piece: "of:piece",
+            vouched: false,
+            followsOrigin: undefined,
+          }]);
+        });
       });
 
       it("reports no change for a piece that reads no other space", () => {

@@ -1354,6 +1354,61 @@ describe("currency-index", () => {
 
         expect(stored.falseClean).toEqual([]);
       });
+
+      describe("for a piece whose result document each viewer holds an instance of", () => {
+        const ROOT = { id: "of:scoped", scope: "session" as const };
+        const OUT = { id: "computed:out", scope: "session" as const };
+
+        /**
+         * A record of `of:scoped` whose slice for Alice's session read her
+         * instance of the piece's result document, and vouches for it and
+         * for `computed:out`.
+         */
+        const scoped = () =>
+          record("of:scoped", {
+            writes: ["of:scoped", "computed:out"],
+            slices: [{
+              key: ALICE_SESSION,
+              vouched: true,
+              reads: [input("of:scoped", ALICE_SESSION)],
+              vouches: ["of:scoped", "computed:out"],
+            }],
+          });
+
+        it("names no piece that wrote its outputs once the viewer's instance of its result document was made", () => {
+          // The piece does not run for a viewer who holds no instance, so
+          // whoever instantiates it for them makes the instance, and that
+          // prompts what the piece writes.
+
+          const asOf = write("of:a");
+          store(asOf, [scoped()]);
+          const own = write(ROOT, OUT);
+
+          const stored = store(asOf, [scoped()], [own]);
+
+          expect(stored.falseClean).toEqual([]);
+        });
+
+        it("names a piece that wrote an output again while the viewer's instance of its result document stood", () => {
+          const asOf = write(ROOT, OUT);
+          store(asOf, [scoped()]);
+          const own = write(OUT);
+
+          const stored = store(asOf, [scoped()], [own]);
+
+          expect(stored.falseClean).toEqual(["of:scoped"]);
+        });
+
+        it("names a piece that wrote the viewer's instance of its result document again, to another value", () => {
+          const asOf = write(ROOT, OUT);
+          store(asOf, [scoped()]);
+          const own = write(ROOT);
+
+          const stored = store(asOf, [scoped()], [own]);
+
+          expect(stored.falseClean).toEqual(["of:scoped"]);
+        });
+      });
     });
   });
 

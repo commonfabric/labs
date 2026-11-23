@@ -277,6 +277,7 @@ describe("fan-out: which run an instance holds the write of", () => {
       discovered: "user",
       startGen,
       log: emptyLog(),
+      transaction,
     });
     for (const scopeKey of changed) {
       fanOutSlotChanged(state, scopeKey, shared, transaction);
@@ -332,6 +333,7 @@ describe("fan-out: which run an instance holds the write of", () => {
         discovered: "user",
         startGen,
         log: emptyLog(),
+        transaction,
       });
     }
     fanOutSlotChanged(state, "space", shared, aliceTransaction);
@@ -373,7 +375,7 @@ describe("fan-out: which run an instance holds the write of", () => {
     expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(false);
   });
 
-  it("names the run under the key the ratchet gives it once the run narrowed", () => {
+  it("names the run under the key it was recorded under once it narrowed", () => {
     // The probe runs at the space's key and discovers the user's scope, so
     // the instance it leaves is Alice's, and the change its writes make is
     // that instance's.
@@ -387,14 +389,51 @@ describe("fan-out: which run an instance holds the write of", () => {
       discovered: "user",
       startGen,
       log: emptyLog(),
+      transaction,
     });
-    fanOutSlotChanged(state, "space", shared, transaction);
-    fanOutRunApplied(state, transaction);
     run(state, bob, [bob.key]);
     fanOutSlotChanged(state, "space", shared, transaction);
 
     expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(true);
     expect(fanOutHoldsSlot(state, bob.key, "space", shared)).toBe(false);
+  });
+
+  it("keeps a change for the key its run was recorded under, whatever the ratchet gives the run's identity later", () => {
+    // Alice's run at her user's key hands its writes over, and before the
+    // replica applies them another run narrows her to her session. The
+    // change is the user instance's run's, and no instance of hers at the
+    // session's depth made it.
+
+    const state = narrowed();
+    const transaction = {};
+    const startGen = fanOutRunStarted(state, alice);
+    fanOutRunOpened(state, alice, transaction);
+    fanOutRunFinished(state, alice, {
+      discovered: "user",
+      startGen,
+      log: emptyLog(),
+      transaction,
+    });
+    const deeper = { identity: aliceS1, key: sessionKey(aliceS1) };
+    const deeperGen = fanOutRunStarted(state, deeper);
+    fanOutRunFinished(state, deeper, {
+      discovered: "session",
+      startGen: deeperGen,
+      log: emptyLog(),
+    });
+    fanOutSlotChanged(state, "space", shared, transaction);
+
+    expect(fanOutHoldsSlot(state, deeper.key, "space", shared)).toBe(false);
+  });
+
+  it("counts a change whose transaction no run of the node handed over as no run's", () => {
+    const state = narrowed();
+    run(state, alice, []);
+    const transaction = {};
+    fanOutRunOpened(state, alice, transaction);
+    fanOutSlotChanged(state, "space", shared, transaction);
+
+    expect(fanOutHoldsSlot(state, alice.key, "space", shared)).toBe(false);
   });
 
   it("forgets the changes to the instances of a viewer who left and keeps those the remaining runs reach", () => {

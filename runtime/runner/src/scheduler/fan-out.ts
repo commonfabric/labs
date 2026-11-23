@@ -29,6 +29,7 @@ import {
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
+  toDirtyKey,
 } from "@commonfabric/memory/v2";
 import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
 import { scopeRank } from "../scope.ts";
@@ -72,6 +73,9 @@ interface InstanceRecord {
 
 /** The latest change to one instance of a document a fanned-out node writes. */
 interface SlotChange {
+  /** The scope key of the instance. */
+  scopeKey: string;
+
   /** The node's count of changes once it was counted. */
   at: number;
 
@@ -112,14 +116,19 @@ export interface FanOutNodeState {
 
   /**
    * The latest change to each instance of a document the node writes, by
-   * the instance's scope key and the document's id (`slotOf()`). What an
-   * instance holds is what a run left there for as long as no other run,
-   * and nothing else, has changed it since (`fanOutHoldsSlot()`).
+   * the instance's key (`toDirtyKey()`). What an instance holds is what a
+   * run left there for as long as no other run, and nothing else, has
+   * changed it since (`fanOutHoldsSlot()`).
    */
   readonly slotChanges: Map<string, SlotChange>;
 
-  /** The instance each transaction a run of the node opened runs for. */
-  readonly runs: WeakMap<object, FanOutInstance>;
+  /**
+   * The run each transaction a run of the node opened writes for: its
+   * instance, and once the run handed its writes over, the key it was
+   * recorded under then. A change that arrives later is that key's,
+   * whatever the ratchet gives the run's identity by then.
+   */
+  readonly runs: WeakMap<object, { instance: FanOutInstance; key?: ScopeKey }>;
 }
 
 export function newFanOutNodeState(): FanOutNodeState {
@@ -136,7 +145,8 @@ export function newFanOutNodeState(): FanOutNodeState {
 }
 
 /** The key `FanOutNodeState.slotChanges` holds an instance under. */
-const slotOf = (scopeKey: string, id: string): string => `${scopeKey}\0${id}`;
+const slotOf = (scopeKey: string, id: string): string =>
+  toDirtyKey(id, scopeKey as ScopeKey);
 
 const pairOrder = (a: ScopeKeyIdentity, b: ScopeKeyIdentity): number => {
   const p = String(a.principal).localeCompare(String(b.principal));
@@ -333,10 +343,8 @@ export function pruneFanOutInstances(
   for (const instance of current) {
     for (const key of keysOnChain(instance.identity)) reachable.add(key);
   }
-  for (const slot of [...state.slotChanges.keys()]) {
-    if (!reachable.has(slot.slice(0, slot.indexOf("\0")))) {
-      state.slotChanges.delete(slot);
-    }
+  for (const [slot, { scopeKey }] of [...state.slotChanges]) {
+    if (!reachable.has(scopeKey)) state.slotChanges.delete(slot);
   }
 }
 
@@ -362,7 +370,7 @@ export function fanOutRunOpened(
   instance: FanOutInstance,
   transaction: object,
 ): void {
-  state.runs.set(transaction, instance);
+  state.runs.set(transaction, { instance });
 }
 
 /**
@@ -376,11 +384,9 @@ export function fanOutSlotChanged(
   id: string,
   source: object | undefined,
 ): void {
-  const instance = source === undefined ? undefined : state.runs.get(source);
-  const by = instance === undefined
-    ? undefined
-    : keyAtRatchet(state, instance.identity) ?? instance.key;
+  const by = source === undefined ? undefined : state.runs.get(source)?.key;
   state.slotChanges.set(slotOf(scopeKey, id), {
+    scopeKey,
     at: ++state.changes,
     ...(by !== undefined && { by }),
   });
@@ -395,11 +401,8 @@ export function fanOutRunApplied(
   state: FanOutNodeState,
   source: object,
 ): void {
-  const instance = state.runs.get(source);
-  if (instance === undefined) return;
-  const record = state.instances.get(
-    keyAtRatchet(state, instance.identity) ?? instance.key,
-  );
+  const key = state.runs.get(source)?.key;
+  const record = key === undefined ? undefined : state.instances.get(key);
   if (record !== undefined) record.settledAt = state.changes;
 }
 
@@ -446,6 +449,9 @@ export function fanOutRunFinished(
     discovered: CellScope;
     startGen: number;
     log: ReactivityLog | undefined;
+
+    /** The transaction the run wrote through (`fanOutRunOpened()`). */
+    transaction?: object;
   },
 ): boolean {
   const moved = ratchetDiscovered(state, instance.identity, outcome.discovered);
@@ -462,6 +468,10 @@ export function fanOutRunFinished(
   record.identity = instance.identity;
   if (outcome.log !== undefined) record.log = outcome.log;
   record.settledAt = state.changes;
+  const run = outcome.transaction === undefined
+    ? undefined
+    : state.runs.get(outcome.transaction);
+  if (run !== undefined) run.key = key;
   state.instances.set(key, record);
   if (!dirtiedMeanwhile) {
     state.clean.add(key);
