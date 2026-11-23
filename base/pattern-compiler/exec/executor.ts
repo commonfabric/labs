@@ -3360,6 +3360,19 @@ export class Instance {
        */
       load?: (id: string) => { kind: string; value: unknown } | undefined;
       /**
+       * Whether the instance is one that a store outside the executor
+       * holds from a run before: a state cell whose document `load` gives
+       * keeps what that document holds, and is given neither its first
+       * value nor the default of its schema.
+       */
+      resume?: boolean;
+      /**
+       * What a run before of this instance counted (`minted`), for one
+       * that is resumed: the counts go on from there, so that an event and
+       * a document a body makes get a name that no run before gave.
+       */
+      minted?: { events: number; created: number };
+      /**
        * Documents that exist before the instance is created, each with
        * its identifier, its kind and its value: the documents of the
        * inputs that the argument links to. They are made outside any
@@ -3386,6 +3399,10 @@ export class Instance {
     this.id = options.id ?? "result";
     this.argument = argumentOf(this.id);
     this.root = options.parent?.root ?? this;
+    if (this.root === this && options.minted !== undefined) {
+      this.#events = options.minted.events;
+      this.#created = options.minted.created;
+    }
     if (this.root !== this) {
       this.root.options.transactions?.instantiated?.(this.id, artifact);
     }
@@ -4137,7 +4154,9 @@ export class Instance {
       const first = record.first === undefined
         ? undefined
         : this.#states.get(cell);
-      if (first !== undefined) {
+      if (this.root.options.resume === true && this.store.docs.has(id)) {
+        // The document holds what the run before stored.
+      } else if (first !== undefined) {
         const reader = new Host(this, host.context, record.first?.cone);
         this.counts.evaluations += 1;
         // The edge of a first value always stores the value the cone
@@ -12641,6 +12660,16 @@ export class Instance {
     owner.#storedResult = undefined;
     store.write(new Ref(doc, []), held);
     owner.#nowDue();
+  }
+
+  /**
+   * The events this instance handled and the documents its bodies made
+   * with no cause of their own, counted: what the names of the runs of its
+   * handlers and of those documents are formed from. A store outside the
+   * executor keeps them for a resume (`options.minted`).
+   */
+  get minted(): { events: number; created: number } {
+    return { events: this.#events, created: this.#created };
   }
 
   /** The identifiers of the documents and declared places of the instance. */

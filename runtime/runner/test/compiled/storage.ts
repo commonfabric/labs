@@ -1,7 +1,11 @@
 import type { Identity } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 
-import { StorageManager } from "../../src/storage/cache.deno.ts";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "../../src/storage/cache.deno.ts";
 
 /** The storage a test of a compiled piece runs on. */
 export type TestStorage = ReturnType<typeof StorageManager.emulate>;
@@ -33,4 +37,37 @@ export const openStorage = (signer: Identity): TestStorage => {
     await server.close();
   };
   return storageManager;
+};
+
+/** A memory server that several sessions of one test share. */
+export type SharedStorage = {
+  /** Opens a session of the server as `signer`. */
+  open(signer: Identity): TestStorage;
+  /** Closes the server, behind the sessions opened on it. */
+  close(): Promise<void>;
+};
+
+/**
+ * Starts a memory server for the sessions of one test: over a socket, one
+ * that listens on an ephemeral localhost port, and otherwise one in this
+ * thread that tells its sessions of a commit on the next turn.
+ */
+export const shareStorage = (): SharedStorage => {
+  if (overSocket()) {
+    const server = StandaloneMemoryServer.start();
+    return {
+      open: (signer) =>
+        StorageManager.open({
+          as: signer,
+          memoryHost: server.url,
+        }) as TestStorage,
+      close: () => server.close(),
+    };
+  }
+  const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+  return {
+    open: (signer) =>
+      EmulatedStorageManager.connectTo(server, { as: signer }) as TestStorage,
+    close: () => server.close(),
+  };
 };

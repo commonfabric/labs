@@ -36,7 +36,12 @@ import {
   isWalkableObjectNotArray,
 } from "@commonfabric/data-model";
 
-import { createSigilLinkFromParsedLink, parseLink } from "../link-utils.ts";
+import {
+  createSigilLinkFromParsedLink,
+  getMetaLink,
+  parseLink,
+} from "../link-utils.ts";
+import { rawMetaWriteAuthorization } from "../meta-seam.ts";
 import { isPrimitiveCellLink, type NormalizedFullLink } from "../link-types.ts";
 import type { JSONSchema } from "../builder/types.ts";
 import {
@@ -255,6 +260,22 @@ export type Restored = { doc: string; value: unknown };
 export class RuntimeTransactions implements TransactionHooks {
   readonly #runtime: Runtime;
   readonly #space: MemorySpace;
+  readonly #resume: boolean;
+  /** The `result` link the documents the executor makes are given. */
+  #resultLink: unknown;
+  /**
+   * With `resume`: the identifiers `load()` was asked for that the replica
+   * holds no document of.
+   */
+  readonly absent = new Set<string>();
+  /**
+   * Whether the first derivation of a resumed instance is in progress. A
+   * change of it that writes what the storage holds is then no write, and
+   * the path keeps the label the storage holds for it. No record is given
+   * for a path that differs either: the runtime labels it with the join of
+   * what the transaction read, which is every label the derivation read.
+   */
+  #resuming: boolean;
   #tx: IExtendedStorageTransaction | undefined;
   #cause = "";
   /** The positions the transaction in progress read, as text. */
@@ -519,6 +540,13 @@ export class RuntimeTransactions implements TransactionHooks {
        * wrote, which the executor's store is then ahead of.
        */
       refused?: (reason: string, restored?: Restored[]) => void;
+      /**
+       * Whether the storage holds the documents of the instance from a run
+       * before. `load()` then gives a document the executor names by an
+       * identifier of its own as well, and the write that creates the
+       * result document empty is not made.
+       */
+      resume?: boolean;
     } = {},
   ) {
     this.#runtime = runtime;
@@ -530,6 +558,8 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#onLabels = options.labels;
     this.#onApplied = options.applied;
     this.#onRefused = options.refused;
+    this.#resume = options.resume === true;
+    this.#resuming = this.#resume;
     this.#countRecordBytes = options.countRecordBytes === true;
     this.#compiledPattern = options.artifact === undefined ||
         !runtime.experimental.compiledPatterns || !runtime.servingPosture
@@ -1518,11 +1548,19 @@ export class RuntimeTransactions implements TransactionHooks {
       // written.
       this.#documents.add(doc);
       this.#created.push(doc);
-      tx.writeValueOrThrow(
-        this.#address(doc, []),
-        this.#encodeWithRows(tx, store, rows, [], document.value),
-      );
+      // The executor makes the result document of a resumed instance empty
+      // and derives into it, and the storage keeps what it holds until a
+      // path of the derivation differs.
+      if (
+        !(this.#resume && doc === this.#owner && document.value === undefined)
+      ) {
+        tx.writeValueOrThrow(
+          this.#address(doc, []),
+          this.#encodeWithRows(tx, store, rows, [], document.value),
+        );
+      }
       this.#enroll(tx, doc);
+      this.#linkToResult(tx, doc);
     } else if (array !== undefined || above) {
       const held = store.peek(doc, path);
       const cut = made ?? splice;
@@ -1596,6 +1634,10 @@ export class RuntimeTransactions implements TransactionHooks {
         tx.writeValueOrThrow(at(path), this.#encode(store.peek(doc, path)));
       }
     }
+    if (
+      this.#resuming && attempts !== undefined &&
+      tx.getWriteAttemptLog?.().length === attempts
+    ) return;
     if (this.#rowsApart !== undefined) {
       // No transaction of rows stays open behind the change: a later read
       // or write of a row through the handed transaction finds it stored.
@@ -1779,6 +1821,7 @@ export class RuntimeTransactions implements TransactionHooks {
       this.#rowsHanded.add(id);
     }
     this.#enroll(tx, id);
+    if (!this.#rowsHeld.has(id)) this.#linkToResult(tx, id);
     // The write policy of the write, as `change` records it for a path.
     recordRelevantSchemaWritePolicyInput(tx, address, undefined);
     if (load !== undefined && apart !== undefined && this.#rowsApart) {
@@ -2102,7 +2145,7 @@ export class RuntimeTransactions implements TransactionHooks {
      */
     links = false,
   ): void {
-    if (this.#compiledPattern === undefined) return;
+    if (this.#compiledPattern === undefined || this.#resuming) return;
     // The records of one change of the members of a list hold one array of
     // what the change compared, which is given to the runtime as one
     // object.
@@ -2579,7 +2622,9 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /** The document of the executor that an entity holds. */
   documentOf(entity: string): string {
-    return this.#byEntity.get(entity) ?? entity;
+    const known = this.#byEntity.get(entity);
+    if (known !== undefined || !this.#resume) return known ?? entity;
+    return this.#heldDocumentOf(entity);
   }
 
   /**
@@ -2605,6 +2650,60 @@ export class RuntimeTransactions implements TransactionHooks {
       owner,
       runtimeWritePolicyAuthorization,
     );
+  }
+
+  /**
+   * Writes onto a document the executor made the `result` link to the
+   * result document of the instance, as the runner writes it onto the
+   * cells a piece owns (`setResultCell`). The runtime finds the piece that
+   * a document belongs to by this link, and a resumed instance tells by it
+   * a document the executor named from one that exists outside it.
+   */
+  #linkToResult(tx: IExtendedStorageTransaction, doc: string): void {
+    if (this.#owner === undefined || doc === this.#owner) return;
+    const owner = this.#address(this.#owner, []);
+    this.#resultLink ??= this.#runtime.getCellFromLink(owner)
+      .getAsWriteRedirectLink({ includeSchema: true });
+    tx.writeOrThrow(
+      { ...this.#address(doc, []), path: ["result"] },
+      this.#resultLink as FabricValue,
+      rawMetaWriteAuthorization,
+    );
+  }
+
+  /**
+   * The document of the executor that the replica holds in `entity`, for a
+   * resumed instance: the identifier without `of:` where the entity holds
+   * the `result` link to the result document of the instance, and the
+   * identifier of the entity otherwise.
+   */
+  #heldDocumentOf(entity: string): string {
+    let doc = entity;
+    if (this.#owner !== undefined && entity.startsWith("of:")) {
+      const read = this.#runtime.edit();
+      try {
+        const link = getMetaLink(
+          this.#runtime.getCellFromLink(
+            {
+              space: this.#space,
+              id: entity as URI,
+              path: [],
+              scope: "space",
+            },
+            undefined,
+            read,
+          ),
+          "result",
+        );
+        if (link?.id === this.#owner && entity !== this.#owner) {
+          doc = entity.slice("of:".length);
+        }
+      } finally {
+        read.abort();
+      }
+    }
+    this.#byEntity.set(entity, doc);
+    return doc;
   }
 
   /** Helper for the hooks, which gives the transaction in progress. */
@@ -2706,6 +2805,7 @@ export class RuntimeTransactions implements TransactionHooks {
         { space: this.#space, id: entity, path: [], scope: "space" },
         { $stream: true },
       );
+      this.#linkToResult(this.#open(), entity);
       this.#onStream?.(entity, stream);
     }
     return entity;
@@ -2736,7 +2836,12 @@ export class RuntimeTransactions implements TransactionHooks {
    * that of its entity.
    */
   load(id: string): { kind: string; value: unknown } | undefined {
-    if (!id.startsWith("of:") || this.#streams.has(id)) return undefined;
+    if (this.#streams.has(id)) return undefined;
+    // The executor makes the result document of a resumed instance empty.
+    if (this.#resume && id === this.#owner) return undefined;
+    if (!id.startsWith("of:")) {
+      return this.#resume ? this.#held(id) : undefined;
+    }
     const address = this.#address(id, []);
     const read = this.#runtime.edit();
     let value: FabricValue | undefined;
@@ -2753,6 +2858,71 @@ export class RuntimeTransactions implements TransactionHooks {
     if (value === undefined) return undefined;
     this.#documents.add(id);
     return { kind: "external", value: this.#decode(value) };
+  }
+
+  /**
+   * What the replica holds of a document the executor names by an
+   * identifier of its own, for an instance that is resumed. The document
+   * counts as one the storage holds, so its first write is of the path
+   * written and not of the document whole.
+   */
+  #held(id: string): { kind: string; value: unknown } | undefined {
+    const read = this.#runtime.edit();
+    let value: FabricValue | undefined;
+    try {
+      value = read.readValueOrThrow(this.#address(id, []));
+    } finally {
+      read.abort();
+    }
+    if (value === undefined) {
+      this.absent.add(id);
+      return undefined;
+    }
+    this.#documents.add(id);
+    return { kind: "held", value: this.#decode(value) };
+  }
+
+  /**
+   * The document that keeps what the instance whose result document is
+   * `owner` counted (`Instance.minted`).
+   */
+  #mintedDocument(): string {
+    return identifierOf({ type: "minted", parent: this.#owner ?? "" });
+  }
+
+  /** What the replica holds of the counts of the instance, for a resume. */
+  heldMinted(): { events: number; created: number } | undefined {
+    const held = this.#held(this.#mintedDocument())?.value;
+    return isWalkableObjectNotArray(held)
+      ? { events: Number(held.events), created: Number(held.created) }
+      : undefined;
+  }
+
+  /** Writes the counts of the instance into `tx`. */
+  writeMinted(
+    tx: IExtendedStorageTransaction,
+    minted: { events: number; created: number },
+  ): void {
+    const doc = this.#mintedDocument();
+    tx.writeValueOrThrow(this.#address(doc, []), { ...minted });
+    if (!this.#documents.has(doc)) {
+      this.#documents.add(doc);
+      this.#enroll(tx, doc);
+      this.#linkToResult(tx, doc);
+    }
+  }
+
+  /** Ends the first derivation of a resumed instance. */
+  resumed(): void {
+    this.#resuming = false;
+  }
+
+  /**
+   * What the replica holds of the argument document of the instance whose
+   * result document is `owner`, as the executor holds a value.
+   */
+  heldArgument(argument: string): unknown {
+    return this.#held(argument)?.value;
   }
 
   /**

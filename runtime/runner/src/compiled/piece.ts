@@ -35,7 +35,10 @@ import {
   Instance,
 } from "../../../../base/pattern-compiler/exec/executor.ts";
 import { rowDocumentCollections } from "../../../../base/pattern-compiler/exec/row-documents.ts";
-import { Ref } from "../../../../base/pattern-compiler/exec/store.ts";
+import {
+  argumentOf,
+  Ref,
+} from "../../../../base/pattern-compiler/exec/store.ts";
 import type { Cancel } from "../cancel.ts";
 import { type Cell, convertCellsToLinks } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
@@ -82,6 +85,14 @@ export type CompiledPieceOptions = {
    * writes the whole load into the handed transaction. The default is 250.
    */
   loadRows?: number;
+  /**
+   * Whether the storage holds the piece from a run before, in this runtime
+   * or another (`resumeCompiledPiece()`). The argument is then the one the
+   * storage holds, a state cell keeps what its document holds, and the
+   * first derivation writes the paths whose value differs from what is
+   * stored, in the handed transaction.
+   */
+  resume?: boolean;
 };
 
 /** What a compiled piece did, counted. */
@@ -119,6 +130,8 @@ export class CompiledPiece {
     changesByOthers: 0,
     ownMs: 0,
   };
+  /** The counts of the instance that the storage holds. */
+  #minted = { events: 0, created: 0 };
   /** The instance exists: a change by another writer can be applied. */
   #started = false;
   #stopped = false;
@@ -144,6 +157,7 @@ export class CompiledPiece {
     const transactions = new RuntimeTransactions(runtime, space, {
       owner: result.id,
       artifact,
+      resume: options.resume,
       countRecordBytes: options.countRecordBytes,
       ...(rowDocuments === undefined ? {} : { rowDocuments }),
       stream: (entity, stream) => this.#registerStream(entity, stream),
@@ -174,13 +188,21 @@ export class CompiledPiece {
       } finally {
         this.#counts.ownMs += performance.now() - began;
       }
+      this.#keepMinted(given);
       if (first) this.#invalidate();
     };
+    const resumed = options.resume === true;
+    const minted = resumed ? transactions.heldMinted() : undefined;
+    if (minted !== undefined) this.#minted = minted;
     this.instance = transactions.within(tx, () =>
       new Instance(
         artifact,
-        transactions.decode(convertCellsToLinks(argument as never)),
+        resumed
+          ? transactions.heldArgument(argumentOf(result.id))
+          : transactions.decode(convertCellsToLinks(argument as never)),
         {
+          resume: resumed,
+          ...(minted === undefined ? {} : { minted }),
           space,
           id: result.id,
           secret: options.secret ?? space,
@@ -193,7 +215,9 @@ export class CompiledPiece {
           ...(rowDocuments === undefined ? {} : { rowDocuments }),
           load: (id) => transactions.load(id),
         },
-      ), { loadRows: options.loadRows ?? 250 });
+      ), { loadRows: resumed ? Infinity : options.loadRows ?? 250 });
+    transactions.resumed();
+    this.#keepMinted(tx);
     this.#started = true;
     this.#cancels.push(
       runtime.scheduler.subscribe(
@@ -230,6 +254,21 @@ export class CompiledPiece {
     for (const cancel of this.#cancels.splice(0)) cancel();
   }
 
+  /**
+   * Writes into `tx` what the instance counted, where a count went on
+   * since the last write: the names of the runs of its handlers and of the
+   * documents its bodies make are formed from the counts, and a resume
+   * goes on from what is stored.
+   */
+  #keepMinted(tx: IExtendedStorageTransaction): void {
+    const { events, created } = this.instance.minted;
+    if (
+      events === this.#minted.events && created === this.#minted.created
+    ) return;
+    this.#minted = { events, created };
+    this.transactions.writeMinted(tx, this.#minted);
+  }
+
   /** Has the scheduler run the derivation action. */
   #invalidate(): void {
     if (this.#started && !this.#stopped) {
@@ -257,6 +296,7 @@ export class CompiledPiece {
         this.#counts.ownMs += performance.now() - began;
       }
       if (!outcome.committed) this.#counts.eventsRefused += 1;
+      this.#keepMinted(tx);
       // An event a handler sends to a stream of the piece is an event of
       // the scheduler's queue like one sent from outside.
       for (const sent of this.instance.takeQueued()) {

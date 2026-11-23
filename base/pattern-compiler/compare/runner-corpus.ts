@@ -9,8 +9,14 @@
  * Run from the repository root, after `cargo build --release` in
  * `base/pattern-compiler`:
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts run <results.jsonl> [part of a module path] [--resume]`
  * `deno run -A --no-check base/pattern-compiler/compare/runner-corpus.ts report <results.jsonl>`
+ *
+ * With `--resume`, a second runtime on the same memory server takes the
+ * piece over after the first half of the events (`resumeCompiledPiece`):
+ * the first runtime is disposed, the second starts the piece from what the
+ * storage holds and handles the other half. The run then also says how
+ * many documents the resume wrote.
  *
  * `run` appends one line per module and leaves out a module the file
  * already has. The inputs are plain values in the argument, so the run
@@ -30,7 +36,11 @@ import {
   startCompiledPiece,
 } from "../../../runtime/runner/src/compiled/piece.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
-import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
+import { resumeCompiledPiece } from "../../../runtime/runner/src/compiled/resume.ts";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+} from "../../../runtime/runner/src/storage/cache.deno.ts";
 import type { Artifact } from "../exec/executor.ts";
 import {
   artifactsOf,
@@ -67,6 +77,12 @@ type Outcome = {
    */
   equal?: boolean;
   difference?: string;
+  /**
+   * With `--resume`: the events the first runtime handled before the
+   * second took the piece over, the documents the resume wrote, or why the
+   * piece did not resume.
+   */
+  resume?: { after: number; documents?: number; failure?: string };
 };
 
 /** The path of the first difference between two values, as text. */
@@ -107,6 +123,7 @@ const needs = (plan: Artifact["plan"]): string | undefined => {
 const runOne = async (
   module: EmittedModule,
   artifacts: (id: string) => Artifact | undefined,
+  resume: boolean,
 ): Promise<Outcome> => {
   const chosen = await mainPattern(module);
   if (chosen === undefined) {
@@ -146,15 +163,18 @@ const runOne = async (
 
   const signer = await Identity.fromPassphrase("pattern-compiler-compare");
   const space = signer.did();
-  const storageManager = StorageManager.emulate({ as: signer });
-  const runtime = new Runtime({
-    apiUrl: new URL(import.meta.url),
-    storageManager,
-    cfcFlowLabels: "persist",
-    experimental: { compiledPatterns: true },
-    servingPosture: true,
-  });
+  const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+  const session = () =>
+    new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: EmulatedStorageManager.connectTo(server, { as: signer }),
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+  let runtime = session();
   let piece: CompiledPiece | undefined;
+  let resumed: Outcome["resume"];
   try {
     const result = runtime.getCell<unknown>(space, "corpus on the runner");
     const tx = runtime.edit();
@@ -187,7 +207,50 @@ const runOne = async (
     }
     let handled = 0;
     const failures: string[] = [];
-    for (const { binding, event } of events) {
+    const half = Math.floor(events.length / 2);
+    for (const [index, { binding, event }] of events.entries()) {
+      if (resume && index === half) {
+        // The second runtime takes the piece over from the storage.
+        piece.stop();
+        await runtime.scheduler.idleWithPendingCommits();
+        await runtime.storageManager.synced();
+        await runtime.dispose();
+        piece = undefined;
+        runtime = session();
+        const written = new Set<string>();
+        runtime.storageManager.subscribe({
+          next(notification) {
+            if (notification.type === "commit") {
+              for (const { address } of notification.changes) {
+                written.add(address.id);
+              }
+            }
+            return undefined;
+          },
+        });
+        try {
+          piece = await resumeCompiledPiece(
+            runtime,
+            artifact,
+            runtime.getCellFromLink(result.getAsNormalizedFullLink()),
+            { artifacts, now },
+          );
+          await runtime.scheduler.idleWithPendingCommits();
+          await runtime.storageManager.synced();
+          resumed = { after: half, documents: written.size };
+        } catch (error) {
+          return {
+            ...base,
+            started: true,
+            resume: {
+              after: half,
+              failure: `${categoryOf(error).category}: ${
+                categoryOf(error).detail
+              }`,
+            },
+          };
+        }
+      }
       const stream = piece.instance.streams().find((held) =>
         held.binding === binding && held.instance === undefined &&
         held.elements !== undefined
@@ -225,6 +288,7 @@ const runOne = async (
       refusals: [...piece.refusals].map((reason) => reason.slice(0, 200)),
       equal: difference === undefined,
       ...(difference === undefined ? {} : { difference }),
+      ...(resumed === undefined ? {} : { resume: resumed }),
     };
   } catch (error) {
     return {
@@ -235,7 +299,7 @@ const runOne = async (
   } finally {
     piece?.stop();
     await runtime.dispose();
-    await storageManager.close();
+    await server.close();
   }
 };
 
@@ -250,7 +314,11 @@ const readResults = async (file: string): Promise<Outcome[]> => {
   }
 };
 
-const run = async (file: string, part: string | undefined) => {
+const run = async (
+  file: string,
+  part: string | undefined,
+  resume: boolean,
+) => {
   const modules = await corpusModules() as EmittedModule[];
   const artifacts = artifactsOf(modules as unknown as CorpusModule[]);
   const done = new Set((await readResults(file)).map(({ module }) => module));
@@ -259,7 +327,7 @@ const run = async (file: string, part: string | undefined) => {
     if (part !== undefined && !module.module.includes(part)) continue;
     let outcome: Outcome;
     try {
-      outcome = await runOne(module, artifacts);
+      outcome = await runOne(module, artifacts, resume);
     } catch (error) {
       outcome = {
         module: module.module,
@@ -309,6 +377,21 @@ const report = async (file: string) => {
       started.filter(({ equal }) => equal).length
     }`,
   );
+  const resumes = outcomes.flatMap(({ resume }) => resume ?? []);
+  if (resumes.length > 0) {
+    const taken = resumes.filter(({ failure }) => failure === undefined);
+    console.log(`resumed by a second runtime: ${taken.length}`);
+    console.log(
+      `  the resume wrote no document: ${
+        taken.filter(({ documents }) => documents === 0).length
+      }`,
+    );
+    for (
+      const [reason, n] of count(({ resume }) =>
+        resume?.failure?.replaceAll(/of:[\w:-]+/g, "<entity>").slice(0, 110)
+      )
+    ) console.log(`  did not resume, ${n}: ${reason}`);
+  }
   for (
     const [reason, n] of count(({ events }) => events?.failures[0])
   ) console.log(`  an event failed, ${n}: ${reason}`);
@@ -320,12 +403,15 @@ const report = async (file: string) => {
 };
 
 if (import.meta.main) {
-  const [command, file, part] = Deno.args;
-  if (command === "run" && file !== undefined) await run(file, part);
+  const [command, file, part] = Deno.args.filter((one) =>
+    !one.startsWith("--")
+  );
+  const resume = Deno.args.includes("--resume");
+  if (command === "run" && file !== undefined) await run(file, part, resume);
   else if (command === "report" && file !== undefined) await report(file);
   else {
     console.error(
-      "usage: runner-corpus.ts run <results.jsonl> [part of a module path] | report <results.jsonl>",
+      "usage: runner-corpus.ts run <results.jsonl> [part of a module path] [--resume] | report <results.jsonl>",
     );
     Deno.exit(2);
   }
