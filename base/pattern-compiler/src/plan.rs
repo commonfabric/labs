@@ -3525,6 +3525,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                 }
             }
+            // A window (note 921 of `SPEC-NOTES.md`): a collection of the
+            // last or the first elements of its receiver, by a count.
+            "last" | "first" if arguments.len() == 1 => {
+                self.window(receiver, name, arguments[0], hint, at)
+            }
             // `index.lookup(k)`: the bucket of `k`, whose label is the
             // template of `k` joined with the membership of a bucket,
             // which is the template of the index (PL §3.17).
@@ -3906,6 +3911,66 @@ impl<'a> Emitter<'_, '_, 'a> {
             Some("groupBy" | "keyBy")
         )
         .then_some(collection)
+    }
+
+    /// A window of a collection, `xs.last(n)` or `xs.first(n)`: a
+    /// collection whose elements are the last or the first `n` elements of
+    /// its source, each passed through with its key. The cone of its body
+    /// is the count, observed as a value. Which elements stand in the
+    /// window follows the membership of the source, order included, and
+    /// the count, so the membership has the template that a `filter`
+    /// whose predicate is the count has.
+    fn window(
+        &mut self,
+        receiver: &Place,
+        via: &str,
+        count: &Expression<'a>,
+        hint: &str,
+        at: u32,
+    ) -> Place {
+        let name = base_name(hint, via);
+        let (source, iterated) = self.source_of(receiver, via, false, name, at);
+        let collection = self.collections.len();
+        self.collections.push(json!({
+            "name": name,
+            "within": self.within_json(),
+            "construct": via,
+            "source": source,
+        }));
+        self.iterated.push(iterated.clone());
+        self.collection_starts.push(at);
+        let saved_env = self.env.clone();
+        let saved_cone = self.cone.take();
+        let saved_operands = (
+            std::mem::take(&mut self.operands),
+            std::mem::replace(&mut self.opaque, false),
+        );
+        self.within.push(json!({ "element": collection }));
+        let (cone, _) = self.computing(name, at);
+        let (_, body) = self.one("value", |emitter| emitter.eval(count, name));
+        // The element as the source has it, passed through.
+        let slot = self.slot(&Root::Element(collection), &[], "identity");
+        self.cones[cone].slots.insert(slot);
+        let element = json!({ "op": "slot", "slot": slot });
+        let membership = match (&iterated, body) {
+            (Some(_), Some(body)) => Some(fold_node(collection, body, None)),
+            _ => None,
+        };
+        if let Some(membership) = &membership {
+            self.collections[collection]["membership"] = membership.clone();
+        }
+        self.within.pop();
+        self.cone = saved_cone;
+        self.env = saved_env;
+        self.operands = saved_operands.0;
+        self.opaque = saved_operands.1;
+        let value = self.value(name, cone);
+        self.values[value].collection = Some(collection);
+        self.values[value].template = membership;
+        self.values[value].element = Some(Some(element));
+        let place = Place::Value(value, Vec::new());
+        self.pass(&place);
+        place
     }
 
     /// An element construct: a collection, and the cone of its body.
@@ -6200,7 +6265,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     if below
                         && matches!(
                             self.collections[collection]["construct"].as_str(),
-                            Some("filter" | "sortBy")
+                            Some("filter" | "sortBy" | "last" | "first")
                         )
                     {
                         return match self.source_origin(collection) {
@@ -6239,7 +6304,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         if let Some(inner) = source["collection"].as_u64() {
             if matches!(
                 self.collections[inner as usize]["construct"].as_str(),
-                Some("filter" | "sortBy")
+                Some("filter" | "sortBy" | "last" | "first")
             ) {
                 return match self.source_origin(inner as usize) {
                     Origin::Stored | Origin::Reference => Origin::Reference,
@@ -7427,7 +7492,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         for (index, collection) in collections.iter().enumerate() {
             if !matches!(
                 collection["construct"].as_str(),
-                Some("map" | "filter" | "flatMap" | "sortBy")
+                Some("map" | "filter" | "flatMap" | "sortBy" | "last" | "first")
             ) {
                 continue;
             }

@@ -7,9 +7,16 @@
  *
  * Run from the repository root, after `cargo build --release` in
  * `base/pattern-compiler`. `<arm>` is `executor`, the executor with its
- * documents in memory, or `runner`, a compiled piece started with
+ * documents in memory, `runner`, a compiled piece started with
  * `startCompiledPiece` in a runtime on emulated storage, with the
- * experimental option `compiledPatterns` on. `<pattern>` is `room`
+ * experimental option `compiledPatterns` on, or `serving`, the room set up
+ * by a client (`setUpCompiledPiece`) and run by the serving loop of a
+ * memory server on this thread (`listenCompiledServingMemoryServer`), with
+ * two clients over a socket: one sends, and both read the number of
+ * messages back. The steps of `serving` are `start`, `seed` and `send`,
+ * with the time until the sender and until the reader read the count; the
+ * serving runtime is given the artifacts this process emitted, and the
+ * source the client writes is a placeholder. `<pattern>` is `room`
  * (`FabriChatRoom`), `manager` (`FabriChatManager`) or `home` (`Home`).
  * Each run prints one line of JSON per step.
  *
@@ -21,7 +28,10 @@
  *   The time is of all of them.
  * - `send`: three more events, each timed until the piece is up to date,
  *   with the counters of the executor for that event alone (evaluations,
- *   evaluations of element bodies, assemblies).
+ *   evaluations of element bodies, assemblies), and on the arm `runner`
+ *   the documents its commits changed, each counted once for a commit,
+ *   and their size as JSON after the commit (`changedDocuments`,
+ *   `changedBytes`).
  * - `read`: the messages of the result are read, and the step says how
  *   many the room holds, the text of the last, and for how many the
  *   result holds the reader's rights, with those of the last.
@@ -33,6 +43,10 @@
  * With `SCALE_CPU_PROFILE` set to the path of a file, the timed sends of
  * `room` and the event of `home` are sampled and the profile is written
  * to that path followed by the size.
+ *
+ * With `SCALE_LISTS=in-place`, the arms `runner` and `serving` store the
+ * links to the row documents of the room in the result document, and
+ * otherwise in documents of their own (`CompiledPieceOptions.lists`).
  *
  * Unless `SCALE_POLICIES` is `keep`, the schemas are given without the
  * write policies and the integrity they declare (`withoutWritePolicies`).
@@ -62,6 +76,7 @@ import {
   FabricEpochNsec,
 } from "@commonfabric/data-model/fabric-primitives";
 
+import type { Cell } from "../../../../runtime/runner/src/cell.ts";
 import {
   type CompiledPiece,
   startCompiledPiece,
@@ -71,11 +86,15 @@ import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "../../../../runtime/runner/src/cfc/ui-contract.ts";
+import { listenCompiledServingMemoryServer } from "../../../../runtime/runner/src/compiled/serving-memory-server.deno.ts";
+import { compiledPiecesOf } from "../../../../runtime/runner/src/compiled/serving.ts";
+import { setUpCompiledPiece } from "../../../../runtime/runner/src/compiled/setup.ts";
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
 import { joinSpaceMembers } from "../../../../runtime/runner/src/space-members.ts";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
+  StorageManager,
 } from "../../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../../exec/executor.ts";
 import { startCpuProfile } from "../cpu-profile.ts";
@@ -266,6 +285,26 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
   }
   // With the stand-ins, the profile is a document of the room's own space
   // and has no claim of whose it is.
+  // What the commits of the runtime changed: the documents, each counted
+  // once for a commit, and the size of each as JSON after the commit.
+  const changedByCommits = { documents: 0, bytes: 0 };
+  runtime.storageManager.subscribe({
+    // deno-lint-ignore no-explicit-any
+    next(notification: any) {
+      if (notification.type !== "commit") return undefined;
+      const seen = new Set<string>();
+      for (const { address, after } of notification.changes) {
+        if (seen.has(address.id)) continue;
+        seen.add(address.id);
+        changedByCommits.documents += 1;
+        changedByCommits.bytes += after === undefined ? 0 : JSON.stringify(
+          after,
+          (_, member) => typeof member === "bigint" ? `${member}n` : member,
+        ).length;
+      }
+      return undefined;
+    },
+  });
   const seeded = runtime.edit();
   const profile = runtime.getCell(space, "profile", undefined, seeded);
   profile.set(structuredClone(PROFILE) as never);
@@ -313,6 +352,9 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
         // the principal a run acts for. `SELF` is no built-in the runtime
         // answers: it is the stand-in of the executor's harness.
         : { actsFor: space, builtins: { SELF: "$SELF" } }),
+      ...(Deno.env.get("SCALE_LISTS") === "in-place"
+        ? { lists: "in-place" as const }
+        : {}),
     });
   } catch (error) {
     tx.abort();
@@ -438,6 +480,8 @@ const onRunner = async (artifact: Artifact, artifacts: Artifact[]) => {
         ),
         derivations: piece.counts.derivations,
         ownMs: piece.counts.ownMs,
+        changedDocuments: changedByCommits.documents,
+        changedBytes: changedByCommits.bytes,
       };
     },
     stop: async () => {
@@ -479,16 +523,191 @@ const SEND_GESTURE = Deno.env.get("SCALE_POLICIES") === "keep"
   ? { surface: "ChatSendSurface", action: "ChatSend" }
   : undefined;
 
+/**
+ * Runs the room under the serving loop for one size: a client sets the
+ * piece up, the serving runtime of a memory server on this thread starts
+ * and runs it, and a second client reads. Each send is timed from the send
+ * until each client reads the count of messages it makes.
+ */
+const underServingLoop = async (
+  artifact: Artifact,
+  artifacts: Artifact[],
+  size: number,
+): Promise<void> => {
+  const base = { arm: "serving", pattern: artifact.name, size };
+  const signer = await Identity.fromPassphrase("pattern-compiler fabrichat");
+  const space = signer.did();
+  // The table that answers each `wish` names the seeded documents, which
+  // exist once the sender wrote them.
+  let home: ReturnType<typeof homeStubs> | undefined;
+  const failures: string[] = [];
+  const serving = await listenCompiledServingMemoryServer({
+    // The artifacts are the ones this process emitted, with the write
+    // policies taken out as on the other arms.
+    compile: () =>
+      Promise.resolve({
+        main: artifact,
+        artifacts: (id) =>
+          artifacts.find(({ plan }) =>
+            (plan as { patterns?: string[] }).patterns?.[0] === id
+          ),
+      }),
+    pieces: {
+      piece: {
+        now: Date.now(),
+        wishes: (operands) => home?.wishes(operands),
+        builtins: builtinsOf(space, space),
+        ...(Deno.env.get("SCALE_LISTS") === "in-place"
+          ? { lists: "in-place" as const }
+          : {}),
+      },
+      failed: (_result, error) => failures.push(`${error}`),
+    },
+  });
+  const client = () =>
+    new Runtime({
+      apiUrl: serving.url,
+      storageManager: StorageManager.open({
+        as: signer,
+        memoryHost: serving.url,
+      }),
+      experimental: { serverExecution: true },
+    });
+  const sender = client();
+  const reader = client();
+  const cancels: (() => void)[] = [];
+  try {
+    const seeded = sender.edit();
+    const profile = sender.getCell(space, "profile", undefined, seeded);
+    profile.set(structuredClone(PROFILE) as never);
+    const root = sender.getCell(space, space, undefined, seeded);
+    root.key("defaultPattern").set(
+      {
+        profiles: [profile],
+        backlinksIndex: { mentionable: [] },
+        pieceRegistry: [],
+      } as never,
+    );
+    const seeding = await seeded.commit().settled;
+    if (seeding.error !== undefined) throw seeding.error;
+    home = homeStubs({
+      profile: {
+        id: profile.getAsNormalizedFullLink().id,
+        kind: "profile",
+        value: structuredClone(PROFILE),
+        space,
+      },
+      root: {
+        id: root.getAsNormalizedFullLink().id,
+        kind: "space root",
+        value: {},
+      },
+    });
+    const result = sender.getCell<unknown>(space, "fabrichat under serving");
+    const link = result.getAsNormalizedFullLink();
+    /** Resolves with the time at which `runtime` reads `count` messages. */
+    const reads = (runtime: Runtime, count: number): Promise<number> => {
+      const { promise, resolve } = Promise.withResolvers<number>();
+      const cell = runtime.getCellFromLink(link).key("messages" as never)
+        .key("count" as never) as unknown as Cell<number>;
+      cancels.push(cell.sink((value) => {
+        if (value === count) resolve(performance.now());
+      }));
+      return promise;
+    };
+    let began = performance.now();
+    const started = Promise.all([reads(sender, 0), reads(reader, 0)]);
+    const tx = sender.edit();
+    setUpCompiledPiece(
+      sender,
+      tx,
+      // The serving runtime is given the artifacts, and reads no source.
+      { main: "/room.tsx", files: [{ name: "/room.tsx", contents: "" }] },
+      {},
+      result.withTx(tx),
+    );
+    const { error } = await tx.commit().settled;
+    if (error !== undefined) throw error;
+    const [startedAtSender, startedAtReader] = await started;
+    print({
+      ...base,
+      step: "start",
+      sender: startedAtSender - began,
+      reader: startedAtReader - began,
+      failures,
+    });
+    // The sender holds the marker of the stream, by which a send to the
+    // member of the result is the append of an event.
+    const sendMessage = sender.getCellFromLink(link).key(
+      "sendMessage" as never,
+    ) as unknown as Cell<unknown>;
+    await sendMessage.sync();
+    await sendMessage.resolveAsCell().sync();
+    cancels.push(sendMessage.sink(() => {}));
+    const [piece] = serving.runtimes().flatMap((runtime) =>
+      compiledPiecesOf(runtime)
+    );
+    began = performance.now();
+    for (let index = 0; index < size; index++) {
+      const done = reads(sender, index + 1);
+      sendMessage.send({ body: `message ${index}` } as never);
+      await done;
+    }
+    print({ ...base, step: "seed", ms: performance.now() - began, failures });
+    for (let index = 0; index < 3; index++) {
+      const before = piece === undefined
+        ? undefined
+        : { ...piece.transactions.counts, ownMs: piece.counts.ownMs };
+      const atSender = reads(sender, size + index + 1);
+      const atReader = reads(reader, size + index + 1);
+      began = performance.now();
+      sendMessage.send({ body: `timed ${index}` } as never);
+      const [sent, read] = await Promise.all([atSender, atReader]);
+      const after = piece?.transactions.counts;
+      print({
+        ...base,
+        step: "send",
+        sender: sent - began,
+        reader: read - began,
+        ...(piece === undefined || before === undefined || after === undefined
+          ? {}
+          : {
+            reads: after.reads - before.reads,
+            writes: after.writes - before.writes,
+            recordsGiven: after.recordsGiven - before.recordsGiven,
+            ownMs: piece.counts.ownMs - before.ownMs,
+          }),
+        refusals: piece?.refusals.length ?? 0,
+        failures,
+      });
+    }
+  } finally {
+    for (const cancel of cancels) cancel();
+    await sender.dispose();
+    await reader.dispose();
+    await serving.close();
+  }
+};
+
 const [arm, which, sizes] = Deno.args;
 const name = PATTERNS[which];
-if (!["executor", "runner"].includes(arm) || name === undefined) {
+if (
+  !["executor", "runner", "serving"].includes(arm) || name === undefined ||
+  (arm === "serving" && which !== "room")
+) {
   console.error(
-    "usage: scale.ts <executor | runner> <room | manager | home> [sizes]",
+    "usage: scale.ts <executor | runner | serving> <room | manager | home> [sizes]",
   );
   Deno.exit(2);
 }
 const artifacts = await emitted();
 const artifact = artifacts.find((pattern) => pattern.name === name)!;
+if (arm === "serving") {
+  for (const size of (sizes ?? "10,100,1000").split(",").map(Number)) {
+    await underServingLoop(artifact, artifacts, size);
+  }
+  Deno.exit(0);
+}
 const start = arm === "executor" ? inMemory : onRunner;
 
 for (

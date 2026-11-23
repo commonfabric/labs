@@ -27,6 +27,7 @@ use oxc_span::{GetSpan, Span};
 use oxc_syntax::scope::ScopeFlags;
 use serde_json::{json, Value};
 
+use crate::api;
 use crate::plan::{Place, Root, SlotKey};
 use crate::program::Resolver;
 use crate::syntax::{offsets, static_key_name, unwrap, FunctionLike};
@@ -1374,6 +1375,28 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
             return;
         };
+        // The function of a window is its count, which no element decides.
+        if api::is_window_method(member.property.name.as_str()) {
+            let Some(count) = call.arguments.first().and_then(Argument::as_expression) else {
+                return;
+            };
+            if self.generator.registered_elements.contains(&collection) {
+                return;
+            }
+            self.source_of_construct(&member.object, collection);
+            let cone = self
+                .generator
+                .finished
+                .values
+                .iter()
+                .find(|(_, of, _)| *of == Some(collection))
+                .map(|(cone, ..)| *cone);
+            let returned = self.in_cone(cone, |rewriter| rewriter.render(count, Want::Pass));
+            self.generator
+                .hoist(format!("$rt.element({collection}, ($h) => ({returned}));"));
+            self.generator.registered_elements.push(collection);
+            return;
+        }
         let Some(function) = call.arguments.first().and_then(FunctionLike::of_argument) else {
             return;
         };

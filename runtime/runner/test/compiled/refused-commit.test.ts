@@ -221,6 +221,8 @@ describe("a commit of a compiled piece that is refused", () => {
           ),
       );
       expect(outcome.committed).toBe(true);
+      // The piece has the derivation run after an event it handles.
+      piece.derive();
     });
     await server.idle();
     const error = await pending;
@@ -265,6 +267,8 @@ describe("a commit of a compiled piece that is refused", () => {
             { text: "+mine" },
           ),
       );
+      // The piece has the derivation run after an event it handles.
+      piece.derive();
     });
     await writer.idle();
     expect(held(piece).rows.map(({ label }) => label)).toEqual([

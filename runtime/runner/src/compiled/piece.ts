@@ -120,6 +120,22 @@ export type CompiledPieceOptions = {
    */
   rows?: "documents" | "in-place";
   /**
+   * Where the links to the row documents of an array, and the links to the
+   * bucket documents of an index the result keeps, are stored. `documents`,
+   * the default: in documents of their own, a long array in chunks, with a
+   * link in the result document at the path of the array or of the record
+   * (`RuntimeTransactions` option `listDocuments`). `in-place`: in the
+   * result document. With `rows` at `in-place` there are no such links.
+   */
+  lists?: "documents" | "in-place";
+  /**
+   * The most rows of an array whose links one list document holds, where
+   * `lists` is `documents`: a reader through the runtime reads such an
+   * array as the array of its rows, and a longer one as an array of chunks
+   * (`RuntimeTransactions` option `listWhole`, which has the default).
+   */
+  listWhole?: number;
+  /**
    * The most row documents that one transaction of the load holds. The
    * load commits the documents the instance makes for itself, and then the
    * row documents in transactions of at most this many, before the caller
@@ -311,6 +327,11 @@ export class CompiledPiece {
       countRecordBytes: options.countRecordBytes,
       ...(rowDocuments === undefined ? {} : { rowDocuments }),
       ...(bucketDocuments === undefined ? {} : { bucketDocuments }),
+      listDocuments: options.rows !== "in-place" &&
+        options.lists !== "in-place",
+      ...(options.listWhole === undefined
+        ? {}
+        : { listWhole: options.listWhole }),
       stream: (entity, stream) => this.#registerStream(entity, stream),
       changes: (changes) => this.#changedByOthers(changes),
       arrived: (doc) => {
@@ -862,6 +883,15 @@ export class CompiledPiece {
     this.#runtime.scheduler.setNoDebounce(this.#derive, true);
   }
 
+  /**
+   * Has the scheduler run the derivation, as the piece does after each
+   * event it handles: for a caller that hands the executor an event
+   * itself (`RuntimeTransactions.within`).
+   */
+  derive(): void {
+    this.#invalidate();
+  }
+
   /** Has the scheduler run the derivation action. */
   #invalidate(): void {
     if (this.#started && !this.#stopped) {
@@ -977,6 +1007,7 @@ export class CompiledPiece {
   #refused(reason: string, restored: Restored[]): void {
     this.#refusals.push(reason);
     if (!this.#started || this.#stopped) return;
+    this.instance.recordsRefused();
     for (const { doc, value, acting } of restored) {
       this.transactions.actingFor(
         acting,

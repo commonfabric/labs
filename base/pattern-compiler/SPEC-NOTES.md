@@ -21860,6 +21860,1241 @@ of round 13.
     (`builder/space-access-change.ts`). The frame of a compiled handler does not
     hold it.
 
+## Round twelve: steps that do not follow what the piece holds
+
+The round of 2026-11-23 on the branch `claude/compiled-pattern-serving-m6` from
+the commit `820fa700ee`, measured on `claude/compiled-pattern-topics-runs`. The
+notes are numbered from 851 and the provisional decisions from P250. Whenever a
+note says `map`, it names the case. The raw output of the round is in the folder
+`r12-send/`.
+
+851. **What the round did, by step.**
+     - _The lists of links of the result as documents (step 1), done for the
+       arrays of row links, in chunks, and done without chunks for the records
+       of bucket links._ Notes 853 to 859. A record of bucket links is one
+       document, and a change of one bucket link still writes a document that
+       follows the number of buckets; the shards that would bound it are stubbed
+       with a plan, because a second piece and today's `lookup` read a bucket at
+       `<index>/buckets/<key>` (note 855). The layout is behind the option
+       `lists` of a compiled piece and is not the default (note 858).
+     - _A send that gives no record for each message held (step 2), done for the
+       records, and stubbed for the other three items._ The record of a row of a
+       `map` over a stored array of references no longer names the position `*`
+       where its body named a member through a handle, and a commit that stored
+       a label alone gives a record again only where a read consumes another
+       label (note 860). Stubbed with plans: a `map` over the result of a body
+       kept by key, `Instance.#unchangedOutput`, and the schema in each stored
+       link (note 861).
+     - _`facts` on the constructs (step 3), stubbed._ Nothing of the copies
+       changed. Note 862 has the plan and what the language lacks.
+     - _FabriChat under the serving loop (step 4), done for the compiled room._
+       The arm `serving` of `compare/fabrichat/scale.ts` (note 863). Today's
+       room under the serving loop was not built.
+     - _The tables (step 5)._ Notes 859, 864 and 865.
+     - _With the experimental option off._ Every change of the runtime is in
+       `runtime/runner/src/compiled/`, which nothing loads without the option.
+852. **Findings on structure, scale and soundness.**
+     - _Scale, closed for the arrays of rows: a change of one link of an array
+       of row documents wrote and delivered the result document._ With `lists`
+       at `documents` one row that enters, leaves or moves writes at most three
+       documents of at most 64 links each (note 853). At 10,000 rows a move
+       writes 17 KB of documents, where it wrote 1.56 MB, and an append 13 KB.
+     - _Scale, not closed: a bucket that comes to exist or ceases to writes the
+       document of the bucket links of its index, which holds one link for each
+       bucket_ (note 855). No reader of the first screen holds that document, so
+       it is delivered to none of the two clients of the harness, and the server
+       still walks it.
+     - _Scale, closed: each send into a room gave four records for each message
+       held._ Two causes, both closed (note 860). A send into a room of 1,000
+       messages gives 99 records, from 4,099, and takes 0.92 to 0.98 s on the
+       runner path with the lists as documents, from 1.7 to 1.8 s.
+     - _Soundness, a label that is smaller than before, by the first change of
+       note 860:_ the row of a `map` whose body takes the cell of a member by
+       its position and does not read it holds the label of the reference at
+       that position, where it held the join of the labels of the references at
+       every position. Deferred question 1 below.
+     - _A defect of the code the round started from, not closed: after a refused
+       commit the adapter keeps the keys of the rows the storage holds while the
+       executor gives every row again as one that enters_ (note 857). With the
+       links in place the storage is written right and the adapter's own list of
+       keys holds each key twice. With `lists` at `documents` the list is laid
+       out anew, which is right. The in-place path was left as it was.
+     - _A defect of two tests, closed: two cases of `refused-commit.test.ts`
+       relied on a derivation that a change of label entries alone caused_ (note
+       860).
+     - _Scale, an observation: the largest documents a create on Topics changes
+       are inputs of the pattern,_ the stored array of topics and the record of
+       names, 373 and 369 KB at 1,000 topics, each one document with one link
+       for a topic (note 859). The layout of the result does not reach them.
+     - _Scale, not closed, by function, for a FabriChat send:_ the body `facts`
+       reads 5 positions for each message held, the conversation rows are a
+       `map` over the result of a body and are formed whole,
+       `Instance.#unchangedOutput` gives a record for each place a comparison
+       left as it was, and each stored link to a typed handle holds the schema
+       of the message (notes 861 and 862). A send still grows with the room.
+853. **Step 1: the layout, and the chunk rule (provisional decision P250).**
+     With `CompiledPieceOptions.lists` at `documents` (`RuntimeTransactions`
+     option `listDocuments`), the result document holds, at the path of each
+     array of row documents, a link to a list document (`LinkList` of
+     `runtime/runner/src/compiled/transactions.ts`), named by a hash of the
+     result document and the path.
+     - _An array of at most 64 rows_ is the list document itself: it holds the
+       links to the rows in order. A reader that follows the link in the result
+       document reads, at the path, the array the result would hold in place.
+     - _A longer array is in chunks._ The list document holds, in order, a link
+       to the document of each chunk, and a chunk holds at most 64 links to rows
+       (`LIST_CHUNK`). A load, and a chunk that is split in its middle, fills a
+       chunk to 48 (`LIST_FILL`), so that the next members to enter it do not
+       split it.
+     - _An insert_ (`RuntimeTransactions.#spliceList`) goes into the chunk that
+       holds the position, or into the last chunk for an append. A chunk that
+       then holds more than 64 links is split: one that grew at the end of the
+       list keeps 64 and the rest go into chunks behind it, and any other is
+       split into chunks of equal length of at most 48.
+     - _A removal_ takes the links from the chunks that hold them. A chunk that
+       holds none leaves the list, and a chunk left with fewer than 16 links
+       joins the chunk beside it where the two hold at most 48 together. A list
+       that shrinks to 32 rows is stored in the list document again.
+     - _So one row that enters, leaves or moves writes at most three chunks,_
+       each at most 64 links, about 160 bytes a link. The list document is
+       written only where a chunk came to exist or ceased to: it holds one link
+       for each chunk, so that write follows the number of rows divided by 48 to
+       64, and happens once for at least 16 inserts into one chunk. A list
+       document that is itself in chunks would bound it; not built.
+     - _A change of the array that the executor gives whole_
+       (`RuntimeTransactions.#relayList`) is applied as the one run of keys that
+       differs, so the chunks outside the run are not written.
+     - _The identifier of a chunk_ is a hash of the result document, the path
+       and a number that the adapter counts up, skipping identifiers in use.
+     - _Tests._ `runtime/runner/test/compiled/link-lists.test.ts`, written
+       first: the bytes of the documents the commits of one step change, for one
+       topic appended and one item moved in a sorted order, at 100, 1,000 and
+       10,000 members, with a bound of 64 KB. Seen to fail with the links in
+       place on 159 KB (the move at 1,000), 1.56 MB (the move at 10,000) and 4.7
+       MB (an append that also made a bucket, at 10,000). With `lists` at
+       `documents` the append writes 5.7, 12.9 and 13.2 KB and the move 11.8,
+       18.9 and 17.2 KB. Four more cases: the links at the two places of the
+       result document, the array of a short list read at its path through the
+       runtime, the link of a new bucket in the document of the bucket links,
+       and the chunks kept across a resume.
+854. **Step 1: the records and the labels of the list documents.** A first build
+     wrote the documents of a list under no record of the plan, as a bucket's
+     document is written. Each then stored the join of what the transaction
+     read, and a read of any row through the list consumed that join: label
+     cases of `test/compiled/` failed on a row that consumed the clause of every
+     input, 19 cases in all with those of note 855 and 857. The built form:
+     - _The documents of a list that a change wrote_
+       (`RuntimeTransactions.#listsWritten`) are given the record of the path
+       the list stands at, or of the nearest path above it that has one, with
+       the root of the document as its target and without the members that
+       describe a change of members (`#recordsOfLists`). So a chunk and the list
+       document store the label of the membership of the array.
+     - _The path of the array in the result document_ holds the link to the
+       list, which a change of the members does not write. The record of the
+       array is given there as that of a write that left the path as it was, so
+       the path keeps the label of the membership as the record gives it now.
+     - _A document of a list that is written with what it holds_ is no write of
+       the transaction and is given no record.
+     - _What `labelOf` answers for a read at or above the array_ is as before:
+       the result document at the path and each row's document. It does not join
+       the labels of the list documents, which hold the label that the path
+       holds.
+     - _The record of bucket links_ is written whole under the record of the
+       index, as each bucket's document is, and one link of it under no record,
+       as the link in the result document was. A read below a bucket crosses the
+       link at the path of the record in the result document, below the entry of
+       the index, and the link in the document of the bucket links; both are
+       given as observed with the chain (`#crossedBucketLink`).
+     - With the layout forced on for every piece, the label cases of
+       `test/compiled/` pass again but for those that read the links in the
+       result document (note 858).
+855. **Step 1: the record of bucket links is one document, and the shards are a
+     plan.** With `lists` at `documents` the result document holds, at
+     `<index>/buckets`, a link to a document that holds the link to each bucket
+     by its encoded key (`BucketRecord.list`). A reader that reads
+     `<index>/buckets/<key>` through the runtime reads what it read before: the
+     link in the result document is followed on the way. A bucket that comes to
+     exist or ceases to writes one path of that document, and the document, with
+     one link of 170 to 320 bytes for each bucket, is the unit the storage walks
+     and a holder is delivered.
+     - _What was built first and taken out:_ the links in 256 shards by a hash
+       of the key, with a list of the shards. A row that holds its bucket by a
+       link (P142) then named `<index>/buckets/<shard>/<key>`, and the bytes of
+       an append that made a bucket were 15 to 27 KB at every size.
+     - _Why it was taken out._ A second piece that looks a key up in the index
+       of the first (`kept-index.test.ts`, "gives a second piece the members of
+       the bucket it looks up") reads `<index>/buckets/<key>` through its own
+       executor, and found no bucket. The stored form is also the shape of
+       today's index data, which today's `lookup` reads at the same path. A
+       layout in shards changes the path for every reader that is not the piece
+       itself.
+     - _The plan._ (1) The stored index says how its buckets are laid out, a
+       member `layout` beside `kind` and `mode`. (2) `Host.lookup` of
+       `exec/executor.ts`, for an index it reads by a reference, puts the shard
+       of the key into the path where the index says so. (3) The adapter of the
+       reading piece loads the document of a shard as it loads a bucket's. (4)
+       Today's `lookup` reads the same member, or a compiled index that another
+       runtime reads keeps its links in one document. Whether today's `lookup`
+       has to read a compiled index is the decision this needs. A record that
+       grows past 256 shards of 64 needs a second level, as the list of the
+       chunks does.
+856. **Step 1: what a reader reads.**
+     - _At the path of an array of at most 64 rows,_ a reader through the
+       runtime reads the array: `result.key("cards").get()` gives the rows, and
+       the runtime's `map` over it reads what it read.
+     - _At the path of a longer array,_ a reader reads an array of chunks, each
+       an array of rows. A reader that wants the rows in order reads the members
+       of each member that is an array in the place of that member, one level
+       deep: a row is a record or a view node and never an array. The runtime's
+       `map` over such a list on a client gives one result for each chunk and
+       not for each row; a pattern that maps the rows of a compiled piece of
+       more than 64 rows has to map the chunks and then the rows. Nothing in the
+       runtime does that for it.
+     - _The children of a view node._ The worker's reconciler renders a child
+       that resolves to an array as a group (`#renderChildContent` of
+       `runtime/html/src/worker/reconciler.ts` wraps it in a `span` with
+       `display: contents`), so a list of chunks renders as its rows in order.
+       This was read in the source and not run: the round launched no browser.
+     - _The harness._ The reader of `compare/topics/serving.ts` finds a card in
+       its chunk (`cardAt`, `rowAt`).
+857. **Step 1: a resume, and a refused commit.**
+     - _A resume_ writes each array whole first. The adapter then reads the
+       layout the storage holds (`#storedRowLinks`) and keeps it where it holds
+       as many links as the array has rows; each document is written with what
+       it holds, which is no write. Test: "keeps the chunks the storage holds
+       when the piece is resumed", seen to fail on 11 chunks written, because a
+       resumed adapter named the document of a list by its entity and took the
+       stored link for another document's.
+     - _A refused commit._ `Instance.restore` takes the result document with the
+       rows of each collection left out, and the next derivation gives every row
+       as one that enters at position 0. The adapter kept the keys the storage
+       holds (`#restored`), so its list of keys held the stored keys behind the
+       ones given again. With the links in place the positions written are the
+       first ones, which are right. With a list document the list was written
+       with every key, and the case "handles an event again from what the
+       storage holds when the wave that held it is rejected" of
+       `compiled-serving.test.ts` read seven rows where four were expected. With
+       `lists` at `documents` the adapter now holds no key after a restore, and
+       the list is laid out anew by the change that gives the rows again. With
+       the links in place nothing was changed.
+858. **Step 1: the default is `in-place` (provisional decision P251).** With the
+     layout forced on for every piece, 33 cases in 7 files of `test/compiled/`
+     fail, each on a read of the links in the result document: the array of row
+     links read as an array, the keys of the record of the buckets, the number
+     of label entries of the result document. No case fails on a value or on a
+     label a reader consumes. So the option is off by default and the harnesses
+     turn it on (`SCALE_LISTS=documents`). Making it the default is a change of
+     those 33 reads to follow the link.
+859. **Step 1: Topics measured.** `compare/topics/scale.ts` on the measurement
+     branch at the commit `1758964815`, with `SCALE_LISTS=documents` for the
+     layout of this round and without it for the links in place, one process for
+     each board, size and run, one at a time, on an Apple M5 Max with 18 cores
+     at load averages of 4.1 to 9.5 (1 minute) from other sessions and from this
+     round's own tests. The binary of the crate in the measurement worktree was
+     older than its source during this batch; it was built again for the runs of
+     note 865, which repeat the serving arm.
+
+     Under the serving loop (the arm `serving` with `SCALE_TAKEOVER`), the time
+     in milliseconds until the second client reads the value, at 100, 1,000 and
+     2,000 topics. With the lists as documents: the median of three runs, a
+     create the median of three creates in each. With the links in place: one
+     run at the same commit.
+
+     | Step                           | `filing-order`, lists as documents | `filing-order`, links in place | `sorted-references`, lists as documents | `sorted-references`, links in place |
+     | ------------------------------ | ---------------------------------- | ------------------------------ | --------------------------------------- | ----------------------------------- |
+     | load                           | 540, 3,208, 6,610                  | 483, 3,000, 5,690              | 519, 3,170, 6,115                       | 491, 3,056, 6,624                   |
+     | edit of a title, first topic   | 38, 48, 52                         | 26, 32, 35                     | 40, 48, 46                              | 30, 32, 37                          |
+     | edit of a title, middle topic  | 17, 22, 23                         | 14, 15, 15                     | 16, 19, 20                              | 14, 17, 20                          |
+     | edit of a title, last topic    | 15, 16, 16                         | 12, 15, 15                     | 18, 20, 16                              | 15, 19, 17                          |
+     | edit of the mentions           | 44, 70, 82                         | 35, 98, 185                    | 42, 66, 79                              | 34, 103, 195                        |
+     | edit of the `shortName`        | 33, 52, 62                         | 37, 101, 183                   | 36, 44, 55                              | 34, 112, 195                        |
+     | edit of `lastActivityAt`       | 14, 20, 21                         | 7, 13, 9                       | 46, 51, 53 (the sender)                 | 11, 24, 38 (the sender)             |
+     | create                         | 69, 122, 136                       | 65, 167, 327                   | 64, 105, 133                            | 67, 191, 346                        |
+     | takeover: a client reads       | 31, 130, 188                       | 32, 114, 221                   | 34, 104, 166                            | 31, 123, 229                        |
+     | first edit after the takeover  | 523, 4,829, 8,910                  | 468, 4,162, 9,012              | 529, 4,518, 8,973                       | 456, 4,443, 8,608                   |
+     | second edit after the takeover | 22, 21, 20                         | 16, 19, 82                     | 19, 19, 22                              | 16, 16, 16                          |
+
+     The lowest and the highest of the three runs at 2,000 topics on
+     `filing-order` with the lists as documents: the edit of the mentions 77 to
+     93, the edit of the `shortName` 57 to 64, a create 128 to 149. The piece's
+     own time is 3 to 4 ms for the two edits and 17, 37 and 46 ms for a create.
+     The basis found the board current after each takeover.
+
+     On the runner path (the arm `runner`, rows and buckets as documents, the
+     load in bounded transactions, no pull,
+     `SCALE_TOPIC_SCHEMA=mentions-as-cells`), the time until the board is up to
+     date and the size as JSON of the documents that the commits of the step
+     changed, at 100, 1,000 and 2,000 topics, on `filing-order`. Times with the
+     lists as documents are the median of three runs and with the links in place
+     of one run; the bytes are of one more run of each with the commits listed.
+
+     | Step                     | ms, lists as documents | ms, links in place | bytes, lists as documents     | bytes, links in place         |
+     | ------------------------ | ---------------------- | ------------------ | ----------------------------- | ----------------------------- |
+     | edit of a title, middle  | 13, 14, 13             | 13, 14, 17         | 10,567, 10,577, 10,587        | 10,567, 10,577, 10,587        |
+     | edit of the mentions     | 20, 24, 24             | 22, 273, 27        | 50,055, 51,199, 51,243        | 160,390, 1,152,435, 2,254,479 |
+     | edit of the `shortName`  | 14, 23, 397            | 21, 30, 374        | 36,740, 184,589, 348,641      | 154,448, 1,146,500, 2,248,552 |
+     | edit of `lastActivityAt` | 9, 11, 10              | 10, 10, 10         | 14,964, 16,107, 16,154        | 14,964, 16,107, 16,154        |
+     | create                   | 112, 323, 578          | 119, 350, 571      | 303,829, 1,134,008, 2,035,052 | 398,626, 2,050,697, 3,894,701 |
+     | load                     | 538, 4,394, 9,084      | 554, 4,671, 8,575  |                               |                               |
+
+     On `sorted-references` with the lists as documents an edit of
+     `lastActivityAt`, which moves a card, takes 20, 28 and 24 ms and changes
+     57,941, 59,087 and 59,134 bytes of documents, where with the links in place
+     it takes 22, 49 and 73 ms and changes 150,629, 1,142,678 and 2,244,727
+     bytes. The tables with every row are `tables-topics.md` of the round's raw
+     output.
+
+     - _What no longer follows the board under the serving loop:_ the edit of
+       the `shortName` is 62 ms at 2,000 topics from 183, the first edit of the
+       mentions 82 from 185, a create 136 from 327. Between 1,000 and 2,000
+       topics they grow by 10, 12 and 14 ms.
+     - _What still follows the board._ The bytes of an edit of the `shortName`
+       are 184 KB at 1,000 topics and 349 KB at 2,000: the document of the
+       bucket links of `crossrefIndex`, 164 bytes for a topic, of which the edit
+       removes one link and adds one (note 855). A create changes 1.1 MB at
+       1,000, in three commits. The handler's commit changes 747 KB: the two
+       inputs it writes, the array of topics (373 KB) and the record of names
+       (369 KB), each one document with one link for a topic. The derivation
+       changes 164 KB in the document of the bucket links of `crossrefIndex`,
+       and 44 KB in the document of the basis. On the runner path a create takes
+       323 and 578 ms at 1,000 and 2,000 topics, as with the links in place:
+       that step is not shorter for the layout. Its largest documents are inputs
+       of the pattern, which the layout of the result does not reach: an append
+       to a stored array of 1,000 links is a change of one document of 1,000
+       links, in the compiled path as in today's.
+     - _What the layout costs._ An edit of a title read by the second client is
+       2 to 17 ms longer, and the load 0.2 to 0.9 s longer at 2,000 topics: a
+       reader of a row follows two more links, and the load writes one document
+       for each 48 rows of each list. On `sorted-references` the sender reads
+       the caption of the moved card after 46 to 53 ms at every size, where it
+       read it after 11, 24 and 38 ms. Where those 35 ms go at 100 topics was
+       not profiled.
+     - _The first edit after a takeover_ is the whole derivation as before (note
+       842), and with the lists as documents it also writes each list document
+       with what it holds.
+     - _Cells that are a pause and not the piece,_ as in notes 655 and 667: the
+       edit of the `shortName` at 2,000 topics on the runner path in both
+       layouts (397 and 374 ms with the piece at 4 ms), and the edit of the
+       title of the last topic at 1,000.
+     - _The reader's sink for the edit of `lastActivityAt` on
+       `sorted-references`_ resolves before the edit in every run, as in note
+       846; the cell holds the sender's time.
+     - _One run that did not end._ The first run of the serving arm on
+       `sorted-references` at 100 topics, with the commits listed, a takeover
+       and tests of this round running beside it, printed no step in ten
+       minutes. Four later runs with the same settings ended. Not explained.
+860. **Step 2: the record of a row at an append. Two causes, both closed
+     (provisional decisions P252 and P253).**
+     - _The first cause: a slot that a body named and did not read._
+       `messageRightsForSession` of the copy of the room is a `map` over the
+       stored messages, an array of references, whose row holds
+       `storedMessageAt(messages, index)`, which is
+       `messages.key(index).resolveAsCell()`. The plan has a slot for the
+       reference at `messages/*` (class `identity`), and all four outputs of a
+       row reach it: `message` directly, and `canDelete`, `canEdit` and
+       `canObliterate` through the comparison of the author. In the executor
+       `Handle.key` made a handle and `Handle.resolveAsCell` returned it, so no
+       read bound the slot. `Instance.#elementsBound` then bound it to `*` below
+       the array, and a path that names every member is taken to consume another
+       label whenever one member's label changes
+       (`Instance.#readsChangedLabel`).
+     - _P252._ `Handle.key` reports the position it names
+       (`Instance.noteNamed`), and the plan's slot for the reference at a member
+       of the handle's cell is bound to that position. The row at position 3
+       then names `messages/3`. A body that names more than 8 positions of one
+       slot in one evaluation, as one that walks the array does, keeps `*`: one
+       address covers them, and a record that lists every member would be as
+       long as the array. `*` also stays for an empty collection, for a slot of
+       the class `enumeration` and for a body that read the length, which
+       `Instance.#enumerated` binds to the container. No row of the room is of
+       those kinds: each row names its own position.
+     - _The label is smaller._ With `*` the runtime joins the labels of the
+       reference at every member; with the position it takes the label of the
+       reference at that member and the entries above it. Where every member has
+       one label the two are equal. No existing label test changed its outcome.
+       Deferred question 1.
+     - _Test._ `exec/test/transaction-hooks.test.ts` over the new fixture
+       `compare/fixtures/named-position.tsx`, "binds the slot to the position
+       the body named, and to no position that names every member", seen to fail
+       on `items/*`, and "gives the record of one row again when the label at
+       the position of its member changed, and of no other row, among 10 members
+       and among 1,000", seen to fail on the record of every row.
+     - _The second cause: the adapter did not say whether a read consumes
+       another label._ With P252 alone a send still gave 137, 141 and 145
+       records at 10 messages. The commit of a send stores a label entry at the
+       position of the appended message, and
+       `RuntimeTransactions.#reportUnchanged` told the executor of the changed
+       entries of that document without `LabelChange.unchanged`. A record that
+       read the document at, above or below a changed path was then given again,
+       and every row reads the array as a reference.
+     - _P253._ `#noteUnchanged` keeps the stored labels that the entries were
+       taken from, and `#reportUnchanged` answers, for a path and a class,
+       whether a read consumes the label it consumed before, as `#reportLabels`
+       does for a commit of another writer. A record is given again where a read
+       of a position it read consumes another label.
+     - _What the rows of the room still follow, where the members differ in
+       their labels._ `Instance.#readsChangedLabel` asks, for each position of a
+       record, in the three classes `value`, `identity` and `shape`, and a row
+       reads the array. A read of the value of the array consumes the label of
+       each member, so an appended member with a label of its own still gives
+       every row again. The harness runs with one label for every message. Tried
+       and taken out: keeping, for each position of a record, the class its
+       binding observes it in. The case "gives the record of the index again,
+       and of no row that holds its bucket by a link" of
+       `bucket-reference.test.ts` then gave no record of the row that holds an
+       empty bucket in place: a stale label of the kind of CFC question 21 of
+       the eighth round of milestone 3, in one more case. So the positions are
+       asked in each class as before.
+     - _Two cases of `refused-commit.test.ts`_ hand the executor an event
+       through `RuntimeTransactions.within` themselves and expected a derivation
+       to run behind the handler. It ran because the handler's commit changed
+       label entries and the piece invalidates its derivation when a record is
+       pending. The piece's own handler invalidates the derivation after each
+       event; the two cases now do the same (`CompiledPiece.derive`). No
+       assertion changed.
+     - _Result._ A send on the runner path gives 97 records at 10 messages and
+       99 at 100 and at 1,000, at each of three sends, from 137 to 145, 499 and
+       4,099.
+861. **Step 2, stubbed with plans: a `map` over the result of a body, the
+     records of unchanged places, and the schema in each link.**
+     - _A `map` over the result of a body keeps its rows by key._ The
+       conversation rows are collection 20 of the room, whose source is the
+       output `main` of `facts`. `Host.rows` is set only for a stored array
+       (`host.found`) or an upstream collection (`host.from`), so
+       `Instance.#reassemble` returns at its first check and the assembly is
+       formed whole. The plan, for an array of references that a body returned:
+       (1) the table of the collection notes the output and the name of the
+       entry it read the array from, with the address each member resolves to;
+       (2) `#reassemble` accepts that entry among its suspects, reads the array
+       again, resolves each member to its address, and takes the one run that
+       differs from the addresses kept; (3) the run is applied as the splices of
+       a stored array are, with the keys of the members that entered formed for
+       the run alone. It returns to forming whole where a key that entered is in
+       the table already, and for an array of plain values generated from
+       scratch, where a member with the key it had can hold another value. One
+       `locate` for each member remains. Step 3 would make this unnecessary for
+       the room: with `main` a `filter` and a `map` of the stored messages,
+       collection 20 has an upstream collection.
+     - _`#unchangedOutput` gives no record for a place whose value and inputs'
+       labels stayed._ It is called from `put` of `Instance.#place` for each
+       leaf the comparison left as it was, scans every recorded output of the
+       plan for the nearest one (714 in the room), and gives one record for each
+       distinct key in a transaction. The plan: (1) find the nearest recorded
+       output through a table of the recorded paths made once, which changes no
+       record; (2) keep, with each record given, the inputs it was formed from
+       and a count that `Instance.#noteInputs` raises when it changes them, and
+       give no record where every count stands and the key is in no pending
+       relabel, no fold and no member group. The call from `#storeIndex` stays
+       (P143). A place whose slot is bound to a position the transaction in
+       progress wrote would keep the label of before until the next transaction:
+       that is a deferred question before it is built.
+     - _A link to a typed handle stores its schema once._ `Instance.stored`
+       writes `{$link: {doc, path, schema}}` for a reference a slot of the class
+       `identity` gave under a schema. The executor reads the stored schema back
+       in `Store.locate` alone. The plan: the executor's store holds, in the
+       link, a hash of the schema, with a table from the hash to the schema
+       filled when an instance is made; `Store.locate` resolves it; the
+       adapter's `#encode` writes the schema into the runtime's link as now, one
+       object for each hash, and `#decode` maps it back. That shortens the
+       executor's documents, their canonical texts and the comparisons of `put`.
+       It does not shorten what the storage holds or the wire, where the memory
+       server already keeps the schemas of links in a table. Leaving the schema
+       out of the runtime's link would change what a reader with no schema of
+       its own reads and could drop a label the schema declares, so it needs a
+       ruling. Not built: `exec/store.ts` is the file the other branch of this
+       round changes.
+862. **Step 3, stubbed: `facts` on the constructs.** Nothing of the copies
+     changed. `facts` is `computed(() => messageFacts(messages, ...))`:
+     `messageEntries` walks the indexes of the stored messages and reads, for
+     each, the record, `sentAt`, `body`, the keys of what it replies to and the
+     author's profile, which is the 5 positions for each message held of a send.
+     What a send needs is the appended message and the window.
+     - _On the constructs that exist:_ the entries are a `map` over the stored
+       messages; `main` is a `filter` of them and a `map` to the cell; `places`
+       is a `groupBy` by the key of the thread with `lookup` in a row; `threads`
+       is a `flatMap` over `main`; `legacyReplies` and `count` are lengths.
+       `rowFactsForSession` goes: a row derives its controls from its own row of
+       `messageRights`.
+     - _What the language lacks._ (1) `elementById` and `resolveAsCell` in the
+       reactive tier: `plan.rs` of the crate has neither, and both are handled
+       in `footprint.rs` and `infer.rs` alone, so a `map` to the resolved cell
+       has to keep the authored helper, as `storedMessageAt` does. (2) The keys
+       of a `groupBy` in the order the buckets came to exist, for `authors`
+       (`keys()`, not done since note 669). (3) A window: the last `n` members
+       of a collection, brought up to date by the splice of its source. `slice`
+       is a method of a value in `plan.rs` and no construct.
+     - _The window, designed._ `collection.last(n)`, and `first(n)`: a
+       collection whose rows are the last `n` rows of its source, by the keys of
+       the source. A splice of the source at position `p` that leaves the length
+       at `l` changes the window only where `p >= l - n` or the length crossed
+       `n`: an append gives one row that enters at the end and one that leaves
+       at the front. Its label is that of the membership of the source, since
+       which rows are the last depends on every member; the label of a row is
+       the row's own. The stored form is an array of at most `n` links where the
+       source has rows as documents, and `n` values in place otherwise. Until it
+       exists the copy stands in for it by a body that reads `main` whole, as it
+       does now.
+     - _A guard in the callback of a collection method_ (note 724): `plan.rs`
+       now has an arm for an `if` statement where a context is given. Whether
+       that covers a callback was not tried.
+863. **Step 4: FabriChat under the serving loop.** The arm `serving` of
+     `compare/fabrichat/scale.ts`: the room is set up by a client
+     (`setUpCompiledPiece`) against `listenCompiledServingMemoryServer`, whose
+     serving runtime starts and runs it; a second client reads. A send is timed
+     from `Cell.send` on the stream `sendMessage` until each client reads the
+     count of messages it makes.
+     - _What stands in._ The serving runtime is given the artifacts the process
+       emitted, with the write policies taken out as on the other arms (P196),
+       through the option `compile`; the source the client writes is a
+       placeholder. The stand-ins for `wish` and for the built-ins are those of
+       the arm `runner`, given through the piece options of the serving runtime:
+       `ServeCompiledPiecesOptions.piece` now passes `lists`, `wishes` and
+       `builtins`. The profile is seeded in the room's space.
+     - _Today's room under the serving loop: not built._ The fixture of note 738
+       runs today's room on `MultiRuntimeHarness` with server execution off. An
+       arm that runs `patterns/system/fabrichat/room.tsx` under the serving loop
+       needs the home space and the profile wish served, which the round did not
+       set up.
+864. **FabriChat measured.** `compare/fabrichat/scale.ts` at the final head on
+     the measurement branch, one run of each cell with three timed sends, one
+     process at a time, at load averages of 6.0 to 9.4. Milliseconds, the lowest
+     and the highest of the three sends. The sizes are the messages the room
+     holds before the timed sends.
+
+     | Arm, and where the links are | Messages held | Send, at the sender | Send, at the second client | In the piece | Positions read | Records given |
+     | ---------------------------- | ------------: | ------------------- | -------------------------- | ------------ | -------------- | ------------- |
+     | runner, in place             |            10 | 58 to 60            |                            | 25 to 26     | 96 to 106      | 97            |
+     | runner, as documents         |            10 | 57 to 63            |                            | 25 to 27     | 96 to 106      | 97            |
+     | runner, in place             |           100 | 176 to 178          |                            | 88 to 89     | 546 to 556     | 99            |
+     | runner, as documents         |           100 | 151 to 181          |                            | 89 to 92     | 546 to 556     | 99            |
+     | runner, in place             |         1,000 | 1,269 to 1,327      |                            | 724 to 766   | 5,046 to 5,056 | 99            |
+     | runner, as documents         |         1,000 | 924 to 984          |                            | 559 to 604   | 5,046 to 5,056 | 99            |
+     | serving, in place            |            10 | 75 to 79            | 76 to 84                   | 25 to 29     | 96 to 106      | 97            |
+     | serving, as documents        |            10 | 72 to 77            | 72 to 77                   | 26 to 27     | 96 to 106      | 97            |
+     | serving, in place            |           100 | 213 to 401          | 211 to 413                 | 88 to 94     | 546 to 556     | 99            |
+     | serving, as documents        |           100 | 194 to 258          | 203 to 250                 | 93 to 97     | 546 to 556     | 99            |
+     | serving, in place            |         1,000 | 1,269 to 1,513      | 1,270 to 1,556             | 517 to 634   | 5,046 to 5,056 | 99            |
+     | serving, as documents        |         1,000 | 1,123 to 1,234      | 1,173 to 1,235             | 530 to 567   | 5,046 to 5,056 | 99            |
+
+     The sends that fill a room of 1,000 messages take 636 s on the runner path
+     with the links in place and 619 s with the lists as documents, and 847 s
+     and 779 s under the serving loop.
+
+     Today's runtime in the harness of note 738 took 690 to 757 ms at 10
+     messages, 1,654 to 1,770 at 100 and 4,188 to 4,231 at 256, and was not run
+     again.
+     - _Against note 740,_ with the links in place: a send on the runner path is
+       58 to 60 ms at 10 messages, from 72 to 74, 176 to 178 at 100, from 236 to
+       244, and 1,269 to 1,327 at 1,000, from 1,690 to 1,802. It gives 97 to 99
+       records at every size, from 137, 499 and 4,099. The sends that fill a
+       room of 1,000 take 636 s, from 900.
+     - _A send still grows with the room,_ by about 1.2 ms for each message held
+       on the runner path with the links in place, of which 0.7 ms is in the
+       piece, and by 0.9 ms with the lists as documents. It reads 5 positions
+       for each message held, as before (note 862). The owner's rule is not met:
+       a send is below today's at every size both reached, and it follows the
+       room.
+     - _Under the serving loop,_ with the lists as documents, the second client
+       reads a send after 72 to 77 ms at 10 messages, 203 to 250 at 100 and
+       1,173 to 1,235 at 1,000. The serving runtime reported no failure and the
+       piece no refusal in any run.
+     - _The lists as documents_ change a send at 10 and at 100 messages by less
+       than the spread of the three sends. At 1,000 a send is a quarter shorter
+       on the runner path, 924 to 984 ms against 1,269 to 1,327: the result
+       document no longer holds an array of 1,000 links for each collection of
+       rows. One run of each.
+865. **The runs at the final head, and the corpus.**
+     - _Topics under the serving loop again,_ one run of each board and size
+       with the lists as documents, after the changes of note 860 and with the
+       binary of the crate built from the source, at load averages of 5.3 to
+       7.6. On `filing-order`, at 100, 1,000 and 2,000 topics, the second client
+       reads the edit of the mentions after 38, 54 and 68 ms, the edit of the
+       `shortName` after 30, 39 and 46, a create after 62, 94 and 115, the edit
+       of the middle title after 15, 18 and 20, and the first edit after the
+       takeover after 514, 4,151 and 8,580. On `sorted-references`: 37, 55 and
+       77; 31, 40 and 50; 62, 90 and 129; 15, 18 and 22; and 466, 4,260 and
+       10,058. These are at or below the medians of note 859, so the binary that
+       was older than its source did not make that batch faster.
+     - _The corpus,_ `compare/runner-corpus.ts`, one run of each, with the links
+       in place. On the runner path, of 378 modules 273 are run, 259 start, 219
+       handle every event, 249 have no commit refused and 228 hold the values of
+       the executor in memory. A run at the commit the round started from had
+       375 modules, of which 272, 258, 219, 248 and 228. Three modules have
+       another outcome line: `apps/lunch-poll/participant-identity-card.tsx`
+       handles 3 of 4 events where it handled 2, `apps/redactor/vault.tsx` holds
+       its refusal of writer fit 3 times where it held it 4 times, and
+       `dev/experimental/folksonomy-stress-test.tsx` differs from the executor
+       in memory at another path than before. Why was not looked into. Three
+       modules are new on the measurement branch. Under the serving loop
+       (`--serving`): 239 run, 230 start, 200 handle every event, 220 have no
+       commit refused and 212 are equal, from 215 and 210 in note 848. After a
+       resume (`--resume`): 239, 230, 200, 221 and 211, from 216 and 209; 131
+       modules were resumed, the basis of all 131 matched, and the resume wrote
+       no document for 93. The corpus was not run with the lists as documents.
+866. **Provisional decisions of the round, and what was not done.** P250: with
+     the option `lists` at `documents`, the links to the rows of an array of row
+     documents are stored in a list document that the result links to, an array
+     of more than 64 rows in chunks of at most 64 links under the rule of note
+     853, and the links to the buckets of a kept index in one document that the
+     result links to (notes 853 and 855). The documents of a list take the
+     record of the path the list stands at, and the path keeps the label of the
+     membership through a record of a write that left it as it was (note 854).
+     P251: the option is off by default (note 858). P252: the plan's slot for
+     the reference at a member that a body named through a handle and did not
+     read is bound to the position named, for at most 8 positions in one
+     evaluation (note 860). P253: after a commit that stored a label alone, the
+     adapter says for a path and a class whether a read consumes another label,
+     and a record is given again only where one does (note 860). Not done: the
+     shards of a record of bucket links (note 855); a list of chunks that is
+     itself in chunks (note 853); the layout as the default, and the 33 cases
+     that read the links in the result document (note 858); the rows of a long
+     list flattened for a reader through the runtime, and the rendering of a
+     list in chunks seen in a browser (note 856); the adapter's keys after a
+     refused commit with the links in place (note 857); a `map` over the result
+     of a body kept by key, `#unchangedOutput`, and the schema of a link stored
+     once (note 861); `facts` on the constructs and the window (note 862);
+     today's room under the serving loop (note 863); the class a record observes
+     each position in (note 860); the first edit after a takeover and the load
+     under the serving loop, as in notes 842 to 844; the profile of the sender's
+     read after a move on `sorted-references` (note 859); more than one run of
+     the FabriChat cells and of the cells with the links in place; a machine
+     with no other load.
+
+### CFC questions deferred, round twelve
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. P252 (note 860): the label stored for the row of a `map` over a stored array
+   of references whose body takes the cell of a member by its position, and does
+   not read it, holds the label of the reference at that position and the
+   entries above it. Before, it held the join of the labels of the references at
+   every position of the array (`Instance.#elementsBound`). The stored label is
+   smaller where the members differ. Whether the row has to follow the labels of
+   the other members is question 1 of FabriChat round two; this round built the
+   answer "no" for a body that named at most 8 positions.
+2. P253 (note 860): a record is not given again after a commit that changed the
+   label entries of a document it read, where a read of each position it read,
+   in each of the three classes, consumes the label it consumed before. The
+   entries then differ and the labels do not. This is what `#reportLabels` does
+   for a commit of another writer. Whether a record has to be given again for a
+   change of entries that changes no consumed label was taken as "no".
+3. P250 (note 854): the documents of a list, a chunk and the list of the chunks,
+   store the label of the membership of the array, by the record of the path the
+   list stands at. A chunk that is written under a splice the executor gives as
+   one of positions, with no record at the path of the array, is written under
+   no record and stores the join of what the transaction read. Which of the two
+   a chunk has to hold, and whether a reader that reads which chunk a row is in
+   learns more than the membership, were not examined.
+4. P250 (note 854): the path of the array in the result document keeps its label
+   through a record of a write that left the path as it was, in each transaction
+   that changes the members. The preparation requires a record of the plan to
+   name a path the transaction wrote (question 23 of the eighth round of
+   milestone 3); the layout avoids that by giving the record at the path as
+   unchanged and at the documents written as a write.
+5. P250 (note 854): one link of the document of the bucket links is written
+   under no record, as the link in the result document was (question 15 of the
+   seventh round). The entry it stores is now in another document than the entry
+   of the index, and a read below a bucket is given both positions as observed.
+   Whether the entry of the index at the path in the result document is the one
+   place the membership has to be stored is question 25 of the eighth round,
+   unchanged.
+6. The shards of note 855 would name a bucket at a path that holds a hash of its
+   key. Which label the list of the shards has, and whether which shard exists
+   says more than the membership of the index, belong to the plan.
+7. The window of note 862: which rows are the last `n` depends on every member
+   of the source. The plan gives the window the label of the membership of the
+   source and each row its own label. Not examined beyond that.
+
+## Round fifteen: a window of a collection, the main conversation on the constructs, and lists in documents by default
+
+The round of 2026-11-23 on the branch `claude/compiled-pattern-serving-m6` from
+the commit `65d5a6aebc`, measured on `claude/compiled-pattern-topics-runs`. The
+notes are numbered from 920 and the provisional decisions from P390. Whenever a
+note says `map`, it names the case. The raw output of the round is in the folder
+`r15-send/`.
+
+920. **What the round did, by step.**
+     - _A send that does not grow with the room (step 1): not reached. Two of
+       its five items are built, one in part, and the rest is stubbed with a
+       plan._ Built: `Instance.#unchangedOutput` gives no record for a place
+       whose inputs are those of the record last given for it (note 922), and
+       the window construct, `collection.last(n)` and `collection.first(n)`, in
+       the crate and the executor (note 921). Built in part: `facts` on the
+       constructs, for the main conversation, its rows and the newest messages
+       (note 923). Stubbed with plans (note 923): a `map` over the result of a
+       body kept by key, which the main conversation no longer needs; the schema
+       of a link stored once; `elementById` and `resolveAsCell` in the reactive
+       tier; the keys of a `groupBy` in creation order; and the rest of `facts`.
+       A send still reads 5 positions for each message held.
+     - _Lists in documents by default (step 2), done._ The 33 reads follow the
+       link, the default of `CompiledPieceOptions.lists` is `documents`, and a
+       list of at most 128 rows is one document that a reader through the
+       runtime reads as the array (notes 924 and 925). No flattening of a list
+       in chunks was built in the runtime.
+     - _Bucket links (step 3), decided: one document_ (note 926).
+     - _Inputs written whole by a handler (step 4), found done at the
+       transaction and stopped there_ (note 927): the adapter writes a `push` as
+       the number of members and the position, and a `set` of one member of a
+       record as that member. What still follows the size is the storage's
+       handling of one document.
+     - _The tables (step 5)._ Notes 928 to 930, and the findings on structure,
+       scale and soundness in note 931.
+     - _The harnesses._ `SCALE_LISTS=in-place` and `SCALE_LIST_WHOLE` for where
+       the links are and for the size of a whole list; `SCALE_LAYOUT` on the arm
+       `serving` of the Topics harness, which says how the list a step waits on
+       is laid out; and, on the arm `runner` of the FabriChat harness, the
+       documents the commits of a send changed and their size.
+     - _With the experimental option off._ The crate and the executor are loaded
+       by nothing without the option, and every change of the runtime is in
+       `runtime/runner/src/compiled/`.
+     - _Two commits do not type-check._ `8e2b073cdb` and `e356bb32c1` fail
+       `deno task check` at one line of the new test
+       `handler-positions.test.ts`, which `bcbee7937a` corrects. The check was
+       run after the commit and not before it.
+921. **The window: `xs.last(n)` and `xs.first(n)` (provisional decision P391).**
+     A window is a collection over its receiver whose elements are the last or
+     the first `n` elements of it, each passed through with the key it has in
+     the source, as an element of the result of a `filter` is.
+     - _In the plan._ `api::is_window_method` names the two methods, and
+       `is_handle_collection_method` includes them. The plan emitter's `window`
+       of `plan.rs` gives a collection with the construct `last` or `first` and
+       the source of any other construct. The cone of its body is the count,
+       observed as a value. The membership is a `fold` of the template of the
+       count over the collection, as that of a `filter` whose predicate is the
+       count: which elements stand in the window follows the membership of the
+       source, order included, and the count. The entry of an element is the
+       slot of the element, of the class `identity`. `array_method` of
+       `infer.rs` gives the result the type of the result of a `filter`, key
+       fields included. `element_construct` of `emit.rs` registers the count as
+       the function of the collection, `$rt.element(c, ($h) => (n))`.
+       `collection_call` of `check/mod.rs` checks the count as an argument and
+       reports no missing callback, and the promotion check names a window as
+       what keeps an expression from being promoted, as it does an aggregate.
+     - _In the executor._ `Instance.assembled` takes the count from what the
+       function returned for the first element, and holds the elements at the
+       positions `windowOf` gives. Where every element gave that count it keeps
+       it (`Rows.window`), and `Instance.#reassemble` then brings the window up
+       to date from the changes of its source: the splices are applied to the
+       element table as for any construct, the elements at the positions of the
+       window now are compared with those it held from both ends, and the
+       difference is one splice. The work is the count of the window and the
+       length of the splices of the source, and no element outside the window is
+       looked at. An append to a source longer than the count gives one element
+       that leaves at the front and one that enters at the end. This holds over
+       an array of references and over the result of a `filter` or a `sortBy`
+       over an array of references, whose members are references. Over the
+       result of a `map`, whose members are the rows the body returned, the
+       window is formed whole at each change: the brought up to date form would
+       have to depend on the entry of each row in the window, which
+       `#reassemble` has no host for. Another count than the one kept forms the
+       window whole.
+     - _What it costs that it need not._ The function of a collection is
+       evaluated once for each element, so a window of 50 over 1,000 elements
+       evaluates its count 1,000 times at the load and once at each append, and
+       holds one memo entry for each element of the source. A count that is
+       evaluated once for the collection needs a function of the collection that
+       is not per element, which the plan has no record for.
+     - _Stored form._ The window stands at its path as an array of at most `n`
+       links, in place. An append to a full window gives every position another
+       link, and the record of each of the `n` entries is given again. That is
+       bounded by the count and does not follow the source. A window whose links
+       are in a list document, written as one splice, is not built.
+     - _Label._ As measured in `runtime/runner/test/compiled/window.test.ts`,
+       over five items each under a clause of its own: a read of one element of
+       a window over the array, and of the length of the window, consumes the
+       clause of every item, as a read of an element of the result of a `sortBy`
+       does, and after an append also the clause of the item that left the
+       window. Note 862 planned the label of the membership of the source for
+       the window and the row's own for a row. Deferred question 1.
+     - _Tests, written first._ `tests/plan.rs`, "a window is a collection with
+       the fold of its count and a map over it is a collection over it".
+       `exec/test/window-construct.test.ts` over the new fixture
+       `compare/fixtures/window-construct.tsx`, nine cases, seen to fail on "an
+       element construct `last`": the windows over an array of references, over
+       the result of a `filter` and over the result of a `map`; a `map` over a
+       window; an append; an append that the `filter` leaves out; and the work
+       of an append at 1,000 elements against 10, by the evaluations, by the new
+       counter `Counts.assembliesFormed` of the assemblies formed whole (1 at
+       both sizes, the window over the result of the `map`), and by the
+       positions of the result written.
+       `runtime/runner/test/compiled/window.test.ts`, four cases as a compiled
+       piece: the values, the stored labels, and an append by another writer
+       with no commit refused.
+922. **`Instance.#unchangedOutput` gives no record for a place whose inputs
+     stayed (provisional decision P390).**
+     - _What it did._ It is not called when a cone is evaluated again and
+       returns the value it returned: the result is then not compared with its
+       form. It is called for each leaf that the comparison of the whole result
+       leaves as it was, which runs whenever any output holds another value. So
+       a change of one output gave the record of every other output again: 97 to
+       99 records at each send of the room.
+     - _The rule._ `InputsDigests` of the new file `exec/inputs-digest.ts` names
+       the content of the inputs of a record by a number: each binding and each
+       set of inputs of the table of the transaction once, by its content with
+       everything it names by index named by its number in turn, so two sets of
+       inputs of two transactions have one number exactly where their contents
+       are equal. `Instance.#noteRecord` keeps the number of the inputs of each
+       record it is given. `#unchangedOutput` forms the record as before and
+       gives it only where the number differs from the one kept, or where a
+       label the record read changed since (`#relabels`). A refused commit
+       forgets every number (`Instance.recordsRefused`, called by
+       `CompiledPiece.#refused` and by `Instance.restore`), since the storage
+       then holds the label of no record given in that transaction.
+     - _The texts it holds are bounded._ The first form kept the text of each
+       content it had named, up to 65,536 texts. The binding of a slot that
+       reads every member of a list has a text that follows the list, and each
+       transaction that reads another member gives another one: a send newly
+       named 72 KB of text at 100 messages and 198 KB at 300, so the texts held
+       followed the square of the room, and a send at 1,000 messages took 1,252
+       to 1,751 ms. The texts are now held in two generations of at most
+       8,000,000 characters each; a text that was not named while the older
+       generation filled is let go, and has another number when it is named
+       again, so its record is then given once more. A number is used once. The
+       text of a binding is the one `InputsTable.binding` formed
+       (`InputsTable.bindingText`). With that a send at 1,000 messages takes 829
+       to 892 ms (note 929). Test: `exec/test/inputs-digest.test.ts`.
+     - _What a record depends on that the number does not hold:_ the label
+       stored at a position. A change of it reaches the record through
+       `labelsChanged`, which puts the record among those to form again unless
+       the record was given in the transaction that stored the label. A place
+       that is not given because its number stands, and that reads a position
+       the same transaction stores another label for, is formed again in the
+       derivation transaction behind it. Deferred question 2.
+     - _Tests, written first,_ in `exec/test/transaction-hooks.test.ts` over the
+       new fixture `compare/fixtures/unchanged-place.tsx`: no record for an
+       output whose inputs stayed while another output changed, seen to fail on
+       the record of `chosen`, at one change and at three in a row; the record
+       given where an evaluation bound a slot to another position; and the
+       record given where a label the record read changed.
+     - _Result for the room._ 88 records at 10 messages and 90 at 300, from 97
+       and 99. The time of a send did not change: the records that are still
+       given are those of the outputs that read `facts`, whose inputs are other
+       positions after each send, and `#noteRecord` walks the positions of
+       `facts` once for each of them (52 ms of a send at 300 messages; note
+       931).
+     - _A finding of the code as it stood, not closed (soundness)._ A cone that
+       is evaluated again, binds a slot to another position and returns an equal
+       value gives no record, because the result is not compared: the place
+       keeps the label formed from the position it read before, until another
+       output changes. Seen on the fixture with `chosen`, which reads `left` or
+       `right` by `useLeft`: after `useLeft` changes, the derivation evaluates
+       `chosen`, writes nothing and gives no record. The numbers of this note
+       would name the case at no further cost, at the end of the evaluation of a
+       cone whose value stayed; that is new label machinery, and was left.
+       Deferred question 3.
+923. **`facts` on the constructs: the main conversation, and the plan for the
+     rest.**
+     - _Built, as one commit on the copy of the room._ `mainMessages` is
+       `messages.filter(...)` over the stored messages, an array of references,
+       by whether the message replies to nothing or its reply is shown in the
+       main conversation. The rows of the main list are a `map` over the result
+       of that `filter`, which is a collection with an upstream collection, so
+       its rows are kept by key and a send evaluates the row of the message
+       sent. `latest.messages` is
+       `mainMessages.last(FABRICHAT_POLICY.maxWindowCount)`, and `hasOlder` and
+       `isEmpty` read the length of the `filter`'s result. It stands in for
+       `facts.main` and `facts.list.latest`. A message the room cannot read is
+       not left out, as `messageEntries` leaves it out.
+     - _What it gives._ The assembly of the conversation rows is brought up to
+       date and not formed whole. Against the room as it was, at the engine of
+       the round's head (note 929): a send takes 197 to 207 ms at 100 messages,
+       from 326 to 353, and 829 to 892 at 1,000, from 1,263 to 1,413, and its
+       commits change 410 KB of documents at 100 and 1.57 MB at 1,000, from 548
+       KB and 3.03 MB. It gives 189 records, from 90: the 50 entries of the
+       window each hold another link after an append (note 921), and their
+       records are given again with others that the round did not tell apart.
+       That number does not follow the room.
+     - _Why a send still follows the room,_ from the profile of three sends at
+       300 messages after that commit, by function. `facts` is still one body
+       that reads 5 positions for each message held, for `places`, `authors`,
+       `entries` and the counts (23 ms of a send). `Instance.#noteRecord` walks
+       those positions for each record that reaches `facts` (33 ms).
+       `rowFactsForSession` is a body that reads every row of
+       `messageRightsForSession`, a `map` over the stored messages, and the
+       reads of a value through `Host.v` follow the links of what they read
+       (about 50 ms in `Store.#deep`, of which 14 ms are the handler's read of
+       its state). The result of a `filter` is formed again from every element
+       when its source changes, with no evaluation and one object for each
+       element (`Instance.#reassemble`, the branch for `moved`).
+     - _The plan for the rest of `facts`,_ in the order it would be built. (1)
+       `count`, `oldestAt` and `newestAt`: the length of the stored messages,
+       and a read of `messages.first(1)` and `messages.last(1)`. (2)
+       `legacyReplies`: the length of a `filter`. (3) `places`: an index
+       `messages.groupBy((record) => record.replyTo?.thread)` by the cell of the
+       root, and in the body of each row `lookup(message)`, whose bucket gives
+       the number of replies and, by a `reduce`, the newest `sentAt`. A row is
+       an instance of `FabriChatMessageRow`, which is handed `places` and reads
+       its own entry by key; a `lookup` by a cell in an index the instance is
+       handed is not supported (`plan.rs`, the arm of `lookup` for a slot), so
+       the room's `map` looks the bucket up and hands the row what it found. (4)
+       `rowFactsForSession` goes: the body of the room's `map` derives the
+       controls of its row from the rights of its own message. (5) `threads`: a
+       `filter` of `mainMessages` by whether the bucket of the message holds a
+       reply, and a `map` over it; the messages of a thread are its root and
+       `bucket.last(n)`, a window over the bucket of an index, which was not
+       tried. (6) `threadMessages`: the bucket of the open root. (7) `authors`:
+       the keys of `messages.groupBy((record) => record.authorProfile)` in the
+       order the buckets came to exist, which the executor does not give
+       (`keys()`, note 669).
+     - _What the language lacks for it, unchanged from note 862:_ `elementById`
+       and `resolveAsCell` in the reactive tier, and the keys of a `groupBy` in
+       creation order. Neither was built. The main conversation did not need the
+       first: an element of the result of a `filter` over an array of references
+       is the reference, which a row is handed as the cell of the message.
+     - _A `map` over the result of a body kept by key (note 861), not built._
+       The conversation rows no longer have a body as their source. The plan of
+       note 861 stands for any other pattern that maps an array of references a
+       body returned.
+     - _A link to a typed handle stores its schema once (note 861), not built._
+       The executor's store, `exec/store.ts`, is the file another branch changed
+       throughout; the plan of note 861 is unchanged.
+924. **Lists in documents by default (provisional decision P392).**
+     `CompiledPieceOptions.lists` has the default `documents`, and `in-place`
+     keeps the links in the result document.
+     - _The 33 reads._ Each read the links of rows or of buckets at a path of
+       the result document. They now read through `storedList` of
+       `test/compiled/storage.ts`, which follows the link at the path to the
+       list document and gives, for a list in chunks, the members of the chunks
+       in order; a path that holds no link is returned as the storage has it, so
+       the same read serves both layouts. The helpers changed are `storedRows`,
+       `storedAt` and `linksOf` of `row-documents.test.ts`, `rowEntities` of
+       `basis.test.ts`, `documents` of `sorted-rows.test.ts`, `storedAt` of
+       `kept-index.test.ts`, `storedBucketOf` of `bucket-reference.test.ts`, and
+       one read each in `names-table.test.ts` and `crossref.test.ts`.
+     - _Three cases restated, because they counted writes of the layout in
+       place._ "writes one link ... for a member added at the end" of
+       `row-documents.test.ts` is three cases: the list document of five links
+       written for the fifth; at most the 64 links of one chunk written for a
+       member added at the end of 200; and, with `lists` at `in-place`, one link
+       at 4 members and at 40. The move of a card of `sorted-rows.test.ts`
+       counts no write of the array of the result and two writes of the one list
+       document, the removal and the insertion.
+     - _Result._ `test/compiled/` passes with the default on emulated storage
+       and over a socket.
+925. **What a client of the runtime sees, and the size of a whole list
+     (provisional decision P393).** No flattening was built in the runtime: a
+     read of a list in chunks through `Cell.get()` gives an array of chunks, and
+     the runtime's `map` over it one result for each chunk, as note 856 has it.
+     Instead a list is kept in one document up to the size where a split into
+     chunks pays, so that a reader through the runtime reads every list of that
+     size or less as the array of its rows.
+     - _The size, measured._ `LIST_WHOLE` of
+       `runtime/runner/src/compiled/transactions.ts` is the most links a list
+       document holds itself, and the option `listWhole` of a piece gives
+       another number; the chunks hold at most 64 links as before. Topics on
+       `filing-order` under the serving loop, the time until the second client
+       reads the value, the median of three runs with the lowest and the
+       highest, with the links in chunks (`listWhole` at 64) and in one document
+       (`listWhole` above the size), at load averages of 18 to 20 from other
+       sessions:
+
+       | Step                     | 128 topics, chunks | 128, one document | 256, chunks   | 256, one document | 512, chunks   | 512, one document | 1,000, chunks | 1,000, one document |
+       | ------------------------ | ------------------ | ----------------- | ------------- | ----------------- | ------------- | ----------------- | ------------- | ------------------- |
+       | create                   | 132 (131-147)      | 139 (129-153)     | 142 (135-147) | 240 (188-244)     | 144 (139-206) | 219 (211-228)     | 173 (157-178) | 467 (456-482)       |
+       | edit of the mentions     | 90 (78-103)        | 76 (69-86)        | 81 (80-90)    | 84 (64-93)        | 107 (92-107)  | 98 (90-127)       | 106 (102-118) | 132 (124-134)       |
+       | edit of a title, middle  | 67 (60-78)         | 29 (25-29)        | 60 (59-80)    | 32 (23-34)        | 72 (67-74)    | 32 (30-39)        | 67 (55-106)   | 34 (32-57)          |
+       | edit of `lastActivityAt` | 38 (34-55)         | 21 (21-24)        | 30 (29-37)    | 23 (18-24)        | 36 (35-39)    | 27 (27-30)        | 36 (35-101)   | 33 (32-37)          |
+
+       A create takes as long with 128 links in one document as in chunks, and
+       1.7 times as long with 256. So `LIST_WHOLE` is 128.
+     - _What the chunks cost a reader._ The second client reads the edit of the
+       title of a middle topic after 60 to 72 ms where the card is in a chunk,
+       and after 29 to 34 ms where the list is one document, at every size.
+       Where the 35 ms go was not profiled; note 859 has the same difference for
+       the caption of a moved card.
+     - _What a reader has to do above 128 rows:_ read the members of each member
+       that is an array in the place of that member, one level deep, as
+       `storedList` and `cardAt` of `compare/topics/serving.ts` do. The
+       flattening in the runtime, for `Cell.get()` and for the runtime's `map`
+       over a list of chunks, is not built.
+926. **Bucket links: one document (provisional decision P394).** A second piece
+     that looks a key up in the index of another (`Host.lookup` for an index it
+     is handed) and today's `lookup` both read `<index>/buckets/<key>`: the plan
+     extends the place of the index by `buckets` and picks the child by the
+     encoded key (`plan.rs`, the arm of `lookup` for a slot). The runtime
+     follows the link at `<index>/buckets` to the document of the bucket links
+     and reads the key there. A document of shards by a hash of the key holds no
+     member under the key, and no path resolution turns a key into its shard, so
+     a layout in shards is not found by the same path. The record of bucket
+     links stays one document with one link of 164 bytes for each bucket. Its
+     cost, measured: an edit of the `shortName` on Topics, which removes one
+     link and adds one, changes a document of 184 KB at 1,000 topics and 349 KB
+     at 2,000 (note 859), and the second client reads the edit after the times
+     of note 928; no reader of the first screen holds that document. The plan of
+     note 855 is what shards would take: the stored index says its layout, and
+     each reader puts the shard into the path.
+927. **Inputs a handler changes at one position (step 4): written as positions
+     already, and what still follows the size.**
+     - _What is written._ For a `push` to an array of references the executor
+       gives a splice, and `RuntimeTransactions.change` writes the number of
+       members and the position added, under the records of those two paths and
+       of the membership of the array. For a `set` of one member of a record it
+       writes that member. Test:
+       `runtime/runner/test/compiled/handler-positions.test.ts` over the new
+       fixture `compare/fixtures/handler-positions.tsx`, at 3 members and at
+       300. No code changed.
+     - _What the storage reports._ The commit of the `push` names the array as
+       what changed, since its members are other ones, and the commit of the
+       `set` names the member.
+     - _What follows the size._ The array of topics and the record of names of a
+       Topics create are each one document with one link for a topic. Note 650
+       measured that a change of one path of a document of links costs in
+       proportion to the document in the runtime itself: the subscriber is
+       delivered the document, and the memory server evaluates its subscriptions
+       over it. The preparation refused no positional write in this round, so
+       the rule the brief asked to name was not met. What bounds the cost is an
+       input stored in chunks, which is the pattern's own array and not the
+       result of the piece: the pattern would hold a list of chunks, or the
+       runtime would store any long array of links in chunks (the part documents
+       of P20). Not built.
+     - _An observation._ The `set` of one member of a record by a key the event
+       gives is recorded under no record of the plan: the commit holds no plan
+       write that names the member. Deferred question 4.
+928. **Topics measured.** `compare/topics/scale.ts` on the measurement branch at
+     the commit `ce9df31f8c` and, for the cells run again, `32b8b950a5`; one
+     process at a time for the batch, on an Apple M5 Max with 18 cores at load
+     averages of 9 to 27 (1 minute) from other sessions, about twice those of
+     round twelve, so the times are not to be held against note 859. With the
+     lists as documents: the median of two runs. With the links in place
+     (`SCALE_LISTS=in-place`): one run.
+
+     Under the serving loop (the arm `serving` with `SCALE_TAKEOVER`), the time
+     in milliseconds until the second client reads the value, at 100, 1,000 and
+     2,000 topics; a create is the median of three creates in each run.
+
+     | Step                           | `filing-order`, lists as documents | `filing-order`, links in place | `sorted-references`, lists as documents | `sorted-references`, links in place |
+     | ------------------------------ | ---------------------------------- | ------------------------------ | --------------------------------------- | ----------------------------------- |
+     | load                           | 913, 5,297, 10,494                 | 906, 5,443, 12,503             | 734, 4,428, 9,423                       | 967, 6,211, 12,124                  |
+     | edit of a title, first topic   | 79, 90, 84                         | 66, 74, 84                     | 65, 65, 75                              | 65, 67, 74                          |
+     | edit of a title, middle topic  | 29, 68, 67                         | 33, 32, 36                     | 23, 39, 59                              | 28, 35, 39                          |
+     | edit of a title, last topic    | 25, 26, 25                         | 27, 29, 31                     | 19, 19, 21                              | 23, 35, 33                          |
+     | edit of the mentions           | 102, 111, 134                      | 79, 190, 405                   | 67, 84, 121                             | 61, 224, 347                        |
+     | edit of the `shortName`        | 31, 50, 66                         | 62, 177, 545                   | 32, 39, 55                              | 75, 202, 320                        |
+     | edit of `lastActivityAt`       | 22, 37, 37                         | 23, 27, 39                     | 67, 64, 91 (the sender)                 | 90, 58, 71 (the sender)             |
+     | create                         | 125, 175, 205                      | 131, 304, 737                  | 107, 127, 236                           | 134, 456, 560                       |
+     | takeover: a client reads       | 59, 195, 266                       | 67, 226, 515                   | 47, 128, 314                            | 72, 274, 388                        |
+     | first edit after the takeover  | 914, 7,019, 14,643                 | 1,024, 9,625, 18,057           | 861, 5,898, 14,724                      | 921, 11,330, 14,593                 |
+     | second edit after the takeover | 27, 28, 42                         | 33, 39, 36                     | 28, 27, 31                              | 29, 40, 35                          |
+
+     On the runner path (the arm `runner`, rows and buckets as documents, the
+     load in bounded transactions, no pull,
+     `SCALE_TOPIC_SCHEMA=mentions-as-cells`), the time until the board is up to
+     date and the size as JSON of the documents that the commits of the step
+     changed, at 100, 1,000 and 2,000 topics, on `filing-order`.
+
+     | Step                     | ms, lists as documents | ms, links in place | bytes, lists as documents     | bytes, links in place         |
+     | ------------------------ | ---------------------- | ------------------ | ----------------------------- | ----------------------------- |
+     | edit of a title, middle  | 24, 26, 24             | 21, 42, 20         | 10,567, 10,577, 10,587        | 10,567, 10,577, 10,587        |
+     | edit of the mentions     | 36, 178, 751           | 32, 54, 42         | 50,055, 51,199, 51,243        | 160,390, 1,152,435, 2,254,479 |
+     | edit of the `shortName`  | 21, 50, 287            | 30, 80, 655        | 36,740, 184,589, 348,641      | 154,260, 1,146,312, 2,248,364 |
+     | edit of `lastActivityAt` | 16, 17, 17             | 15, 14, 21         | 14,964, 16,107, 16,154        | 14,964, 16,107, 16,154        |
+     | create                   | 174, 544, 720          | 172, 429, 1,296    | 360,430, 1,131,089, 2,032,133 | 395,707, 2,047,778, 3,891,782 |
+     | load                     | 885, 6,703, 12,522     | 718, 6,103, 11,315 |                               |                               |
+
+     On `sorted-references` with the lists as documents an edit of
+     `lastActivityAt`, which moves a card, takes 37, 37 and 39 ms and changes
+     56,657, 59,087 and 59,134 bytes of documents, where with the links in place
+     it takes 27, 62 and 133 ms and changes 150,441, 1,142,490 and 2,244,539
+     bytes. The tables with every row are `tables-topics.md` of the round's raw
+     output.
+
+     - _The bytes at 1,000 and 2,000 topics are those of note 859,_ to within 3
+       KB. At 100 topics a create changes 360 KB where it changed 304 KB: a list
+       of 100 rows is now one document (note 925).
+     - _Under the serving loop with the lists as documents,_ between 1,000 and
+       2,000 topics the edit of the `shortName` grows by 16 ms, the first edit
+       of the mentions by 23 and a create by 30, where with the links in place
+       they grow by 368, 215 and 433.
+     - _Cells that are a pause and not the piece,_ as in notes 655 and 859. On
+       the runner path at 2,000 topics on `filing-order`, the edit of the
+       mentions took 44 ms in one run and 1,458 ms in the other, of which 1,398
+       ms inside the piece's own time with the same 10 evaluations, 4 positions
+       read and 2 records given. The edit of the `shortName` took 40 and 535 ms
+       at 2,000 with the piece at 6 and 7 ms, and the edit of the title of the
+       last topic 26 and 233 ms at 1,000. The medians of two runs hold those
+       cells.
+     - _The middle title_ is read after 67 to 68 ms at 1,000 and 2,000 topics
+       with the lists as documents and after 32 to 36 ms with the links in place
+       (note 925).
+     - _Two runs did not end, and were run again._ The first run on
+       `sorted-references` at 2,000 topics with the lists as documents and the
+       run on `filing-order` at 100 topics with the links in place printed no
+       step in 15 minutes and were ended by the guard of the script. Note 931
+       has what was found.
+929. **FabriChat measured.** `compare/fabrichat/scale.ts` on the measurement
+     branch, one run of each cell with three timed sends, at load averages of 12
+     to 20. Milliseconds, the lowest and the highest of the three sends. The
+     sizes are the messages the room holds before the timed sends. The arm
+     `runner` also says which documents the commits of a send changed, each
+     counted once for a commit, and their size as JSON after the commit; taking
+     that size is inside the timed step. The cells of the lists as documents at
+     100 and 1,000 messages are at the commit `32b8b950a5`, with the names of
+     the inputs of records bounded (note 922); the others are at `ce9df31f8c`.
+
+     | Arm, and where the links are | Messages held | Send, at the sender | Send, at the second client | In the piece   | Positions read | Records given | Documents changed | Bytes of them          |
+     | ---------------------------- | ------------: | ------------------- | -------------------------- | -------------- | -------------- | ------------- | ----------------: | ---------------------- |
+     | runner, as documents         |            10 | 66 to 72            |                            | 29 to 32       | 97 to 107      | 100 to 102    |                24 | 96,770 to 103,700      |
+     | runner, in place             |            10 | 108 to 117          |                            | 46 to 54       | 97 to 107      | 99 to 101     |                21 | 97,107 to 104,199      |
+     | runner, as documents         |           100 | 197 to 207          |                            | 117 to 124     | 547 to 557     | 189           |                24 | 409,585 to 413,045     |
+     | runner, in place             |           100 | 259 to 269          |                            | 128 to 136     | 547 to 557     | 188           |                21 | 417,214 to 420,838     |
+     | runner, as documents         |         1,000 | 829 to 892          |                            | 525 to 595     | 5,047 to 5,057 | 189           |                24 | 1,574,852 to 1,578,738 |
+     | runner, in place             |         1,000 | 1,749 to 2,238      |                            | 1,070 to 1,376 | 5,047 to 5,057 | 188           |                21 | 2,117,563 to 2,121,615 |
+     | serving, as documents        |            10 | 98 to 107           | 99 to 107                  | 36 to 40       | 97 to 107      | 100 to 102    |                   |                        |
+     | serving, as documents        |           100 | 149 to 154          | 150 to 154                 | 67 to 71       | 547 to 557     | 189           |                   |                        |
+     | serving, as documents        |         1,000 | 961 to 1,114        | 962 to 1,145               | 504 to 585     | 5,047 to 5,057 | 189           |                   |                        |
+
+     The sends that fill a room of 1,000 messages take 561 s on the runner path
+     with the lists as documents, and 607 s under the serving loop.
+
+     - _The room as it was before the main conversation was a `filter` (note
+       923),_ run at the engine of the round's head, one run beside the batch: a
+       send takes 326 to 353 ms at 100 messages and 1,263 to 1,413 at 1,000,
+       gives 90 records, and changes 22 documents of 548 KB at 100 and 3.03 MB
+       at 1,000. So the main conversation on the constructs takes a third off a
+       send at both sizes and halves the bytes, and gives 99 more records, the
+       50 entries of the window among them.
+     - _The cell of the links in place at 1,000 messages_ was run before the
+       names of the inputs of records were bounded, as were the cells at 10. At
+       that commit a send with the lists as documents took 1,252 to 1,751 ms at
+       1,000 messages, with 808 to 1,057 ms in the piece, and the sends that
+       fill the room 724 s.
+     - _A send still grows with the room:_ by about 0.75 ms for each message
+       held on the runner path, of which 0.5 ms are in the piece, and by 1.3 KB
+       of documents changed. It reads 5 positions for each message held, as
+       before. The owner's rule is not met.
+     - _Under the serving loop,_ the second client reads a send after 99 to 107
+       ms at 10 messages, 150 to 154 at 100 and 962 to 1,145 at 1,000. The
+       serving runtime reported no failure and the piece no refusal in any run.
+       Today's room under the serving loop was not built.
+930. **The corpus, with the lists as documents.** `compare/runner-corpus.ts`,
+     one run of each mode at `ce9df31f8c`, 378 modules.
+
+     | Mode                                 | Run | Start | Handle every event | No commit refused | Equal to the executor in memory |
+     | ------------------------------------ | --: | ----: | -----------------: | ----------------: | ------------------------------: |
+     | runner path                          | 273 |   259 |                219 |               249 |                             228 |
+     | runner path, `--evaluate=function`   | 273 |   258 |                218 |               248 |                             228 |
+     | under the serving loop (`--serving`) | 239 |   230 |                200 |               220 |                             212 |
+     | after a resume (`--resume`)          | 239 |   230 |                200 |               221 |                             211 |
+
+     The first, third and fourth rows are the numbers of note 865, where the
+     corpus ran with the links in place. After a resume 131 modules were
+     resumed, the basis of all 131 matched, and the resume wrote no document for
+     91, from 93: for two modules a resume now writes a document, which was not
+     looked into. The mode `--evaluate=function` was not run in round twelve;
+     one module starts in the compartment and not in the realm of the harness,
+     which was not looked into either.
+931. **Findings on structure, scale and soundness.**
+     - _Structure, not closed: under the serving loop a piece that a client set
+       up is sometimes never run, and nothing reports it._ In 4 of about 66 runs
+       of the arm `serving` of the Topics harness the load never showed: two of
+       the batch (note 928) and two of 14 runs of `sorted-references` at 2,000
+       topics made to look into it. The process then used no processor time.
+       With `SCALE_LAYOUT`, which this round added to the harness, one such run
+       says that the serving runtime was quiescent
+       (`ExecutorHost.whenQuiescent`) while the result document held nothing at
+       `mentionable`, with the setup committed and no failure given to the
+       harness. Runs with the same settings ended before and after each of the
+       four, and other processes ran on the machine throughout. Round twelve saw
+       one (note 859). The cause was not found: what was established is that the
+       serving runtime goes quiet without having started the piece, or without
+       its load having committed.
+     - _Scale, a defect of this round, closed: the names of the inputs of
+       records kept every text they had named_ (note 922). A send at 1,000
+       messages took 1,252 to 1,751 ms with it and takes 829 to 892 without.
+     - _Scale, not closed: `Instance.#noteRecord` registers each record at every
+       position its inputs reach._ A record of an output that reads `facts`
+       reaches every position `facts` read, and each such record walks them and
+       enters itself at each in the table of the readers of labels
+       (`#recordReaders`). In a profile of three sends at 1,000 messages that is
+       331 ms of the 830 ms a send spends in the piece. What bounds it is a
+       table in which a set of inputs is entered once and a record names its
+       set, so that the work follows the size of the table of inputs of the
+       transaction and not the records times the positions; that is a change of
+       `#recordsReading`, `#readsChangedLabel` and `#labelsRead`, and was not
+       built.
+     - _Scale, not closed, by function, for a FabriChat send_ (note 923):
+       `facts` reads 5 positions for each message held, `rowFactsForSession`
+       reads every row of the rights, a read of a value follows the links of
+       what it reads (`Store.#deep`, 247 ms of a send at 1,000 in that profile),
+       and the result of a `filter` is formed again from every element with one
+       object for each.
+     - _Scale, an observation: a window over the result of a `map` is formed
+       whole,_ and the count of a window is evaluated once for each element of
+       its source (note 921).
+     - _Scale, an observation: a list in chunks costs a reader of one row about
+       35 ms more than a list in one document_ (notes 925 and 928).
+     - _Soundness, a finding of the code as it stood, not closed:_ a cone that
+       binds a slot to another position and returns an equal value gives no
+       record (note 922, deferred question 3).
+     - _Soundness, a label that is larger than planned:_ an element of a window
+       stores the join of the labels of the references at every position of the
+       source (note 921, deferred question 1).
+     - _A change of the checker that reaches patterns outside the round._
+       `api::is_handle_member` now holds `last` and `first`, so a read of a
+       member of those names through a handle is taken for a listed handle
+       member where it was reported before. No module of the corpus changed its
+       outcome line on the runner path (note 930).
+932. **Provisional decisions of the round, and what was not done.** P390: the
+     record of a place that a comparison left as it was is given again only
+     where the inputs of the record last given for it are other ones, or a label
+     it read changed (note 922). P391: a window of a collection is `xs.last(n)`
+     and `xs.first(n)`, a collection whose function is the count, whose
+     membership is the `fold` of the count's template, and whose elements are
+     the source's, passed through (note 921). P392: the lists of links of the
+     result of a compiled piece are documents of their own by default (note
+     924). P393: a list of at most 128 rows is one document, and no flattening
+     of a list in chunks is built in the runtime (note 925). P394: the record of
+     bucket links stays one document (note 926). Not done: the rest of `facts`
+     on the constructs, `elementById` and `resolveAsCell` in the reactive tier,
+     the keys of a `groupBy` in creation order, a `map` over the result of a
+     body kept by key, and the schema of a link stored once (note 923); a window
+     over the result of a `map` brought up to date, a count evaluated once, and
+     a window stored as a list document (note 921); the record of a cone whose
+     bindings changed while its value stayed (note 922); the readers of labels
+     entered by set of inputs (note 931); the flattening of a list in chunks for
+     `Cell.get()` and the runtime's `map`, and the profile of what a chunk costs
+     a reader (note 925); an input of a pattern stored in chunks (note 927); the
+     cause of a piece that the serving runtime never runs (note 931); the two
+     modules whose resume writes a document, and the module that does not start
+     with `--evaluate=function` (note 930); today's room under the serving loop;
+     more than two runs of a Topics cell and more than one of a FabriChat cell;
+     a machine with no other load; a browser.
+
+### CFC questions deferred, round fifteen
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. The window (note 921): a read of one element of a window over an array of
+   references, and of the length of the window, consumes the label of the
+   reference at every position of the source, and after an append also that of
+   an element that left the window. That is the label the entry of an element of
+   the result of a `filter` or of a `sortBy` stores. Note 862 planned the label
+   of the membership of the source for the window and the row's own label for a
+   row. Which of the two a window has to store, and whether the label of an
+   element that left has to leave with it, were not examined; what is stored is
+   the larger.
+2. P390 (note 922): a place that a comparison left as it was is given no record
+   where the inputs of the record last given for it stand. Where the same
+   transaction stores another label at a position that record read, the label of
+   the place is formed again in the derivation transaction behind it, and
+   between the two commits the place holds the label of before. Before, the
+   record was given in the transaction that stored the other label.
+3. A finding of the code as it stood (note 922): a cone that is evaluated again,
+   binds a slot to another position, as by another branch of a `select` or
+   another child of a `pick`, and returns an equal value gives no record. The
+   place holds the label formed from the positions it read before, until another
+   output of the result changes and the result is compared whole. Whether the
+   record has to be given at the evaluation was not examined.
+4. Note 927: a `set` of one member of a record by a key the event gives is
+   recorded under no record of the plan. The member then stores what a write
+   with no record stores. Whether a write of a member chosen by a value has to
+   have a record of its own, with the key as the choice of a `pick`, was not
+   examined.
+5. P393 (note 925): a list of at most 128 rows is one document, which stores the
+   label of the membership of the array, as a list document did at 64 rows
+   (question 3 of round twelve). The larger size changes no label, and makes a
+   reader that holds the list hold the links of up to 128 rows.
+
 ## Round seventeen: the remaining branches merged into one
 
 Merged on 2026-11-23 on the branch `claude/compiled-pattern-sandbox-m5`, one

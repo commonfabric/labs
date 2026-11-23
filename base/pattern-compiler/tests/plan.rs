@@ -5132,6 +5132,58 @@ export const Sorted = pattern<
     assert_eq!(plan["collections"][1]["source"]["collection"], json!(0));
 }
 
+/// A window (note 921 of `SPEC-NOTES.md`): `last` and `first` are
+/// collections over their receiver whose membership is a `fold` of the
+/// template of the count over every element, whose elements are the source
+/// elements passed through, and a `map` over a window is a collection over
+/// it. The count is the function of the collection.
+#[test]
+fn a_window_is_a_collection_with_the_fold_of_its_count_and_a_map_over_it_is_a_collection_over_it() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { pattern, type Writable } from "commonfabric";
+interface Item { title: string; rank: number }
+export const Windowed = pattern<
+  { items: Writable<Item[]>; shown: number },
+  { titles: string[]; oldest: Item[] }
+>(({ items, shown }) => {
+  const latest = items.last(3);
+  return { titles: latest.map((item) => item.title), oldest: items.first(shown) };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Windowed");
+    let last = &plan["collections"][0];
+    assert_eq!(last["construct"], json!("last"));
+    assert_eq!(
+        last["source"]["slot"]
+            .as_u64()
+            .map(|slot| &plan["slots"][slot as usize]["path"]),
+        Some(&json!(["items"]))
+    );
+    assert_eq!(last["membership"]["op"], json!("fold"), "{last}");
+    assert_eq!(last["membership"]["body"]["op"], json!("const"));
+    assert_eq!(plan["collections"][1]["construct"], json!("map"));
+    assert_eq!(plan["collections"][1]["source"]["collection"], json!(0));
+    let first = &plan["collections"][2];
+    assert_eq!(first["construct"], json!("first"));
+    let count = first["membership"]["body"]["slot"]
+        .as_u64()
+        .expect("the slot of the count") as usize;
+    assert_eq!(plan["slots"][count]["path"], json!(["shown"]));
+    assert_eq!(plan["slots"][count]["observes"], json!("value"));
+    // An element of a window is the element of the source, by reference.
+    let element = plan["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|output| output["path"] == json!(["oldest", "*"]))
+        .expect("the entry of an element of the window");
+    let slot = element["template"]["slot"].as_u64().expect("a slot") as usize;
+    assert_eq!(plan["slots"][slot]["root"]["kind"], json!("element"));
+    assert_eq!(plan["slots"][slot]["observes"], json!("identity"));
+}
+
 /// A key that is a cell is observed as the reference it is, in the key
 /// function of an index and in a `lookup` (PL §3.17): the bucket is that
 /// of the position the reference names, and nothing of what the cell

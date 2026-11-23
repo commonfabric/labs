@@ -69,6 +69,7 @@ import {
   withDefaults,
 } from "./store.ts";
 import type { PartsOptions, Sealed } from "./parts.ts";
+import { InputsDigests } from "./inputs-digest.ts";
 import {
   type Address,
   type FoldElements,
@@ -578,7 +579,27 @@ const encodeIndexKey = (
 /** Whether a construct assembles an array of rows. */
 const assemblesRows = (construct: string): boolean =>
   construct === "map" || construct === "filter" || construct === "flatMap" ||
-  construct === "sortBy";
+  construct === "sortBy" || construct === "last" || construct === "first";
+
+/**
+ * How many elements a window holds, from what the function of its count
+ * returned: a whole number that is not negative, and otherwise none.
+ */
+const windowCount = (count: unknown): number =>
+  typeof count === "number" && count > 0 ? Math.floor(count) : 0;
+
+/**
+ * The positions `[start, end)` of the `length` elements of its source that
+ * a window of `count` elements holds.
+ */
+const windowOf = (
+  construct: "last" | "first",
+  length: number,
+  count: number,
+): [number, number] =>
+  construct === "last"
+    ? [Math.max(0, length - count), length]
+    : [0, Math.min(count, length)];
 
 /**
  * The order of two keys of a sort (note 614 of `SPEC-NOTES.md`): numbers
@@ -788,7 +809,7 @@ const tableName = (assembly: string): string => `${TABLE_PREFIX}${assembly}`;
  * formed again (`#reassemble`).
  */
 type Rows = {
-  construct: "map" | "filter" | "flatMap" | "sortBy";
+  construct: "map" | "filter" | "flatMap" | "sortBy" | "last" | "first";
   /**
    * For a collection over a stored array: the reference that the array
    * was found through, its name, and of the keys of the array the
@@ -837,6 +858,11 @@ type Rows = {
    * the element. `members` holds the elements in the sorted order.
    */
   sortKeys?: Map<string, unknown>;
+  /**
+   * For a window (`last`, `first`): the count its elements were taken by.
+   * `members` holds the elements of the window.
+   */
+  window?: number;
 };
 
 /**
@@ -1283,6 +1309,11 @@ export type Counts = {
   /** Of those, the assemblies of a collection, which no cone computes. */
   assemblies: number;
   /**
+   * Of the assemblies, those formed whole, from every element of the
+   * source, and not brought up to date from the changes of the source.
+   */
+  assembliesFormed: number;
+  /**
    * Segments of a `flatMap` formed: one for each element of the source
    * where the assembly is formed whole, and one for each element whose
    * segment changed where it is brought up to date.
@@ -1536,12 +1567,17 @@ export class Handle {
 
   key(segment: string | number): Handle {
     if (this.#target instanceof StreamRef) return this;
+    const target = this.#target.key(`${segment}`);
+    const below = [...this.#below, `${segment}`];
+    if (this.#host !== undefined && this.#slot !== undefined) {
+      this.#instance.noteNamed(this.#host, this.#slot, below, target);
+    }
     return new Handle(
       this.#instance,
-      this.#target.key(`${segment}`),
+      target,
       this.#host,
       this.#slot,
-      [...this.#below, `${segment}`],
+      below,
       schemaBelow(this.#declared, `${segment}`),
       this.#fixed,
     );
@@ -1934,6 +1970,13 @@ export class Host {
   demandedAt: { clock: number; reads: number } | undefined;
   /** What the evaluation bound each slot it read to, by the slot. */
   readonly bound = new Map<number, Bound>();
+  /**
+   * The slots of `bound` that no read bound, each to the positions a body
+   * named through a handle (`Instance.noteNamed`).
+   */
+  readonly namedOnly = new Set<number>();
+  /** The slots a body named too many positions of for `noteNamed` to bind. */
+  readonly namedMany = new Set<number>();
   /** The branch each selector took, as the value code reported it. */
   readonly selections = new Map<number, number>();
   /** The key each pick chose, as the value code reported it. */
@@ -3370,6 +3413,7 @@ export class Instance {
     elementEvaluations: 0,
     rowsLeftStored: 0,
     assemblies: 0,
+    assembliesFormed: 0,
     slotsNotListed: 0,
     readsWithoutSlot: 0,
     outputsWithoutEdge: 0,
@@ -6574,6 +6618,17 @@ export class Instance {
     if (root.#givenNow.has(key)) return;
     if (!root.#placing) root.#namedIndex.clear();
     const write = this.#outputRecord(this.id, nearest.output, [...path]);
+    // The record last given for the place had these inputs, and no label
+    // one of them read changed since: the place holds the label the record
+    // would form.
+    if (
+      !root.#relabels.has(key) &&
+      root.#recordDigests.get(key) ===
+        root.#digests.of(root.#inputsTable, write.inputs, write.keys)
+    ) {
+      root.#ownReads.delete(key);
+      return;
+    }
     root.#noteRecord(key, this.id, write);
     hooks.unchanged(
       this.id,
@@ -8146,7 +8201,10 @@ export class Instance {
     }
     this.counts.evaluations += 1;
     if (kind === "element") this.counts.elementEvaluations += 1;
-    if (kind === "assembly") this.counts.assemblies += 1;
+    if (kind === "assembly") {
+      this.counts.assemblies += 1;
+      this.counts.assembliesFormed += 1;
+    }
     const entryName = cone === undefined
       ? "result"
       : this.plan.cones[cone].entry;
@@ -8691,7 +8749,7 @@ export class Instance {
           });
           // What a later change of the array or of one row is applied to.
           const rows = (
-            construct: "map" | "filter" | "flatMap" | "sortBy",
+            construct: Rows["construct"],
             members: Element[],
             flags?: boolean[],
             segmentDependencies = 0,
@@ -8849,6 +8907,27 @@ export class Instance {
                 }
               }
               return keyed(sorted.map(given));
+            }
+            case "last":
+            case "first": {
+              // A window (note 921 of `SPEC-NOTES.md`): the last or the
+              // first elements of the source, by the count the function
+              // returned, each passed through with its key.
+              const count = windowCount(host.v(results[0]));
+              const [start, end] = windowOf(
+                record.construct,
+                elements.length,
+                count,
+              );
+              const held = elements.slice(start, end);
+              host.members = numbered(held);
+              // A later change of the source moves the window
+              // (`#reassemble`), where every element gave the one count.
+              if (results.every((result) => windowCount(result) === count)) {
+                rows(record.construct, host.members);
+                if (host.rows !== undefined) host.rows.window = count;
+              }
+              return keyed(held.map(given));
             }
             case "flatMap": {
               // An element of the result has the key of its source
@@ -9573,6 +9652,50 @@ export class Instance {
         rows.members = rowsNow;
         value = sorted;
         delta = { ops: spliced, rows: [] };
+      }
+    } else if (rows.construct === "last" || rows.construct === "first") {
+      // A window: the elements at the positions of the window now, against
+      // those it held, as one splice. The work is the count of the window,
+      // and no element outside it is looked at. Another count, and an
+      // element of the window that is no reference, form the assembly
+      // whole.
+      const count = rows.window;
+      if (count === undefined || !Array.isArray(held.value)) return undefined;
+      for (const key of changed) {
+        const element = byKey.get(key);
+        if (
+          element !== undefined &&
+          windowCount(results[element.index]) !== count
+        ) return undefined;
+      }
+      const [start, end] = windowOf(rows.construct, elements.length, count);
+      const now = elements.slice(start, end);
+      const [were, length] = [members.length, now.length];
+      let head = 0;
+      while (
+        head < were && head < length && members[head].key === now[head].key
+      ) head += 1;
+      let tail = 0;
+      while (
+        tail < were - head && tail < length - head &&
+        members[were - 1 - tail].key === now[length - 1 - tail].key
+      ) tail += 1;
+      differs = head !== were || head !== length;
+      if (differs) {
+        if (now.some(({ source }) => !(source instanceof Ref))) {
+          return undefined;
+        }
+        rowsNow = now.map((element, index) => ({ ...element, index }));
+        rows.members = rowsNow;
+        value = now.map(({ source }) => source);
+        delta = {
+          ops: [{
+            start: head,
+            removed: members.slice(head, were - tail).map(({ key }) => key),
+            inserted: now.slice(head, length - tail).map(({ key }) => key),
+          }],
+          rows: [],
+        };
       }
     } else if (rows.construct === "flatMap") {
       const { segments } = rows;
@@ -10567,6 +10690,17 @@ export class Instance {
   /** On the root: the transaction hooks are ending a transaction. */
   #ending = false;
 
+  /** On the root: what names the content of the inputs of a record. */
+  readonly #digests = new InputsDigests();
+
+  /**
+   * On the root: the number `#digests` gave the inputs of the record last
+   * given under each key (`#noteRecord`). A record of a place that a
+   * comparison left as it was is not given again while its inputs have
+   * that number (`#unchangedOutput`).
+   */
+  readonly #recordDigests = new Map<string, number>();
+
   /** The key of the record of an output of this instance at a path. */
   #recordKey(output: number, at: readonly string[]): string {
     return JSON.stringify([this.id, output, at]);
@@ -10580,6 +10714,10 @@ export class Instance {
   #noteRecord(key: string, instance: string, write: PlanWrite): void {
     this.#givenNow.add(key);
     this.#relabels.delete(key);
+    this.#recordDigests.set(
+      key,
+      this.#digests.of(this.#inputsTable, write.inputs, write.keys),
+    );
     for (const { doc, path } of this.#recordReads.get(key) ?? []) {
       let node = this.#recordReaders.get(doc);
       for (const segment of path) node = node?.children.get(segment);
@@ -11208,6 +11346,84 @@ export class Instance {
       return;
     }
     host.bound.set(index, { observes: slot.observes, at });
+  }
+
+  /**
+   * For `noteNamed()`: the `identity` slot of the plan for the member that
+   * a handle names below the cell of its own slot, by that slot and the
+   * path below with each position of a member written as `*`; -1 where
+   * the plan has none.
+   */
+  readonly #namedSlots = new Map<string, number>();
+
+  /**
+   * The most positions that `noteNamed()` binds one slot to in one
+   * evaluation. A body that names more, as one that walks a whole array
+   * does, leaves the slot to the position that names every member
+   * (`#elementsBound`), which one address covers.
+   */
+  static readonly #NAMED_MOST = 8;
+
+  /**
+   * Records that a body named, through the handle of `slot`, the member at
+   * the path `below` of the handle's cell, which is at `named`: the plan's
+   * slot for the reference at a member of that cell (its path ends in `*`
+   * where the handle's ends) is bound to the position named. A body that
+   * takes the cell of a member and does not read it, as
+   * `list.key(index).resolveAsCell()` does, makes no read that binds the
+   * slot. Without this the slot is bound to the position that names every
+   * member, and the label of what the body returned follows the labels of
+   * all of them.
+   */
+  noteNamed(
+    host: Host,
+    slot: number,
+    below: readonly string[],
+    named: Ref,
+  ): void {
+    if (this.root.options.transactions === undefined) return;
+    const isMember = (segment: string) =>
+      /^(0|[1-9][0-9]*)$/.test(segment) || isKeySegment(segment);
+    const text = `${slot}\n${
+      below.map((segment) => isMember(segment) ? "*" : JSON.stringify(segment))
+        .join("\n")
+    }`;
+    let found = this.#namedSlots.get(text);
+    if (found === undefined) {
+      const of = this.plan.slots[slot];
+      const path = [...of.path, ...below];
+      found = this.plan.slots.findIndex((candidate, index) =>
+        index !== slot && candidate.observes === "identity" &&
+        candidate.path.includes("*") && sameRoot(candidate.root, of.root) &&
+        candidate.path.length === path.length &&
+        candidate.path.every((segment, at) =>
+          segment === "*" ? isMember(path[at]) : segment === path[at]
+        )
+      );
+      this.#namedSlots.set(text, found);
+    }
+    if (found < 0 || host.namedMany.has(found)) return;
+    const held = host.bound.get(found);
+    if (held === undefined) {
+      host.bound.set(found, { observes: "identity", at: [named] });
+      host.namedOnly.add(found);
+      return;
+    }
+    if (!("at" in held) || !host.namedOnly.has(found)) return;
+    if (
+      held.at.some((one) =>
+        one instanceof Ref && one.doc === named.doc &&
+        one.path.length === named.path.length &&
+        one.path.every((segment, at) => segment === named.path[at])
+      )
+    ) return;
+    if (held.at.length >= Instance.#NAMED_MOST) {
+      host.bound.delete(found);
+      host.namedOnly.delete(found);
+      host.namedMany.add(found);
+      return;
+    }
+    held.at.push(named);
   }
 
   /**
@@ -15259,6 +15475,16 @@ export class Instance {
   }
 
   /**
+   * On the root: a commit was refused, so the storage holds the label of no
+   * record given in its transaction. The record of each place that a
+   * comparison leaves as it was is given at that comparison, whatever
+   * inputs the record last given for it had (`#unchangedOutput`).
+   */
+  recordsRefused(): void {
+    this.root.#recordDigests.clear();
+  }
+
+  /**
    * On the root: takes what the storage holds for a document in place of
    * what the store holds, after a commit that wrote the document was
    * refused, and marks what read the document. `value` is what the storage
@@ -15303,6 +15529,7 @@ export class Instance {
       instance.#markUsers(key);
       instance.#nowDue();
     }
+    root.recordsRefused();
     const owner = doc === root.id ? root : root.#instances.get(doc);
     // What stored an output in a scope instance stores it again.
     const { base, scope } = scopeOfDocument(doc);

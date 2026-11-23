@@ -2544,6 +2544,13 @@ impl<'p, 'a> Checker<'p, 'a> {
         if let Some(arguments) = &call.type_arguments {
             self.visit_ts_type_parameter_instantiation(arguments);
         }
+        // A window takes a count and no callback.
+        if api::is_window_method(name) {
+            for argument in &call.arguments {
+                self.argument(argument, false);
+            }
+            return;
+        }
         let reduce = name == "reduce";
         let selector = api::is_selector_method(name);
         let Some(first) = call.arguments.first() else {

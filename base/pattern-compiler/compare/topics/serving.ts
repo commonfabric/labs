@@ -279,6 +279,46 @@ type CaptionPath = {
   cards: (string | number)[];
   /** The path of the caption below a card. */
   caption: (string | number)[];
+  /**
+   * Where the array of cards is stored in chunks (unless `SCALE_LISTS` is
+   * `in-place`, for more cards than one list document holds): how many
+   * cards each chunk held when the path was found. The array then holds
+   * the chunks, and a card stands in its chunk.
+   */
+  chunks?: number[];
+};
+
+/**
+ * The path of the row at `index` below an array of rows of a board that
+ * was loaded with `size` topics: the index, or, unless `SCALE_LISTS` is
+ * `in-place`, for more topics than one list document holds
+ * (`SCALE_LIST_WHOLE`, or 128), the chunk and the place in it. A load lays
+ * the rows out in chunks of 48 (`LIST_FILL` of
+ * `runtime/runner/src/compiled/transactions.ts`), and a topic that is
+ * appended afterwards moves none of them.
+ */
+const rowAt = (
+  arm: string,
+  size: number,
+  index: number,
+): (string | number)[] =>
+  arm === "serving" && Deno.env.get("SCALE_LISTS") !== "in-place" &&
+    size > Number(Deno.env.get("SCALE_LIST_WHOLE") ?? 128)
+    ? [Math.floor(index / 48), index % 48]
+    : [index];
+
+/** The path of the card at `index`, below the array of cards. */
+const cardAt = (
+  { chunks }: CaptionPath,
+  index: number,
+): (string | number)[] => {
+  if (chunks === undefined) return [index];
+  let chunk = 0;
+  while (chunk < chunks.length - 1 && index >= chunks[chunk]) {
+    index -= chunks[chunk];
+    chunk += 1;
+  }
+  return [chunk, index];
 };
 
 /**
@@ -368,6 +408,34 @@ const captionPathOf = async (
       );
       return caption === undefined ? undefined : { cards: path, caption };
     }
+    // An array of cards that is stored in chunks holds the chunks, each an
+    // array of cards.
+    if (Array.isArray(value) && value.length > 0 && size > 0) {
+      const first = await resolved(value[0], {
+        ...base,
+        path: [...base.path, "0"],
+      });
+      if (Array.isArray(first.value) && first.value.length > 0) {
+        const chunks = [first.value.length];
+        for (let at = 1; at < value.length; at++) {
+          const chunk = await resolved(value[at], {
+            ...base,
+            path: [...base.path, `${at}`],
+          });
+          chunks.push(Array.isArray(chunk.value) ? chunk.value.length : 0);
+        }
+        if (chunks.reduce((sum, length) => sum + length, 0) >= size) {
+          const caption = await below(
+            first.value[0],
+            { ...first.base, path: [...first.base.path, "0"] },
+            0,
+          );
+          return caption === undefined
+            ? undefined
+            : { cards: path, caption, chunks };
+        }
+      }
+    }
     for (const [name, member] of Object.entries(value)) {
       if (name === "$cell") continue;
       const found = await walk(
@@ -413,7 +481,19 @@ export const runServing = async (
         ? {}
         : { policy: { storeReadThrough: true } }),
       pieces: {
-        piece: { now: 1_000_000 },
+        // `SCALE_LISTS=in-place` stores the links to the rows and to the
+        // buckets of the board in the result document, and
+        // `SCALE_LIST_WHOLE` is the most rows whose links one list
+        // document holds.
+        piece: {
+          now: 1_000_000,
+          ...(Deno.env.get("SCALE_LISTS") === "in-place"
+            ? { lists: "in-place" as const }
+            : {}),
+          ...(Deno.env.get("SCALE_LIST_WHOLE") === undefined
+            ? {}
+            : { listWhole: Number(Deno.env.get("SCALE_LIST_WHOLE")) }),
+        },
         resumed: (_result, piece) => resumed.push(piece),
         failed: (_result, error) => {
           failures.push(`${error}`);
@@ -518,6 +598,42 @@ export const runServing = async (
         tx.abort();
       }
     };
+    /**
+     * How the serving runtime holds the list at the member `name` of the
+     * result: the number of links of the list document, and where those
+     * link to chunks, the number of links of each chunk.
+     */
+    const layoutOf = (name: string): unknown => {
+      const [runtime] = serving.runtimes();
+      if (runtime === undefined) return "no serving runtime";
+      const at = result.getAsNormalizedFullLink();
+      const tx = runtime.edit();
+      try {
+        const follow = (link: unknown): unknown => {
+          const { id, path } = parseLink(link as never, at);
+          return tx.readValueOrThrow({
+            ...at,
+            id: id as typeof at.id,
+            path: [...(path ?? [])],
+          });
+        };
+        const held = tx.readValueOrThrow({ ...at, path: [name] });
+        if (!isCellLink(held)) {
+          return Array.isArray(held) ? { inPlace: held.length } : "no list";
+        }
+        const list = follow(held);
+        if (!Array.isArray(list)) return "no list document";
+        const members = list.slice(0, 4096).map((member) =>
+          isCellLink(member) ? follow(member) : undefined
+        );
+        return members.length > 0 &&
+            members.every((member) => Array.isArray(member))
+          ? { chunks: members.map((member) => (member as unknown[]).length) }
+          : { links: list.length };
+      } finally {
+        tx.abort();
+      }
+    };
     const storedLabels = () => {
       const [runtime] = serving.runtimes();
       const at = result.getAsNormalizedFullLink();
@@ -576,6 +692,24 @@ export const runServing = async (
       );
       const began = performance.now();
       await change();
+      // With `SCALE_LAYOUT` set: once the serving runtime is quiescent,
+      // how the list the step waits on is laid out, how many pieces that
+      // runtime runs, and the refusals and failures so far, on the error
+      // stream.
+      if (Deno.env.get("SCALE_LAYOUT") !== undefined) {
+        void serving.host.whenQuiescent().then(() =>
+          console.error(
+            JSON.stringify({
+              step,
+              path,
+              layout: layoutOf(`${path[0]}`),
+              pieces: serving.pieces().length,
+              refusals: piece()?.refusals.length ?? 0,
+              failures: failures.length,
+            }),
+          )
+        );
+      }
       // A piece the serving runtime did not start never shows the value.
       const [first, second] = await Promise.race([
         Promise.all(visible),
@@ -631,7 +765,7 @@ export const runServing = async (
     const last = size - 1;
     await measure(
       "load",
-      ["mentionable", last, "title"],
+      ["mentionable", ...rowAt(arm, size, last), "title"],
       (value) => value === board.topics[last].title,
       async () => {
         const tx = sender.edit();
@@ -689,7 +823,11 @@ export const runServing = async (
           result.getAsNormalizedFullLink(),
         ).key("$UI" as never);
         for (
-          const segment of [...captionAt.cards, card, ...captionAt.caption]
+          const segment of [
+            ...captionAt.cards,
+            ...cardAt(captionAt, card),
+            ...captionAt.caption,
+          ]
         ) caption = caption.key(segment);
         screenSinks.push(caption.sink(() => {}));
       }
@@ -706,7 +844,7 @@ export const runServing = async (
     for (const at of board.edited) {
       await measure(
         `edit topic ${at}`,
-        ["mentionable", at, "title"],
+        ["mentionable", ...rowAt(arm, size, at), "title"],
         (value) => value === `Edited topic ${at}`,
         () =>
           commit((tx) => {
@@ -717,7 +855,7 @@ export const runServing = async (
     const middle = Math.floor(size / 2);
     await measure(
       `edit mentions ${middle}`,
-      ["crossrefs", 0, "mentionedBy", 2],
+      ["crossrefs", ...rowAt(arm, size, 0), "mentionedBy", 2],
       (value) => value !== undefined && value !== null,
       () =>
         commit((tx) => {
@@ -726,7 +864,7 @@ export const runServing = async (
     );
     await measure(
       `edit shortName ${middle}`,
-      ["mentionable", middle, "shortName"],
+      ["mentionable", ...rowAt(arm, size, middle), "shortName"],
       (value) => value === `renamed-${middle}`,
       () =>
         commit((tx) => {
@@ -743,7 +881,7 @@ export const runServing = async (
       const ordered = !board.module.endsWith("board-filing-order.tsx");
       const card = [
         ...captionAt.cards,
-        ordered ? 0 : middle,
+        ...cardAt(captionAt, ordered ? 0 : middle),
         ...captionAt.caption,
       ];
       // deno-lint-ignore no-explicit-any
@@ -789,7 +927,7 @@ export const runServing = async (
         if (profiled === "title") {
           await measure(
             `repeated title ${turn}`,
-            ["mentionable", middle, "title"],
+            ["mentionable", ...rowAt(arm, size, middle), "title"],
             (value) => value === `Repeated ${turn}`,
             () =>
               commit((tx) => {
@@ -799,7 +937,7 @@ export const runServing = async (
         } else if (profiled === "shortName") {
           await measure(
             `repeated shortName ${turn}`,
-            ["mentionable", middle, "shortName"],
+            ["mentionable", ...rowAt(arm, size, middle), "shortName"],
             (value) => value === `again-${turn}`,
             () =>
               commit((tx) => {
@@ -811,7 +949,7 @@ export const runServing = async (
           const gone = turn % 2 === 0;
           await measure(
             `repeated mentions ${turn}`,
-            ["crossrefs", 0, "mentionedBy", 2],
+            ["crossrefs", ...rowAt(arm, size, 0), "mentionedBy", 2],
             (value) => (value === undefined || value === null) === gone,
             () =>
               commit((tx) => {
@@ -854,7 +992,7 @@ export const runServing = async (
         for (let turn = 0; turn < 2; turn++) {
           await measure(
             `after takeover ${turn}`,
-            ["mentionable", 0, "title"],
+            ["mentionable", ...rowAt(arm, size, 0), "title"],
             (value) => value === `After the takeover ${turn}`,
             () =>
               commit((tx) => {
