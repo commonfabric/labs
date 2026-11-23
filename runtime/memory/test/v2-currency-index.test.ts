@@ -23,8 +23,21 @@ import {
   storeCurrencyRecords,
 } from "../v2/currency-index.ts";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
-import { resolveScopeKey } from "../v2.ts";
+import {
+  applyCommit,
+  applyWaveCommit,
+  close,
+  type Engine,
+  open,
+  serverSeq,
+} from "../v2/engine.ts";
+import { executionLeaseHolder } from "../v2/execution-lease.ts";
+import {
+  resetServerExecutionConfig,
+  resolveScopeKey,
+  scopeOfScopeKey,
+  setServerExecutionConfig,
+} from "../v2.ts";
 
 const SPACE = "did:key:z6Mk-currency-index-test-space";
 
@@ -1407,6 +1420,223 @@ describe("currency-index", () => {
           const stored = store(asOf, [scoped()], [own]);
 
           expect(stored.falseClean).toEqual(["of:scoped"]);
+        });
+      });
+
+      describe("for an instance at another key that a slice decides", () => {
+        // A commit says which run made each of its writes only where it is
+        // a serving loop's derivation, so the writes of these cases are
+        // derivations, each attributed to the run it is made as.
+
+        /** The shared slot Alice's run leaves a redirect at. */
+        const SLOT = { id: "computed:out", scopeKey: "space" };
+        const PREFS = { id: "of:prefs", scope: "session" as const };
+        let holder: string;
+
+        beforeEach(() => {
+          setServerExecutionConfig(true);
+          holder = executionLeaseHolder(`service:${SPACE}`);
+          engine.executionLeases.acquire(SPACE, holder);
+        });
+
+        afterEach(() => {
+          resetServerExecutionConfig();
+        });
+
+        /**
+         * Commits a derivation that writes `instance`, attributed to a run
+         * that acted as `acting`, and returns the commit's seq. The value
+         * written is `{ n }`, one no other commit of the test writes where
+         * `n` is left out.
+         */
+        const derive = (
+          instance: { id: string; scopeKey: string },
+          acting: { principal?: string; sessionId?: string },
+          n?: number,
+        ): number => {
+          localSeq += 1;
+          const scope = scopeOfScopeKey(instance.scopeKey);
+          return applyWaveCommit(engine, {
+            sessionId: holder,
+            space: SPACE,
+            commitClass: "derived",
+            holder,
+            commit: {
+              localSeq,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: instance.id,
+                ...(scope !== "space" && { scope }),
+                value: { value: { n: n ?? localSeq } },
+              }],
+            },
+            annotations: [{
+              op: 0,
+              ...(scope !== "space" && { scopeKey: instance.scopeKey }),
+              ...(acting.principal !== undefined &&
+                { actingUser: acting.principal }),
+              ...(acting.sessionId !== undefined &&
+                { actingSession: acting.sessionId }),
+            }],
+            waveBasis: { basisSeq: serverSeq(engine), rebasedHeads: [] },
+          }).seq;
+        };
+
+        /**
+         * A record of `of:piece` whose slice at `key` read Alice's prefs,
+         * vouches for `vouches`, and names `slots` as the instances at
+         * another key it answers for or no longer does.
+         */
+        const deciding = (
+          slots: Pick<CurrencySliceRecord, "decides" | "superseded"> = {
+            decides: [SLOT],
+          },
+          key = ALICE_SESSION,
+          vouches: string[] = [],
+        ) =>
+          record("of:piece", {
+            writes: ["computed:out"],
+            slices: [{
+              key,
+              vouched: true,
+              reads: [input("of:prefs", ALICE_SESSION)],
+              vouches,
+              ...slots,
+            }],
+          });
+
+        /**
+         * Stores a record in which the run for Alice's session decides the
+         * slot, as that run wrote it.
+         */
+        const storeDeciding = () => {
+          write(PREFS);
+          store(derive(SLOT, ALICE), [deciding()]);
+        };
+
+        it("names a piece one of whose slices wrote a slot it decides again with no input changed", () => {
+          storeDeciding();
+          const own = derive(SLOT, ALICE);
+
+          const stored = store(own, [deciding()]);
+
+          expect(stored.falseClean).toEqual(["of:piece"]);
+        });
+
+        it("names a piece whose slice at a user's key wrote a slot it decides again", () => {
+          const user = { principal: ALICE.principal };
+          write(PREFS);
+          store(derive(SLOT, user), [deciding(undefined, ALICE_USER)]);
+          const own = derive(SLOT, user);
+
+          const stored = store(own, [deciding(undefined, ALICE_USER)]);
+
+          expect(stored.falseClean).toEqual(["of:piece"]);
+        });
+
+        it("names a piece whose `space` slice wrote a viewer's instance it decides again", () => {
+          const narrower = { id: "computed:out", scopeKey: ALICE_SESSION };
+          const taken = deciding({ decides: [narrower] }, "space");
+          write(PREFS);
+          store(derive(narrower, {}), [taken]);
+          const own = derive(narrower, {});
+
+          const stored = store(own, [taken]);
+
+          expect(stored.falseClean).toEqual(["of:piece"]);
+        });
+
+        it("names no piece that wrote a slot it decides again with the value it held", () => {
+          write(PREFS);
+          store(derive(SLOT, ALICE, 1), [deciding()]);
+          const own = derive(SLOT, ALICE, 1);
+
+          const stored = store(own, [deciding()]);
+
+          expect(stored.falseClean).toEqual([]);
+        });
+
+        it("names no piece whose slot another viewer's run wrote, though its own run left the slot as that run wrote it", () => {
+          // The record names the slot as one the slice decides, since
+          // nothing changed it after the slice's run. That run made no
+          // write of it, so nothing says it would have written otherwise
+          // than the slot stood.
+
+          storeDeciding();
+          const other = derive(SLOT, BOB);
+
+          const stored = store(other, [deciding()]);
+
+          expect(stored.falseClean).toEqual([]);
+        });
+
+        it("names no piece whose run wrote a slot again that the record names as holding a later write", () => {
+          storeDeciding();
+          const own = derive(SLOT, ALICE);
+
+          const stored = store(own, [deciding({ superseded: [SLOT] })]);
+
+          expect(stored.falseClean).toEqual([]);
+        });
+
+        it("names no piece whose run wrote a slot again that its last record named as holding a later write", () => {
+          // The slice answered for nothing at the slot, so no judgment
+          // rested on what it held.
+
+          write(PREFS);
+          store(derive(SLOT, ALICE), [deciding({ superseded: [SLOT] })]);
+          const own = derive(SLOT, ALICE);
+
+          const stored = store(own, [deciding()]);
+
+          expect(stored.falseClean).toEqual([]);
+        });
+
+        it("names no piece that wrote a slot it decides again after an instance its slice read changed", () => {
+          storeDeciding();
+          write(PREFS);
+          const own = derive(SLOT, ALICE);
+
+          const stored = store(own, [deciding()]);
+
+          expect(stored.falseClean).toEqual([]);
+        });
+
+        it("names no piece whose slot was written again by a commit that names no run", () => {
+          storeDeciding();
+          const unattributed = write("computed:out");
+
+          const stored = store(unattributed, [deciding()], [unattributed]);
+
+          expect(stored.falseClean).toEqual([]);
+        });
+
+        it("names no piece whose `space` slice decides a viewer's instance that was written again by a commit that names no run", () => {
+          const narrower = { id: "computed:out", scopeKey: ALICE_SESSION };
+          const taken = deciding({ decides: [narrower] }, "space");
+          write(PREFS);
+          store(derive(narrower, {}), [taken]);
+          const unattributed = write({ id: "computed:out", scope: "session" });
+
+          const stored = store(unattributed, [taken], [unattributed]);
+
+          expect(stored.falseClean).toEqual([]);
+        });
+
+        it("names no piece that wrote a vouched instance again after a commit the loop did not make wrote a slot it decides", () => {
+          const OWN = { id: "computed:out", scopeKey: ALICE_SESSION };
+          const vouching = () =>
+            deciding(undefined, ALICE_SESSION, ["computed:out"]);
+          write(PREFS);
+          derive(SLOT, ALICE);
+          store(derive(OWN, ALICE), [vouching()]);
+          write("computed:out");
+          const own = derive(OWN, ALICE);
+
+          const stored = store(own, [vouching()]);
+
+          expect(stored.falseClean).toEqual([]);
         });
       });
     });
