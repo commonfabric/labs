@@ -125,8 +125,11 @@ export type StoredUnits = {
  * the children of a view node, which the evaluation of the result says.
  *
  * - its rows are documents of their own (`rows`, as
- *   `rowDocumentCollections` gives them), and its source is a slot that
- *   holds an array, so each element is a reference;
+ *   `rowDocumentCollections` gives them), so each element is a reference:
+ *   its source is a slot that holds an array of references, the output of
+ *   a `lift` or a `computed` that gives a reference at each member, or a
+ *   `filter` or a `sortBy` over such a source. The executor evaluates a
+ *   source that is no slot once when it is resumed, and leaves the rows;
  * - nothing but a handler binding is declared inside its element body: no
  *   state cell, no instance, no operation and no other collection, and no
  *   cone of the body has side-writes. A row then names no document that
@@ -178,7 +181,6 @@ export const storedRowCollections = (
       return;
     }
     if (collection.construct !== "map" || collection.within.length > 0) return;
-    if (collection.source.slot === undefined) return;
     if (collection.source.entries === true) return;
     const place = plan.outputs.find((output) => output.collection === index);
     if (place === undefined || place.path.includes("*")) return;
