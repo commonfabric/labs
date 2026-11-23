@@ -138,9 +138,9 @@ describe("runtime-owned list elements", () => {
   });
 
   it("commits a keyed add after a labeled write reached the list", async () => {
-    // The add reads the list, so its join carries the clause the earlier
-    // write left there, and the keyed element's document is where that
-    // join lands.
+    // `addUnique()` reads the list only to decide whether to append, so the
+    // clause the earlier write left there is not this transaction's to
+    // carry into the keyed element's document.
     await seedSecret("wedging-source");
     const piece = await startPiece("wedged-list");
     expect((await overRead(piece, "wedging-source")).error).toBeUndefined();
@@ -148,5 +148,43 @@ describe("runtime-owned list elements", () => {
     const added = await addByKey(piece, "after");
 
     expect(added.error).toBeUndefined();
+  });
+
+  it("refuses a keyed add whose handler read the labeled list", async () => {
+    // Reading the list's content is an observation of the clause, and the
+    // keyed element's document has no declaration to hold it.
+    await seedSecret("observed-source");
+    const piece = await startPiece("observed-list");
+    expect((await overRead(piece, "observed-source")).error).toBeUndefined();
+    const tx = runtime.edit();
+    // deno-lint-ignore no-explicit-any
+    const list = (piece.withTx(tx) as any).key("items");
+    const seen = (list.get() as { name: string }[]).length;
+    const entry = list.elementById("observed");
+    entry.set({ name: `after ${seen}` });
+    list.addUnique(entry);
+    tx.prepareCfc();
+
+    const { error } = await tx.commit().settled;
+
+    expect(error?.message).toContain("writer-fit confidentiality misfit");
+  });
+
+  it("refuses a keyed add whose element carries the labeled source", async () => {
+    await seedSecret("carried-source");
+    const piece = await startPiece("carried-list");
+    const tx = runtime.edit();
+    const source = runtime.getCell(space, "carried-source", undefined, tx);
+    const raw = source.getRaw() as { secret?: string };
+    // deno-lint-ignore no-explicit-any
+    const list = (piece.withTx(tx) as any).key("items");
+    const entry = list.elementById("carried");
+    entry.set({ name: `${raw.secret}` });
+    list.addUnique(entry);
+    tx.prepareCfc();
+
+    const { error } = await tx.commit().settled;
+
+    expect(error?.message).toContain("writer-fit confidentiality misfit");
   });
 });
