@@ -309,7 +309,7 @@ export const RUNTIME_CFC_DIAL_DEFAULTS: ResolvedCfcDials = Object.freeze({
   cfcWriteFloor: "enforce",
   cfcTriggerReadGating: true,
   cfcDecomposedEnvelopes: false,
-  cfcContentAddressedLabels: false,
+  cfcContentAddressedLabels: true,
   cfcPolicyEvaluation: "enforce",
   cfcLabelMetadataProtection: "enforce",
   cfcDeclaredMonotonicity: "observe",

@@ -51,7 +51,7 @@ was last checked against the code.
 | [`cfcWriteFloor`](#cfcwritefloor)                                           | `RuntimeOptions.cfcWriteFloor`                                                                                                                  | `enforce`                                                                            | Bernhard Seefeld (#4479)                              | move toward `enforce`                                                                                                                                                                                                             | implemented, on by default at `enforce`                                         |
 | [`cfcTriggerReadGating`](#cfctriggerreadgating)                             | `RuntimeOptions.cfcTriggerReadGating`                                                                                                           | `true`                                                                               | Bernhard Seefeld (#4488)                              | move toward `true`                                                                                                                                                                                                                | implemented, on by default                                                      |
 | [`cfcDecomposedEnvelopes`](#cfcdecomposedenvelopes)                         | `RuntimeOptions.cfcDecomposedEnvelopes`                                                                                                         | `false`                                                                              | Robin McCollum (CT-2062)                              | move toward `true` once every deployed reader resolves the references a stored root carries                                                                                                                                      | implemented, off by default                                                     |
-| [`cfcContentAddressedLabels`](#cfccontentaddressedlabels)                   | `RuntimeOptions.cfcContentAddressedLabels`                                                                                                      | `false`                                                                              | Bernhard Seefeld                                      | move toward `true` once every deployed reader interprets version-2 envelopes                                                                                                                                                     | implemented, off by default                                                     |
+| [`cfcContentAddressedLabels`](#cfccontentaddressedlabels)                   | `RuntimeOptions.cfcContentAddressedLabels`                                                                                                      | `true`                                                                               | Bernhard Seefeld                                      | retire the dial once the default has soaked, so version 2 is the only spelling the persist path writes                                                                                                                           | implemented, on by default                                                      |
 | [`cfcPolicyEvaluation`](#cfcpolicyevaluation)                               | `RuntimeOptions.cfcPolicyEvaluation`                                                                                                            | `enforce`                                                                            | Bernhard Seefeld (#4566)                              | move toward `enforce`                                                                                                                                                                                                             | implemented, on by default at `enforce`                                         |
 | [`cfcDeclaredMonotonicity`](#cfcdeclaredmonotonicity)                       | `RuntimeOptions.cfcDeclaredMonotonicity`                                                                                                        | `observe`                                                                            | Bernhard Seefeld (#4647)                              | `observe` first, then `enforce` (must soak before the §8.12.7 route 2b event ships)                                                                                                                                               | implemented, on by default at `observe`                                         |
 | [`cfcPrefixProvenanceStats`](#cfcprefixprovenancestats)                     | `RuntimeOptions.cfcPrefixProvenanceStats` (per-deployment; not env-wired)                                                                       | `false`                                                                              | Bernhard Seefeld (#4623)                              | stays a measurement opt-in; fold in or remove after Stage 0                                                                                                                                                                       | implemented, off by default, measurement only                                   |
@@ -1486,15 +1486,19 @@ the per-epic implementation notes).
   in version 2 on its next persist even when its labels are unchanged,
   which is how a store migrates without a data migration; with it off, a
   stored version 2 is left as it is.
-- **Current default and planned end state.** `false` by default. The target
-  is `true`; version-1 envelopes remain readable indefinitely.
-- **Status on 2026-09-15.** Implemented, off by default. The flip is gated
-  on deployment reach: a reader that predates version 2 fails closed on a
-  version-2 envelope through `UnknownCfcMetadataVersionError`, which is
-  correct and also unusable, so every deployed reader must interpret
-  version 2 before any space sees one.
-- **Path to removal.** Once the default flips, the dial retires and version
-  2 becomes the only spelling the persist path emits.
+- **Current default and planned end state.** `true` by default
+  (`RUNTIME_CFC_DIAL_DEFAULTS` in `runtime/runner/src/cfc/posture-report.ts`;
+  no preset pins it). A transaction no runtime configured keeps the version-1
+  floor. Version-1 envelopes remain readable indefinitely.
+- **Status on 2026-11-23.** Implemented, on by default. Every reader in the
+  tree interprets version 2: the runner's metadata reader, the memory
+  engine's commit and anchor readers, cf-harness's space-label reader, and
+  `cf inspect`. A reader that predates version 2 fails closed on a version-2
+  envelope through `UnknownCfcMetadataVersionError`, so a deployment still
+  running a build from before 2026-09-15 sets the dial to `false` until it
+  updates.
+- **Path to removal.** Once the default has soaked, the dial retires and
+  version 2 becomes the only spelling the persist path emits.
 
 ### `cfcPolicyEvaluation`
 

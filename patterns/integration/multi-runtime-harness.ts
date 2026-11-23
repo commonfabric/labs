@@ -114,6 +114,24 @@ export type MultiRuntimeCfcOptions = Pick<
 export type { PieceAddress, TrustedUiDescriptor };
 export type { CommitRejection, RuntimeDiagnosticsSnapshot };
 
+/**
+ * One entry of a stored label map, its label resolved. The clauses and atoms
+ * are left unchecked, for a test to narrow to the atoms it asserts on.
+ */
+export interface StoredLabelEntry {
+  /** The path the label applies at. */
+  path: string[];
+
+  /** What produced the entry, such as `declared` or `link`. */
+  origin?: string;
+
+  /** The observation class the entry records. */
+  observes?: string;
+
+  /** The label, read out of its label document when stored by reference. */
+  label: { confidentiality?: unknown[]; integrity?: unknown[] };
+}
+
 export interface MultiRuntimeSessionSpec {
   /** Explicit host policy for this session and, for the first session, creation. */
   cfc?: Omit<MultiRuntimeCfcOptions, "cfcReadMaxConfidentiality">;
@@ -746,6 +764,21 @@ export class MultiRuntimeSession {
       value?: FabricValue;
       error?: string;
     };
+  }
+
+  /**
+   * The label-map entries stored for the document at an explicit storage
+   * address, each label resolved, so a label the envelope holds by reference
+   * to its `cid:` label document reads the same as one held inline. Empty
+   * when the document stores no envelope.
+   */
+  async storedLabelEntries(
+    address: { id: string; space: string; scope?: FabricValue },
+  ): Promise<StoredLabelEntry[]> {
+    return await this.#client.call(
+      "storedLabelEntries",
+      address,
+    ) as unknown as StoredLabelEntry[];
   }
 
   /**
