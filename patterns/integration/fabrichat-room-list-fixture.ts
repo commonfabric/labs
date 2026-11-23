@@ -408,7 +408,7 @@ export class RoomListServer {
       await this.settle(controller);
       return { controller, home, waits, arrived, refused };
     } catch (error) {
-      await controller.dispose();
+      await this.dispose(controller);
       throw error;
     }
   }
