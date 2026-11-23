@@ -19,14 +19,15 @@ next.
   the branch `claude/compiled-pattern-m4`, on which milestone 4 was built, is
   retired. #10016 holds Topics on the executor, on
   `claude/compiled-pattern-topics`, and does not hold milestone 4. Milestone 3
-  is built on `claude/compiled-pattern-runner-m3`, cut from that branch, which
-  is pushed and has no pull request yet. It holds the runner path for a compiled
+  is built on `claude/compiled-pattern-runner-m3`, cut from that branch, in the
+  draft pull request #10140. It holds the runner path for a compiled
   piece (`runtime/runner/src/compiled/`, with its tests under
   `runtime/runner/test/compiled/`), with the load in bounded transactions; the
   executor's reads through handles and its label readers; a change of the commit
   preparation's asks for a transaction's reads
-  (`runtime/runner/src/cfc/prepare.ts`, commit `42676da433`), which is on no
-  other branch; the harnesses `base/pattern-compiler/compare/runner-path.ts` and
+  (`runtime/runner/src/cfc/prepare.ts`, commit `42676da433`), which is also
+  the pull request #10142 against `main`; the harnesses
+  `base/pattern-compiler/compare/runner-path.ts` and
   `compare/runner-corpus.ts`, with the arm `runner` of
   `compare/topics/scale.ts`; and the notes 579 to 609 of the crate's
   `SPEC-NOTES.md`. The latest commit of it read is `1788b7eb75`. A change to a
@@ -6515,6 +6516,18 @@ is relitigated.
   (`compiled-pattern-language-integration.md`, "Milestone 2: Topics at
   scale").
 
+- The first derivation of an instance a handler made may be committed in a
+  transaction of its own, before the derivation of what reads the instance
+  (2026-11-22, Z87). The owner's words on question 373: "either is fine, so go
+  ahead with that choice". P64 stands as built, and the ruling that a batch's
+  stale derivations settle once behind the batch is read as being about
+  evaluation, not about the number of commits. The same day the owner decided
+  three points of procedure: the change of the preparation's asks for the
+  reads goes to `main` in a pull request of its own (question 347; #10142);
+  milestone 3 has a draft pull request (#10140) and holds the Topics scale
+  harness with its switches (question 378); and the three constructs that
+  Topics lacks are designed and built next (question 370).
+
 ## Provisional decisions awaiting the owner's ratification
 
 The owner's standing instruction of 2026-11-17: "Don't block progress on
@@ -6663,16 +6676,9 @@ pointer to its entry.
 11. **P22,** which resolves a conflict of the documents with themselves: a cone
    that places the result of a per-element construct holds a reference to the
    collection, so one row's change evaluates no enclosing cone.
-12. **P64** is flagged. The owner's ruling has every derivation a batch made
-   stale settle once behind the batch. On the runner path of milestone 3 the
-   first derivation of an instance a handler made is committed in a transaction
-   of its own, before the derivation of what reads it, so that a create on
-   Topics does not give every row its record again. Each derivation is still
-   evaluated once; whether two commits behind one event are within the ruling
-   is the owner's to say (question 373). With it, for the owner: the three
-   constructs that Topics needs (question 370), the start of a piece in several
-   commits (question 368, P65), and the pull request of the preparation's asks
-   for the reads to `main` (question 347, P66).
+12. **The start of a piece in several commits** (question 368, P65), for the
+   owner. P64, which commits the first derivation of an instance a handler made
+   apart, is within the ruling Z87.
 
 Beside these, question 285 is no provisional decision: the documents said that
 today's runtime commits none of the writes of a node that throws, and it commits
@@ -8223,10 +8229,10 @@ today.
   P65.
 - **P64. The first derivation of an instance a handler made is a transaction of
   its own, committed before the derivation of what reads the instance.** The
-  coordinator's decision of 2026-11-22; it is no owner ruling. It is flagged:
-  the owner's ruling under [Decided](#decided) has the derivations a batch made
-  stale settle once behind the batch, and whether two commits behind one event
-  are within it is question 373. *The case:* a handler that makes an instance
+  coordinator's decision of 2026-11-22, which the ruling Z87 of the same day
+  admits: the derivations a batch made stale are each evaluated once, and two
+  commits behind one event are within the ruling. *The case:* a handler that
+  makes an instance
   stores its two documents in the event's transaction. With one derivation
   transaction behind the event, the first derivation of the instance is in the
   transaction that also runs every `lift` over the list that holds the new
@@ -13524,12 +13530,12 @@ are theirs.
      decides nothing and stores nothing; it makes a replacement of a read
      record's metadata object, after a boundary pass has asked for the reads,
      throw a `TypeError`, where the view otherwise finds the replacement at its
-     next ask, and no code of the runtime makes such a replacement; and by the
-     coordinator's check of 2026-11-22 it applies to `origin/main` with one
-     freeze site left out, where the notes have it apply with no conflict. *The
-     coordinator's recommendation for it, not a ruling:* yes, a pull request to
-     `main` beside the first, on the same grounds. *Assumed* until answered:
-     both commits stay on their branches alone.
+     next ask, and no code of the runtime makes such a replacement; and it
+     applies to `main` with no conflict. *Decided
+     by the owner on 2026-11-22 for this second commit:* a pull request of its
+     own to `main`, which is #10142; the commit applied to `main` with no
+     conflict. *Assumed* until answered for the first commit, `17a3f57016`: it
+     stays on its branch alone.
 348. **The write records of an instance of another pattern** (for the owner, as
      to when; provisional decision P43). The comparison adapter registers one
      plan with the runtime, that of the pattern the executor is started with,
@@ -13964,34 +13970,15 @@ of its three rounds. Whenever a question says `map`, it names the case.
      the integration plan, and the figures of milestone 3 are read with them.
      The order in which they are built is not decided.
 373. **Whether the first derivation of an instance a handler made may be a
-     transaction of its own** (for the owner, to look at first among the
-     questions of milestone 3; provisional decision P64). The owner's ruling
-     under [Decided](#decided) is that every derivation a batch made stale,
-     other than what a later handler of the batch reads, "settles once behind
-     the batch, not once per event", and the design's documents render it as one
-     derivation transaction behind the batch (`execution-and-storage.md` §1.1;
-     `scheduler-and-serving-loop.md` under "Terms" and in its §5.2 and §5.4). On
-     the runner path the derivation behind an event that made an instance is two
-     transactions: the first derives the new instance alone and is committed,
-     and the second derives what reads it. Each derivation is still evaluated
-     once and not once per event; what differs from the documents is that the
-     two are committed apart, so a reader between them finds the new member with
-     its result and the board's derived outputs without it, which is what the
-     handler's own commit already shows with less. Whether that is within the
-     ruling is the owner's to say; the coordinator does not read the ruling for
-     the owner. The paragraph "From the creation of an instance to its settled
-     result" of `execution-and-storage.md` §1.1 holds as written, since it does
-     not say that the instance's derivation transaction is the one that derives
-     its parent. *What it gives:* a create on `filing-order` at 1,000 topics
-     gives 91 write records and takes 1,034 ms, where with one derivation
-     transaction, measured in the second round, it gives 2,122 records and takes
-     1,960 ms, because the labels of what the whole-list `lift`s read of the new
-     member are stored and have identifiers. *The alternative, which keeps one
-     transaction:* the adapter names a label that the transaction in progress
-     stages, which needs the runtime's table of labels to hold labels that are
-     not stored. *The coordinator's recommendation, not a ruling:* P64 as built
-     for the measurements of milestone 3, and the alternative if the owner reads
-     the ruling as one commit. *Assumed* until answered: P64 as built.
+     transaction of its own** (settled by the ruling Z87 of 2026-11-22: it
+     may; provisional decision P64 stands). The derivation behind an event
+     that made an instance is two transactions: the first derives the new
+     instance alone and is committed, and the second derives what reads it.
+     Each derivation is evaluated once. A reader between the two finds the
+     new member with its result and the board's derived outputs without it.
+     *Open:* the sentences of `execution-and-storage.md` §1.1 and §1.4 and of
+     `scheduler-and-serving-loop.md` ("Terms", §5.2, §5.4) that say one
+     derivation transaction runs behind the batch are brought in line.
 374. **What the load in bounded transactions leaves** (not for the owner;
      provisional decision P65; beside question 368). First, where the caller
      does not commit the handed transaction, or its commit is refused, the
@@ -14055,20 +14042,15 @@ of its three rounds. Whenever a question says `map`, it names the case.
      where every other edit of a title takes 9 to 17 ms. A write alone at the
      middle of 1,000 topics took 143 ms once. The cause was not looked for.
      *Assumed:* a cost outside the piece and the preparation, until examined.
-378. **The harness switch of the third round's tables is not on the branch**
-     (not for the owner). Notes 604 and 606 of the crate's `SPEC-NOTES.md`
-     measure with `SCALE_TOPIC_SCHEMA=mentions-as-cells`, which declares the
-     mentions of a topic as references in the schema the harness writes a topic
-     under. `compare/topics/scale.ts` at the head of the branch of milestone 3,
-     `1788b7eb75`, reads no such variable; `topicSchemaOf` there declares a
-     label and no structure. A commit that adds the switch, `91451b3cd7`, is on
-     the local branch `claude/compiled-pattern-topics-runs` of the build
-     checkout, is no ancestor of that head and is on no pushed branch. The
-     tables of the third round can therefore not be measured again from the
-     pushed branch. The coordinator's run of 2026-11-22 is under the schema with
-     no structure. *Assumed:* the commit is brought onto the branch of milestone
-     3, and the tables stand as measured until then.
-
+378. **The harness switches of the Topics tables** (settled). The Topics
+     scale harness with every switch the tables of milestone 3 name,
+     `SCALE_TOPIC_SCHEMA=mentions-as-cells` among them, is on the branch of
+     milestone 3 (`base/pattern-compiler/compare/topics/scale.ts`). The boards
+     `board-filing-order.tsx` and `board-sorted-references.tsx` that the
+     tables measure are on the local branch
+     `claude/compiled-pattern-topics-runs`, with the compiled subset of
+     Topics, which is a change to a pattern and so not part of the stack.
+     *Open:* where those two boards go.
 ## Open, and not needing the owner
 
 - **The pattern closure's remaining gaps** (K12) are questions 307 to 310
@@ -15239,7 +15221,7 @@ The open questions each document ends with stay where they are.
    (question 302); the translation of a pattern closure used as a value, once
    the provisional decisions P33 to P36 are ratified. Milestone 2 is measured
    and milestone 3 is built for one writer on the branch
-   `claude/compiled-pattern-runner-m3`, which has no pull request. What
+   `claude/compiled-pattern-runner-m3` (draft pull request #10140). What
    milestone 3 leaves, with the soundness items first: a write by another writer
    to a derived array (question 366); the two untested cases after a refused
    commit, and what a load in bounded transactions leaves stored when its handed
