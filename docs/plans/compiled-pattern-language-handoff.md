@@ -161,6 +161,27 @@ every agreement figure that `firstDifference` of `compare/values.ts`
 decides; the corpus figures of note 534 (6,013 of 6,107 and 1,484 of 1,584)
 were not rechecked and may be too high.
 
+**Review findings on #9942 not yet addressed** (three, from the review of
+the commit `b11109b6fb`; each is a claim to check with a failing test first,
+on the prototype branch, and then on the trunk, whose `exec/store.ts` was
+rewritten since):
+
+- `Store.write` and `Store.put` in `exec/store.ts` compare stored values by
+  a serialization that erases the difference between an `undefined` position
+  and `null`, so a change of `[undefined]` to `[null]` is dropped (review
+  comment 4670306219). On the trunk the comparison is `sameStored`; check
+  whether it tells the two apart.
+- `Store.undo` restores the previous value of a write beyond the end of an
+  array and not the array's length, so an undone write at index 3 of an
+  empty array leaves length 4 (comment 4670306234).
+- `structure` in `src/emit.rs` joins the entries of an array literal with no
+  final separator, so a literal that ends in a hole loses a position:
+  `[x,,]` is emitted with length 1 and `[,]` with length 0 (comment
+  4670306243).
+
+Each thread on the pull request gets a reply and is resolved when its
+finding is fixed or shown not to hold.
+
 **Questions of Contextual Flow Control** are deferred by the ruling Z88 and
 listed in the plan as questions 391 to 467 and 512, and per round under
 "CFC questions deferred" in `SPEC-NOTES.md`. Several are suspected
