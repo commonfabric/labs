@@ -129,6 +129,8 @@ describe("what the value code of a compiled piece cannot change", () => {
     ["sets a member of the exports of its module", "$exports.added = 1"],
     ["sets a property of a function of `$rt`", "$rt.force.calls = 1"],
     ["sets a property of the host `$rt` holds", "$rt.nohost.calls = 1"],
+    ["sets a member of the handle it is handed", "last.calls = 1"],
+    ["sets a member of the reference `$rt` holds", '$rt.self.doc = "other"'],
   ];
   for (const [what, write] of refused) {
     it(`refuses a handler body that ${what}`, async () => {
@@ -137,4 +139,25 @@ describe("what the value code of a compiled piece cannot change", () => {
       expect(await lastAfterAnEvent(artifact)).toBe("refused");
     });
   }
+
+  it("gives a handler body no member of a handle that names its position", async () => {
+    const artifact = await artifactWithBody(
+      "last.set([typeof last.target, typeof last.slot, typeof last.below, " +
+        "typeof last.declared, typeof last.fixed].join());",
+    );
+
+    expect(await lastAfterAnEvent(artifact)).toBe(
+      "undefined,undefined,undefined,undefined,undefined",
+    );
+  });
+
+  it("gives a handler body no array of `$rt` to write to", async () => {
+    const artifact = await artifactWithBody(
+      "last.set(Object.values($rt).filter((member) => " +
+        'typeof member !== "function" && !Object.isFrozen(member)).length' +
+        ".toString());",
+    );
+
+    expect(await lastAfterAnEvent(artifact)).toBe("0");
+  });
 });

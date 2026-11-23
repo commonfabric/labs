@@ -11,7 +11,13 @@ import {
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { type Artifact, Handle, Host, Instance } from "../executor.ts";
+import {
+  type Artifact,
+  Handle,
+  Host,
+  Instance,
+  targetOf,
+} from "../executor.ts";
 import {
   argumentOf as argumentDocument,
   ComputedOutput,
@@ -2193,7 +2199,7 @@ describe("an element that is a plain value in place", () => {
 
     const members = stops.get() as Handle[];
 
-    expect(members.map((member) => (member.target as Ref).path)).toEqual([
+    expect(members.map((member) => (targetOf(member) as Ref).path)).toEqual([
       ["stops", keySegment(keyOf(instance, "a", 1))],
       ["stops", keySegment(keyOf(instance, "b", 2))],
       ["stops", keySegment(keyOf(instance, "c", 3))],
@@ -2216,7 +2222,7 @@ describe("an element that is a plain value in place", () => {
 
     const members = stops.get() as Handle[];
 
-    expect(members.map((member) => (member.target as Ref).path)).toEqual([
+    expect(members.map((member) => (targetOf(member) as Ref).path)).toEqual([
       ["stops", "0"],
       ["stops", "1"],
       ["stops", "2"],

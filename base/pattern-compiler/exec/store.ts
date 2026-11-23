@@ -461,7 +461,11 @@ export class Ref {
      * (`execution-and-storage.md` §2.2).
      */
     readonly schema?: Schema,
-  ) {}
+  ) {
+    // Value code is handed a reference inside a value, and sets no member
+    // of it.
+    Object.freeze(this);
+  }
 
   key(...segments: string[]): Ref {
     return segments.reduce(
@@ -509,7 +513,9 @@ export class StreamRef {
     readonly binding: number,
     readonly keys: readonly string[],
     readonly instance = "",
-  ) {}
+  ) {
+    Object.freeze(this);
+  }
 }
 
 /**

@@ -520,7 +520,7 @@ const encodeIndexKey = (
   if (typeof key === "string") return `s:${key}`;
   if (typeof key === "number") return `n:${key}`;
   if (typeof key === "boolean") return `b:${key}`;
-  if (key instanceof Handle) return encodeIndexKey(instance, key.target);
+  if (key instanceof Handle) return encodeIndexKey(instance, targetOf(key));
   if (key instanceof Ref) {
     return `c:${instance.store.addressText(instance.store.current(key))}`;
   }
@@ -1259,6 +1259,22 @@ const matchesPath = (pattern: readonly string[], path: readonly string[]) =>
   pattern.every((segment, index) => segment === "*" || segment === path[index]);
 
 /**
+ * The parts of a handle that the executor reads and a body does not: what
+ * it names, its `identity` slot with the path below its cell, the schema
+ * of its declared type, and whether it refuses a write. `Handle` sets
+ * both functions, which read its private fields.
+ */
+let partsOf: (handle: Handle) => {
+  target: Ref | StreamRef;
+  slot: number | undefined;
+  below: readonly string[];
+  declared: Schema | undefined;
+  fixed: boolean;
+};
+/** What a handle names (`partsOf`). */
+export let targetOf: (handle: Handle) => Ref | StreamRef;
+
+/**
  * A cell handle given to a sandboxed body (ES §2.4, "Handles"): reads and
  * writes go to the position the handle names.
  */
@@ -1270,51 +1286,79 @@ export class Handle {
    */
   readonly #instance: Instance;
   readonly #host: Host | undefined;
+  /**
+   * What the handle names. Private as the instance is: a body that reads
+   * a member of the handle reaches no reference, no path and no schema,
+   * and the executor reads them with `partsOf`.
+   */
+  readonly #target: Ref | StreamRef;
+  readonly #slot: number | undefined;
+  readonly #below: readonly string[];
+  readonly #declared: Schema | undefined;
+  readonly #fixed: boolean;
+
+  static {
+    partsOf = (handle) => ({
+      target: handle.#target,
+      slot: handle.#slot,
+      below: handle.#below,
+      declared: handle.#declared,
+      fixed: handle.#fixed,
+    });
+    targetOf = (handle) => handle.#target;
+  }
 
   constructor(
     instance: Instance,
-    readonly target: Ref | StreamRef,
+    target: Ref | StreamRef,
     host: Host | undefined,
     /** The `identity` slot of the handle, and the path below its cell. */
-    readonly slot: number | undefined,
-    readonly below: readonly string[],
+    slot: number | undefined,
+    below: readonly string[],
     /**
      * The schema of the handle's declared type: a position it declares as
      * a handle is one in what a read through the handle gives.
      */
-    readonly declared?: Schema,
+    declared?: Schema,
     /** The handle is to a value with no stored address: a write fails. */
-    readonly fixed = false,
+    fixed = false,
   ) {
     this.#instance = instance;
     this.#host = host;
+    this.#target = target;
+    this.#slot = slot;
+    this.#below = below;
+    this.#declared = declared;
+    this.#fixed = fixed;
+    // A body adds no member to a handle and replaces none.
+    Object.freeze(this);
   }
 
   /** A handle of `instance` to the same position that refuses a write. */
   refusingWrites(instance: Instance): Handle {
     return new Handle(
       instance,
-      this.target,
+      this.#target,
       this.#host,
-      this.slot,
-      this.below,
-      this.declared,
+      this.#slot,
+      this.#below,
+      this.#declared,
       true,
     );
   }
 
   get(): unknown {
-    if (this.target instanceof StreamRef) return { $stream: true };
-    const target = this.target;
+    if (this.#target instanceof StreamRef) return { $stream: true };
+    const target = this.#target;
     return this.#instance.readThrough(
       this,
-      () => this.#typed(target, this.declared, this.#host?.reads, 0),
+      () => this.#typed(target, this.#declared, this.#host?.reads, 0),
     );
   }
 
   sample(): unknown {
-    if (this.target instanceof StreamRef) return { $stream: true };
-    return this.#typed(this.target, this.declared, undefined, 0);
+    if (this.#target instanceof StreamRef) return { $stream: true };
+    return this.#typed(this.#target, this.#declared, undefined, 0);
   }
 
   /** What a read gives under a schema that declares handles below it. */
@@ -1375,24 +1419,24 @@ export class Handle {
   }
 
   key(segment: string | number): Handle {
-    if (this.target instanceof StreamRef) return this;
+    if (this.#target instanceof StreamRef) return this;
     return new Handle(
       this.#instance,
-      this.target.key(`${segment}`),
+      this.#target.key(`${segment}`),
       this.#host,
-      this.slot,
-      [...this.below, `${segment}`],
-      schemaBelow(this.declared, `${segment}`),
-      this.fixed,
+      this.#slot,
+      [...this.#below, `${segment}`],
+      schemaBelow(this.#declared, `${segment}`),
+      this.#fixed,
     );
   }
 
   set(value: unknown): Handle {
-    if (this.target instanceof StreamRef) {
+    if (this.#target instanceof StreamRef) {
       this.send(value);
       return this;
     }
-    if (this.fixed) {
+    if (this.#fixed) {
       throw new Unsupported(
         "a write through a handle to a value the instance holds no address for",
       );
@@ -1400,9 +1444,9 @@ export class Handle {
     const recorded = this.#instance.written(this);
     try {
       this.#instance.store.write(
-        this.target,
+        this.#target,
         this.#instance.detached(
-          this.target,
+          this.#target,
           this.#instance.anchored(
             this.#instance.stored(this.#instance.returned(value)),
           ),
@@ -1424,17 +1468,17 @@ export class Handle {
    * is resolved once, and each member is written at the position found.
    */
   update(members: Record<string, unknown>): Handle {
-    const at = this.target instanceof Ref
-      ? this.#instance.store.locate(this.target, true)
+    const at = this.#target instanceof Ref
+      ? this.#instance.store.locate(this.#target, true)
       : undefined;
     const base = at === undefined || at.missing ? this : new Handle(
       this.#instance,
       at.ref,
       this.#host,
-      this.slot,
-      this.below,
-      this.declared,
-      this.fixed,
+      this.#slot,
+      this.#below,
+      this.#declared,
+      this.#fixed,
     );
     for (const [name, member] of Object.entries(members)) {
       base.key(name).set(member);
@@ -1451,13 +1495,13 @@ export class Handle {
    * to decide that they are added, which the records of the write hold.
    */
   #append(members: unknown[], decided?: Observed[]): void {
-    if (this.target instanceof StreamRef) return;
-    if (this.fixed) {
+    if (this.#target instanceof StreamRef) return;
+    if (this.#fixed) {
       throw new Unsupported(
         "a write through a handle to a value the instance holds no address for",
       );
     }
-    const located = this.#instance.store.locate(this.target, true);
+    const located = this.#instance.store.locate(this.#target, true);
     // Where the place holds nothing, the array starts from the default
     // that the place declares, as a write below the root of a state cell
     // does: the default nearest the end of the links the handle resolves
@@ -1465,7 +1509,9 @@ export class Handle {
     const declared = located.value !== undefined
       ? undefined
       : located.fallback ??
-        (typeof this.declared === "object" ? this.declared.default : undefined);
+        (typeof this.#declared === "object"
+          ? this.#declared.default
+          : undefined);
     const held = Array.isArray(located.value)
       ? located.value
       : Array.isArray(declared)
@@ -1482,9 +1528,9 @@ export class Handle {
       ) as unknown[];
       // An array that is stored is changed in place, as a splice.
       if (Array.isArray(located.value)) {
-        this.#instance.store.splice(this.target, held.length, 0, pushed);
+        this.#instance.store.splice(this.#target, held.length, 0, pushed);
       } else {
-        this.#instance.store.write(this.target, [...held, ...pushed]);
+        this.#instance.store.write(this.#target, [...held, ...pushed]);
       }
     } finally {
       recorded();
@@ -1505,9 +1551,9 @@ export class Handle {
     member: unknown,
     first = false,
   ): { positions: number[]; read: Observed[]; list?: Address } {
-    if (this.target instanceof StreamRef) return { positions: [], read: [] };
+    if (this.#target instanceof StreamRef) return { positions: [], read: [] };
     const { store } = this.#instance;
-    const list = this.target;
+    const list = this.#target;
     const located = store.locate(list, true);
     if (!Array.isArray(located.value)) return { positions: [], read: [] };
     const { doc, path } = located.ref;
@@ -1572,8 +1618,8 @@ export class Handle {
    * the positions read, which the records of the removal hold.
    */
   #removeAt(positions: readonly number[], decided: Observed[]): void {
-    if (this.target instanceof StreamRef || positions.length === 0) return;
-    if (this.fixed) {
+    if (this.#target instanceof StreamRef || positions.length === 0) return;
+    if (this.#fixed) {
       throw new Unsupported(
         "a write through a handle to a value the instance holds no address for",
       );
@@ -1589,7 +1635,7 @@ export class Handle {
         while (end + 1 < last.length && last[end + 1] === last[end] - 1) {
           end++;
         }
-        this.#instance.store.splice(this.target, last[end], end - run + 1, []);
+        this.#instance.store.splice(this.#target, last[end], end - run + 1, []);
         run = end + 1;
       }
     } finally {
@@ -1604,11 +1650,11 @@ export class Handle {
   }
 
   send(event: unknown): void {
-    if (this.target instanceof StreamRef) {
-      this.#instance.queue(this.target, event);
+    if (this.#target instanceof StreamRef) {
+      this.#instance.queue(this.#target, event);
       return;
     }
-    const located = this.#instance.store.locate(this.target, true);
+    const located = this.#instance.store.locate(this.#target, true);
     if (isStream(located.value)) {
       const { binding, keys, instance } = located.value.$stream;
       this.#instance.queue(new StreamRef(binding, keys, instance), event);
@@ -1619,7 +1665,7 @@ export class Handle {
     // is a write of the handler all the same.
     if (
       located.value === undefined &&
-      isStreamSchema(located.ref.schema ?? this.declared)
+      isStreamSchema(located.ref.schema ?? this.#declared)
     ) {
       this.#instance.written(this)();
       return;
@@ -1658,14 +1704,14 @@ export class Handle {
    * covers (`Instance.written`), and for nothing else.
    */
   elementById(key: unknown): Handle {
-    if (this.target instanceof StreamRef) return this;
+    if (this.#target instanceof StreamRef) return this;
     return new Handle(
       this.#instance,
-      this.#instance.keyedElement(this.target, `${key}`),
+      this.#instance.keyedElement(this.#target, `${key}`),
       this.#host,
-      this.slot,
-      [...this.below, "*"],
-      schemaBelow(this.declared, "0"),
+      this.#slot,
+      [...this.#below, "*"],
+      schemaBelow(this.#declared, "0"),
     );
   }
 
@@ -2054,7 +2100,7 @@ export class Host {
    */
   lookup(index: unknown, key: unknown, pick?: number): unknown {
     const instance = this.#instance;
-    const stored = index instanceof Handle ? index.target : index;
+    const stored = index instanceof Handle ? targetOf(index) : index;
     if (stored instanceof Ref) {
       // An index that another instance keeps: the bucket is the member of
       // its `buckets` under the encoded key, given as a reference, so that
@@ -2181,7 +2227,7 @@ export class Host {
       if (found instanceof Ref) {
         found = found.key(`${segment}`);
       } else if (found instanceof Handle) {
-        found = found.key(`${segment}`).target;
+        found = targetOf(found.key(`${segment}`));
       } else if (typeof found === "string") {
         found = segment === "length" ? found.length : undefined;
       } else if (typeof found !== "object" || found === null) {
@@ -4024,7 +4070,6 @@ export class Instance {
       nohost: none,
       // What `[SELF]` of the pattern's parameter names: the result.
       self: new Ref(this.id, []),
-      setups: this.#setups,
       // The value of a constant of frozen data, and an authored function
       // of module scope (`language-subset.md` §3.3, "Emitted code").
       data: freezeModuleData,
@@ -5057,7 +5102,7 @@ export class Instance {
     // The link to the stream a marker stands for, in the marker's place
     // (ES §2.2, "The replacement").
     if (value instanceof StreamMarker) return this.stored(streamOf(value));
-    if (value instanceof Handle) return this.stored(value.target);
+    if (value instanceof Handle) return this.stored(targetOf(value));
     if (value instanceof Thunk) return undefined;
     if (typeof value === "function") return undefined;
     if (Array.isArray(value)) {
@@ -5129,7 +5174,7 @@ export class Instance {
    * stored as a reference").
    */
   returned(value: unknown): unknown {
-    if (value instanceof Handle) return value.target;
+    if (value instanceof Handle) return targetOf(value);
     if (typeof value === "object" && value !== null) {
       const read = this.store.addresses.get(value);
       if (read !== undefined) return new Ref(read.doc, read.path);
@@ -5229,14 +5274,15 @@ export class Instance {
    * decision P41, `equalsKey`).
    */
   equalsKey(value: unknown): string | undefined {
-    if (value instanceof Handle && value.target instanceof StreamRef) {
-      const { instance, binding, keys } = value.target;
+    const named = value instanceof Handle ? targetOf(value) : undefined;
+    if (named instanceof StreamRef) {
+      const { instance, binding, keys } = named;
       return textOf({
         stream: { instance, binding, keys: [...keys] },
       });
     }
     const ref = value instanceof Handle
-      ? value.target as Ref
+      ? targetOf(value) as Ref
       : value instanceof Ref
       ? value
       : typeof value === "object" && value !== null
@@ -9530,10 +9576,10 @@ export class Instance {
     const host = this.#handling === undefined
       ? invoking?.host
       : this.#handlerHost;
-    const entry = body === undefined || handle.slot === undefined
+    const entry = body === undefined || partsOf(handle).slot === undefined
       ? -1
       : (this.plan.bodies[body].handles ?? []).findIndex((held) =>
-        held.handle?.slot === handle.slot
+        held.handle?.slot === partsOf(handle).slot
       );
     if (body === undefined || entry < 0) return run();
     const { store } = this;
@@ -9608,8 +9654,8 @@ export class Instance {
     const invoking = this.#invoking.at(-1);
     if (
       this.#handling !== undefined || invoking === undefined ||
-      !(handle.target instanceof Ref) ||
-      !this.#createdCells.has(handle.target.doc)
+      !(targetOf(handle) instanceof Ref) ||
+      !this.#createdCells.has((targetOf(handle) as Ref).doc)
     ) return;
     const { writes } = this.plan.bodies[invoking.body];
     const calls = new Set<number>();
@@ -9620,7 +9666,7 @@ export class Instance {
       if (found < 0) found = index;
     });
     if (found < 0 || calls.size !== 1) return;
-    const { doc, path } = handle.target;
+    const { doc, path } = targetOf(handle) as Ref;
     const held = this.#createdWrites.get(invoking.host) ??
       { write: found, targets: new Map<string, Address>() };
     this.#createdWrites.set(invoking.host, held);
@@ -12976,9 +13022,9 @@ export class Instance {
     if (counted) this.#noteCreatedWrite(handle);
     const body = this.plan.bodies[index];
     const covers = (target: { slot?: number; path?: string[] }) =>
-      target.slot === handle.slot &&
-      (matchesPath(target.path ?? [], handle.below) ||
-        matchesPath(handle.below, target.path ?? []));
+      target.slot === partsOf(handle).slot &&
+      (matchesPath(target.path ?? [], partsOf(handle).below) ||
+        matchesPath(partsOf(handle).below, target.path ?? []));
     const write = body.writes.findIndex(({ target }) =>
       target.kind === "handle" && covers(target)
     );
@@ -13821,7 +13867,7 @@ const commonfabric = (instance: Instance): unknown => {
       if (instance.loading) return absent(instance, "navigateTo");
       instance.root.requests.push({
         kind: "navigateTo",
-        target: target instanceof Handle ? target.target : target,
+        target: target instanceof Handle ? targetOf(target) : target,
       });
       return undefined;
     },
