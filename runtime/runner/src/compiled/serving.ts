@@ -375,3 +375,19 @@ export const serveCompiledPieces = (
     return true;
   };
 };
+
+/**
+ * Has the loader of `runtime` treat `piece` as the running piece of the
+ * result document `result`, where `Runtime.run` started it
+ * (`runCompiledPatterns`) and the loader did not: a demand or an event
+ * that reaches the piece then starts no second executor for it. Does
+ * nothing where `serveCompiledPieces()` was not called for the runtime.
+ */
+export const adoptCompiledPiece = (
+  runtime: Runtime,
+  result: string,
+  piece: CompiledPiece,
+): void => {
+  loading.get(runtime)?.set(result, Promise.resolve(piece));
+  running.get(runtime)?.push(piece);
+};

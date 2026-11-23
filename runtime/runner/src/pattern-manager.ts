@@ -3137,7 +3137,22 @@ export class PatternManager {
     } else {
       program = input;
     }
+    const pattern = await this.#compileProgram(program, cacheCtx);
+    // Under the experimental option `compiledPatterns`, a runtime that was
+    // given a pattern compiler compiles the program to a plan as well, and
+    // `Runner.run` starts a compiled piece where that compile accepted it.
+    const compiled = this.#runtime.experimental.compiledPatterns === true
+      ? this.#runtime.compiledPatternRunner
+      : undefined;
+    if (compiled !== undefined) await compiled.prepare(pattern, program);
+    return pattern;
+  }
 
+  /** Compiles and evaluates `program` (`compilePattern`). */
+  async #compileProgram(
+    program: RuntimeProgram,
+    cacheCtx: Parameters<PatternManager["compilePattern"]>[1],
+  ): Promise<Pattern> {
     // Use the content-addressed cell cache when we have a target space and
     // CFC is enforced (the compiled-set integrity label only persists — and
     // is only trusted on read — under an enforcing mode; see cell-cache).

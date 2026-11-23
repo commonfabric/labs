@@ -117,6 +117,29 @@ describe("PatternCompiler", () => {
       expect(compiled.artifacts("sha256:absent")).toBeUndefined();
     });
 
+    it("returns the pattern the main file exports as default by its name", async () => {
+      await Deno.writeTextFile(
+        join(directory, "emitted"),
+        JSON.stringify([{
+          module: "main.tsx",
+          patterns: [{
+            name: "Named",
+            plan: { patterns: ["sha256:named"] },
+            schemas: [],
+            unsupported: [],
+            code: { modules: [], main: 0, unsupported: [] },
+          }],
+        }]),
+      );
+      const compiler = new PatternCompiler({ binary });
+
+      const compiled = await compiler.compile(
+        program("const Named = 1;\nexport default Named;\n"),
+      );
+
+      expect(compiled.main.name).toBe("Named");
+    });
+
     it("rejects where the main file exports no pattern under the name the program gives", async () => {
       const compiler = new PatternCompiler({ binary });
 

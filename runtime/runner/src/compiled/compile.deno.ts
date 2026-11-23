@@ -228,8 +228,18 @@ export class PatternCompiler {
       }
     }
     const name = program.mainExport ?? "default";
-    const chosen = modules.find(({ module }) => module === main)?.patterns
-      .find((pattern) => pattern.name === name);
+    const ofMain = modules.find(({ module }) => module === main)?.patterns;
+    // The crate names a pattern held in a constant by the constant, also
+    // where the module exports that constant as its default.
+    const defaultName = name === "default"
+      ? files.find((file) => file.name === main)?.contents.match(
+        /export\s+default\s+([A-Za-z_$][\w$]*)\s*;/,
+      )?.[1]
+      : undefined;
+    const chosen = ofMain?.find((pattern) => pattern.name === name) ??
+      (defaultName === undefined
+        ? undefined
+        : ofMain?.find((pattern) => pattern.name === defaultName));
     if (chosen === undefined) {
       throw new Error(`${program.main} exports no pattern as \`${name}\`.`);
     }
