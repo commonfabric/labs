@@ -231,11 +231,42 @@ pub fn check_module<'a>(
         checker.imported_module();
     } else {
         checker.subset_module();
+        checker.reserved_names();
     }
     checker.out
 }
 
 impl<'p, 'a> Checker<'p, 'a> {
+    /// Refuses each declaration of the module whose name begins with `$`.
+    /// The emitted value code binds such names around the authored code
+    /// (`$rt`, `$h`, `$arg`, `$e`, `$s`, and names the emitter numbers),
+    /// so an authored one would be read as the emitted one where their
+    /// scopes meet: a constant `$h` of module scope, read in a function
+    /// written in the reactive tier, would be the host of the call.
+    fn reserved_names(&mut self) {
+        let scoping = self.scoping;
+        let mut found: Vec<(Span, String)> = scoping
+            .symbol_ids()
+            .filter(|symbol| scoping.symbol_name(*symbol).starts_with('$'))
+            .map(|symbol| {
+                (
+                    scoping.symbol_span(symbol),
+                    scoping.symbol_name(symbol).to_string(),
+                )
+            })
+            .collect();
+        found.sort_by_key(|(span, _)| span.start);
+        for (span, name) in found {
+            self.report(
+                "stdlib:unsupported-member",
+                span,
+                format!(
+                    "`{name}` begins with `$`, which the compiler keeps for the names of the code it emits; choose another name"
+                ),
+            );
+        }
+    }
+
     // ----- Reporting -----
 
     fn report(&mut self, id: &'static str, span: Span, found: impl AsRef<str>) {
