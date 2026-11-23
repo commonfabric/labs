@@ -1646,6 +1646,14 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                         let key = self.render(arguments[0], Want::Use);
                         self.member(&member.object, key, want)
                     }
+                    // `index.lookup(k)`: the host gives the bucket of the
+                    // key, and the evaluation depends on that bucket alone.
+                    "lookup" if arguments.len() == 1 => {
+                        self.place_of(&member.object)?;
+                        let index = self.render(&member.object, Want::Pass);
+                        let key = self.render(arguments[0], Want::Use);
+                        Some(format!("$h.lookup({index}, {key})"))
+                    }
                     // `h.equals(x)` is the comparison that `equals(h, x)`
                     // is (LS §6.1): each operand is passed as the
                     // reference it is, and the host resolves the links.

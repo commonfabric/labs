@@ -3407,6 +3407,29 @@ impl<'a> Emitter<'_, '_, 'a> {
                     }
                 }
             }
+            // A collection index (PL §3.17): the key function is the body
+            // of a collection of its own, once per element key, and the
+            // index has the template of a bucket's membership.
+            "groupBy" | "keyBy" => {
+                match arguments.first().and_then(|first| FunctionLike::of(first)) {
+                    Some(function) => self.collection(call, receiver, name, function, hint, at),
+                    None => {
+                        self.unsupported("an element construct with no callback in place", at);
+                        Place::Unknown
+                    }
+                }
+            }
+            // `index.lookup(k)`: the bucket of `k`, whose label is the
+            // template of `k` joined with the membership of a bucket,
+            // which is the template of the index (PL §3.17).
+            "lookup" if arguments.len() == 1 && self.index_of_place(receiver).is_some() => {
+                let receiver = receiver.clone();
+                let key = self.eval(arguments[0], hint);
+                self.derived(hint, at, |emitter, _| {
+                    emitter.consume(&key);
+                    emitter.pass(&receiver);
+                })
+            }
             "reduce" => match arguments.first().and_then(|first| FunctionLike::of(first)) {
                 Some(function) => {
                     self.reduce(receiver, function, arguments.get(1).copied(), hint, at)
@@ -3694,6 +3717,20 @@ impl<'a> Emitter<'_, '_, 'a> {
         (source, iterated)
     }
 
+    /// The collection of the index a place holds, where the place is
+    /// the result of `groupBy` or `keyBy`.
+    fn index_of_place(&self, place: &Place) -> Option<usize> {
+        let Place::Value(value, path) = place else {
+            return None;
+        };
+        let collection = self.values[*value].collection.filter(|_| path.is_empty())?;
+        matches!(
+            self.collections[collection]["construct"].as_str(),
+            Some("groupBy" | "keyBy")
+        )
+        .then_some(collection)
+    }
+
     /// An element construct: a collection, and the cone of its body.
     fn collection(
         &mut self,
@@ -3792,8 +3829,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                 })
             })
         });
+        let index = matches!(via, "groupBy" | "keyBy");
         let tests = scan || via == "filter";
         let class = match (tests, returned) {
+            // The key of an index is observed as a value (PL §3.17).
+            _ if index => "value",
             (true, Some(returned)) => self.test_class(returned),
             (true, None) => "value",
             (false, _) => "identity",
@@ -3827,7 +3867,11 @@ impl<'a> Emitter<'_, '_, 'a> {
             // `pred`, joined with the source's membership", and "an
             // element of the result is the source element, passed
             // through".
-            "filter" => (
+            // PL §3.17: the membership of a bucket is "the source's
+            // membership, order included, joined with a `fold` of the key
+            // function's template over every element", and an element of a
+            // bucket is the source element, passed through.
+            "filter" | "groupBy" | "keyBy" => (
                 joined(fold(body, None), &iterated),
                 Some(source_element(self)),
                 None,

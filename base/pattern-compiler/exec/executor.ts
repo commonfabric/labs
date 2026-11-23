@@ -381,6 +381,72 @@ export class Assembled {
   }
 }
 
+/**
+ * A collection index as the executor holds it (PL §3.17, ES §6.3): for
+ * each element key the encoded index key that the key function gave, and
+ * for each encoded index key its bucket. A bucket that emptied stays, with
+ * no member, so that its count goes on from where it was.
+ */
+export class Index {
+  /** The encoded index key of each element key that is in a bucket. */
+  readonly of = new Map<string, string>();
+  /**
+   * By encoded index key: the index key, the element keys of the bucket in
+   * source order, and a count that moves with each change of the bucket.
+   */
+  readonly buckets = new Map<
+    string,
+    { key: unknown; keys: string[]; version: number }
+  >();
+  /** Moves with each change of a bucket. */
+  serial = 0;
+  constructor(
+    readonly mode: "group" | "key",
+    /** The name of the memo entry of the assembly. */
+    readonly name: string,
+  ) {}
+}
+
+/**
+ * A collection index as value code holds it: a reference to the index for
+ * the element keys it was named under. `Host.lookup` reads one bucket
+ * through it and depends on that bucket alone.
+ */
+export class IndexHandle {
+  constructor(readonly collection: number, readonly context: Context) {
+    Object.freeze(this);
+  }
+}
+
+/** Whether a construct builds a collection index. */
+const buildsIndex = (construct: string): boolean =>
+  construct === "groupBy" || construct === "keyBy";
+
+/** The name that stands for one bucket of an index. */
+const bucketName = (assembly: string, encoded: string): string =>
+  `bucket ${assembly}\n${encoded}`;
+
+/**
+ * The text an index key is filed under, by its kind, so that the number 1
+ * and the text "1" have buckets of their own, and nothing for a key that
+ * leaves its element out of the index (`null` and `undefined`). A cell is
+ * filed under the position it names.
+ */
+const encodeIndexKey = (
+  instance: Instance,
+  key: unknown,
+): string | undefined => {
+  if (key === undefined || key === null) return undefined;
+  if (typeof key === "string") return `s:${key}`;
+  if (typeof key === "number") return `n:${key}`;
+  if (typeof key === "boolean") return `b:${key}`;
+  if (key instanceof Handle) return encodeIndexKey(instance, key.target);
+  if (key instanceof Ref) {
+    return `c:${instance.store.addressText(instance.store.current(key))}`;
+  }
+  throw new Unsupported("an index key that is no primitive and no cell");
+};
+
 /** Whether a construct assembles an array of rows. */
 const assemblesRows = (construct: string): boolean =>
   construct === "map" || construct === "filter" || construct === "flatMap";
@@ -549,6 +615,8 @@ type Rows = {
   members: Element[];
   /** For a `filter`: whether each element is kept. */
   flags?: boolean[];
+  /** For a collection index: the index, which the results are the keys of. */
+  index?: Index;
 };
 
 /** Stands for the source of an element that is not found yet. */
@@ -919,6 +987,8 @@ const sameRoot = (a: Root, b: Root): boolean =>
 
 /** What an executed instance counted. */
 export type Counts = {
+  /** Buckets of a collection index that a change of the index changed. */
+  bucketsChanged: number;
   /** Evaluations of a value function, of a per-element function, and of
    * the assembly of a collection. */
   evaluations: number;
@@ -1626,6 +1696,16 @@ export class Host {
     ) {
       instance.counts.outputsWithoutEdge += 1;
     }
+    if (
+      output.collection !== undefined &&
+      buildsIndex(instance.plan.collections[output.collection].construct)
+    ) {
+      // An index is held by reference, so that a cone that looks up a key
+      // depends on one bucket. The result of the instance holds the index
+      // whole.
+      const handle = new IndexHandle(output.collection, this.context);
+      return this.cone === undefined ? this.settled(handle) : handle;
+    }
     if (output.collection !== undefined) {
       // The result of a construct that assembles rows is held by
       // reference until something observes it.
@@ -1685,6 +1765,13 @@ export class Host {
    * is.
    */
   settled(value: unknown): unknown {
+    if (value instanceof IndexHandle) {
+      const { instance } = this;
+      const assembled = instance.assembled(value.collection);
+      const entry: Lazy = () => assembled(instance.freshContext(value.context));
+      const index = this.done ? entry(this.context).value : this.depend(entry);
+      return instance.indexRecord(index as Index, this);
+    }
     if (!(value instanceof Assembled)) return value;
     const { instance } = this;
     const assembled = instance.assembled(value.collection);
@@ -1696,7 +1783,9 @@ export class Host {
 
   /** A value with each reference to an assembled collection settled. */
   whole(value: unknown): unknown {
-    if (value instanceof Assembled) return this.whole(this.settled(value));
+    if (value instanceof Assembled || value instanceof IndexHandle) {
+      return this.whole(this.settled(value));
+    }
     if (Array.isArray(value)) return value.map((member) => this.whole(member));
     if (isRecord(value)) {
       return Object.fromEntries(
@@ -1743,6 +1832,48 @@ export class Host {
   }
 
   /**
+   * `index.lookup(key)` (PL §3.17): the members of the bucket of `key` in
+   * source order for an index in `group` mode, and the first of them, or
+   * nothing, in `key` mode. The evaluation depends on that one bucket, by
+   * the name that stands for it, which a change of the bucket marks: a
+   * change of another bucket evaluates nothing here. A key that no element
+   * has gives the empty bucket, and the evaluation depends on it as well.
+   */
+  lookup(index: unknown, key: unknown): unknown {
+    if (!(index instanceof IndexHandle)) {
+      throw new Unsupported("a `lookup` on what is no collection index");
+    }
+    const { instance } = this;
+    const assembled = instance.assembled(index.collection);
+    const lazy: Lazy = () => assembled(instance.freshContext(index.context));
+    const entry = lazy(this.context);
+    const held = entry.value as Index;
+    const encoded = encodeIndexKey(instance, key);
+    if (encoded === undefined || entry.key === undefined) {
+      this.dependEntry(lazy);
+      return held.mode === "group" ? [] : undefined;
+    }
+    const name = bucketName(entry.key, encoded);
+    if (this.key !== undefined) instance.uses(this.key, name);
+    const version = (from: Entry) =>
+      (from.value as Index).buckets.get(encoded)?.version ?? 0;
+    this.dependencies.push({
+      stamp: (context) => version(lazy(context)),
+      seen: version(entry),
+      on: name,
+    });
+    // An index written in an element body is brought up to date when it is
+    // read and by nothing else, so its readers depend on it whole.
+    if (instance.plan.collections[index.collection].within.length > 0) {
+      this.dependEntry(lazy);
+    }
+    const members = (held.buckets.get(encoded)?.keys ?? []).map((element) =>
+      instance.indexMember(held, element, this)
+    );
+    return held.mode === "group" ? members : members[0];
+  }
+
+  /**
    * A marker for the stream of a binding (ES §2.2, `ConeHost.stream`),
    * for the element keys this evaluation has at the `element` steps of
    * the binding's `within`. The code that is given it can place it in a
@@ -1783,7 +1914,9 @@ export class Host {
    * (`Store.read`).
    */
   v(value: unknown, bound?: Schema): unknown {
-    if (value instanceof Assembled) return this.v(this.settled(value));
+    if (value instanceof Assembled || value instanceof IndexHandle) {
+      return this.v(this.settled(value));
+    }
     if (value instanceof Ref) {
       return this.#reading(
         this.instance.store.read(value, this.reads, false, bound),
@@ -2557,6 +2690,7 @@ export class Instance {
   readonly plan: Plan;
   readonly code: Code;
   readonly counts: Counts = {
+    bucketsChanged: 0,
     evaluations: 0,
     elementEvaluations: 0,
     assemblies: 0,
@@ -4526,6 +4660,11 @@ export class Instance {
     assembled?: (reference: Assembled, path: string[]) => unknown,
     path: string[] = [],
   ): unknown {
+    // An index is compared by which bucket each element is in.
+    if (value instanceof Index) return { $index: [...value.of] };
+    if (value instanceof IndexHandle) {
+      return { $index: this.plan.collections[value.collection].name };
+    }
     if (value instanceof Assembled) {
       return assembled === undefined
         ? { $assembled: value.name }
@@ -6467,6 +6606,43 @@ export class Instance {
               })));
               rows("map", host.members);
               return keyed([...results]);
+            case "groupBy":
+            case "keyBy": {
+              // The users of a bucket of the index this one replaces.
+              const before = this.#memo.get(key)?.value;
+              if (before instanceof Index) {
+                for (const encoded of before.buckets.keys()) {
+                  this.#markUsers(bucketName(key, encoded));
+                }
+              }
+              const index = new Index(
+                record.construct === "groupBy" ? "group" : "key",
+                key,
+              );
+              // The counts of the buckets go on from those of the index
+              // before, so that a reader of a bucket finds another count.
+              if (before instanceof Index) index.serial = before.serial;
+              elements.forEach((element, at) => {
+                const encoded = encodeIndexKey(this, results[at]);
+                if (encoded === undefined) return;
+                index.of.set(element.key, encoded);
+                const bucket = index.buckets.get(encoded) ??
+                  { key: results[at], keys: [], version: 0 };
+                bucket.keys.push(element.key);
+                bucket.version = ++index.serial;
+                index.buckets.set(encoded, bucket);
+              });
+              for (const encoded of index.buckets.keys()) {
+                this.#markUsers(bucketName(key, encoded));
+              }
+              host.members = numbered(elements.map(({ key }) => ({
+                key,
+                source: { entry: this.#perElement(collection, key), at: [] },
+              })));
+              rows("map", host.members);
+              if (host.rows !== undefined) host.rows.index = index;
+              return index;
+            }
             case "filter": {
               const flags = elements.map((_, index) => holds(index));
               const kept = elements.filter((_, index) => flags[index]);
@@ -6522,6 +6698,39 @@ export class Instance {
         (held, slot) =>
           this.#reassemble(collection, key, around, context, held, slot),
       );
+    };
+  }
+
+  /**
+   * What a bucket of an index holds for the element of one key: the
+   * reference to the element, or for an element of the result of another
+   * per-element construct the row, which the evaluation then depends on.
+   */
+  indexMember(index: Index, key: string, host: Host): unknown {
+    const source = this.#tables.get(index.name)?.byKey.get(key)?.source;
+    if (source === undefined) return undefined;
+    if (source instanceof Ref) return source;
+    return "entry" in source
+      ? host.at(host.depend(source.entry, source.at), source.at)
+      : source.value;
+  }
+
+  /**
+   * An index as a value, in the shape of today's `CollectionIndexData`:
+   * the occupied index keys and each bucket by its encoded key.
+   */
+  indexRecord(index: Index, host: Host): Record<string, unknown> {
+    const occupied = [...index.buckets].filter(([, { keys }]) =>
+      keys.length > 0
+    );
+    return {
+      kind: "collection-index",
+      mode: index.mode,
+      keys: occupied.map(([, { key }]) => key),
+      buckets: Object.fromEntries(occupied.map(([encoded, { keys }]) => {
+        const members = keys.map((key) => this.indexMember(index, key, host));
+        return [encoded, index.mode === "group" ? members : members[0]];
+      })),
     };
   }
 
@@ -6786,7 +6995,57 @@ export class Instance {
     let delta: Entry["delta"];
     const moved = ops.length > 0;
     let differs = moved;
-    if (rows.construct === "map") {
+    if (rows.index !== undefined) {
+      // A collection index: each element that left, entered, moved or has
+      // another key leaves the bucket it was in and enters the bucket of
+      // its key at its place in the source order, and what looked up
+      // either bucket is marked. No other element is looked at.
+      const index = rows.index;
+      const touched = new Set<string>();
+      const leave = (key: string) => {
+        const was = index.of.get(key);
+        if (was === undefined) return;
+        index.of.delete(key);
+        const bucket = index.buckets.get(was);
+        const at = bucket?.keys.indexOf(key) ?? -1;
+        if (bucket !== undefined && at >= 0) {
+          bucket.keys.splice(at, 1);
+          touched.add(was);
+        }
+      };
+      for (const key of left) leave(key);
+      for (const key of changed) {
+        const element = byKey.get(key);
+        if (element === undefined) continue;
+        const result = results[element.index];
+        const encoded = encodeIndexKey(this, result);
+        const fresh = ops.some((op) => op.inserted.includes(key));
+        if (index.of.get(key) === encoded && !fresh) continue;
+        leave(key);
+        if (encoded === undefined) continue;
+        const bucket = index.buckets.get(encoded) ??
+          { key: result, keys: [], version: 0 };
+        index.buckets.set(encoded, bucket);
+        let low = 0;
+        let high = bucket.keys.length;
+        while (low < high) {
+          const middle = (low + high) >> 1;
+          const other = byKey.get(bucket.keys[middle])?.index ?? -1;
+          if (other < element.index) low = middle + 1;
+          else high = middle;
+        }
+        bucket.keys.splice(low, 0, key);
+        index.of.set(key, encoded);
+        touched.add(encoded);
+      }
+      for (const encoded of touched) {
+        const bucket = index.buckets.get(encoded);
+        if (bucket !== undefined) bucket.version = ++index.serial;
+        this.#markUsers(bucketName(name, encoded));
+      }
+      this.counts.bucketsChanged += touched.size;
+      differs = touched.size > 0;
+    } else if (rows.construct === "map") {
       differs ||= dirty.length > 0;
       if (differs) {
         value = [...results];
@@ -7250,6 +7509,16 @@ export class Instance {
         throw new RangeError("a derivation transaction that does not end");
       }
       const before = this.store.clock;
+      // A collection index of the pattern body is brought up to date
+      // first: that marks what looked up a bucket that changed, which
+      // depends on no other part of the index.
+      this.plan.collections.forEach((collection, index) => {
+        if (
+          buildsIndex(collection.construct) && collection.within.length === 0 &&
+          this.#elements.has(index) &&
+          this.#memo.has(this.#name("assembly", index, []))
+        ) this.assembled(index)(none);
+      });
       this.plan.outputs.forEach((output, index) => {
         if (!output.kept || output.path.includes("*")) return;
         const value = this.valueOfOutput.get(index);

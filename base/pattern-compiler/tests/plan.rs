@@ -5051,3 +5051,51 @@ export const P = pattern<{ items: Writable<Item[]> }, { rows: Row[]; titles: num
         .iter()
         .all(|read| read["handle"] == json!(true) || read.get("schema").is_none()));
 }
+
+/// PL §3.17: the membership of a bucket is the source's membership joined
+/// with a `fold` of the key function's template over every element, and a
+/// `lookup` has the template of its key joined with that of the index.
+#[test]
+fn a_collection_index_has_the_fold_of_its_key_function_and_a_lookup_joins_the_key() {
+    let analysis = program(
+        r#"/// <cts-enable />
+import { pattern, type Writable } from "commonfabric";
+interface Item { title: string; tag: string }
+interface Tag { name: string }
+export const Joined = pattern<
+  { items: Writable<Item[]>; tags: Writable<Tag[]> },
+  { rows: { name: string; titles: string[] }[] }
+>(({ items, tags }) => {
+  const byTag = items.groupBy((item) => item.tag);
+  const rows = tags.map((tag) => ({
+    name: tag.name,
+    titles: byTag.lookup(tag.name).map((item) => item.title),
+  }));
+  return { rows };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "Joined");
+    let index = &plan["collections"][0];
+    assert_eq!(index["construct"], json!("groupBy"));
+    let fold = &index["membership"];
+    assert_eq!(fold["op"], json!("fold"), "{fold}");
+    assert_eq!(fold["collection"], json!(0));
+    let key = fold["body"]["slot"].as_u64().expect("the slot of the key") as usize;
+    assert_eq!(plan["slots"][key]["path"], json!(["tag"]));
+    assert_eq!(plan["slots"][key]["observes"], json!("value"));
+    // The lookup: an interim output that the collection of the inner `map`
+    // is over, derived from the key and from the index.
+    let over = plan["collections"][2]["source"]["output"]
+        .as_u64()
+        .expect("the output the inner `map` is over") as usize;
+    let lookup = &plan["outputs"][over]["template"];
+    assert_eq!(lookup["op"], json!("derive"), "{lookup}");
+    let inputs = lookup["inputs"].as_array().expect("inputs");
+    assert!(inputs.iter().any(|input| input["op"] == json!("output")
+        && plan["outputs"][input["output"].as_u64().unwrap() as usize]["collection"] == json!(0)));
+    assert!(inputs.iter().any(|input| {
+        input["op"] == json!("slot")
+            && plan["slots"][input["slot"].as_u64().unwrap() as usize]["path"] == json!(["name"])
+    }));
+}
