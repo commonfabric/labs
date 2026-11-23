@@ -276,11 +276,11 @@ export const FileStoreView = pattern<FileStoreViewInput, FileStoreViewOutput>(
     const notices = computed((): PerSession<string[]> =>
       sent.get().flatMap(({ requestId, name }) => {
         const outcome = store.requests[requestId];
-        if (outcome === undefined) return [];
-        if (outcome.status === "refused") {
-          return [`${name}: ${outcome.reason}`];
-        }
-        return outcome.name === name
+        return outcome === undefined
+          ? []
+          : outcome.status === "refused"
+          ? [`${name}: ${outcome.reason}`]
+          : outcome.name === name
           ? []
           : [`${name} was added as ${outcome.name}.`];
       })

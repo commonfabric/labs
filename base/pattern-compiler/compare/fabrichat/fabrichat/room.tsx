@@ -1954,11 +1954,11 @@ export const FabriChatRoomCore = pattern<
   // each removal's outcome read by its id alone.
   const unremovedFiles = computed((): PerSession<UnremovedFile[]> =>
     (composer.get()?.takenOut ?? []).flatMap((file) => {
-      if (file.removing !== true) return [];
       const outcome = spaceFileStore?.key("requests").key(
         removalRequestId(file.requestId),
       ).get() as FileRequestOutcome | undefined;
-      return outcome?.status === "refused" && outcome.code !== "not-found"
+      return file.removing === true && outcome?.status === "refused" &&
+          outcome.code !== "not-found"
         ? [{
           requestId: file.requestId,
           text: `${file.name} stays in this chat's files: ${outcome.reason}`,
