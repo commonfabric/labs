@@ -20851,3 +20851,56 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
    items of `apps/redactor/vault.tsx` written as references, the commits that
    are refused leave a stored result that is not the derivation of the stored
    argument, and a wake by units evaluates every body (note 965).
+
+## Round seventeen: the remaining branches merged into one
+
+Merged on 2026-11-23 on the branch `claude/compiled-pattern-sandbox-m5`, one
+branch at a time: the trunk head `7b2a492b82`, then
+`claude/compiled-pattern-write-integrity`, then
+`claude/compiled-pattern-serving-m6`. The logs are in the folder `r17-merge/` of
+the session. The notes are numbered from 980.
+
+980. **What holds after the merge of the trunk head `7b2a492b82`.**
+     - _The only textual conflict_ was this file; both sides' notes are kept.
+       The trunk's new code (`#storedIn`, `#watchPositions`, `#underListed`,
+       `#noteRows`, `PieceUnits.positioned`) merged without a conflict.
+     - _The rule of note 892 is kept._ A piece that has named a document of a
+       scope resumes whole and writes no list of readers. The new trunk code is
+       not reached by such a piece: `resumeCompiledPieceFromBasis` takes the
+       wake by units only where no source of the basis names a scope, and the
+       whole resume gives the executor no `stale`, so `#claimStored` and
+       `#storedRows` take nothing, `#seeds` stays empty, and `#storedIn`,
+       `#watchPositions` and the marking in `#underListed` find no seed. What
+       stays is that `#noteRows` tells `PieceUnits.read` what each row read,
+       which only `PieceUnits.record` stores, and the piece does not call it.
+       Leaving rows as stored beside a memo for each principal was not shown
+       sound, so the rule was not changed: a collection whose source is no slot,
+       the trunk's new case, is under the same rule as one over a slot.
+     - _Gates,_ each with exit status 0: `deno fmt --check`, `deno lint`,
+       `deno task check`, the six `check-*` tasks of the handoff, the executor
+       tests (198 tests, 966 steps), `test/compiled/` on emulated storage and
+       over a socket (45 tests, 329 steps each), `cargo test`,
+       `cargo fmt
+       --check` and `cargo clippy`. The emitted fixtures
+       regenerated with no change.
+     - _Measured,_ one run at a load average of 50 to 70 from other sessions:
+       `compare/serving-path.ts` at 1,000 rows finds the piece current after a
+       takeover with no evaluation, and the first event after it takes 35 ms
+       with 6 evaluations at the wake (the trunk: about 31 ms, 6 evaluations).
+     - _The corpus,_ one run of each mode, as started, every event handled, no
+       commit refused, equal: runner path 264, 222, 251, 232; serving 232, 200,
+       222, 211; after a resume 264, 221, 253, 230; serving with a resume 232,
+       199, 222, 210, with 71 pieces found current (the trunk 80) and rows left
+       in 18 (19). With `--serving --resume --references` rows are left in 19
+       modules, as on the trunk, and 71 pieces are found current. Every line
+       equals the line of one parent but two:
+       `system/profile-embed/profile-embed.tsx` on the runner path (one event
+       handled, four refusals, where the sandbox branch handled five with three)
+       and `apps/agent/agent.tsx` after a resume (three refusals, where the
+       sandbox branch had two). Each run alone twice gives the line of the
+       sandbox branch, so neither was attributed to the merge. With
+       `--references` three lines differ from the trunk's, where the sandbox
+       branch has no run: `apps/redactor/vault.tsx` (two refusals where the
+       trunk had three) and `system/fabrichat/message-row.tsx` and
+       `system/profile-picker/profile-picker.tsx`, which start here and did not
+       on the trunk, as under `--serving` on the sandbox branch.
