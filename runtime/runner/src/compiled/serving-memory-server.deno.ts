@@ -48,8 +48,18 @@ export type CompiledServingMemoryServer = {
    * conflicts is, without reaching the store.
    */
   rejectNextWave(): void;
+  /**
+   * Has the serving loop that is attached now stop committing: the first
+   * commit of a wave after which `when` holds is the last that reaches the
+   * store, and every later one of this loop is rejected, as the commits of
+   * a serving process that stopped do not arrive. Resolves when that last
+   * commit was taken. `restart()` attaches a loop that commits.
+   */
+  stopCommittingWhen(when: () => boolean): Promise<void>;
   /** The compiled pieces the serving runtimes run. */
   pieces(): CompiledPiece[];
+  /** The serving runtimes of the loop that is attached now. */
+  runtimes(): Runtime[];
   /** Closes the serving loop, then the memory server. */
   close(): Promise<void>;
 };
@@ -100,6 +110,9 @@ export const listenCompiledServingMemoryServer = async (
     });
   let runtimes: Runtime[] = [];
   let rejecting = false;
+  // What `stopCommittingWhen` waits for, and whether the loop has stopped.
+  let stopping: { when: () => boolean; taken: () => void } | undefined;
+  let stopped = false;
   const attach = () => {
     const create = factory();
     return new ExecutorHost({
@@ -108,15 +121,34 @@ export const listenCompiledServingMemoryServer = async (
         currentHeads: (space, docs) => sink.currentHeads(space, docs),
         concurrentWritePaths: (space, doc, sinceSeq) =>
           sink.concurrentWritePaths(space, doc, sinceSeq),
-        commitWave: (batch) => {
-          if (!rejecting) return sink.commitWave(batch);
-          rejecting = false;
-          return Promise.resolve({
-            error: {
-              name: "WaveCommitRejected" as const,
-              message: "The test rejected the wave.",
-            },
-          });
+        commitWave: async (batch) => {
+          if (stopped) {
+            return {
+              error: {
+                name: "WaveCommitRejected" as const,
+                message: "The serving loop of the test stopped committing.",
+              },
+            };
+          }
+          if (rejecting) {
+            rejecting = false;
+            return {
+              error: {
+                name: "WaveCommitRejected" as const,
+                message: "The test rejected the wave.",
+              },
+            };
+          }
+          const outcome = await sink.commitWave(batch);
+          if (
+            stopping !== undefined && outcome.error === undefined &&
+            stopping.when()
+          ) {
+            stopped = true;
+            stopping.taken();
+            stopping = undefined;
+          }
+          return outcome;
         },
       }),
       ...(options.policy === undefined ? {} : { policy: options.policy }),
@@ -142,9 +174,16 @@ export const listenCompiledServingMemoryServer = async (
     rejectNextWave: () => {
       rejecting = true;
     },
+    stopCommittingWhen: (when) =>
+      new Promise((taken) => {
+        stopping = { when, taken };
+      }),
+    runtimes: () => [...runtimes],
     restart: async () => {
       await host.close();
       runtimes = [];
+      stopped = false;
+      stopping = undefined;
       serviceIdentity = await Identity.generate();
       delegatingDids.push(serviceIdentity.did());
       host = attach();

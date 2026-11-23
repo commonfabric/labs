@@ -165,7 +165,11 @@ export class CompiledPiece {
     ownMs: 0,
   };
   /** The counts of the instance that the storage holds. */
-  #minted = { events: 0, created: 0 };
+  #minted: { events: number; created: number; made: Record<string, string> } = {
+    events: 0,
+    created: 0,
+    made: {},
+  };
   /** The instance exists: a change by another writer can be applied. */
   #started = false;
   #stopped = false;
@@ -284,6 +288,21 @@ export class CompiledPiece {
     const resumed = options.resume === true;
     const minted = resumed ? transactions.heldMinted() : undefined;
     if (minted !== undefined) this.#minted = minted;
+    // An instance a handler made is started again from what the storage
+    // holds of it: no body of the resumed piece makes it.
+    const made = Object.entries(minted?.made ?? {}).map(([id, pattern]) => {
+      const artifact = options.artifacts?.(pattern);
+      if (artifact === undefined) {
+        throw new Error(
+          `The piece holds an instance of a pattern it has no artifact of: ${pattern}.`,
+        );
+      }
+      return {
+        id,
+        artifact,
+        argument: transactions.heldArgument(argumentOf(id)),
+      };
+    });
     this.instance = transactions.within(tx, () =>
       new Instance(
         artifact,
@@ -293,6 +312,7 @@ export class CompiledPiece {
         {
           resume: resumed,
           ...(minted === undefined ? {} : { minted }),
+          ...(made.length === 0 ? {} : { made }),
           space,
           id: result.id,
           secret: options.secret ?? space,
@@ -383,10 +403,16 @@ export class CompiledPiece {
    */
   #keepMinted(tx: IExtendedStorageTransaction): void {
     const { events, created } = this.instance.minted;
+    const made = Object.fromEntries(
+      this.instance.madeByHandlers().map(({ id, pattern }) => [id, pattern]),
+    );
+    const held = this.#minted.made;
     if (
-      events === this.#minted.events && created === this.#minted.created
+      events === this.#minted.events && created === this.#minted.created &&
+      Object.keys(made).length === Object.keys(held).length &&
+      Object.keys(made).every((id) => held[id] === made[id])
     ) return;
-    this.#minted = { events, created };
+    this.#minted = { events, created, made };
     this.transactions.writeMinted(tx, this.#minted);
     this.#basis.wrote(tx, [this.transactions.mintedDocument], []);
   }
@@ -429,8 +455,14 @@ export class CompiledPiece {
       }
       if (!outcome.committed) this.#counts.eventsRefused += 1;
       this.#keepMinted(tx);
-      // An event a handler sends to a stream of the piece is an event of
-      // the scheduler's queue like one sent from outside.
+      // An event a handler sends to a stream of the piece is sent through
+      // the cell of the stream in the handler's transaction, as a handler
+      // of today's runtime sends one (`Cell.send`). On a serving runtime
+      // that appends the event to the entries of the stream in this
+      // transaction, so it is stored with what the handler wrote and
+      // withdrawn with it, and a serving loop that takes the space over
+      // before the event was handled finds it. On every other runtime it
+      // is an event of the scheduler's queue.
       for (const sent of this.instance.takeQueued()) {
         const target = transactions.entityOfStream(sent.stream);
         if (target === undefined) {
@@ -438,10 +470,11 @@ export class CompiledPiece {
             "A handler sent an event to a stream the storage has no marker of.",
           );
         }
-        this.#runtime.scheduler.queueEvent(
+        this.#runtime.getCellFromLink(
           { space, id: target, path: [], scope: "space" },
-          transactions.encode(sent.event),
-        );
+          undefined,
+          tx,
+        ).send(transactions.encode(sent.event) as never);
       }
       this.#invalidate();
     };

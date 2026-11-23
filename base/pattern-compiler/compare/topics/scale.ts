@@ -5,7 +5,8 @@
  *
  * `deno run -A --no-check base/pattern-compiler/compare/topics/scale.ts <arm> [sizes | --seed <seed>]`
  *
- * `<arm>` is `executor`, `storage`, `today` or `today-labeled`, and each
+ * `<arm>` is `executor`, `storage`, `runner`, `serving`, `serving-today`,
+ * `today` or `today-labeled`, and each
  * run prints one line of JSON per measured step. The arms run in processes
  * of their own, one after the other, so that no two timed runs share a
  * machine at once.
@@ -31,6 +32,9 @@
  *   With `SCALE_REORDER` set, a step `reorder` follows the edits: a writer
  *   outside the board writes the `lastActivityAt` of the topic filed first,
  *   which makes it the one last active.
+ * - `serving` and `serving-today`: the board under the serving loop, as a
+ *   compiled piece and as today's piece, timed on two clients
+ *   (`./serving.ts`).
  * - `today`: today's runtime, with no label stored.
  * - `today-labeled`: today's runtime with `cfcFlowLabels` at `persist` and
  *   the same clauses on the topics and the inputs.
@@ -170,6 +174,7 @@ import { identifierOf, isLink, Ref } from "../../exec/store.ts";
 import { generateInputs, inputClause } from "../generate.ts";
 import { scenarioAudience } from "../harness.ts";
 import { RuntimeTransactions } from "../runtime-transactions.ts";
+import { runServing } from "./serving.ts";
 
 const repository = fromFileUrl(new URL("../../../../", import.meta.url));
 
@@ -1836,10 +1841,23 @@ if (import.meta.main) {
       ? await runToday(board, arm === "today-labeled")
       : arm === "runner"
       ? await runToday(board, true, true)
+      : arm === "serving" || arm === "serving-today"
+      ? await runServing(
+        {
+          module: BOARD,
+          files: TOPICS_FILES,
+          topics: board.topics,
+          names: board.names,
+          created: CREATED,
+          edited: edited(board.topics.length),
+        },
+        arm,
+        (step) => console.log(JSON.stringify(step)),
+      ).then(() => [])
       : undefined;
     if (steps === undefined) {
       console.error(
-        "usage: scale.ts executor|storage|runner|today|today-labeled [sizes | --seed <seed>]",
+        "usage: scale.ts executor|storage|runner|serving|serving-today|today|today-labeled [sizes | --seed <seed>]",
       );
       Deno.exit(2);
     }

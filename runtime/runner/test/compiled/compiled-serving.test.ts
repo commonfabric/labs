@@ -312,6 +312,119 @@ describe("a compiled piece under the serving loop", () => {
     expect(serving.pieces()[0].refusals).toEqual([]);
   });
 
+  // `fixtures/relay.tsx`: the handler of `relay` counts its runs in
+  // `relayed` and sends an event to the stream `bump`, whose handler adds
+  // to `total`.
+  describe("an event a handler sends to a stream of the piece", () => {
+    type Relayed = { total: number; relayed: number };
+
+    const setUpRelay = async (runtime: Runtime) => {
+      const result = runtime.getCell<Relayed>(space, "relay");
+      const program = await programOf("relay");
+      await commit(runtime, (tx) => {
+        setUpCompiledPiece(
+          runtime,
+          tx,
+          program,
+          { start: 1 },
+          result.withTx(tx),
+        );
+      });
+      const cell = runtime.getCellFromLink<Relayed>(
+        result.getAsNormalizedFullLink(),
+      );
+      cancels.push(cell.sink(() => {}));
+      return cell;
+    };
+
+    /**
+     * The member `name` of the result, once the client holds the marker
+     * of the stream it links to, by which a send to it is an event.
+     */
+    const stream = async (cell: Cell<Relayed>, name: string) => {
+      await waitForCellValue<Record<string, unknown>>(
+        clients[0],
+        cell,
+        (value) => value?.[name] !== undefined,
+        { stuckLabel: `a client reads the member ${name}` },
+      );
+      const member = cell.key(name as never) as unknown as Cell<unknown>;
+      await member.sync();
+      await member.resolveAsCell().sync();
+      return member;
+    };
+
+    /** Waits until `cell` holds `total` and `relayed`. */
+    const counts = (
+      runtime: Runtime,
+      cell: Cell<Relayed>,
+      total: number,
+      relayed: number,
+    ) =>
+      waitForCellValue<Relayed>(
+        runtime,
+        cell,
+        (value) =>
+          (value?.total ?? 0) === total && (value?.relayed ?? 0) === relayed,
+        { stuckLabel: `a client reads total ${total}, relayed ${relayed}` },
+      );
+
+    it("is handled behind the handler that sent it", async () => {
+      const sender = client();
+      const cell = await setUpRelay(sender);
+
+      (await stream(cell, "relay")).send({ by: 3 });
+
+      await counts(sender, cell, 3, 1);
+      expect(serving.pieces()[0].counts.events).toBe(2);
+      expect(serving.pieces()[0].refusals).toEqual([]);
+    });
+
+    it("is handled by the serving loop that takes the space over, where the loop before stopped between the commit of the handler that sent it and its handling", async () => {
+      const sender = client();
+      const cell = await setUpRelay(sender);
+      const relay = await stream(cell, "relay");
+      relay.send({ by: 3 });
+      await counts(sender, cell, 3, 1);
+      await serving.host.whenQuiescent();
+      const [piece] = serving.pieces();
+      const [runtime] = serving.runtimes();
+      // The serving process handles nothing more for the stream `bump`
+      // unless the event comes from a stored entry: the copy of a sent
+      // event that the process holds for itself is lost with the process.
+      const { queueEvent } = runtime.scheduler;
+      const bump = (await stream(cell, "bump")).resolveAsCell()
+        .getAsNormalizedFullLink().id;
+      runtime.scheduler.queueEvent = (link, ...rest) => {
+        const served = rest[4]?.served;
+        if (link.id === bump && served?.streamEntry === undefined) return;
+        return queueEvent.call(runtime.scheduler, link, ...rest);
+      };
+      // The commit of the wave that holds the second run of `relay` is the
+      // last of this loop to reach the store.
+      const stopped = serving.stopCommittingWhen(() =>
+        piece.counts.events >= 3
+      );
+
+      relay.send({ by: 4 });
+      await stopped;
+      await serving.restart();
+      // A client that connects to the serving process that started again.
+      const late = client();
+      const read = late.getCellFromLink<Relayed>(
+        cell.getAsNormalizedFullLink(),
+      );
+      cancels.push(read.sink(() => {}));
+
+      // `relay` ran twice and is not run again, and the event it sent in
+      // its second run is handled once.
+      await counts(late, read, 7, 2);
+      await serving.host.whenQuiescent();
+      expect((await counts(late, read, 7, 2)).relayed).toBe(2);
+      expect(serving.pieces()[0].refusals).toEqual([]);
+    });
+  });
+
   it("goes on from what the storage holds when another serving loop takes the space over", async () => {
     const sender = client();
     const { artifact, result } = await setUp(sender, 3);

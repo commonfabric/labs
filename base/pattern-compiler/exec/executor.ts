@@ -43,6 +43,7 @@ import {
   linkedSchema,
   markerOf,
   memberKey,
+  membersInOrder,
   type Name,
   OUTPUT,
   type Position,
@@ -2243,8 +2244,10 @@ export class Host {
     if (value instanceof Handle) return value.get();
     if (Array.isArray(value)) return value.map((member) => this.v(member));
     if (isRecord(value)) {
+      // A record a computation made, in the order a read of it from the
+      // storage gives (`membersInOrder`).
       return Object.fromEntries(
-        Object.entries(value).map(([name, member]) => [name, this.v(member)]),
+        membersInOrder(value).map((name) => [name, this.v(value[name])]),
       );
     }
     return value;
@@ -3683,6 +3686,16 @@ export class Instance {
        */
       bucketDocuments?: ReadonlySet<number>;
       /**
+       * With `resume`: the instances that handlers of a run before made
+       * (`madeByHandlers`), each with the artifact of its pattern and the
+       * argument the storage holds for it. Each is started again before
+       * the first derivation of this instance, under the identifier it
+       * has, from its stored argument and its stored state. An instance
+       * that a `lift` or a `computed` made is made again by the body
+       * that made it.
+       */
+      made?: readonly { id: string; artifact: Artifact; argument: unknown }[];
+      /**
        * Where an event that a handler sends to a stream of the executor
        * is kept. `documents`, the default: it is appended to the document
        * of its stream and handled behind the events before it.
@@ -3816,6 +3829,18 @@ export class Instance {
     // A state cell of the pattern's own body exists from the start, and
     // one of an element body from when its key enters the element table.
     const first = () => {
+      for (const { id, artifact, argument } of this.options.made ?? []) {
+        if (this.root !== this || this.#instances.has(id)) continue;
+        const child = new Instance(artifact, argument, {
+          ...this.options,
+          made: undefined,
+          parent: this,
+          id,
+        });
+        this.#instances.set(id, child);
+        this.#made.set(id, { instance: child, ordinal: 0 });
+        this.#children.push(child);
+      }
       this.#declare(new Map());
       this.#settle();
     };
@@ -13597,6 +13622,23 @@ export class Instance {
    */
   get minted(): { events: number; created: number } {
     return { events: this.#events, created: this.#created };
+  }
+
+  /**
+   * The instances that handlers of this instance made and that exist, each
+   * by its identifier with the identity of its pattern. No body makes one
+   * of them again, so a store outside the executor keeps the list for a
+   * resume (`options.made`).
+   */
+  madeByHandlers(): { id: string; pattern: string }[] {
+    const made: { id: string; pattern: string }[] = [];
+    for (const { instance, keyed } of this.root.#made.values()) {
+      const pattern = instance.plan.patterns?.[0];
+      if (keyed === undefined && pattern !== undefined) {
+        made.push({ id: instance.id, pattern });
+      }
+    }
+    return made;
   }
 
   /** The identifiers of the documents and declared places of the instance. */

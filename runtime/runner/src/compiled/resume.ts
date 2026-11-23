@@ -37,6 +37,8 @@ import {
 } from "./basis.ts";
 import type { JSONSchema } from "../builder/types.ts";
 import type { Cell, MemorySpace } from "../cell.ts";
+import type { NormalizedFullLink } from "../link-types.ts";
+import { isCellLink, parseLink } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import type { URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -116,17 +118,63 @@ const syncBasis = async (
   );
   if (made) {
     await Promise.all(
-      Object.keys(basis.documents ?? {}).map((one) =>
-        runtime.getCellFromLink({
-          space,
-          id: entityOf(one),
-          path: [],
-          scope: "space",
-        }, EVERYTHING).sync()
-      ),
+      Object.keys(basis.documents ?? {}).map((one) => at(one).sync()),
     );
   }
   return basis;
+};
+
+/**
+ * Brings into the replica of `runtime` the documents `roots` name and every
+ * document of the space that a link leads to from one of them, at any
+ * depth, each once and each by a sync of the one document. The replica is
+ * then subscribed to each document, and the session holds no query that
+ * follows links: the memory server evaluates such a query again, over what
+ * it reaches, when a document it visited changes, which for the result of
+ * a board is work that follows the board for each commit of the piece.
+ */
+const bringReached = async (
+  runtime: Runtime,
+  space: MemorySpace,
+  roots: readonly string[],
+): Promise<void> => {
+  const seen = new Set<URI>(roots.map(entityOf));
+  let level = [...seen];
+  const linksOf = (value: unknown, base: NormalizedFullLink, found: URI[]) => {
+    if (typeof value !== "object" || value === null) return;
+    if (isCellLink(value)) {
+      const link = parseLink(value, base);
+      if (link.space === space && link.id !== undefined) {
+        found.push(link.id as URI);
+      }
+      return;
+    }
+    for (const member of Object.values(value)) linksOf(member, base, found);
+  };
+  while (level.length > 0) {
+    await Promise.all(
+      level.map((id) =>
+        runtime.getCellFromLink(
+          { space, id, path: [], scope: "space" },
+          NOTHING_BELOW,
+        ).sync()
+      ),
+    );
+    const found: URI[] = [];
+    for (const id of level) {
+      linksOf(
+        heldAt(runtime, space, id),
+        { space, id, path: [], scope: "space" },
+        found,
+      );
+    }
+    level = [];
+    for (const id of found) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      level.push(id);
+    }
+  }
 };
 
 /**
@@ -214,7 +262,11 @@ export const resumeCompiledPiece = async (
   const { opened, sealed, ...pieceOptions } = options;
   const brought = new Set<string>();
   const { space, id } = resultCell.getAsNormalizedFullLink();
-  await syncCompiledPiece(runtime, artifact, resultCell);
+  // The inputs by a query that follows links, as at the load, so that the
+  // piece hears of a member another writer adds and gets its document. The
+  // documents of the piece, which the result links to, each by itself.
+  await syncCompiledPiece(runtime, artifact, resultCell, [], false);
+  await bringReached(runtime, space, [id]);
   // The resumed piece compares the number of each document its basis names
   // with what the replica holds, so the replica has to hold each.
   const basis = await syncBasis(runtime, space, id, true);
@@ -269,7 +321,7 @@ export const resumeCompiledPiece = async (
       new Error("A document of the piece may not have been in the replica."),
     );
     for (const id of missing) brought.add(id);
-    await syncCompiledPiece(runtime, artifact, resultCell, missing);
+    await bringReached(runtime, space, missing);
   }
 };
 

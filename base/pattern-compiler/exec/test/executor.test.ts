@@ -6422,9 +6422,12 @@ describe("a debug renderer", () => {
       entry,
     });
 
+    // The value code reads the members of the record in the order of the
+    // storage, which is that of their names (`membersInOrder`).
+    const read = { tags: entry.tags, title: entry.title };
     expect(instance.result()).toEqual({
-      compact: toCompactDebugString(entry),
-      indented: `entry: ${toIndentedDebugString(entry)}`,
+      compact: toCompactDebugString(read),
+      indented: `entry: ${toIndentedDebugString(read)}`,
     });
   });
 });
