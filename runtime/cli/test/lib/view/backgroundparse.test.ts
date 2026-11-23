@@ -143,6 +143,21 @@ describe("backgroundparse", () => {
           expect(after).toBe(result.kind === "document" && result.document);
         });
 
+        it("gives a finished result once, and then parses at once", () => {
+          const pending = new PendingParses(0);
+          pending.document("a", typescript, SOURCE, "a.ts");
+          const [taken] = pending.take();
+          const result = parse("document", typescript, SOURCE, "a.ts");
+          taken.finish(result);
+
+          const first = pending.document("a", typescript, SOURCE, "a.ts");
+          const second = pending.document("a", typescript, SOURCE, "a.ts");
+
+          expect(first).toBe(result.kind === "document" && result.document);
+          expect(second).not.toBe(first);
+          expect(second).toEqual(first);
+        });
+
         it("parses at once a pending parse's key asked for with other text", () => {
           const pending = new PendingParses(0);
           pending.document("a", typescript, SOURCE, "a.ts");
@@ -195,6 +210,8 @@ describe("backgroundparse", () => {
           expect(before).toBeNull();
           expect(after).toEqual(plainTextLanguage.highlightLines(SOURCE));
           expect(coloredSpans(after ?? [])).toBe(0);
+          const again = pending.lines("a", typescript, SOURCE, "a.ts");
+          expect(coloredSpans(again ?? [])).toBe(0);
         });
       });
 
