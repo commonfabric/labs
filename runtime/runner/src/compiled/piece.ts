@@ -69,6 +69,7 @@ import {
   type StreamOfExecutor,
 } from "./transactions.ts";
 import { RuntimeAnswers, runtimeBuiltins } from "./builtins.ts";
+import { OutsideReads, outsideReadsDocumentOf } from "./outside-reads.ts";
 import { compartmentEvaluator } from "./value-code.ts";
 import { answersEffect, RuntimeWishes } from "./wish.ts";
 
@@ -348,6 +349,9 @@ export class CompiledPiece {
       }
       this.#keepMinted(given);
       this.#bring();
+      // A piece that has documents of a scope is never resumed without its
+      // executor, which registers every action again.
+      if (!first && !transactions.scoped) outside.flush(given);
       // The basis is of a derivation that brought everything up to date.
       if (first) this.#invalidate();
       else if (!this.#basisOfEveryKey) {
@@ -363,6 +367,23 @@ export class CompiledPiece {
         if (this.transactions.scoped) this.#basisOfEveryKey = true;
       }
     };
+    // What the wishes and the built-ins read outside the executor, for a
+    // resume from a basis that matches (`outside-reads.ts`).
+    const outsideDocument = outsideReadsDocumentOf(result.id);
+    const outside = new OutsideReads({
+      stored: transactions.heldOwn(outsideDocument) !== undefined,
+      write: (handed, path, value) =>
+        transactions.writeOwn(
+          handed,
+          outsideDocument,
+          path,
+          value as FabricValue,
+        ),
+      changed: () => this.#invalidate(),
+    });
+    const readOutside = (position: string, by: IExtendedStorageTransaction) => {
+      if (!transactions.scoped) outside.noted(position, by);
+    };
     // The runtime's `wish` answers each `wish` operation the instance
     // evaluates, unless a harness gave a table, and its built-ins the
     // effects of the reactive tier that they implement.
@@ -370,6 +391,7 @@ export class CompiledPiece {
       resultCell: resultCell.withTx(),
       entityOf: (doc) => transactions.entityOf(doc),
       linkOf: (doc) => transactions.linkOf(doc, []),
+      read: (state, by) => readOutside(`wish ${state}`, by),
       ...(options.actsFor === undefined ? {} : { actsFor: options.actsFor }),
     });
     this.#cancels.push(() => wishes.stop());
@@ -403,6 +425,7 @@ export class CompiledPiece {
       stamp: (given: IExtendedStorageTransaction, what: string) =>
         this.#stamp(given, what),
       scopeKey: (scope: "user" | "session") => transactions.scopeKey(scope),
+      read: readOutside,
       piece: {
         space,
         pieceId: `space:${result.id}`,

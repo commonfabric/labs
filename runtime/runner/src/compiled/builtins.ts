@@ -88,6 +88,12 @@ export type RuntimeBuiltinsContext = {
   scopeKey: (scope: "user" | "session") => string;
   /** The piece, as an action of the scheduler names it. */
   piece: { space: MemorySpace; pieceId: string; pieceRootId: string };
+  /**
+   * Called when a question was asked again for a principal, with the
+   * transaction it was asked through: what the piece keeps of what the
+   * answer read (`OutsideReads`).
+   */
+  read?: (position: string, tx: IExtendedStorageTransaction) => void;
 };
 
 /** A text that is the same for two answers that are the same. */
@@ -239,6 +245,7 @@ export class RuntimeAnswers {
     } catch (error) {
       now = `threw: ${error}`;
     }
+    this.#context.read?.(`answer ${principal} ${question}`, tx);
     if (now === held.last) return;
     held.last = now;
     // The entry that used the answer is one for every principal, or one of

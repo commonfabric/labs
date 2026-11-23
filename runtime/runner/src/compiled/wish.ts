@@ -66,6 +66,12 @@ export type RuntimeWishesOptions = {
    */
   linkOf?: (doc: string) => NormalizedFullLink;
   /**
+   * Called when a run of the action of the state document `state` ended,
+   * with its transaction: what the piece keeps of what the run read
+   * (`OutsideReads`).
+   */
+  read?: (state: string, tx: IExtendedStorageTransaction) => void;
+  /**
    * The principal a run of a `wish` acts for where the runtime is in the
    * serving posture and nothing stamped the run
    * (`CompiledPieceOptions.actsFor`).
@@ -151,7 +157,17 @@ export class RuntimeWishes {
       // runs. The read is one the action depends on, so it runs again when
       // the request is there.
       if (tx.readValueOrThrow(request) === undefined) return;
-      return resolve(tx);
+      const done = resolve(tx);
+      const { read } = this.#options;
+      if (read === undefined) return done;
+      if (done instanceof Promise) {
+        return done.then((result) => {
+          read(state, tx);
+          return result;
+        });
+      }
+      read(state, tx);
+      return done;
     };
     cancels.push(
       runtime.scheduler.subscribe(action, {

@@ -34,6 +34,7 @@ import {
   type CompiledPieceOptions,
   startCompiledPiece,
 } from "./piece.ts";
+import { wakeOnOutsideReads } from "./outside-reads.ts";
 import {
   resumeCompiledPieceFromBasis,
   type ResumedPiece,
@@ -280,11 +281,19 @@ const start = async (
     false as JSONSchema,
   ).sync();
   if (held(runtime, space, id) !== undefined) {
-    return await resumeCompiledPieceFromBasis(runtime, artifact, resultCell, {
-      ...pieceOptions,
-      opened,
-      sealed: { failed },
-    });
+    const resumed = await resumeCompiledPieceFromBasis(
+      runtime,
+      artifact,
+      resultCell,
+      { ...pieceOptions, opened, sealed: { failed } },
+    );
+    // A piece whose stored result is current runs no action of a `wish`
+    // or of a built-in: a change of what those read wakes it.
+    if (resumed.current) {
+      const stop = await wakeOnOutsideReads(runtime, resultCell, resumed);
+      resumed.woken.then(stop, stop);
+    }
+    return resumed;
   }
   // The result document is empty, and the piece alone writes it.
   await syncCompiledPiece(runtime, artifact, resultCell, [], false);
