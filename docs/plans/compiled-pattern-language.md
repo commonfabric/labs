@@ -6528,6 +6528,22 @@ is relitigated.
   harness with its switches (question 378); and the three constructs that
   Topics lacks are designed and built next (question 370).
 
+- The milestones are completed before the open questions of CFC are taken up
+  (2026-11-22, Z88). The owner's words: "I want to keep noting CFC issues like
+  this, very helpful, but keep moving faster to complete all milestones, which
+  are really more about the engineering approach to running patterns
+  efficiently. It looks like CFC brings in a class of issues and questions
+  that are in the end orthogonal, at least mostly, to those questions (e.g.
+  labels will accumulate quickly irrespectively of how we interpret the code),
+  so let's tackle that afterwards." A question about a label, or a suspected
+  under-label, that a round meets is written down and reported, and the round
+  does not stop to resolve it. A construct with a suspected under-label is
+  marked as not checked for labels. The label tests that exist keep passing.
+  The owner made the remark after asking what a bucket of a grouping and the
+  result of a `filter` depend on: the membership of either as a whole depends
+  on the key, or the predicate's input, of every member of the source, and one
+  member being in the result depends on that member's own alone.
+
 ## Provisional decisions awaiting the owner's ratification
 
 The owner's standing instruction of 2026-11-17: "Don't block progress on
