@@ -759,11 +759,13 @@ deno run -A --no-check base/pattern-compiler/compare/growth.ts 100 1000 10000
 
 `alone` runs the modules that need `wish` or request an effect on the executor,
 with the answers of `compare/stubs.ts`, and `stubbed` runs them on today's
-runtime as well, with `fetch` replaced by a function that answers the same.
-`sizes.ts` prints the size of each plan of the corpus with its largest members,
-and `growth.ts` what one change of a list costs the executor at several lengths.
-Notes 479 on of `SPEC-NOTES.md` have what was tested, what the documents do not
-decide, and the figures.
+runtime as well, with `fetch` replaced by a function that answers the same. A
+line that `stubbed` writes holds what the clock of its stubs held, and `again`
+runs such a line with the same answers and that clock, and compares a number
+within a day of that clock as a time. `sizes.ts` prints the size of each plan of
+the corpus with its largest members, and `growth.ts` what one change of a list
+costs the executor at several lengths. Notes 479 on of `SPEC-NOTES.md` have what
+was tested, what the documents do not decide, and the figures.
 
 A template names the template of another output by a node
 `{ op: "output", output }` (ruling Z58), a template that a plan holds at more

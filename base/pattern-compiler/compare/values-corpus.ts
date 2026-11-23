@@ -18,7 +18,8 @@
  * `deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts again <results.jsonl> <new.jsonl>`
  *
  * runs the executor alone on the crate's current output and compares it
- * with the values the earlier run read.
+ * with the values the earlier run read. A line that `stubbed` wrote holds
+ * the clock of its stubs, and `again` runs it with the same stubs.
  *
  * `run` leaves out the modules that need `wish` or request an effect.
  * `stubbed <results.jsonl>` runs those, with the answers of `stubs.ts` in
@@ -77,11 +78,19 @@ export type ModuleValues = {
     events: { binding: number; event: unknown }[];
     outcomes: Pick<EventOutcome, "outcome" | "elements">[];
     values: Values;
+    /**
+     * What the clock of the stubs held, where the run was answered from
+     * the table of `stubs.ts` in place of the network.
+     */
+    stubs?: { now: number };
   };
 };
 
-/** The stubs of a run: the table of `stubs.ts`, and the clock at now. */
-const stubsNow = (): Stubs => ({ completion: stubCompletion, now: Date.now() });
+/** The stubs of a run: the table of `stubs.ts`, and the clock at `now`. */
+const stubsAt = (now: number): Stubs => ({ completion: stubCompletion, now });
+
+/** The stubs of a run that begins now. */
+const stubsNow = (): Stubs => stubsAt(Date.now());
 
 /** Whether the main pattern of a module needs `wish` or an effect. */
 const needsStubs = async (module: EmittedModule): Promise<boolean> =>
@@ -152,12 +161,8 @@ const runOne = async (
   const argument = argumentOf({ argument: {}, inputs });
   // The executor runs beside today's run, which finds each stream by
   // where the executor stored it (ruling Z43).
-  const executor = new ExecutorRun(
-    artifact,
-    argument,
-    artifacts,
-    stubbed ? stubsNow() : undefined,
-  );
+  const stubs = stubbed ? stubsNow() : undefined;
+  const executor = new ExecutorRun(artifact, argument, artifacts, stubs);
   const restoreFetch = stubbed ? stubFetch() : undefined;
   let result: Awaited<ReturnType<typeof runModule>>;
   try {
@@ -206,7 +211,36 @@ const runOne = async (
       events,
       outcomes,
       values: inFileForm(values) as Values,
+      ...(stubs === undefined ? {} : { stubs: { now: stubs.now } }),
     },
+  };
+};
+
+/**
+ * The line of an earlier run with the comparison of `artifact`, run on
+ * the executor now, with the values that the earlier run read from
+ * today's runtime. A line of a run with stubs is run with the same
+ * table and with the clock that the line holds, so a request that was
+ * answered in the earlier run is answered here.
+ */
+export const replayed = (
+  earlier: ModuleValues & { runtime: NonNullable<ModuleValues["runtime"]> },
+  artifact: Artifact,
+  artifacts?: (id: string) => Artifact | undefined,
+): ModuleValues => {
+  const { argument, events, outcomes, stubs } = earlier.runtime;
+  const values = outOfFileForm(earlier.runtime.values) as Values;
+  return {
+    ...earlier,
+    comparison: compareValues(
+      artifact,
+      argument,
+      events,
+      outcomes,
+      values,
+      artifacts,
+      stubs === undefined ? undefined : stubsAt(stubs.now),
+    ),
   };
 };
 
@@ -225,23 +259,12 @@ const again = async (file: string, to: string) => {
     const artifact = module?.patterns.find((pattern) =>
       pattern.name === earlier.pattern
     );
-    if (earlier.runtime === undefined || artifact === undefined) {
-      lines.push(JSON.stringify(earlier));
-      continue;
-    }
-    const { argument, events, outcomes } = earlier.runtime;
-    const values = outOfFileForm(earlier.runtime.values) as Values;
-    lines.push(JSON.stringify({
-      ...earlier,
-      comparison: compareValues(
-        artifact,
-        argument,
-        events,
-        outcomes,
-        values,
-        artifacts,
-      ),
-    }));
+    const { runtime } = earlier;
+    lines.push(JSON.stringify(
+      runtime === undefined || artifact === undefined
+        ? earlier
+        : replayed({ ...earlier, runtime }, artifact, artifacts),
+    ));
   }
   await Deno.writeTextFile(to, lines.map((line) => `${line}\n`).join(""));
 };
