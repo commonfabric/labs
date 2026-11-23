@@ -131,6 +131,9 @@ const WATCH: Watch = (Deno.env.get("SCALE_WATCH") as Watch | undefined) ??
 /** The inputs one transaction of the setup holds at most. */
 const ITEMS_PER_TRANSACTION = 1_000;
 
+/** How many times a sink on a whole list was called back. */
+const listReads = { calls: 0 };
+
 /**
  * Resolves with the time at which `runtime` reads `label` at the row `at`
  * of the result: the callback of a sink on the path `watch` names. A list
@@ -174,6 +177,7 @@ const visible = (
   return new Promise((resolve) => {
     let done = false;
     const cancel: () => void = cell.sink((value: unknown) => {
+      if (watch === "list") listReads.calls += 1;
       if (done || labelOf(value) !== label) return;
       done = true;
       resolve(performance.now());
@@ -437,6 +441,7 @@ const measure = async (
       add: summary(adds),
       memory,
       ...(counts === undefined ? {} : { piece: counts }),
+      ...(listReads.calls === 0 ? {} : { listReads: listReads.calls }),
       resume: {
         ...resume,
         firstEvent: {
