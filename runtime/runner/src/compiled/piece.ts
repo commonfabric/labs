@@ -281,6 +281,16 @@ export class CompiledPiece {
   readonly #asked = new Set<string>();
   /** Whether the derivation names its piece to the scheduler. */
   #named = false;
+  /**
+   * Whether a run made the first derivation of the instances a handler made
+   * and its transaction has not ended. A serving loop runs the derivation
+   * for each principal and session that demands the piece in one pass, and
+   * a run of that pass reads its replica before the commit of the run
+   * before it: a run that read the result of such an instance as the
+   * handler stored it would be refused. The runs wait for that commit, and
+   * its end asks for the derivation again.
+   */
+  #madePending = false;
   /** What stops the derivation action. */
   #unsubscribe: Cancel | undefined;
   /**
@@ -457,6 +467,9 @@ export class CompiledPiece {
       if (scopeRank(given.getNarrowestReadScope()) < scopeRank(narrowest)) {
         given.resetNarrowestReadScope(narrowest);
       }
+      // A run of the same pass behind the first derivation of the instances
+      // a handler made derives nothing until that commit has ended.
+      if (this.#madePending) return;
       for (const doc of this.#arrived) this.#take(doc);
       this.#arrived.clear();
       // The first derivation of the instances a handler made is a
@@ -489,7 +502,9 @@ export class CompiledPiece {
       // replica does not hold what this run wrote yet.
       const names = transactions.scoped && !this.#named;
       if (names || (first && this.#named)) {
+        if (first) this.#madePending = true;
         given.addCommitCallback(() => {
+          this.#madePending = false;
           if (this.#stopped) return;
           if (transactions.scoped && !this.#named) this.#subscribe();
           this.#invalidate();

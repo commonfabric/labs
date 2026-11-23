@@ -216,6 +216,8 @@ installFakeClock({
     "compiled-serving-takeover-derived",
     // The same, for the events of two principals in turn.
     "compiled-serving-principals",
+    // The same, for an instance a handler made, which two sessions demand.
+    "made-session",
   ],
 });
 
