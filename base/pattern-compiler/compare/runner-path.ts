@@ -4,7 +4,11 @@
  * from the write that causes it until the runtime is settled (milestone 3
  * of `docs/plans/compiled-pattern-language-integration.md`).
  *
- * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today] [--case=<part of a name>] [--no-pull] [--rows=in-place] [--slots=<n>] [lengths]`
+ * `deno run -A --no-check base/pattern-compiler/compare/runner-path.ts [--later=<n>] [--arms=compiled,today,alone] [--case=<part of a name>] [--no-pull] [--rows=in-place] [--slots=<n>] [lengths]`
+ *
+ * The arm `alone` starts no piece: it makes the inputs and the same
+ * changes, so its time is that of the harness's own writes, the commit and
+ * the memory server's handling included. It is compared with no arm.
  *
  * Both arms run in a runtime of their own on emulated storage, with
  * `cfcFlowLabels` at `persist` and the input under a schema with one
@@ -55,8 +59,12 @@ import type { Artifact } from "../exec/executor.ts";
 import { inputClause } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
 
-/** The two paths a pattern is run on. */
-export type Arm = "compiled" | "today";
+/**
+ * The two paths a pattern is run on, and `alone`: the same inputs and the
+ * same changes with no piece started, which is what the writes of the
+ * harness cost by themselves.
+ */
+export type Arm = "compiled" | "today" | "alone";
 
 /** What one step of one arm cost. */
 export type StepCost = {
@@ -384,6 +392,7 @@ const growthArm = async (
         diffAndUpdate(runtime, tx, link, held as never);
       }
       const result = runtime.getCell<unknown>(space, `growth ${one.name}`);
+      if (arm === "alone") return { result };
       if (arm === "compiled") {
         const [{ patterns }] = JSON.parse(
           await Deno.readTextFile(
@@ -529,7 +538,9 @@ if (import.meta.main) {
       }
       const row = (operation: string, costs: Row): void =>
         console.log(JSON.stringify({ ...costs, operation }));
-      const read = () => started.map(({ run }) => run.read());
+      // The arm `alone` has no result to compare.
+      const compared = started.filter(({ arm }) => arm !== "alone");
+      const read = () => compared.map(({ run }) => run.read());
       const equal = () => {
         const [first, ...rest] = read();
         return rest.every((other) => other === first);
@@ -538,7 +549,7 @@ if (import.meta.main) {
       row("load", {
         ...base,
         ...Object.fromEntries(started.map(({ arm, load }) => [arm, load])),
-        ...(started.length > 1 ? { equal: equal() } : {}),
+        ...(compared.length > 1 ? { equal: equal() } : {}),
       });
       for (const operation of Object.keys(started[0].operations)) {
         const costs: Row = { ...base };
@@ -564,7 +575,7 @@ if (import.meta.main) {
             ...(later > 0 ? { later: round(sum / later) } : {}),
           };
         }
-        if (started.length > 1) costs.equal = equal();
+        if (compared.length > 1) costs.equal = equal();
         for (const { arm, run } of started) {
           if (arm === "compiled") {
             costs.followed = run.throughRuntime() === run.read();
