@@ -17,6 +17,7 @@
  * holds it, and not as a copy. A part document over the maximum is not
  * split further. Label entries and provenance are in no size.
  */
+import { FabricPrimitive } from "@commonfabric/data-model";
 
 /** The size from which a row is stored as a part of its own. */
 export const PART_MIN_BYTES = 1_024;
@@ -67,7 +68,7 @@ const bytesOf = (value: unknown): number =>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value) &&
-  !(value instanceof ArrayLink);
+  !(value instanceof ArrayLink) && !(value instanceof FabricPrimitive);
 
 /** The part document of one row. */
 type Part = { kind: "part"; id: string; bytes: number; key?: string };

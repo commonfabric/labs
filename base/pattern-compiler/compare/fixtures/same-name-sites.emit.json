@@ -64,7 +64,7 @@
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
             {
-              "eventSchema": "unhashed:schema/5",
+              "eventSchema": "unhashed:schema/4",
               "handler": {
                 "body": 0
               },
@@ -499,13 +499,13 @@
                 "collection": 1,
                 "kind": "element"
               },
-              "schema": "unhashed:schema/4"
+              "schema": "unhashed:schema/2"
             }
           ],
           "stateCells": [
             {
               "name": "count",
-              "schema": "unhashed:schema/6",
+              "schema": "unhashed:schema/5",
               "scope": "space",
               "within": []
             }
@@ -561,16 +561,12 @@
           },
           {
             "id": "unhashed:schema/4",
-            "schema": {}
-          },
-          {
-            "id": "unhashed:schema/5",
             "schema": {
               "type": "unknown"
             }
           },
           {
-            "id": "unhashed:schema/6",
+            "id": "unhashed:schema/5",
             "schema": {
               "default": 0
             }
@@ -701,7 +697,7 @@
           "argumentSchema": "unhashed:schema/0",
           "bindings": [
             {
-              "eventSchema": "unhashed:schema/5",
+              "eventSchema": "unhashed:schema/4",
               "handler": {
                 "body": 0
               },
@@ -731,7 +727,7 @@
               ]
             },
             {
-              "eventSchema": "unhashed:schema/5",
+              "eventSchema": "unhashed:schema/4",
               "handler": {
                 "body": 0
               },
@@ -761,7 +757,7 @@
               ]
             },
             {
-              "eventSchema": "unhashed:schema/5",
+              "eventSchema": "unhashed:schema/4",
               "handler": {
                 "body": 0
               },
@@ -1905,7 +1901,7 @@
                 "collection": 1,
                 "kind": "element"
               },
-              "schema": "unhashed:schema/4"
+              "schema": "unhashed:schema/2"
             },
             {
               "observes": "enumeration",
@@ -1941,7 +1937,7 @@
                 "collection": 3,
                 "kind": "element"
               },
-              "schema": "unhashed:schema/4"
+              "schema": "unhashed:schema/2"
             },
             {
               "observes": "value",
@@ -1977,13 +1973,13 @@
                 "collection": 5,
                 "kind": "element"
               },
-              "schema": "unhashed:schema/4"
+              "schema": "unhashed:schema/2"
             }
           ],
           "stateCells": [
             {
               "name": "count",
-              "schema": "unhashed:schema/6",
+              "schema": "unhashed:schema/5",
               "scope": "space",
               "within": [
                 {
@@ -1996,7 +1992,7 @@
             },
             {
               "name": "count",
-              "schema": "unhashed:schema/6",
+              "schema": "unhashed:schema/5",
               "scope": "space",
               "within": [
                 {
@@ -2009,7 +2005,7 @@
             },
             {
               "name": "count",
-              "schema": "unhashed:schema/6",
+              "schema": "unhashed:schema/5",
               "scope": "space",
               "within": [
                 {
@@ -2081,16 +2077,12 @@
           },
           {
             "id": "unhashed:schema/4",
-            "schema": {}
-          },
-          {
-            "id": "unhashed:schema/5",
             "schema": {
               "type": "unknown"
             }
           },
           {
-            "id": "unhashed:schema/6",
+            "id": "unhashed:schema/5",
             "schema": {
               "default": 0
             }

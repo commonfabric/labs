@@ -32,6 +32,7 @@
  */
 import {
   debugStr,
+  FabricPrimitive,
   type FabricValue,
   isWalkableObjectNotArray,
 } from "@commonfabric/data-model";
@@ -713,9 +714,11 @@ export class RuntimeTransactions implements TransactionHooks {
       this.#subscription = {
         next: (notification) => {
           if (notification.type === "reset") this.#labelIds.clear();
+          // A commit of another space changes a document the executor
+          // holds where a link led it into that space (`#spaces`).
           if (
             notification.type === "reset" ||
-            notification.space !== this.#space
+            (notification.space !== this.#space && this.#spaces.size === 0)
           ) {
             return undefined;
           }
@@ -729,6 +732,8 @@ export class RuntimeTransactions implements TransactionHooks {
           for (const { address, before, after } of notification.changes) {
             const doc = this.#byEntity.get(address.id);
             if (doc === undefined) continue;
+            // Two spaces can hold documents of one entity.
+            if (this.#spaceOf(doc) !== notification.space) continue;
             this.#sources?.changed(
               doc,
               false,
@@ -934,6 +939,28 @@ export class RuntimeTransactions implements TransactionHooks {
     return this.#streams.has(entity) ? entity : undefined;
   }
 
+  /**
+   * The entity that holds the stream marker of a stream of the executor,
+   * written into the handed transaction in progress (`within()`) where no
+   * transaction wrote it: a stream that a handler sends to and that no
+   * stored value links, as one that the state of a binding alone holds,
+   * has its marker from the transaction of the handler that first sends to
+   * it.
+   */
+  markedStream(stream: StreamOfExecutor): URI {
+    const known = this.entityOfStream(stream);
+    if (known !== undefined) return known;
+    this.begin("send");
+    let committed = false;
+    try {
+      const entity = this.#streamEntity(stream);
+      committed = true;
+      return entity;
+    } finally {
+      this.end({ committed });
+    }
+  }
+
   /** What the transactions were given so far. */
   get counts(): Readonly<RuntimeCounts> {
     return { ...this.#counts, byCause: { ...this.#counts.byCause } };
@@ -996,13 +1023,24 @@ export class RuntimeTransactions implements TransactionHooks {
         this.#entriesOf.set(doc, now);
         const { paths, alone } = changedLabelPaths(before, after);
         if (paths.length > 0) {
+          // The answer for a path and a class is the same for every record
+          // that read the path, and the records of the rows of a list read
+          // the same few paths of it.
+          const answered = new Map<string, boolean>();
           changes.push({
             doc,
             paths,
             ...(alone.length > 0 ? { alone } : {}),
-            unchanged: (path, observes) =>
-              this.#labelIn(was, path, observes) ===
-                this.#labelIn(now, path, observes),
+            unchanged: (path, observes) => {
+              const asked = `${observes}\n${JSON.stringify(path)}`;
+              let answer = answered.get(asked);
+              if (answer === undefined) {
+                answer = this.#labelIn(was, path, observes) ===
+                  this.#labelIn(now, path, observes);
+                answered.set(asked, answer);
+              }
+              return answer;
+            },
           });
         }
       }
@@ -3334,6 +3372,11 @@ export class RuntimeTransactions implements TransactionHooks {
     ) {
       return value;
     }
+    // A primitive of the data model, such as a time, and a `bigint` are
+    // values of the storage as they are.
+    if (value instanceof FabricPrimitive || typeof value === "bigint") {
+      return value;
+    }
     throw new Error(debugStr`The executor holds no JSON value: ${value}`);
   }
 
@@ -3588,6 +3631,13 @@ export class RuntimeTransactions implements TransactionHooks {
       const stream = this.#streams.get(link.id ?? "");
       if (stream !== undefined) return { $stream: stream };
       const row = this.documentOf(link.id ?? "");
+      // A link that names another space than the piece's leads to a
+      // document of that space: the executor names a document by its
+      // entity alone, and the adapter keeps the space it is read in.
+      if (
+        link.space !== undefined && link.space !== this.#space &&
+        !this.#spaces.has(row) && !this.#documents.has(row)
+      ) this.#spaces.set(row, link.space);
       if (
         rows !== undefined &&
         (this.#rowDocuments.has(row) || this.#bucketDocuments.has(row))

@@ -37,8 +37,13 @@
  * (`compartmentEvaluator`), and with `--evaluate=function` in the realm of
  * the harness, as the executor in memory evaluates it.
  *
- * A module that needs `wish` or requests an effect is left out: nothing
- * answers a request of a compiled piece on the runner path.
+ * A `wish` is answered from the seeded home of `wish-home.ts`, which
+ * stands in for the runtime's own resolution: the piece is handed the
+ * table as the option `wishes`. A module whose `wish` the home does not
+ * simulate is left out, and so is one with a `wish` under `--resume` or
+ * `--serving`, where nothing hands the table to the piece that takes over.
+ * A module that requests an effect is left out: nothing answers a request
+ * of a compiled piece on the runner path.
  */
 import { Identity } from "@commonfabric/identity";
 
@@ -72,6 +77,7 @@ import {
 import { generateEvent, generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
 import { argumentOf, categoryOf, ExecutorRun, normalize } from "./values.ts";
+import { hasWish, homeStubs, memoryHome, seedHome } from "./wish-home.ts";
 
 type EmittedModule = Omit<CorpusModule, "patterns"> & {
   patterns: Artifact[];
@@ -169,7 +175,6 @@ const valueAt = (value: unknown, path: string): string => {
 const needs = (plan: Artifact["plan"]): string | undefined => {
   const operations =
     (plan as { operations?: { kind?: string }[] }).operations ?? [];
-  if (operations.some(({ kind }) => kind === "wish")) return "needs `wish`";
   if (operations.some(({ kind }) => kind === "effect")) {
     return "requests an effect";
   }
@@ -205,13 +210,30 @@ export const runOne = async (
     event: generateEvent(plan, schemas, binding),
   }));
   const now = Date.now();
+  // A `wish` is answered from the seeded home of `wish-home.ts`, on both
+  // sides: the executor in memory from documents it is given, and the
+  // piece from the same documents written into its storage.
+  const wishes = hasWish(artifact.plan);
+  if (wishes && (serving || resume)) {
+    return { ...base, skipped: "needs `wish`" };
+  }
 
   // The executor with its documents in memory.
+  const stubs = wishes ? homeStubs(await memoryHome()) : undefined;
   const alone = new ExecutorRun(artifact, argument, artifacts, {
     completion: () => undefined,
     now,
+    ...(stubs === undefined ? {} : { home: stubs }),
   } as never);
   alone.start(undefined);
+  if (stubs !== undefined && stubs.unsimulated.length > 0) {
+    return {
+      ...base,
+      skipped: `needs \`wish\`: ${
+        stubs.unsimulated.map((query) => `\`${query}\``).join(", ")
+      } is not simulated`,
+    };
+  }
   events.forEach(({ binding, event }, index) => {
     const [held] = alone.held(binding);
     if (held !== undefined) {
@@ -250,6 +272,9 @@ export const runOne = async (
   let resumed: Outcome["resume"];
   try {
     const result = runtime.getCell<unknown>(space, "corpus on the runner");
+    const seeded = wishes
+      ? homeStubs(await seedHome(runtime, space))
+      : undefined;
     const tx = runtime.edit();
     try {
       piece = startCompiledPiece(
@@ -258,7 +283,12 @@ export const runOne = async (
         artifact,
         argument,
         result.withTx(tx),
-        { artifacts, now, ...(evaluate === undefined ? {} : { evaluate }) },
+        {
+          artifacts,
+          now,
+          ...(evaluate === undefined ? {} : { evaluate }),
+          ...(seeded === undefined ? {} : { wishes: seeded.wishes }),
+        },
       );
     } catch (error) {
       tx.abort();

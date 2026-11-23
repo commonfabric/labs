@@ -782,6 +782,38 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
         }
     }
 
+    /// The state of a handler applied where it is written: each member of
+    /// the state is rendered for the value functions it registers. The
+    /// binding reads its state by the places the plan records, so nothing
+    /// else renders a value written in the state, such as a conditional,
+    /// and without its function the output the binding names has no value.
+    fn binding_state(&mut self, call: &CallExpression<'a>) {
+        let Some(Expression::ObjectExpression(state)) = call
+            .arguments
+            .first()
+            .and_then(Argument::as_expression)
+            .map(unwrap)
+        else {
+            return;
+        };
+        for property in &state.properties {
+            let ObjectPropertyKind::ObjectProperty(property) = property else {
+                continue;
+            };
+            // A name is read by its place, and has its function where it
+            // is declared.
+            let written = unwrap(&property.value);
+            if matches!(written, Expression::Identifier(_)) {
+                continue;
+            }
+            let unregistered = matches!(self.place_of(written), Some(Place::Value(value, path))
+                if path.is_empty() && !self.generator.registered_values.contains(&value));
+            if unregistered {
+                self.render(written, Want::Pass);
+            }
+        }
+    }
+
     /// Registers the value function of a `const` of a block body, where
     /// `value` is one and has no function: the initializer, which reads
     /// the other names of the block as outputs.
@@ -921,6 +953,8 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     let function = call.arguments.first().and_then(FunctionLike::of_argument);
                     if let (true, Some(function)) = (action, function) {
                         self.inline_handler(*binding, function);
+                    } else if !action {
+                        self.binding_state(call);
                     }
                 }
                 self.place_code(&fact.place, want)
