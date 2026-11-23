@@ -10,8 +10,8 @@ import type {
   ReadonlyCell,
   Stream,
   Suggestion,
+  SuggestionPatternVerb,
   SUGGESTIONS as SUGGESTIONS_TYPE,
-  SuggestionVerbCall,
   TILE_UI as TILE_UI_TYPE,
   UI as UI_TYPE,
   VIEWS as VIEWS_TYPE,
@@ -197,7 +197,7 @@ function reservedOutputTypeChecks() {
   const inlineSuggestion: Suggestion = {
     title: "Add cake",
     acts: [{
-      kind: "verb.call",
+      kind: "pattern.verb",
       label: "Add",
       verb: addItem,
       payload: { title: "Cake" },
@@ -210,11 +210,11 @@ function reservedOutputTypeChecks() {
   }));
 
   // An act typed by its handler's event checks the payload against it.
-  const badSuggestionAct: SuggestionVerbCall<AddItemEvent> = {
-    kind: "verb.call",
+  const badSuggestionAct: SuggestionPatternVerb<AddItemEvent> = {
+    kind: "pattern.verb",
     label: "Add",
     verb: addItem,
-    // @ts-expect-error a verb.call's payload is what its verb receives
+    // @ts-expect-error a pattern.verb's payload is what its verb receives
     payload: { name: "Cake" },
   };
 

@@ -5112,17 +5112,17 @@ export interface SuggestionAmount {
 }
 
 /** What one of a suggestion's buttons does. */
-export type SuggestionAct = SuggestionVerbCall | SuggestionWant;
+export type SuggestionAct = SuggestionPatternVerb | SuggestionWant;
 
 /**
  * A button that sends `payload` to one of the pattern's handlers. The take
- * runs as the piece's owner, and asks the person first only when `confirm` is
- * set.
+ * runs as the owner of the pattern's instance, who need not be the person
+ * taking it, and asks that person first only when `confirm` is set.
  */
 // deno-lint-ignore no-explicit-any
-export interface SuggestionVerbCall<E = any> {
+export interface SuggestionPatternVerb<E = any> {
   /** The kind of act. */
-  kind: "verb.call";
+  kind: "pattern.verb";
   /** The button's words, such as "Add". */
   label: string;
   /** Why the act is offered, in words the person reads. */
