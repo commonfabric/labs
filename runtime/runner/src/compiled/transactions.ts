@@ -248,6 +248,12 @@ type BucketRecord = {
   keys: Set<string>;
 };
 
+/**
+ * The most positions behind a splice of an array of row documents that are
+ * written one by one. A splice that shifts more is written as the array.
+ */
+const SPLICE_AS_POSITIONS = 16;
+
 /** What a handed transaction leaves for when its commit is applied. */
 type Handed = {
   unchanged: Map<string, Map<string, string>>;
@@ -2204,14 +2210,25 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     const moved = splice.removed !== splice.inserted;
     const end = moved ? held.length : splice.start + splice.inserted;
+    // A splice in the middle of a long array shifts every position behind
+    // it. The array is then written once, as the links it holds now, under
+    // a read of the array: the commit sends the difference from what the
+    // storage holds, which is the splice itself where the server takes
+    // splices of an array the transaction read, and the positions that
+    // differ otherwise. The paths written are the same either way.
+    const whole = moved && end - splice.start > SPLICE_AS_POSITIONS;
     if (moved) {
       written.push([...path, "length"]);
-      tx.writeValueOrThrow(here(["length"]), held.length);
+      if (!whole) tx.writeValueOrThrow(here(["length"]), held.length);
     }
     this.#counts.rowLinks += Math.max(0, end - splice.start);
     for (let index = splice.start; index < end; index++) {
       written.push([...path, `${index}`]);
-      tx.writeValueOrThrow(here([`${index}`]), linkAt(index));
+      if (!whole) tx.writeValueOrThrow(here([`${index}`]), linkAt(index));
+    }
+    if (whole) {
+      tx.readValueOrThrow(here([]));
+      tx.writeValueOrThrow(here([]), held.map((_, index) => linkAt(index)));
     }
   }
 
