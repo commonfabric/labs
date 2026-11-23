@@ -327,7 +327,14 @@ P391 for them (`api::is_window_method`, `window` in `plan.rs`,
 `array_method` in `infer.rs`, `collection_call` in `check/mod.rs`); `last`
 and `first` are removed, with their entry in `api::is_handle_member`; the
 room's copy, the fixtures and the tests `window-construct.test.ts` and
-`window.test.ts` are rewritten to `slice`. The round reports a FabriChat
+`window.test.ts` are rewritten to `slice`. The window gives what
+JavaScript's `slice` gives for every value of the count: the forms
+recognized are `xs.slice(-n)` and `xs.slice(0, n)` where `n` is a positive
+integer literal, or an expression whose value the executor checks at each
+evaluation, taking the window for a positive integer and the result of
+`slice` evaluated whole for any other value (`xs.slice(-0)` is the whole
+array, and a negative `n` in `xs.slice(0, n)` counts from the end). A
+`slice` with any other arguments is evaluated as today. The round reports a FabriChat
 send with the window and with the `slice` evaluated whole, and does not
 extend the window over the result of a `map` before the general costs of a
 send are fixed (the registration of a record at every position, the deep

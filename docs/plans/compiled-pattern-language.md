@@ -6616,7 +6616,11 @@ is relitigated.
   elements and `xs.slice(0, n)` as the first `n`, and plans each as the
   window the serving branch built as `xs.last(n)` and `xs.first(n)` (P391);
   the methods `last` and `first` are removed, with the entry for them in
-  `api::is_handle_member`. Any other `slice` is evaluated as today. Not
+  `api::is_handle_member`. The count `n` is a positive integer literal, or
+  an expression for which the executor takes the window when its value is a
+  positive integer and evaluates the `slice` whole otherwise, so that the
+  result is JavaScript's for every value. Any other `slice` is evaluated as
+  today. Not
   built: it follows the merge of the serving branch.
 
 - The constructs the build added under names regular JavaScript lacks move to
@@ -17743,8 +17747,9 @@ the members of a record: "I imagine Object.keys and Object.entries and maybe
 Object.values would be a bigger win earlier". `Object.entries(record).map`
 is built. `Object.keys(x).map`, `Object.values(x).map`, and a `filter` or a
 `flatMap` over the entries of a record are not; 59 files under `patterns/`
-call one of the three functions. This is work before the launch, listed
-under "Next work".
+call one of the three functions. This is work before the launch; the
+[handoff document](compiled-pattern-language-handoff.md) lists it among the
+open lines of work.
 
 ## Next work
 
