@@ -393,11 +393,33 @@ export const nameText = (name: Name): string =>
  * the serialization of a record.
  */
 export const recordOfKey = (key: string): Record<string, FabricValue> => {
+  const known = decodedKeys.get(key);
+  if (known !== undefined && known !== null) return known;
   const parts = fabricFromJsonValue(key);
   if (!isValueRecord(parts)) {
     throw new Error(debugStr`Not an element key: $quote${key}`);
   }
+  noteDecoded(key, parts);
   return parts;
+};
+
+/**
+ * What the codec read of each text that was asked about as a key: the
+ * record of a text that is the serialization of one, which the codec gives
+ * frozen, and `null` for any other text. A key is asked about at each read
+ * and each write through a reference that holds it, and reading its text
+ * costs many times a lookup. The table is emptied when it holds
+ * `DECODED_KEYS` texts, so it holds no more than that many.
+ */
+const decodedKeys = new Map<string, Record<string, FabricValue> | null>();
+const DECODED_KEYS = 100_000;
+
+const noteDecoded = (
+  text: string,
+  record: Record<string, FabricValue> | null,
+): void => {
+  if (decodedKeys.size >= DECODED_KEYS) decodedKeys.clear();
+  decodedKeys.set(text, record);
 };
 
 /** A path of a document in `Store.#changes`. */
@@ -494,14 +516,17 @@ export const keyOfSegment = (
   segment: string,
 ): Record<string, FabricValue> | undefined => {
   if (!segment.startsWith(CODEC_TEXT)) return undefined;
-  let decoded: FabricValue;
-  try {
-    decoded = fabricFromJsonValue(segment);
-  } catch {
-    // A text that the codec does not read is a property name.
-    return undefined;
+  let decoded: FabricValue | null | undefined = decodedKeys.get(segment);
+  if (decoded === undefined) {
+    try {
+      decoded = fabricFromJsonValue(segment);
+    } catch {
+      // A text that the codec does not read is a property name.
+      decoded = null;
+    }
+    noteDecoded(segment, isValueRecord(decoded) ? decoded : null);
   }
-  if (!isValueRecord(decoded)) return undefined;
+  if (decoded === null || !isValueRecord(decoded)) return undefined;
   const isKey = ("element" in decoded && "occurrence" in decoded) ||
     ("source" in decoded && "member" in decoded);
   return isKey ? decoded : undefined;
@@ -510,6 +535,15 @@ export const keyOfSegment = (
 /** Whether a segment of a path names an element by its key. */
 export const isKeySegment = (segment: string): boolean =>
   keyOfSegment(segment) !== undefined;
+
+/**
+ * A text for the document and the path of a reference, the same for two
+ * references where both are the same: what a reference is held under in a
+ * set or a table of one store. It is no address: `Store.addressText` gives
+ * the text that names what a reference names.
+ */
+const positionText = (ref: Ref): string =>
+  `${ref.doc}\n${JSON.stringify(ref.path)}`;
 
 /** Whether two paths have the same segments. */
 const samePath = (a: readonly string[], b: readonly string[]): boolean =>
@@ -2225,7 +2259,7 @@ export class Store {
         all = true;
         continue;
       }
-      const id = this.addressText(state.at);
+      const id = positionText(state.at);
       const reads: Position[] = [];
       let parts: ElementPart[];
       this.#keying.add(id);
@@ -2545,7 +2579,7 @@ export class Store {
     fields: readonly string[] = [],
     whole = false,
   ): string[] {
-    const id = this.addressText(at);
+    const id = positionText(at);
     // An element that holds a reference by key into its own array is
     // keyed by its position while the keys of that array are formed.
     const reentered = this.#keying.has(id);
@@ -2749,6 +2783,11 @@ export class Store {
         // the key by: it reads the position that holds the row now.
         const rows = this.rowKeys.get(JSON.stringify([doc, at]));
         if (
+          rows === undefined && reads !== undefined &&
+          this.#beforeKeys.has(reads)
+        ) {
+          reads = undefined;
+        } else if (
           rows === undefined && reads !== undefined && !this.#plain.has(reads)
         ) {
           const keyed = new Ref(doc, [...named_, segment, ...rest]);
@@ -2833,6 +2872,21 @@ export class Store {
       fallback,
     };
   }
+
+  /**
+   * `locate`, for a caller that takes the position found and the positions
+   * the read went through, and nothing of a read by key: where `locate`
+   * would put one read by key in the place of the positions from a key on,
+   * `crossed` gets nothing from the key on, and the element the key names
+   * is not read to keep what it holds.
+   */
+  locateCrossed(ref: Ref, through: boolean, crossed: Position[]): Located {
+    this.#beforeKeys.add(crossed);
+    return this.locate(ref, through, crossed);
+  }
+
+  /** The lists of reads that end at the first key (`locateCrossed`). */
+  readonly #beforeKeys = new WeakSet<Position[]>();
 
   /** Reports a position a read went through (`onRead`, `reader`). */
   #read(doc: string, path: string[]): void {
@@ -3011,7 +3065,7 @@ export class Store {
       false,
       declaredMembers(bound),
     );
-    const id = this.addressText(located.ref);
+    const id = positionText(located.ref);
     if (open.has(id)) return undefined;
     const reached = this.#reached?.get(bound);
     if (reached?.has(id)) return reached.get(id);

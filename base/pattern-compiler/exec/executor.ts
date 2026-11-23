@@ -11571,14 +11571,12 @@ export class Instance {
           // The links crossed, and the position that holds the key now
           // in the place of the read by key.
           const crossed: Position[] = [];
-          const located = this.store.locate(
+          const located = this.store.locateCrossed(
             ref,
             through && position instanceof Ref,
             crossed,
           );
-          for (const { doc, path, keyed } of crossed) {
-            if (keyed === undefined) add(doc, path);
-          }
+          for (const { doc, path } of crossed) add(doc, path);
           add(located.ref.doc, located.ref.path);
         } else {
           add(position.doc, position.path, position.stopped === true);

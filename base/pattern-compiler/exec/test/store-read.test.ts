@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { Ref, type Schema, Store } from "../store.ts";
+import { recordOfKey, Ref, type Schema, Store } from "../store.ts";
 
 const link = (doc: string) => ({ $link: { doc, path: [] } });
 
@@ -240,6 +240,41 @@ describe("Store", () => {
       expect(read).not.toBe(store.peek("doc", ["items"]));
       expect(read[0]).toBe(store.peek("a", []));
       expect(store.handed.get(read[1])?.at.doc).toBe("b");
+    });
+  });
+
+  describe("locateCrossed()", () => {
+    it("gives the position a reference by key names and the links crossed before the key, and no read by key", () => {
+      const store = new Store({ parts: false });
+      store.create("doc", "list", {
+        items: [{ id: "a", title: "t" }, { id: "b", title: "u" }],
+      });
+      store.create("holder", "argument", {
+        list: { $link: { doc: "doc", path: ["items"] } },
+      });
+      const held = store.peek("doc", ["items"]) as object[];
+      const [, key] = store.keysOf(held, new Ref("doc", ["items"]));
+      const byKey = new Ref("holder", ["list", key, "title"]);
+      const crossed: { doc: string; path: readonly string[] }[] = [];
+
+      const located = store.locateCrossed(byKey, true, crossed);
+
+      expect(located.ref.doc).toBe("doc");
+      expect(located.ref.path).toEqual(["items", "1", "title"]);
+      expect(crossed).toEqual([{ doc: "holder", path: ["list"] }]);
+    });
+  });
+
+  describe("recordOfKey()", () => {
+    it("gives one frozen record for a text of a key, at each call", () => {
+      const store = new Store({ parts: false });
+      const key = store.keyOf({ id: "a" });
+
+      const record = recordOfKey(key);
+
+      expect(recordOfKey(key)).toBe(record);
+      expect(Object.isFrozen(record)).toBe(true);
+      expect(record.occurrence).toBe(0);
     });
   });
 
