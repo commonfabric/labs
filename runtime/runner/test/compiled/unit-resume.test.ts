@@ -238,6 +238,82 @@ describe("resumeCompiledPieceByUnits()", () => {
     ]);
   });
 
+  // The argument holds the array itself, so each element is a plain value
+  // in place in the argument document. The body of such an element reads
+  // through a reference by key, which the lists of the readers do not
+  // hold.
+  it("evaluates every body at the wake where the array holds plain values in place", async () => {
+    const result = runtime.getCell<Result>(space, "result");
+    const artifact = await artifactOf("Once");
+    let first: CompiledPiece | undefined;
+    await commit((tx) => {
+      first = startCompiledPiece(
+        runtime,
+        tx,
+        artifact,
+        {
+          items: TITLES.map((title, index) => ({
+            id: `i${index}`,
+            title,
+            done: false,
+          })),
+        },
+        result.withTx(tx),
+      );
+    });
+    first!.stop();
+
+    const piece = await wokenByUnits(artifact, result);
+    expect(piece.instance.counts.elementEvaluations).toBe(TITLES.length);
+    await send(result, "rename", { at: 2, title: "third" });
+
+    expect(piece.refusals).toEqual([]);
+    expect(labelsAt(result, "rows")).toEqual([
+      "one!",
+      "two!",
+      "third!",
+      "four!",
+    ]);
+  });
+
+  // An array of plain records that a client writes through a cell holds a
+  // link at each position: the runtime stores each record in an entity of
+  // its own.
+  it("leaves the rows as stored where a client wrote the array as plain records through a cell", async () => {
+    const items = runtime.getCell<unknown[]>(space, "items");
+    const result = runtime.getCell<Result>(space, "result");
+    const artifact = await artifactOf("Once");
+    let first: CompiledPiece | undefined;
+    await commit((tx) => {
+      items.withTx(tx).set(
+        TITLES.map((title, index) => ({ id: `i${index}`, title, done: false })),
+      );
+    });
+    await commit((tx) => {
+      first = startCompiledPiece(
+        runtime,
+        tx,
+        artifact,
+        { items },
+        result.withTx(tx),
+      );
+    });
+    first!.stop();
+
+    const piece = await wokenByUnits(artifact, result);
+    expect(piece.instance.counts.elementEvaluations).toBe(0);
+    await send(result, "rename", { at: 2, title: "third" });
+
+    expect(piece.refusals).toEqual([]);
+    expect(piece.instance.counts.elementEvaluations).toBe(1);
+    expect(labelsAt(result, "rows")).toEqual([
+      "one!",
+      "two!",
+      "third!",
+      "four!",
+    ]);
+  });
+
   // The result keeps the collection at `again` and at `rows`. The rows of
   // one place are documents that the storage holds, and the unit at the
   // other place takes the rows as values, which evaluates every body.
