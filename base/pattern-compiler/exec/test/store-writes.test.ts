@@ -57,6 +57,19 @@ describe("Store", () => {
       }
     });
 
+    it("keeps a position of the array that holds nothing as one that holds nothing", () => {
+      const store = listOf(2);
+      store.write(new Ref("doc", ["items", "4"]), rows(1)[0]);
+
+      store.write(new Ref("doc", ["items", "0", "title"]), "edited");
+      const after = itemsOf(store);
+
+      expect(after).toHaveLength(5);
+      expect(2 in after).toBe(false);
+      expect(3 in after).toBe(false);
+      expect(after[4].id).toBe("i0");
+    });
+
     it("copies nothing and reports no change for a write of the value a path holds", () => {
       const store = listOf(5);
       const before = itemsOf(store);

@@ -72,6 +72,19 @@ export const spliceIn = <T>(
       ([start, count] as unknown[]).concat(members) as [number, number],
     ) as T[];
 
+/**
+ * A copy of a frozen array that is not frozen. At 10,000 members
+ * `Object.values` takes 7 us, in a realm that is locked down and in one
+ * that is not; a spread takes 1 us in a realm that is not locked down and
+ * 110 us in one that is, and `slice` 160 us in both. `Object.values`
+ * leaves out a position that holds nothing, so an array with one is copied
+ * by `concat`, which keeps it.
+ */
+const copyOfArray = <T>(array: readonly T[]): T[] => {
+  const copy = Object.values(array);
+  return copy.length === array.length ? copy : array.concat();
+};
+
 const linked = new WeakSet<object>();
 
 /**
@@ -408,8 +421,10 @@ export const recordOfKey = (key: string): Record<string, FabricValue> => {
  * record of a text that is the serialization of one, which the codec gives
  * frozen, and `null` for any other text. A key is asked about at each read
  * and each write through a reference that holds it, and reading its text
- * costs many times a lookup. The table is emptied when it holds
- * `DECODED_KEYS` texts, so it holds no more than that many.
+ * costs many times a lookup. What the table holds for a text is a function
+ * of the text alone, so the stores of one process share it with no effect
+ * on any of them. It is emptied when it holds `DECODED_KEYS` texts, so it
+ * holds no more than that many.
  */
 const decodedKeys = new Map<string, Record<string, FabricValue> | null>();
 const DECODED_KEYS = 100_000;
@@ -1429,7 +1444,9 @@ export class Store {
         if (typeof member !== "object" || member === null) continue;
         const held = this.#keep(member);
         if (held !== member) {
-          if (kept === value && Object.isFrozen(value)) kept = [...value];
+          if (kept === value && Object.isFrozen(value)) {
+            kept = copyOfArray(value);
+          }
           kept[index] = held;
         }
         if (this.#holdsLinks(held)) links += 1;
@@ -1563,9 +1580,7 @@ export class Store {
       let links = this.#linksOf(from) - (this.#holdsLinks(from[name]) ? 1 : 0);
       let copy: Record<string, unknown>;
       if (Array.isArray(from)) {
-        // A spread, since `slice` of a frozen array copies member by
-        // member at many times the cost.
-        copy = [...from] as unknown as Record<string, unknown>;
+        copy = copyOfArray(from) as unknown as Record<string, unknown>;
         copy[name] = next;
       } else {
         copy = { ...from };
@@ -1613,7 +1628,7 @@ export class Store {
     removed: number,
     members: readonly unknown[],
   ): unknown[] {
-    const next = [...held];
+    const next = copyOfArray(held);
     const kept = members.map((member) => this.#keep(member));
     const taken = spliceIn(next, start, removed, kept);
     let links = this.#linksOf(held);
