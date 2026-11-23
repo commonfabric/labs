@@ -11,6 +11,7 @@ import {
 import { parseLink } from "../../src/link-utils.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { storedList } from "./storage.ts";
 
 /** The pattern of `compare/fixtures/sorted-rows.tsx`. */
 const artifact = async (): Promise<Artifact> => {
@@ -112,16 +113,8 @@ describe("the rows of a `map` over a sort by a key as a compiled piece, stored a
 
   /** The document each position of the stored array of cards links to. */
   const documents = (result: Cell<Sorted>): string[] => {
-    const tx = runtime.edit();
-    try {
-      const cards = tx.readValueOrThrow({
-        ...result.getAsNormalizedFullLink(),
-        path: ["cards"],
-      }) as unknown[];
-      return cards.map((card) => parseLink(card as never).id!);
-    } finally {
-      tx.abort();
-    }
+    const cards = storedList(runtime, result, ["cards"]) as unknown[];
+    return cards.map((card) => parseLink(card as never).id!);
   };
 
   const expected = (order: number[]) => order.map((index) => `t${index}`);
@@ -134,10 +127,10 @@ describe("the rows of a `map` over a sort by a key as a compiled piece, stored a
     expect(new Set(documents(result)).size).toBe(COUNT);
   });
 
-  it("moves the card of an item whose rank puts it before every other, with one write of the array and the document of each card where it was", async () => {
+  it("moves the card of an item whose rank puts it before every other, with two writes of the list document, none of the result, and the document of each card where it was", async () => {
     const { result, items } = await sorted();
     const before = documents(result);
-    const written = piece.transactions.counts.rowArraysWritten;
+    const written = { ...piece.transactions.counts };
 
     await commit((tx) => items[COUNT - 1].withTx(tx).key("rank").set(-1));
 
@@ -148,7 +141,11 @@ describe("the rows of a `map` over a sort by a key as a compiled piece, stored a
       before[COUNT - 1],
       ...before.slice(0, -1),
     ]);
-    expect(piece.transactions.counts.rowArraysWritten - written).toBe(1);
+    const { rowArraysWritten, listDocumentsWritten } =
+      piece.transactions.counts;
+    expect(rowArraysWritten - written.rowArraysWritten).toBe(0);
+    // The removal and the insertion are each written to the one document.
+    expect(listDocumentsWritten - written.listDocumentsWritten).toBe(2);
   });
 
   it("moves the cards of two items whose ranks another writer changes in one transaction", async () => {

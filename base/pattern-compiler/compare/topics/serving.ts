@@ -280,7 +280,8 @@ type CaptionPath = {
   /** The path of the caption below a card. */
   caption: (string | number)[];
   /**
-   * Where the array of cards is stored in chunks (`SCALE_LISTS`): how many
+   * Where the array of cards is stored in chunks (unless `SCALE_LISTS` is
+   * `in-place`, for more cards than one list document holds): how many
    * cards each chunk held when the path was found. The array then holds
    * the chunks, and a card stands in its chunk.
    */
@@ -289,9 +290,10 @@ type CaptionPath = {
 
 /**
  * The path of the row at `index` below an array of rows of a board that
- * was loaded with `size` topics: the index, or with `SCALE_LISTS=documents`
- * and more than 64 topics, the chunk and the place in it. A load lays the
- * rows out in chunks of 48 (`LIST_FILL` of
+ * was loaded with `size` topics: the index, or, unless `SCALE_LISTS` is
+ * `in-place`, for more topics than one list document holds
+ * (`SCALE_LIST_WHOLE`, or 64), the chunk and the place in it. A load lays
+ * the rows out in chunks of 48 (`LIST_FILL` of
  * `runtime/runner/src/compiled/transactions.ts`), and a topic that is
  * appended afterwards moves none of them.
  */
@@ -300,8 +302,8 @@ const rowAt = (
   size: number,
   index: number,
 ): (string | number)[] =>
-  arm === "serving" && Deno.env.get("SCALE_LISTS") === "documents" &&
-    size > 64
+  arm === "serving" && Deno.env.get("SCALE_LISTS") !== "in-place" &&
+    size > Number(Deno.env.get("SCALE_LIST_WHOLE") ?? 64)
     ? [Math.floor(index / 48), index % 48]
     : [index];
 
@@ -479,13 +481,18 @@ export const runServing = async (
         ? {}
         : { policy: { storeReadThrough: true } }),
       pieces: {
-        // `SCALE_LISTS=documents` stores the links to the rows and to the
-        // buckets of the board in documents of their own.
+        // `SCALE_LISTS=in-place` stores the links to the rows and to the
+        // buckets of the board in the result document, and
+        // `SCALE_LIST_WHOLE` is the most rows whose links one list
+        // document holds.
         piece: {
           now: 1_000_000,
-          ...(Deno.env.get("SCALE_LISTS") === "documents"
-            ? { lists: "documents" as const }
+          ...(Deno.env.get("SCALE_LISTS") === "in-place"
+            ? { lists: "in-place" as const }
             : {}),
+          ...(Deno.env.get("SCALE_LIST_WHOLE") === undefined
+            ? {}
+            : { listWhole: Number(Deno.env.get("SCALE_LIST_WHOLE")) }),
         },
         resumed: (_result, piece) => resumed.push(piece),
         failed: (_result, error) => {

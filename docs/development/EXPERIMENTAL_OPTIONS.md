@@ -1227,9 +1227,11 @@ holds the measurements and the conditions for revisiting.
   scheduler for each stream of the piece and one effect for its derivation,
   and throws with the option off. Such a piece stores the rows of a `map`
   over references and the buckets of an index it keeps in documents of their
-  own, and the links to them in its result document, or with its option
-  `lists` at `documents` in documents of their own, an array of more than 64
-  rows in chunks. The value code of such a piece is
+  own, and the links to them in list documents that its result document
+  links to, an array of more rows than its option `listWhole` in chunks of
+  at most 64 links, or with its option `lists` at `in-place` in its result
+  document. A reader through the runtime reads a list in chunks as an array
+  of chunks, each an array of rows. The value code of such a piece is
   evaluated in an SES compartment
   (`runtime/runner/src/compiled/value-code.ts`), and
   `runtime/runner/src/compiled/compile.deno.ts` compiles a pattern source

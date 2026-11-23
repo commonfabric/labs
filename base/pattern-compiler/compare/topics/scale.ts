@@ -111,9 +111,11 @@
  * a field of the same topic that the board does not read (`write alone`):
  * what the write itself costs, the memory server's handling included.
  *
- * With `SCALE_LISTS=documents`, the arm `runner` and the arm `serving` store
+ * With `SCALE_LISTS=in-place`, the arm `runner` and the arm `serving` store
  * the links to the row documents and to the bucket documents of the board
- * in documents of their own (`CompiledPieceOptions.lists`).
+ * in the result document, and otherwise in documents of their own
+ * (`CompiledPieceOptions.lists`). `SCALE_LIST_WHOLE` is the most rows whose
+ * links one list document holds (`CompiledPieceOptions.listWhole`).
  *
  * With `SCALE_LOAD_ROWS` set to a number, the arm `runner` loads the board
  * with at most that many row documents in one transaction
@@ -1682,11 +1684,15 @@ const runToday = async (
             ...(Deno.env.get("SCALE_ROWS") === "in-place"
               ? { rows: "in-place" as const }
               : {}),
-            // `SCALE_LISTS=documents` stores the links to the rows and to
-            // the buckets in documents of their own.
-            ...(Deno.env.get("SCALE_LISTS") === "documents"
-              ? { lists: "documents" as const }
+            // `SCALE_LISTS=in-place` stores the links to the rows and to
+            // the buckets in the result document, and `SCALE_LIST_WHOLE`
+            // is the most rows whose links one list document holds.
+            ...(Deno.env.get("SCALE_LISTS") === "in-place"
+              ? { lists: "in-place" as const }
               : {}),
+            ...(Deno.env.get("SCALE_LIST_WHOLE") === undefined
+              ? {}
+              : { listWhole: Number(Deno.env.get("SCALE_LIST_WHOLE")) }),
             // `SCALE_LOAD_ROWS` is the most row documents one transaction
             // of the load holds; `Infinity` loads in one transaction.
             ...(Deno.env.get("SCALE_LOAD_ROWS") === undefined

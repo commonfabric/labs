@@ -1,6 +1,10 @@
 import type { Identity } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 
+import type { Cell } from "../../src/cell.ts";
+import { isPrimitiveCellLink } from "../../src/link-types.ts";
+import { parseLink } from "../../src/link-utils.ts";
+import type { Runtime } from "../../src/runtime.ts";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -70,4 +74,41 @@ export const shareStorage = (): SharedStorage => {
       EmulatedStorageManager.connectTo(server, { as: signer }) as TestStorage,
     close: () => server.close(),
   };
+};
+
+/**
+ * What the storage holds at `path` of the entity of `cell`, with the link
+ * to a list document followed (`CompiledPieceOptions.lists`): where the
+ * path holds a link, what the document it names holds, and for a list in
+ * chunks the members of the chunks in order. A path that holds no link is
+ * returned as the storage has it, so the same read serves both layouts.
+ * No link of a row or of a bucket is followed.
+ */
+export const storedList = (
+  runtime: Runtime,
+  cell: Cell<unknown>,
+  path: string[],
+): unknown => {
+  const tx = runtime.edit();
+  try {
+    const base = cell.getAsNormalizedFullLink();
+    const at = (link: unknown): unknown => {
+      const { id, path } = parseLink(link as never);
+      return tx.readValueOrThrow({ ...base, id: id!, path: [...(path ?? [])] });
+    };
+    const held = tx.readValueOrThrow({ ...base, path });
+    if (!isPrimitiveCellLink(held)) return held;
+    const list = at(held);
+    if (
+      !Array.isArray(list) || list.length === 0 ||
+      !list.every((member) => isPrimitiveCellLink(member))
+    ) return list;
+    // A chunk is an array, and a row is a record or a view node.
+    const members = list.map(at);
+    return members.every((member) => Array.isArray(member))
+      ? members.flat()
+      : list;
+  } finally {
+    tx.abort();
+  }
 };

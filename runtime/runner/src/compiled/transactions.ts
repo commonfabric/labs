@@ -268,7 +268,7 @@ type RowArray = {
  * the result document, which holds a link to `doc` at the path of the
  * array.
  *
- * An array of at most `LIST_CHUNK` rows is one document, `doc`, that holds
+ * An array of at most `LIST_WHOLE` rows is one document, `doc`, that holds
  * the links to the rows in order: a reader that follows the link in the
  * result document reads the array the result would hold in place. A longer
  * array is stored in chunks: `doc` holds, in order, a link to the document
@@ -302,8 +302,16 @@ type LinkList = {
 /** A chunk of a `LinkList`: its document and how many links it holds. */
 type ListChunk = { doc: string; length: number };
 
-/** The most links to rows that one document of a `LinkList` holds. */
+/** The most links to rows that one chunk of a `LinkList` holds. */
 const LIST_CHUNK = 64;
+
+/**
+ * The most links to rows that a `LinkList` holds in the list document
+ * itself, unless the option `listWhole` gives another number. A reader
+ * through the runtime reads a list of at most this many rows as the array
+ * of the rows; a longer one it reads as an array of chunks.
+ */
+const LIST_WHOLE = 64;
 
 /**
  * The links a chunk is given where a list is laid out anew or a chunk is
@@ -631,6 +639,8 @@ export class RuntimeTransactions implements TransactionHooks {
    * their own (`LinkList`, `BucketRecord.list`).
    */
   readonly #lists: boolean;
+  /** The most links to rows that a list document holds itself. */
+  readonly #listWhole: number;
   /**
    * The array of row documents whose links each document of a `LinkList`
    * holds: the list document itself and the document of each chunk.
@@ -721,6 +731,12 @@ export class RuntimeTransactions implements TransactionHooks {
        */
       listDocuments?: boolean;
       /**
+       * The most rows of an array whose links the list document holds
+       * itself, where the lists are documents of their own. A longer array
+       * is stored in chunks. The default is `LIST_WHOLE`.
+       */
+      listWhole?: number;
+      /**
        * Called when a value first stored holds a stream of the executor.
        * The stream is then stored as a link to an entity that holds the
        * runtime's stream marker, which a `Cell.send` resolves to; without
@@ -769,6 +785,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#owner = options.owner;
     this.#rowCollections = options.rowDocuments ?? new Set();
     this.#lists = options.listDocuments === true;
+    this.#listWhole = options.listWhole ?? LIST_WHOLE;
     if (options.owner !== undefined && options.bucketDocuments !== undefined) {
       for (const output of options.artifact?.plan.outputs ?? []) {
         if (
@@ -2422,14 +2439,14 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /**
    * Lays the links of an array of `length` rows out anew: in the list
-   * document itself for at most `LIST_CHUNK` rows, and otherwise in chunks
+   * document itself for at most `#listWhole` rows, and otherwise in chunks
    * of `LIST_FILL`.
    */
   #layOutList(array: RowArray, length: number): void {
     const list = array.list!;
     for (const chunk of list.chunks ?? []) this.#dropChunk(list, chunk);
     list.top = true;
-    if (length <= LIST_CHUNK) {
+    if (length <= this.#listWhole) {
       list.chunks = undefined;
       return;
     }
@@ -2454,7 +2471,7 @@ export class RuntimeTransactions implements TransactionHooks {
    * where the two hold at most `LIST_FILL` together. So one row that
    * enters, leaves or moves writes at most three chunks, and the list of
    * the chunks only where a chunk came to exist or ceased to. A list that
-   * shrinks to half of `LIST_CHUNK` rows is stored in the list document
+   * shrinks to half of `#listWhole` rows is stored in the list document
    * again.
    */
   #spliceList(
@@ -2466,7 +2483,7 @@ export class RuntimeTransactions implements TransactionHooks {
     const list = array.list!;
     if (list.chunks === undefined) {
       list.top = true;
-      if (array.keys.length > LIST_CHUNK) {
+      if (array.keys.length > this.#listWhole) {
         this.#layOutList(array, array.keys.length);
       }
       return;
@@ -2546,7 +2563,7 @@ export class RuntimeTransactions implements TransactionHooks {
       chunks.splice(chunks.indexOf(gone), 1);
       this.#dropChunk(list, gone);
     }
-    if (array.keys.length <= LIST_CHUNK / 2) {
+    if (array.keys.length <= this.#listWhole / 2) {
       for (const chunk of chunks) this.#dropChunk(list, chunk);
       list.chunks = undefined;
     }

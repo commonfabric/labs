@@ -105,7 +105,13 @@ export type ServeCompiledPiecesOptions = {
    */
   piece?: Pick<
     CompiledPieceOptions,
-    "artifacts" | "now" | "evaluate" | "lists" | "wishes" | "builtins"
+    | "artifacts"
+    | "now"
+    | "evaluate"
+    | "lists"
+    | "listWhole"
+    | "wishes"
+    | "builtins"
   >;
   /** Called with each piece the runtime started, when its executor runs. */
   started?: (piece: CompiledPiece) => void;
