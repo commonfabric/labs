@@ -2739,9 +2739,26 @@ Deno.test("memory v2 server elides own set heads and delivers own patch heads th
     assertEquals(observerEffect.effect.removes, []);
     assertEquals(observerMessages, []);
 
-    // A PATCH head rides the writer's own covering frame as the full
-    // post-apply document (CT-1965): merged state is truth the writer
-    // cannot extrapolate, so the frame is the truth channel.
+    // A PATCH head applied over another session's write in the same batch
+    // rides the writer's own covering frame as the full post-apply document
+    // (CT-1965): merged state is truth the writer cannot extrapolate, so the
+    // frame is the truth channel.
+    await observer.receive(encodeMemoryBoundary({
+      type: "transact",
+      requestId: "observer-patch",
+      space,
+      sessionId: observerSessionId,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "patch",
+          id: "of:doc:1",
+          patches: [{ op: "add", path: "/value/note", value: "theirs" }],
+        }],
+      },
+    }));
+    assertEquals(nextResponse<any>(observerMessages).ok?.seq, 2);
     await writer.receive(encodeMemoryBoundary({
       type: "transact",
       requestId: "writer-patch",
@@ -2759,7 +2776,7 @@ Deno.test("memory v2 server elides own set heads and delivers own patch heads th
     }));
     const patched = nextResponse<any>(writerMessages);
     assertEquals(patched.requestId, "writer-patch");
-    assertEquals(patched.ok?.seq, 2);
+    assertEquals(patched.ok?.seq, 3);
 
     await server.flushSessions([space]);
 
@@ -2768,15 +2785,15 @@ Deno.test("memory v2 server elides own set heads and delivers own patch heads th
       branch: "",
       id: "of:doc:1",
       scope: "space",
-      seq: 2,
+      seq: 3,
       doc: {
-        value: { version: 2 },
+        value: { version: 2, note: "theirs" },
       },
     }]);
     assertEquals(writerEcho.effect.caughtUpLocalSeq, 2);
     assertEquals(writerMessages, []);
     const observerPatchEffect = assertEffect(shiftMessage(observerMessages));
-    assertEquals(observerPatchEffect.effect.upserts.map((u) => u.seq), [2]);
+    assertEquals(observerPatchEffect.effect.upserts.map((u) => u.seq), [3]);
     assertEquals(observerMessages, []);
   } finally {
     await server.close();
@@ -2863,8 +2880,8 @@ Deno.test("memory v2 server classifies own-write echo by the head-producing op",
     assertEquals(elided.effect.upserts, []);
     assertEquals(elided.effect.caughtUpLocalSeq, 2);
 
-    // Multi-op ending in a patch: the patch produced the head — full
-    // post-apply doc.
+    // Multi-op ending in a patch: the patch produced the head, and the
+    // commit wrote the document twice — full post-apply doc.
     await transact("set-then-patch", 3, [
       { op: "set", id: "of:doc:c", value: { value: { items: [] } } },
       {
@@ -2885,8 +2902,8 @@ Deno.test("memory v2 server classifies own-write echo by the head-producing op",
     assertEquals(echoed.effect.caughtUpLocalSeq, 3);
 
     // Two commits coalesced into one flush: the origin tracks the latest
-    // commit — a patch head — so the frame carries the full doc at the
-    // latest seq.
+    // commit, a patch head applied over the writer's own set. The writer
+    // holds what it set and replays the patch it sent, so the head is elided.
     await transact("coalesced-set", 4, [{
       op: "set",
       id: "of:doc:c",
@@ -2899,13 +2916,7 @@ Deno.test("memory v2 server classifies own-write echo by the head-producing op",
     }]);
     await server.flushSessions([space]);
     const coalesced = assertEffect(shiftMessage(messages));
-    assertEquals(coalesced.effect.upserts, [{
-      branch: "",
-      id: "of:doc:c",
-      scope: "space",
-      seq: 5,
-      doc: { value: { items: ["d", "e"] } },
-    }]);
+    assertEquals(coalesced.effect.upserts, []);
     assertEquals(coalesced.effect.caughtUpLocalSeq, 5);
 
     // An own DELETE head is elided: the writer trivially holds its outcome.

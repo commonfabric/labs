@@ -3310,12 +3310,15 @@ export function resetMessageCompressionConfig(): void {
 
 /**
  * Ambient server behavior for own-write echo on sync frames (CT-1965): a
- * session's own accepted patch-produced heads ride the covering frame as full
- * post-apply documents, so promotion retires the pending overlay against
- * delivered truth instead of extrapolating merged state it never saw. Set- and
- * delete-produced heads stay elided — the client provably holds their outcome.
- * Off restores full echo suppression (the pre-CT-1965 behavior). Not a
- * protocol capability: every client generation handles the echoed frames.
+ * session's own accepted patch-produced head rides the covering frame as the
+ * full post-apply document, so promotion retires the pending overlay against
+ * delivered truth instead of extrapolating merged state it never saw. The
+ * head is left out where the server can show the session holds the revision
+ * its patches were applied over, since replaying them there yields the head.
+ * Set- and delete-produced heads stay elided — the client provably holds
+ * their outcome. Off restores full echo suppression (the pre-CT-1965
+ * behavior). Not a protocol capability: every client generation handles a
+ * frame with the document and a frame without it.
  */
 export function setOwnWriteEchoConfig(enabled?: boolean): void {
   ownWriteEchoEnabled = enabled ?? true;
