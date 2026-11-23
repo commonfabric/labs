@@ -211,6 +211,8 @@ export class CompiledPiece {
    * took: what a derivation could find different from the one before.
    */
   #changes = 0;
+  /** The documents the piece asked the storage for (`#bring`). */
+  readonly #asked = new Set<string>();
   /** The reason of the last commit refused, and `#changes` then. */
   #refusedLast: { reason: string; changes: number } | undefined;
   #stopped = false;
@@ -321,6 +323,7 @@ export class CompiledPiece {
         this.#counts.ownMs += performance.now() - began;
       }
       this.#keepMinted(given);
+      this.#bring();
       // The basis is of a derivation that brought everything up to date.
       if (first) this.#invalidate();
       else {
@@ -365,8 +368,7 @@ export class CompiledPiece {
       space,
       linkOf: (doc: string, path: readonly string[]) =>
         transactions.linkOf(doc, path),
-      documentOf: (link: NormalizedFullLink) =>
-        transactions.documentOf(link.id),
+      documentOf: (link: NormalizedFullLink) => transactions.documentAt(link),
       invalidate: () => this.#invalidate(),
       stamp: (given: IExtendedStorageTransaction, what: string) =>
         this.#stamp(given, what),
@@ -420,6 +422,7 @@ export class CompiledPiece {
     this.#keepMinted(tx);
     this.#basis.record(tx, true);
     this.#started = true;
+    this.#bring();
     this.#cancels.push(
       runtime.scheduler.subscribe(
         this.#derive,
@@ -500,6 +503,35 @@ export class CompiledPiece {
     this.#minted = { events, created, made };
     this.transactions.writeMinted(tx, this.#minted);
     this.#basis.wrote(tx, [this.transactions.mintedDocument], []);
+  }
+
+  /**
+   * Asks the storage for each document the executor asked for and the
+   * replica held none of (`RuntimeTransactions.wanted`), once: a read
+   * through a transaction does not bring a document, and a document of
+   * another space than the piece's is in no query the piece's load made.
+   * When the storage answered with a document, the executor takes it, what
+   * read the place is marked, and the derivation runs. The scheduler counts
+   * the request as work under way, so the runtime is not idle before the
+   * answer.
+   */
+  #bring(): void {
+    for (const doc of this.transactions.wanted) {
+      if (this.#asked.has(doc)) continue;
+      this.#asked.add(doc);
+      const answered = this.#runtime.getCellFromLink(
+        this.transactions.linkOf(doc, []),
+      ).sync().then(() => {
+        // A place the executor has made a document of since is its own.
+        if (this.#stopped || this.transactions.holds(doc)) return;
+        const loaded = this.transactions.load(doc);
+        if (loaded === undefined) return;
+        this.instance.restore(doc, loaded.value);
+        this.#changes += 1;
+        this.#invalidate();
+      });
+      this.#runtime.scheduler.trackBackgroundTask(answered);
+    }
   }
 
   /**

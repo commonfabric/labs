@@ -82,6 +82,7 @@ import {
 import { readMaybeLink } from "../link-resolution.ts";
 import type { Runtime } from "../runtime.ts";
 import type { URI } from "../sigil-types.ts";
+import { documentIn, placeOfDocument } from "./names.ts";
 import type {
   IExtendedStorageTransaction,
   IReadActivity,
@@ -354,6 +355,12 @@ export class RuntimeTransactions implements TransactionHooks {
    * holds no document of.
    */
   readonly absent = new Set<string>();
+  /**
+   * The documents outside the executor that `load()` was asked for and the
+   * replica held none of, by name: the storage may hold one that the
+   * replica has not been brought.
+   */
+  readonly wanted = new Set<string>();
   /**
    * Whether the first derivation of a resumed instance is in progress. A
    * change of it that writes what the storage holds is then no write, and
@@ -731,9 +738,12 @@ export class RuntimeTransactions implements TransactionHooks {
           const seen = new Set<string>();
           let labelsByOther = false;
           for (const { address, before, after } of notification.changes) {
-            const doc = this.#byEntity.get(address.id);
+            // Two spaces can hold documents of one entity: a document of
+            // another space is held under a name that names the space.
+            const doc = this.#byEntity.get(
+              this.#keyOf(notification.space, address.id),
+            );
             if (doc === undefined) continue;
-            // Two spaces can hold documents of one entity.
             if (this.#spaceOf(doc) !== notification.space) continue;
             this.#sources?.changed(
               doc,
@@ -808,7 +818,10 @@ export class RuntimeTransactions implements TransactionHooks {
             }
             this.#sources?.changed(doc, true);
             if (!Array.isArray(now) || !Array.isArray(then)) {
-              byOther.push({ ...place, value: this.#decode(now) });
+              byOther.push({
+                ...place,
+                value: this.#decode(now, undefined, notification.space),
+              });
               continue;
             }
             const splice = spliceBetween(then, now);
@@ -817,7 +830,9 @@ export class RuntimeTransactions implements TransactionHooks {
               splice: {
                 start: splice.start,
                 removed: splice.removed,
-                members: splice.members.map((member) => this.#decode(member)),
+                members: splice.members.map((member) =>
+                  this.#decode(member, undefined, notification.space)
+                ),
               },
             });
           }
@@ -861,7 +876,9 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#stopReading = runtime.storageManager.addDocumentReader?.((
       address,
     ) => {
-      const doc = this.#byEntity.get(address.id);
+      const doc = this.#byEntity.get(
+        this.#keyOf(address.space, address.id),
+      );
       return doc !== undefined && address.space === this.#spaceOf(doc);
     });
   }
@@ -982,7 +999,34 @@ export class RuntimeTransactions implements TransactionHooks {
 
   /** The space a document of the executor is in. */
   #spaceOf(doc: string): MemorySpace {
-    return this.#spaces.get(doc) ?? this.#space;
+    return placeOfDocument(doc).space as MemorySpace | undefined ??
+      this.#spaces.get(doc) ?? this.#space;
+  }
+
+  /**
+   * What `#byEntity` holds the document of `space` at `entity` under: the
+   * entity for the space of the piece, and the entity with the space for
+   * another (`documentIn`).
+   */
+  #keyOf(space: MemorySpace, entity: string): string {
+    return space === this.#space || entity.startsWith("data:")
+      ? entity
+      : documentIn(entity, space);
+  }
+
+  /**
+   * The document of the executor that the entity of a link holds in the
+   * space the link names: for a link into another space than the piece's,
+   * the name that names the space.
+   */
+  documentAt(link: { space?: MemorySpace; id: string }): string {
+    if (
+      link.space === undefined || link.space === this.#space ||
+      link.id.startsWith("data:")
+    ) return this.documentOf(link.id);
+    const doc = documentIn(link.id, link.space);
+    this.entityOf(doc);
+    return doc;
   }
 
   /** Stops keeping the documents of the executor loaded. */
@@ -3216,10 +3260,16 @@ export class RuntimeTransactions implements TransactionHooks {
    * entity named here loaded until `close()`.
    */
   entityOf(doc: string): URI {
-    const entity: URI = doc.startsWith("of:") || doc.startsWith("data:")
-      ? doc as URI
-      : `of:${doc}`;
-    this.#byEntity.set(entity, doc);
+    const { named, space } = placeOfDocument(doc);
+    const entity: URI = named.startsWith("of:") || named.startsWith("data:")
+      ? named as URI
+      : `of:${named}`;
+    this.#byEntity.set(
+      space === undefined ? entity : documentIn(entity, space),
+      doc,
+    );
+    // The subscription takes the commits of each space named here.
+    if (space !== undefined) this.#spaces.set(doc, space as MemorySpace);
     return entity;
   }
 
@@ -3307,6 +3357,14 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     this.#byEntity.set(entity, doc);
     return doc;
+  }
+
+  /**
+   * Whether the executor holds a document of this name: one it made, or
+   * one `load()` gave it.
+   */
+  holds(doc: string): boolean {
+    return this.#documents.has(doc);
   }
 
   /**
@@ -3528,9 +3586,20 @@ export class RuntimeTransactions implements TransactionHooks {
     }
     // The result document is derived, and no source of the piece.
     if (id !== this.#owner) this.#sources?.read(id);
-    if (value === undefined) return undefined;
+    if (value === undefined) {
+      // The replica holds no such document. The storage may: the piece
+      // asks it (`CompiledPiece`), and reads again when it answered. The
+      // result document is the piece's to make.
+      if (id !== this.#owner) this.wanted.add(id);
+      return undefined;
+    }
+    this.wanted.delete(id);
     this.#documents.add(id);
-    return { kind: "external", value: this.#decode(value) };
+    // A link of the document that names no space leads into its own.
+    return {
+      kind: "external",
+      value: this.#decode(value, undefined, this.#spaceOf(id)),
+    };
   }
 
   /**
@@ -3692,19 +3761,26 @@ export class RuntimeTransactions implements TransactionHooks {
    * `rows`, a link to the document of a row is written back as the row,
    * read through that transaction.
    */
-  #decode(value: unknown, rows?: IExtendedStorageTransaction): unknown {
+  #decode(
+    value: unknown,
+    rows?: IExtendedStorageTransaction,
+    /**
+     * The space of the document the value is of: a link in it that names
+     * no space leads into that space.
+     */
+    within: MemorySpace = this.#space,
+  ): unknown {
     if (isPrimitiveCellLink(value)) {
       const link = parseLink(value);
       const stream = this.#streams.get(link.id ?? "");
       if (stream !== undefined) return { $stream: stream };
-      const row = this.documentOf(link.id ?? "");
-      // A link that names another space than the piece's leads to a
-      // document of that space: the executor names a document by its
-      // entity alone, and the adapter keeps the space it is read in.
-      if (
-        link.space !== undefined && link.space !== this.#space &&
-        !this.#spaces.has(row) && !this.#documents.has(row)
-      ) this.#spaces.set(row, link.space);
+      // A link into another space than the piece's leads to a document of
+      // that space, which the executor holds under a name that names the
+      // space (`documentAt`).
+      const row = this.documentAt({
+        space: link.space ?? within,
+        id: link.id ?? "",
+      });
       if (
         rows !== undefined &&
         (this.#rowDocuments.has(row) || this.#bucketDocuments.has(row))
@@ -3712,11 +3788,12 @@ export class RuntimeTransactions implements TransactionHooks {
         return this.#decode(
           rows.readValueOrThrow(this.#address(row, [])),
           rows,
+          within,
         );
       }
       return {
         $link: {
-          doc: this.documentOf(link.id ?? ""),
+          doc: row,
           path: [...link.path],
           ...(link.schema === undefined
             ? {}
@@ -3725,13 +3802,13 @@ export class RuntimeTransactions implements TransactionHooks {
       };
     }
     if (Array.isArray(value)) {
-      return value.map((member) => this.#decode(member, rows));
+      return value.map((member) => this.#decode(member, rows, within));
     }
     if (isWalkableObjectNotArray(value)) {
       return Object.fromEntries(
         Object.entries(value).map(([name, member]) => [
           name,
-          this.#decode(member, rows),
+          this.#decode(member, rows, within),
         ]),
       );
     }

@@ -208,9 +208,8 @@ describe("a compiled piece whose pattern calls `wish`", () => {
     runtimes.splice(0);
 
     const second = session();
-    // The replica of the second runtime holds the profile, which is in
-    // another space than the piece.
-    await second.getCell(await profileSpace(), "profile").sync();
+    // The replica of the second runtime does not hold the profile, which
+    // is in another space than the piece: the piece asks the storage.
     const resumed = await resumeCompiledPiece(
       second,
       compiled,
