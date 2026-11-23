@@ -515,25 +515,33 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-Swift, Kotlin, Rust, TOML, HCL, Lean, shell, makefile, Java properties, INI,
-ProGuard, XML, and Org mode files use their own highlighting. HCL covers
-OpenTofu and Terraform configuration named `.tf` or `.tofu`, variable
-definitions files named `.tfvars`, backend configuration files named
-`.tfbackend`, and other `.hcl` files, such as dependency lock files. A string's
-interpolations and template directives are colored as code inside the string.
-Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or `.command`,
-and Bash's startup files, such as `.bashrc` and `.profile`. A heredoc's body is
-colored as a string, with the expansions its delimiter allows. The makefile
-language reads GNU make's syntax in files named `Makefile`, `makefile`,
-`GNUmakefile`, or `.mk`. Make passes recipe lines to the shell, so they are
-colored as shell. The same is true of the command in a `!=` assignment and the
-argument of the `shell` function. Make's own variable references and function
-calls are colored inside that shell text. A Swift package manifest is Swift
-source under its `.swift` extension, and a module's `.swiftinterface` is Swift
-as well. Gradle build and settings scripts are Kotlin scripts under the `.kts`
-extension. Gradle version catalogs and Cargo manifests are TOML, as are Cargo
-lock files. The ProGuard language covers the keep rules that ProGuard and R8
-read: `proguard-rules.pro` and `consumer-rules.pro` select it by name, and
+Swift, Kotlin, Rust, TOML, HCL, Lean, C, C++, CUDA, shell, makefile, Java
+properties, INI, ProGuard, XML, and Org mode files use their own highlighting. A
+lowercase `.c` selects C; `.cc`, `.cpp`, `.cxx`, `.c++`, `.hh`, `.hpp`, `.hxx`,
+`.h++`, `.tcc`, and an uppercase `.C` select C++; and `.cu` and `.cuh` select
+CUDA. C++ and CUDA share one grammar, which colors CUDA's qualifiers, such as
+`__global__`, as keywords. C and C++ both write `.h` headers, so a `.h` file is
+colored in a mode that claims neither dialect, using the C++ grammar, which
+reads the declarations C headers usually make; a C header that uses one of C++'s
+keywords, such as `new`, as a name is colored as C when piped with
+`--language
+c`. HCL covers OpenTofu and Terraform configuration named `.tf` or
+`.tofu`, variable definitions files named `.tfvars`, backend configuration files
+named `.tfbackend`, and other `.hcl` files, such as dependency lock files. A
+string's interpolations and template directives are colored as code inside the
+string. Shell covers Bash and POSIX shell scripts named `.sh`, `.bash`, or
+`.command`, and Bash's startup files, such as `.bashrc` and `.profile`. A
+heredoc's body is colored as a string, with the expansions its delimiter allows.
+The makefile language reads GNU make's syntax in files named `Makefile`,
+`makefile`, `GNUmakefile`, or `.mk`. Make passes recipe lines to the shell, so
+they are colored as shell. The same is true of the command in a `!=` assignment
+and the argument of the `shell` function. Make's own variable references and
+function calls are colored inside that shell text. A Swift package manifest is
+Swift source under its `.swift` extension, and a module's `.swiftinterface` is
+Swift as well. Gradle build and settings scripts are Kotlin scripts under the
+`.kts` extension. Gradle version catalogs and Cargo manifests are TOML, as are
+Cargo lock files. The ProGuard language covers the keep rules that ProGuard and
+R8 read: `proguard-rules.pro` and `consumer-rules.pro` select it by name, and
 another `.pro` file uses it when one of its lines starts with one of ProGuard's
 option names, because Qt project files and Prolog use that suffix as well. XML
 covers Android manifests, resources, and layouts, SVG images, and Apple property
