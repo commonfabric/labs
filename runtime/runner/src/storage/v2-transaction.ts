@@ -4086,7 +4086,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     // seen kicks an instance-named load — the serving replica receives a
     // demander's instances only through a watch root that names one, and
     // through the links the memory server follows from such a root, so an
-    // instance none of those reaches arrives only when a read names it.
+    // instance that neither path reaches arrives only when a read names it.
     // The read itself stays absent; the read is logged under that
     // instance, so the reader re-runs when the doc lands. Reserved once
     // per (space, instance, id) per manager (`shouldPullDoc`), like the
