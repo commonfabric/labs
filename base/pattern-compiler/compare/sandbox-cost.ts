@@ -25,8 +25,10 @@
  *   often an edit has the store read a position whole and for how long,
  *   and the time of one read of the array, which copies it.
  * - `compile`: the crate's binary on a source without a cache directory and
- *   with one, and today's compile of the same source in a runtime of its
- *   own, the first of the process and a second of the same source.
+ *   with one, with a compiler made for the compile and with one that is
+ *   kept, and today's compile of the same source in a runtime of its own,
+ *   the first of the runtime and a second of the same source. With
+ *   `--source=<path in the repository>`, that module as well.
  *
  * The arm `function` runs before the realm is locked down, and `function,
  * locked` after it: the lockdown freezes the intrinsics that the executor
@@ -75,8 +77,15 @@ const print = (line: Record<string, unknown>) =>
   console.log(JSON.stringify(line));
 
 /** The program of a file of `compare/fixtures/`, with what it imports. */
-const programOf = async (
+const programOf = (
   fixture: string,
+  mainExport?: string,
+): Promise<RuntimeProgram> =>
+  programAt(`base/pattern-compiler/compare/fixtures/${fixture}`, mainExport);
+
+/** The program of a file of the repository, with what it imports. */
+const programAt = async (
+  path: string,
   mainExport?: string,
 ): Promise<RuntimeProgram> => {
   const signer = await Identity.fromPassphrase("sandbox cost");
@@ -89,7 +98,7 @@ const programOf = async (
     return await resolveLocalProgram(
       (resolver) => runtime.harness.resolve(resolver),
       {
-        main: `${repository}base/pattern-compiler/compare/fixtures/${fixture}`,
+        main: `${repository}${path}`,
         root: repository,
         ...(mainExport === undefined ? {} : { mainExport }),
       },
@@ -304,17 +313,24 @@ const executor = async () => {
 const compile = async () => {
   const cacheDir = await Deno.makeTempDir();
   try {
-    for (
-      const [fixture, mainExport] of [
-        ["sandbox-cost.tsx", "PerRow"],
-        ["runner-lists.tsx", "Plain"],
-        ["handler.tsx", undefined],
-      ] as const
-    ) {
-      const program = await programOf(fixture, mainExport);
+    // With `--source=<path in the repository>`, the default export of
+    // that module as well.
+    const given = Deno.args.filter((argument) =>
+      argument.startsWith("--source=")
+    ).map((argument) => argument.slice("--source=".length));
+    const sources: [string, string | undefined][] = [
+      ["base/pattern-compiler/compare/fixtures/sandbox-cost.tsx", "PerRow"],
+      ["base/pattern-compiler/compare/fixtures/runner-lists.tsx", "Plain"],
+      ["base/pattern-compiler/compare/fixtures/handler.tsx", undefined],
+      ...given.map((path): [string, undefined] => [path, undefined]),
+    ];
+    for (const [fixture, mainExport] of sources) {
+      const program = await programAt(fixture, mainExport);
       const RUNS = 9;
       const cold: number[] = [];
       const cached: number[] = [];
+      const kept: number[] = [];
+      const keeping = new PatternCompiler({ cacheDir });
       for (let run = 0; run < RUNS; run++) {
         let began = performance.now();
         await new PatternCompiler().compile(program);
@@ -326,6 +342,10 @@ const compile = async () => {
           .compile(program);
         if (!hit) throw new Error("The cache directory held no artifact.");
         cached.push(performance.now() - began);
+        // A compiler that is kept has read the binary already.
+        began = performance.now();
+        await keeping.compile(program);
+        kept.push(performance.now() - began);
       }
       // Today's compile, in a runtime of its own with no cache from before.
       const signer = await Identity.fromPassphrase("sandbox cost");
@@ -362,6 +382,10 @@ const compile = async () => {
         runs: RUNS,
         "crate, a process per compile, ms": round(median(cold), 2),
         "crate, from the cache directory, ms": round(median(cached), 2),
+        "crate, from the cache directory, a compiler that is kept, ms": round(
+          median(kept),
+          2,
+        ),
         "today, first compile of the source in the runtime, ms": round(
           first,
           2,

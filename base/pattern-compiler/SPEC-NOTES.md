@@ -12604,3 +12604,387 @@ Noted and not resolved, by the owner's instruction of 2026-11-22.
 7. The join of `SlotBinding.through` takes the integrity that the output and the
    read both carry, and the read's alone where the output has no label (note
    625).
+
+## Milestone 5: value code in a compartment, and compile on load
+
+Milestone 5 of `docs/plans/compiled-pattern-language-integration.md`, on the
+branch `claude/compiled-pattern-sandbox-m5`, cut from the branch of milestone 3
+after its fifth round. The numbers 636 to 699 are left to the rounds of
+milestone 3.
+
+700. **What the round did.** In order: the executor takes what makes a function
+     of a module's text (`ModuleEvaluator` of `exec/executor.ts`), and a
+     compiled piece gives it an SES compartment (note 701); what crosses between
+     the executor and value code, stated and measured (notes 703 and 704); the
+     crate's binary run as a child process on a pattern source, with the
+     artifacts kept by the identity of the source (note 705); and the figures
+     (notes 706 and 707). Stubbed with a plan: the removal of the second read of
+     an argument that a function body is handed whole (note 704), and the call
+     of the compiler from `Runtime.run` (note 705).
+701. **Value code in a compartment.** `Instance` has the option `evaluate`, a
+     `ModuleEvaluator`: it is given the path and the text of a module and the
+     names of the parameters, and returns the function whose body is the text.
+     The default, `evaluateWithFunction`, is `new Function` as before, and every
+     path of the prototype keeps it (`exec/run.ts`, the comparison harnesses,
+     `ExecutorRun`). `startCompiledPiece` gives the executor
+     `compartmentEvaluator()` of `runtime/runner/src/compiled/value-code.ts`
+     unless the caller gives another (`CompiledPieceOptions.evaluate`, which the
+     harnesses use to measure the difference). The evaluator locks the realm
+     down as today's runtime does when it loads a pattern (`ensureSESLockdown`),
+     makes one compartment whose global object is frozen
+     (`createLockedCompartment` of `sandbox/ses-runtime.ts`), and evaluates each
+     text there as the body of one function expression with the parameters `$rt`
+     and `$exports`.
+     - _The globals._ Those of a module compartment of today's bundles
+       (`createModuleCompartmentGlobals`) without `__cfReg`, which value code
+       does not call: the shared intrinsics, `Proxy` as `undefined`, the gated
+       `Date` and `Math`, `structuredClone`, `TextDecoder`, `TextEncoder`,
+       `URL`, `URLSearchParams`, `atob`, `btoa`, and the console whose methods
+       are bound. No `Deno`, `fetch`, `setTimeout`, `process` or `crypto`.
+     - _The clock._ The gated `Date` and `Math` read the frame on top of the
+       frame stack (`sandboxDateNow`). `CompiledPiece` runs each compiled
+       handler under a frame of a handler with the time of the event
+       (`tx.dispatchedEventTime`), so `Date.now()` in a handler body is the
+       event's time to the second and `Math.random()` is a draw. The derivation
+       runs under no such frame, and the same calls throw there and at module
+       scope. With `new Function` both read the realm's clock anywhere.
+     - _What the executor hands the code._ The object `$rt` is frozen
+       (`Instance.#load`).
+     - _The tests._ `runtime/runner/test/compiled/value-code.test.ts` changes
+       the text of the module of `fixtures/handler.tsx`: a handler body reads
+       `Deno`, `fetch`, `setTimeout` and `process` as `undefined`; a module that
+       assigns to a global, adds a member to `Array.prototype`, replaces a
+       member of `$rt` or reads the clock at module scope does not load; a
+       handler body reads the event's time to the second, and a random draw. The
+       cases of the globals, of the write of a global, of the member added to an
+       intrinsic and of the clock at module scope failed before the change, each
+       because the code reached what the case names.
+     - _The corpus._ `compare/runner-corpus.ts` takes `--evaluate=function`. Of
+       the 373 modules the crate emits, 239 are run on the runner path; with
+       `new Function` and with the compartment the same 183 start, handle every
+       event, have no commit refused and hold the values of the executor in
+       memory, and no module has a different outcome line in the two runs.
+702. **Which checks of today's verifier value code passes, fails or does not
+     need.**
+     - _The classification of module items_ (`verifyCompiledModuleBody` over
+       `classifyModuleItems`). Fails, for all 186 module texts of
+       `compare/fixtures/`, at the first statement, with "Top-level declarations
+       must bind simple identifiers": the text opens with
+       `const { ... } = $rt.external("commonfabric")`. The classifier accepts
+       the grammar of TypeScript's CommonJS emit after the transformer, and the
+       crate emits another. It is not run. `language-subset.md` §3.4 has the
+       rule: the compiler is trusted, its check of the source is the only one,
+       and the verifier stays for modules whose function bodies the compiler
+       does not analyze. So the check that stands in its place is the crate's
+       own, and it has to have run: `emit` writes an artifact for a module the
+       check refuses, so compile on load runs `emit --accepted` (note 705). An
+       artifact from anywhere else is trusted as given.
+     - _The verification of the module graph_ (`verifyModuleGraph`). Not needed:
+       value code names a module by its index in the artifact, `$rt` resolves
+       it, and the one external specifier the executor answers is
+       `commonfabric`.
+     - _The frozen global object of the compartment and the frozen intrinsics._
+       Applied, as for a bundle.
+     - _The hardening of each verified function_ (`hardenVerifiedFunction`),
+       _and the freeze of module data_ (`__cf_data`). Needed and not done: see
+       note 703.
+703. **Soundness: what the compartment does not confine.** The compartment
+     confines names. What the executor hands value code is an object of the
+     executor, and the code reads whatever member it has. Four findings; the
+     first is closed, the others are not.
+     - _A handle carried the executor (closed; provisional decision P100)._
+       `Handle` held the instance in the public member `instance` and the host
+       of its cone in `host`. The crate's check accepts a member that the type
+       of a handle does not declare: `last.instance` on a `Writable<string>` has
+       no diagnostic. So a handler body of an accepted pattern, compiled with
+       `emit --accepted` and evaluated in the compartment, read
+       `typeof last.instance.store` as `"object"`: the store of the executor,
+       and from the instance its transactions and the runtime. `Handle` now
+       keeps both in private fields (`Handle.refusingWrites` is the one use
+       outside the class), and `compartmentEvaluator` freezes `Handle`, `Ref`
+       and `StreamRef` with their prototypes, so a body replaces no method of
+       them (`value-code.test.ts`, the two cases on a handle). A body still
+       reads `handle.target`, a reference: the identifier of the document, the
+       path and the schema of the position.
+     - _The crate's check accepts an undeclared member of a handle._ The fix
+       above closes what the member reached, and not the check. Where the check
+       types a member access on a handle, an undeclared member should be an
+       error, as it is on a record.
+     - _`$rt` and `$h` are confined by the check alone._ `Host` holds the
+       instance in the public member `instance`, and `$rt.setups` is the array
+       the executor itself writes. A text that names `$h` or `$rt` reaches the
+       executor. The check refuses both names in a source
+       (`stdlib:unsupported-member`), and `emit` wrote them into value code for
+       a module the check refused, which is why load runs `emit --accepted`
+       (note 705). What closes it without the check: the host and `$rt` as
+       objects that keep their state in private fields or closures, as the
+       handle now does.
+     - _The emitter writes no freeze of module data and no hardening of a
+       function_, which `language-subset.md` §3.3 says the compiler emits. The
+       check refuses a write through a module-scope constant
+       (`module-scope:frozen-data-write`), so this too rests on the check alone.
+       An evaluator cannot add the freeze from outside: it has the text and not
+       its bindings.
+704. **What crosses between the executor and value code, per call.** The
+     compartment adds nothing per call: it has the intrinsics of the realm, so a
+     value is passed by reference with no membrane, no copy and no freeze, and a
+     call of a function made in the compartment is a plain call. What the
+     executor itself does per call, with `new Function` and with the compartment
+     alike:
+     - _A value slot_ (`Host.slot`, `Host.v`): `Store.read` makes a new copy of
+       what is stored at the position, with every link followed (`Store.#copy`),
+       and registers each container of the copy with the address it was read
+       from (`Store.addresses`) or as a copy (`Store.copies`). The copy is not
+       frozen. Its size is that of what is read.
+     - _A function body_ (`Host.invoke`): the computed part is copied
+       (`Host.pass`); each `value` entry of `Body.reads` is then read again with
+       `Host.slot` and put at its place, in place of what the computed part held
+       there; a handle is made for each `identity` entry (`Instance.handleOf`).
+     - _A handle read_ (`Handle.get`): a copy, with `copies` set.
+     - _The result_ (`Instance.returned`): walked whole; a container that
+       carries an address becomes a reference to it, by the identity of the
+       object, and a record is built again.
+     - _Frozen:_ `Ref`, `Assembled`, `IndexHandle` (each freezes itself), the
+       stand-in for a reference that is not followed, and, since this round,
+       `$rt`. **Scale: a `lift` handed a whole array costs two reads of the
+       array per call, each a copy.** For `Whole` of
+       `fixtures/sandbox-cost.tsx`, a `lift` over an array of plain values in
+       place that counts the open items, one edit of one title evaluates the
+       body once and costs 1.0, 10.2 and 99 ms at 100, 1,000 and 10,000 rows on
+       the executor in memory, of which 1.0, 9.4 and 95 ms are the two reads of
+       the store that one call makes: `$h.slot(0)` in the value code for the
+       computed part `{ items }`, and `Host.slot` again in `Host.invoke` for the
+       entry of `Body.reads`, whose value replaces the first. The compartment
+       has no part in it. Not removed in this round, which keeps its changes to
+       `Host.invoke` and the emitter to none while the round of milestone 3
+       edits them. The plan:
+     1. The emitter passes `$h.invoke` nothing at a path that a `value` entry of
+        `Body.reads` fills, as it already does for a default
+        (`ReadInput.default`). That removes one of the two reads and the copy in
+        `Host.pass`.
+     2. The other read stays a copy while a body may change what it is handed
+        and while `Instance.returned` knows a value passed on unchanged by the
+        identity of the object. A read that is frozen can be given to several
+        readers of one transaction, and a change by a body throws where today it
+        is dropped when the body returns the container it changed. That needs
+        the corpus run both ways, since a body that sorts its argument in place
+        would fail. For a `map` over the same array, whose element body reads
+        one row, an edit of one title costs 0.08 ms at 10,000 rows: the per-call
+        copy is of one row.
+705. **Compile on load.** `PatternCompiler` of
+     `runtime/runner/src/compiled/compile.deno.ts`, and the function
+     `compilePatternSource(program, options)` over it, take a program as
+     `Runtime.run`'s compile takes one (`RuntimeProgram`: the files and the name
+     of the main file) and return the artifact of the pattern the program names,
+     every module the crate emitted, and the artifacts by identity
+     (`CompiledPieceOptions.artifacts`).
+     - _How the crate runs (provisional decision P101)._ As its release binary
+       in a child process. The files of the program are written to a temporary
+       directory, the binary runs there with `emit --accepted` and the relative
+       paths, and the directory is removed. The crate reads its modules with
+       `std::fs` and has a binary already; a WebAssembly build needs a target,
+       bindings for the file reads and a built artifact that something keeps
+       current, which is more work than the process, and the plan asks for it
+       only where no native binary can run. The call is made from the realm that
+       starts the piece and not from the compile worker (`ModuleCompileWorker`):
+       the worker exists to take the type check and the emit off the thread of
+       the realm, and a child process is off it already. The child is no Deno
+       process and touches nothing of `DENO_DIR`.
+     - _`emit --accepted`_ (`src/main.rs`, `tests/emit_accepted.rs`): prints the
+       diagnostics to the standard error, no artifact, and exits with a failure
+       unless every module parses and is accepted. `PatternCompileError` carries
+       the diagnostics. It is also thrown where the crate wrote no value code
+       for a construct of the pattern the program names (`code.unsupported`).
+     - _An absent binary_ is `PatternCompilerMissingError`, with the path and
+       the command that builds it. The default path is the release build in the
+       checkout.
+     - _The cache._ With `cacheDir`, what the binary printed is kept at
+       `<cacheDir>/<hash of the binary's bytes>/<hash of the source>.json`,
+       where the source is the name of the main file and the names and texts of
+       the files (`hashStringOf`). A file is written under another name and
+       renamed. Nothing is kept for a refused program. No claim keeps two
+       processes from compiling one source at once: both run the binary and
+       write the same text. Nothing removes an old tree; the shared compile
+       cache (`openSharedCompileCache`) removes what is in its own `modules` and
+       `claims`, so a server that gives a directory beside those has to remove
+       the trees of binaries it no longer runs.
+     - _The tests._ `runtime/runner/test/compiled/compile.test.ts` runs a shell
+       script in the place of the binary, so it needs no build of the crate.
+       `compare/test/compile-on-load.test.ts` runs the release binary on
+       `fixtures/handler.tsx` and starts a piece from the result, from the
+       binary and from the cache directory, and has the binary refuse a body
+       that names `$h`.
+     - _Stubbed: the call from `Runtime.run`._ Nothing in the runtime calls
+       `PatternCompiler`; a harness or a test does, and hands the artifact to
+       `startCompiledPiece`. The plan, with the decisions it needs:
+       1. `RuntimeOptions` takes the compiler (a binary path and a cache
+          directory), which toolshed sets beside `compileCacheDir`. Only the
+          serving runtime compiles.
+       2. Where the option is on and the space is marked as compiled (the mark
+          the plan's "The flag" names; not built),
+          `PatternManager.compilePattern` asks `PatternCompiler` for the program
+          and keeps the artifact with the pattern, and the runner's start of a
+          piece calls `startCompiledPiece` in the place of the instantiation of
+          the pattern's nodes. _To decide:_ what happens for a program the crate
+          refuses in a compiled space, a refusal of the piece or today's path
+          for that piece.
+       3. A piece that is loaded again has to be resumed from its stored
+          documents, which milestone 3 does not build (sync and resume).
+       4. The identity of a pattern is, on today's path, that of its compiled
+          module, and in a plan the hash the crate gives (`Plan.patterns`). _To
+          decide:_ which of the two a stored piece names.
+706. **What the compartment costs.** `compare/sandbox-cost.ts`, each part in a
+     process of its own, three runs, the median; the machine, an Apple M5 Max
+     with 18 cores, had a load average of 4.2 to 6.8 from other work throughout.
+     - _To make an evaluator:_ 5.4 to 6.2 ms for the first of a process, which
+       is the lockdown of the realm, and 0.09 to 0.12 ms for each later one. A
+       piece makes one. Today's runtime locks the realm down when it first loads
+       a pattern, so a process that runs both pays the lockdown once.
+     - _To make the function of a module's text:_ 0.0004 ms with `new Function`
+       before the lockdown, 0.0015 to 0.0018 ms with it after the lockdown, and
+       0.0012 to 0.0015 ms in the compartment.
+     - _One call of a value function_ (the element function of a `map` body,
+       with a host that does no work; 2,000,000 calls, the median of 7 rounds):
+       0.2 to 0.4 ns with `new Function` before the lockdown, 5.6 to 10.2 ns
+       with `new Function` after it, 5.5 to 9.8 ns in the compartment. The
+       compartment costs a call nothing; the lockdown costs it about 5 ns,
+       against about 50,000 ns that the executor spends per evaluation of a row
+       at load.
+     - _The executor in memory, `fixtures/sandbox-cost.tsx`, arrays of plain
+       values in place._ `function`: `new Function`, the realm not locked.
+       `locked`: `new Function` after a lockdown. `per instance`: a compartment
+       evaluator for each instance. `one`: one evaluator for all. In
+       milliseconds; the load is the median of 5 per run, the edit of 20.
+
+       | pattern                          |   rows | measure                         | function | locked | per instance |   one |
+       | -------------------------------- | -----: | ------------------------------- | -------: | -----: | -----------: | ----: |
+       | `PerRow`, an expression per row  |    100 | load                            |      8.0 |    7.5 |          8.6 |   7.5 |
+       |                                  |  1,000 | load                            |     59.6 |   56.8 |         61.7 |  56.6 |
+       |                                  | 10,000 | load                            |      550 |    602 |          556 |   535 |
+       |                                  |    100 | edit of one title               |    0.115 |  0.114 |        0.123 | 0.114 |
+       |                                  |  1,000 | edit of one title               |    0.077 |  0.097 |        0.105 | 0.094 |
+       |                                  | 10,000 | edit of one title               |    0.081 |  0.327 |        0.291 | 0.300 |
+       | `BodyPerRow`, a `lift` per row   |    100 | load                            |      5.8 |    7.1 |          6.6 |   6.6 |
+       |                                  |  1,000 | load                            |     60.5 |   61.7 |         62.1 |  58.4 |
+       |                                  | 10,000 | load                            |      616 |    678 |          614 |   607 |
+       |                                  |    100 | edit of one title               |    0.087 |  0.098 |        0.097 | 0.097 |
+       |                                  |  1,000 | edit of one title               |    0.091 |  0.112 |        0.110 | 0.107 |
+       |                                  | 10,000 | edit of one title               |    0.103 |  0.348 |        0.348 | 0.312 |
+       | `Whole`, a `lift` over the array |    100 | load                            |      1.3 |    1.6 |          1.6 |   1.3 |
+       |                                  |  1,000 | load                            |     10.9 |   12.8 |         12.2 |  11.9 |
+       |                                  | 10,000 | load                            |      112 |    117 |          119 |   116 |
+       |                                  |    100 | edit of one title               |     1.02 |   1.13 |         1.10 |  1.03 |
+       |                                  |  1,000 | edit of one title               |     10.2 |   10.6 |         10.5 |  10.2 |
+       |                                  | 10,000 | edit of one title               |       99 |    114 |          110 |   101 |
+       |                                  | 10,000 | in the 2 store reads of an edit |       95 |    112 |          104 |   101 |
+       |                                  | 10,000 | one read of the array           |       47 |     52 |           48 |    47 |
+
+       The three arms in a locked realm do not differ beyond the spread between
+       runs. Against the realm that is not locked, the load is within the
+       spread, and an edit of one title in a `map` at 10,000 rows goes from 0.08
+       to 0.3 ms: an edit does some work that follows the length of the array
+       (it costs 0.08 ms at 1,000 and at 10,000 without the lockdown, so it is
+       small), and that work is about four times slower with the intrinsics
+       frozen. Which step it is was not profiled.
+     - _The runner path_
+       (`compare/runner-path.ts --arms=compiled
+       --case=declared --no-pull --inputs-first --later=5`,
+       a `map` over an array declared as references, the rows as documents;
+       three runs, the median, in milliseconds; `--evaluate=function`, the same
+       with `--lockdown`, and the default):
+
+       |   rows | step                                | function | function, locked | compartment |
+       | -----: | ----------------------------------- | -------: | ---------------: | ----------: |
+       |    100 | load                                |       81 |               69 |         104 |
+       |  1,000 | load                                |      376 |              409 |         403 |
+       | 10,000 | load                                |    3,585 |            4,435 |       3,880 |
+       |    100 | edit one field, the mean of 5 later |      3.6 |              3.2 |         3.7 |
+       |  1,000 | edit one field, the mean of 5 later |      3.1 |              3.3 |         3.6 |
+       | 10,000 | edit one field, the mean of 5 later |      4.2 |              5.2 |         5.8 |
+       | 10,000 | append, the mean of 5 later         |      784 |              782 |         854 |
+
+       The arms are within the spread of three runs on a loaded machine: the
+       locked arm with `new Function` is the slowest load at 10,000 and the
+       fastest at 100. The runner path adds the transactions and the preparation
+       to the executor's work: a load at 10,000 rows is 3.6 s here against 0.55
+       s for `PerRow` on the executor in memory, and an edit 4 to 6 ms against
+       0.08 to 0.3 ms, so the difference the executor in memory shows is not
+       visible. For a `map` over plain values in place, one run each: a load of
+       100 and 558 ms with `new Function` and 119 and 623 ms with the
+       compartment at 100 and 1,000 rows, and an edit of 25.5 and 188 ms against
+       29.5 and 198 ms; 10,000 rows were run with the compartment alone (5,839
+       ms the load), since one change there takes seconds.
+707. **What compiling costs.** `compare/sandbox-cost.ts compile`, 9 runs, the
+     median, in milliseconds. `crate`: a `PatternCompiler` made for the compile
+     with no cache directory, which is the temporary directory, the process and
+     the parse of the output. `cached`: a compiler made for the compile with the
+     artifact in the cache directory, which reads and hashes the binary. `kept`:
+     the same with a compiler that has read the binary before. `today, first`
+     and `second`: `PatternManager.compilePattern` of the same program in a
+     runtime of its own, and again in that runtime.
+
+     | source                                                              | files |   bytes | crate | cached | kept | today, first | today, second |
+     | ------------------------------------------------------------------- | ----: | ------: | ----: | -----: | ---: | -----------: | ------------: |
+     | `fixtures/sandbox-cost.tsx`                                         |     1 |   1,230 |   3.9 |    2.5 | 0.10 |          322 |          23.6 |
+     | `fixtures/runner-lists.tsx`                                         |     1 |   1,451 |   3.9 |    2.2 | 0.11 |          111 |          16.2 |
+     | `fixtures/handler.tsx`                                              |     1 |     829 |   3.6 |    2.3 | 0.08 |           95 |          12.6 |
+     | `examples/cfc-trusted-component-examples/send-publish-examples.tsx` |    19 | 119,470 |  94.9 |    7.6 |  5.4 |          831 |           114 |
+     | `examples/cfc-spec-gallery/main.tsx`                                |    19 |  88,841 |  20.0 |    3.3 |  1.1 |          655 |          53.8 |
+
+     The first row's `today, first` holds the first compile of the process. The
+     whole corpus, 373 accepted modules, is emitted by one process of the binary
+     in 4.2 s (`emit --corpus`, 23 MB of artifacts). The cache directory saves
+     little for a small source unless the compiler is kept: hashing the binary
+     for its identity is 2 ms of the 2.3. A server keeps one `PatternCompiler`.
+708. **Structural, scaling and soundness findings of the round.**
+     - _Soundness: a body of an accepted pattern reached the executor through a
+       handle_, closed (note 703, P100).
+     - _Soundness: the crate's check is the only thing between a pattern and
+       `$h`, `$rt` and a mutable module constant_, open (note 703).
+     - _Scale: a function body that is handed a whole array reads the array from
+       the store twice per call, each read a copy_, 95 of 99 ms of an edit at
+       10,000 rows, open with a plan (note 704).
+     - _Scale: an edit in a `map` does work that follows the length of the
+       array, and the lockdown makes that work four times slower_ (note 706),
+       not profiled.
+     - _Structure: nothing removes an old tree of the artifact cache, and no
+       claim serializes two compiles of one source_ (note 705).
+     - _Structure: `emit <file>` writes value code for a module the check
+       refuses_; load uses `emit --accepted` (note 705).
+709. **Provisional decisions of the round, and what was not done.** P100: a
+     handle keeps the instance and the host in private fields, and the classes
+     of what a function body is given are frozen where a compartment evaluator
+     is made (note 703). P101: the crate runs on load as its release binary in a
+     child process, started from the realm that starts the piece, and not as
+     WebAssembly and not in the compile worker (note 705). P102: a piece makes a
+     compartment of its own, 0.1 ms, and a caller may share one evaluator among
+     pieces, which the frozen global object and the text as a function body
+     allow (note 701). P103: the globals of value code are those of a module of
+     today's bundles without `__cfReg`, with the gated clock under a frame of a
+     handler (note 701). Not done: the call of the compiler from `Runtime.run`;
+     the removal of the second read of a whole argument; the freeze of module
+     data and the hardening of functions in the emitter; the host and `$rt` with
+     private state; a run of the Topics boards with the compartment, which needs
+     the measurement worktree; the plain values in place at 10,000 rows with
+     `new Function`; more than three runs per cell on the runner path, and a
+     machine with no other load.
+
+### CFC questions deferred
+
+Noted and not resolved, by the owner's instruction of 2026-11-22.
+
+1. The gated clock of a handler gives the time of the event to the second, under
+   a frame the piece pushes (`makeFrame` with `inHandler` and `eventTime`).
+   Whether a compiled handler's read of the clock, and a random draw, need a
+   label or a record of the plan, as an ambient read does in
+   `language-subset.md` (`function-body:ambient-read`): the executor records no
+   read for either.
+2. A function body reads `handle.target`, the reference a handle holds: the
+   identifier of the document, the path and the schema of the position (note
+   703). Whether the identifier of a document a body was handed by reference is
+   something the body may observe without consuming a label.
+3. The artifact cache is keyed by the source and the binary and holds plans with
+   their label templates. Whether an artifact read from a directory that another
+   process wrote is trusted as the compiler's output, since the preparation
+   takes its labels from the plan's templates (`plan-and-label-templates.md`
+   §3): today's compile cache has the same question for module bytes.
