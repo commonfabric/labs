@@ -3618,9 +3618,7 @@ export class CellImpl<T extends FabricValue>
     // existing element's link to compare it reads that element's document
     // as an ordinary observation, and explicit handler reads retain theirs.
     let currentValue = this.#tx.readValueOrThrow(resolvedLink, {
-      meta: value.every((candidate) => isCell(candidate))
-        ? Object.freeze({ ...mergeableOpRead, ...writeDestinationRead })
-        : mergeableOpRead,
+      meta: Object.freeze({ ...mergeableOpRead, ...writeDestinationRead }),
     });
     const cause = this.#frame?.cause;
     const stored = Array.isArray(currentValue);

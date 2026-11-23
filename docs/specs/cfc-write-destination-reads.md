@@ -91,13 +91,19 @@ candidate, the method returns nothing, and every value it writes is a caller's
 candidate. That is §18.6.2's unobservability invariant, and why the snapshot
 is a write-destination read. Resolving an existing entry's link for the
 identity comparison reads that entry's document as an ordinary observation, and
-the operation still answers to the destination's write policy. A handler that
-adds a keyed element (`elementById()`) to a list therefore carries into that
-element's document only what the handler itself read. Without the marker, a
-clause one earlier write left on the list would reach every later element
-document, which has no declaration to hold it, and every later add would be
-refused. `removeByValue()` writes back a value built from what it read, so its
-read stays an ordinary observation.
+the operation still answers to the destination's write policy. As with the
+append, a writer whose read ceiling the list's label exceeds can add to it
+without reading it.
+
+A handler that adds a keyed element (`elementById()`) to a list therefore
+carries into that element's document only what the handler itself read.
+Without the marker, a clause one earlier write left on the list would reach
+every later element document, which has no declaration to hold it, and every
+later add would be refused. An object candidate is different: it anchors into
+a document of its own, and the anchoring's ancestry reads keep their ordinary
+classification, because they decide the id the new document takes, which is
+where the write lands. `removeByValue()` writes back a value built from what it
+read, so its read stays an ordinary observation.
 
 **The served event append.** Under server execution, a handler run's send to a
 stream in the same space appends the event's entry to that stream's entries

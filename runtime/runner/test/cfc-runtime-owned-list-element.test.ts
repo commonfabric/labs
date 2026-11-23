@@ -150,6 +150,20 @@ describe("runtime-owned list elements", () => {
     expect(added.error).toBeUndefined();
   });
 
+  it("commits a plain-value add after a labeled write reached the list", async () => {
+    await seedSecret("plain-source");
+    const piece = await startPiece("plain-list");
+    expect((await overRead(piece, "plain-source")).error).toBeUndefined();
+    const tx = runtime.edit();
+    // deno-lint-ignore no-explicit-any
+    (piece.withTx(tx) as any).key("items").addUnique({ name: "plain" });
+    tx.prepareCfc();
+
+    const { error } = await tx.commit().settled;
+
+    expect(error).toBeUndefined();
+  });
+
   it("refuses a keyed add whose handler read the labeled list", async () => {
     // Reading the list's content is an observation of the clause, and the
     // keyed element's document has no declaration to hold it.
