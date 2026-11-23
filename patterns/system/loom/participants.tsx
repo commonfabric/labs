@@ -3,6 +3,7 @@ import {
   type Cell,
   type Default,
   handler,
+  type Stream,
   type Writable,
   type WriteAuthorizedBy,
 } from "commonfabric";
@@ -59,3 +60,35 @@ export const addParticipant = handler<
   // resolves to.
   roster.key("items").addUnique(profile.resolveAsCell());
 });
+
+/** A roster's one writer, as a root exports it: `addParticipant`. */
+export type ParticipantJoin = Stream<{ profile: ParticipantProfile }>;
+
+/**
+ * Sends `profile` to the roster writer `join`, once the profile resolves. An
+ * unresolved profile arrives as an empty cell, and linking it would record no
+ * profile at all, so it is listed nowhere.
+ */
+export function listProfile(
+  join: ParticipantJoin,
+  profile: ParticipantProfile | undefined,
+): void {
+  const target = profile?.resolveAsCell();
+  if (target === undefined || target.get() === undefined) return;
+  join.send({ profile: target });
+}
+
+/**
+ * Lists the viewer in a social space: bound to its root's `addParticipant`
+ * and the viewer's `#profile`, it adds the viewer's own profile to the roster.
+ * The event carries nothing, so no sender chooses whose profile is listed.
+ * A host that admits its user to the space sends it, on joining and on each
+ * open; the roster adds a profile once, so a repeat changes nothing.
+ *
+ * `void`, not an empty object: a rendered click arrives as the serialized
+ * DOM event, which a closed empty object would refuse.
+ */
+export const joinAsViewer = handler<
+  void,
+  { join: ParticipantJoin; profile: ParticipantProfile | undefined }
+>((_, { join, profile }) => listProfile(join, profile));

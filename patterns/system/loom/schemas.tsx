@@ -335,6 +335,12 @@ export interface LoomOutput {
   members?: PerUser<SpaceMember[]>;
 
   addParticipant: Stream<{ profile: ParticipantProfile }>;
+  /**
+   * Lists the sender in the Loom: adds the sender's own `#profile` to
+   * `participants` through `addParticipant`. A host that admits its user to
+   * the Loom sends it when they join and on each open.
+   */
+  joinAsViewer: Stream<void>;
   chatRoom?: Writable<LinkedChatRoom>;
   setChatRoom: Stream<ChatRoomChoice>;
   ensureChatRoom: Stream<void>;
