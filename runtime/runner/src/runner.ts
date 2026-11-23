@@ -2911,6 +2911,15 @@ export type ViewPieceRegistration = PieceRegistration & {
 type ScopedPieceRegistration = PieceRegistration & {
   piece: string;
   variants: Map<string, PieceRegistration>;
+
+  /** The program each of `variants` runs, under the same key. */
+  programs: Map<string, Pattern>;
+
+  /**
+   * The instances of the piece's result document that record a source
+   * origin, by scope key, as the pointer coordinator last read each.
+   */
+  originInstances: Set<ScopeKey>;
   ensure(tx: IExtendedStorageTransaction, pattern: Pattern): void;
   wake(): void;
 };
@@ -6350,6 +6359,8 @@ export class Runner {
       return existing;
     }
     const variants = new Map<string, PieceRegistration>();
+    const programs = new Map<string, Pattern>();
+    const originInstances = new Set<ScopeKey>();
     const selections = new Map<string, ImplementationSelection>();
     const choices = new Map<ScopeKey, string>();
     const pendingChoices = new Map<IExtendedStorageTransaction, {
@@ -6374,6 +6385,8 @@ export class Runner {
       }
       addCancel(() => {
         variants.clear();
+        programs.clear();
+        originInstances.clear();
         selections.clear();
         choices.clear();
         pendingChoices.clear();
@@ -6387,6 +6400,8 @@ export class Runner {
     cancel.graphIsInstalled = () =>
       [...variants.values()].some((variant) => variant.graphIsInstalled());
     cancel.variants = variants;
+    cancel.programs = programs;
+    cancel.originInstances = originInstances;
     cancel.piece = resultCell.getAsNormalizedFullLink().id;
     this.#cancels.set(pieceKey, cancel);
     this.#allCancels.add(cancel);
@@ -6405,6 +6420,7 @@ export class Runner {
       for (const [key, registration] of variants) {
         if (selected.has(key)) continue;
         variants.delete(key);
+        programs.delete(key);
         selections.delete(key);
         this.#allCancels.delete(registration);
         registration();
@@ -6445,6 +6461,7 @@ export class Runner {
       if (!active) return;
       const ref = this.#entryRefForPattern(pattern);
       const key = patternIdentityKey(ref);
+      programs.set(key, pattern);
       recordSelection(tx, key);
       if (variants.get(key)?.graphIsInstalled()) {
         for (const initialize of selections.get(key)!.instanceInitializers) {
@@ -6472,6 +6489,17 @@ export class Runner {
       });
     };
     const coordinator: Action = (tx) => {
+      // Whether this instance records a source origin, for the currency
+      // index (`pieceCurrencyFacts()`): the instance is read here in any
+      // case, for its pattern pointer.
+      const instance = resolveScopeKey(
+        resultCell.getAsNormalizedFullLink().scope,
+        tx.tx.scopeKeyIdentity ?? this.#runtime.scopeKeyIdentity,
+      );
+      if (
+        typeof resultCell.withTx(tx).getMetaRaw("patternSource") === "string"
+      ) originInstances.add(instance);
+      else originInstances.delete(instance);
       const selected = readSelection(tx);
       if (selected === undefined) {
         recordSelection(tx, undefined);
@@ -13010,9 +13038,12 @@ export class Runner {
    * `resultCell` that its computations do not say (serving-loop.md §3b):
    * whether the piece records a source origin, which a start follows, and
    * the ids of the cells it owns that are owed a default
-   * (`ownedCellOwesSeed`). Returns `undefined` for a piece that is not
-   * running here, or whose pattern this runtime cannot name from what its
-   * replica holds.
+   * (`ownedCellOwesSeed`). For a piece whose result document is narrower
+   * than the space, `resultCell` is at that scope, and the answer is taken
+   * over every viewer's instance: whether any of them records an origin,
+   * and the cells owned under any program the instances point at. Returns
+   * `undefined` for a piece that is not running here, or whose pattern
+   * this runtime cannot name from what its replica holds.
    */
   pieceCurrencyFacts(
     resultCell: Cell<any>,
@@ -13022,6 +13053,30 @@ export class Runner {
       ? this.#runtime.getCellFromLink({ ...link, path: [] })
       : resultCell;
     if (!this.isRunning(rootCell)) return undefined;
+    const ownerScope = rootCell.getAsNormalizedFullLink().scope;
+    const ownedBy = (pattern: Pattern): string[] =>
+      (pattern.derivedInternalCells ?? []).map((descriptor) =>
+        getDerivedInternalCell(rootCell, descriptor).getAsNormalizedFullLink()
+      ).filter((derived) => ownedCellOwesSeed(derived, ownerScope)).map((
+        derived,
+      ) => derived.id);
+    // A piece whose result document is narrower than the space holds a
+    // pattern pointer in each viewer's instance of it, and runs a program
+    // for each pointer those instances hold.
+    const scoped = this.#scopedPieces.get(this.#getDocKey(rootCell));
+    if (scoped !== undefined) {
+      if (scoped.programs.size === 0) return undefined;
+      return {
+        followsOrigin: scoped.originInstances.size > 0,
+        owned: [
+          ...new Set(
+            [...scoped.programs.values()].flatMap((program) =>
+              ownedBy(this.#resolveToPattern(program))
+            ),
+          ),
+        ],
+      };
+    }
     const read = this.#runtime.readTx();
     restrictToLocalReads(read.tx);
     let ref: ReturnType<typeof getPatternIdentityRef>;
@@ -13045,17 +13100,10 @@ export class Runner {
         rootCell.space,
       );
     if (loaded === undefined) return undefined;
-    const pattern = this.#resolveToPattern(loaded as Pattern);
-    const ownerScope = rootCell.getAsNormalizedFullLink().scope;
-    const owned: string[] = [];
-    for (const descriptor of pattern.derivedInternalCells ?? []) {
-      const derivedLink = getDerivedInternalCell(rootCell, descriptor)
-        .getAsNormalizedFullLink();
-      if (ownedCellOwesSeed(derivedLink, ownerScope)) {
-        owned.push(derivedLink.id);
-      }
-    }
-    return { followsOrigin, owned };
+    return {
+      followsOrigin,
+      owned: ownedBy(this.#resolveToPattern(loaded as Pattern)),
+    };
   }
 
   /**

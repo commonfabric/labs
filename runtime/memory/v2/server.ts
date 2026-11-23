@@ -13325,7 +13325,12 @@ export class Server {
       running?: readonly string[];
     },
   ): Promise<{
-    servable: Array<{ root: string; piece: string }>;
+    /**
+     * The roots the store can serve, each with its piece and the pieces it
+     * rests on that record a source origin, which the loop follows before
+     * it leaves the root unstarted.
+     */
+    servable: Array<{ root: string; piece: string; origins: string[] }>;
     held: Array<{ root: string; piece: string; readers: string[] }>;
     upstream: CurrencyUpstreamRead[];
     refused: Partial<Record<CurrencyRefusal, number>>;
@@ -13440,11 +13445,16 @@ export class Server {
     const reasons = new Map(
       judgment.refused.map(({ root, reason }) => [root, reason]),
     );
-    const servable: Array<{ root: string; piece: string }> = [];
+    const origins = new Map(
+      judgment.origins.map(({ root, pieces }) => [root, pieces]),
+    );
+    const servable: Array<
+      { root: string; piece: string; origins: string[] }
+    > = [];
     const held: Array<{ root: string; piece: string; readers: string[] }> = [];
     for (const [root, piece] of pieces) {
       if (passing.has(piece)) {
-        servable.push({ root, piece });
+        servable.push({ root, piece, origins: origins.get(piece) ?? [] });
         continue;
       }
       const readers = holding.get(piece);

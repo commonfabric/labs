@@ -53,6 +53,13 @@ const sameDocument = (a: unknown, b: unknown): boolean => {
 /** What the id of a document some computation derives begins with. */
 const COMPUTED_ID_PREFIX = "computed:";
 
+/**
+ * The seq a row of `currency_decide` stands at for a slot that holds a
+ * write later than its slice's: below the head of every instance, one with
+ * no revision included.
+ */
+const SUPERSEDED_SEQ = -1;
+
 export { ANY_INSTANCE };
 
 /**
@@ -142,6 +149,16 @@ export type CurrencySliceRecord = {
   decides?: readonly CurrencyInstance[];
 
   /**
+   * The instances at another key that a run of the slice wrote and that
+   * something has changed since, as another viewer's run does that writes
+   * the slot differently. Such a slot holds that later write, so the slice
+   * answers for it no longer: its row is stored behind the slot's head,
+   * where a viewer of the slice who demands the slot is refused. Absent
+   * for a slice with none.
+   */
+  superseded?: readonly CurrencyInstance[];
+
+  /**
    * The time, in milliseconds since the epoch, from which the slice is no
    * longer current whatever its rows say: the next tick of a clock one of
    * its runs read. Absent for a slice only a commit can make stale.
@@ -171,6 +188,13 @@ export type CurrencyRecord = {
 
   /** The ids of the cells the piece owns and owes a default. */
   owned: readonly string[];
+
+  /**
+   * Whether the piece records a source origin (serving-loop.md §3e), which
+   * a serving loop follows before it leaves a demanded root that rests on
+   * the piece unstarted.
+   */
+  followsOrigin?: boolean;
 
   /**
    * The slices the loop ran. A piece with no `space` slice yet is given one
@@ -359,6 +383,22 @@ WHERE branch = :branch AND id = :id AND scope_key = :scope_key
 `),
   deleteUnder: engine.prepare(`
 DELETE FROM currency_under WHERE branch = :branch AND piece = :piece
+`),
+  // The pieces a root encloses, read through the index that leads with the
+  // root: the table's own key leads with the piece enclosed.
+  selectBeneath: engine.prepare(`
+SELECT piece FROM currency_under WHERE branch = :branch AND root = :root
+`),
+  insertOrigin: engine.prepare(`
+INSERT OR IGNORE INTO currency_origin (branch, piece)
+VALUES (:branch, :piece)
+`),
+  deleteOrigin: engine.prepare(`
+DELETE FROM currency_origin WHERE branch = :branch AND piece = :piece
+`),
+  selectOrigin: engine.prepare(`
+SELECT 1 AS found FROM currency_origin
+WHERE branch = :branch AND piece = :piece
 `),
   insertUnder: engine.prepare(`
 INSERT OR IGNORE INTO currency_under (branch, piece, root)
@@ -1495,7 +1535,23 @@ export const storeCurrencyRecords = (
           ) return false;
           continue;
         }
-        if (written.has(row.entity)) continue;
+        if (written.has(row.entity)) {
+          // A piece does not run for a viewer who holds no instance of its
+          // result document. The write that makes the instance is that of
+          // whoever instantiates the piece for them, and it prompts what
+          // the piece then writes.
+          if (
+            row.entity === ref.piece &&
+            row.entity_scope_key !== ANY_INSTANCE &&
+            headOf(row.entity, row.entity_scope_key) > row.seq &&
+            read(engine, {
+                id: row.entity,
+                scopeKey: row.entity_scope_key as ScopeKey,
+                seq: row.seq,
+              }) === null
+          ) return false;
+          continue;
+        }
         if (headOf(row.entity, row.entity_scope_key) > row.seq) return false;
       }
     }
@@ -1557,6 +1613,11 @@ export const storeCurrencyRecords = (
       statements.deleteWrites.run({ branch, piece });
       for (const root of record.under) {
         if (root !== piece) statements.insertUnder.run({ branch, piece, root });
+      }
+      if (record.followsOrigin === true) {
+        statements.insertOrigin.run({ branch, piece });
+      } else {
+        statements.deleteOrigin.run({ branch, piece });
       }
       for (const id of record.writes) {
         statements.insertWrite.run({ branch, piece, id, owned: 0 });
@@ -1689,8 +1750,21 @@ export const storeCurrencyRecords = (
           });
         }
         // The broader slots the slice's runs wrote are answered for here,
-        // each at the seq it stands at. A record replaces them whole.
+        // each at the seq it stands at. A record replaces them whole. One
+        // that holds a later write is stored behind every head: the row
+        // answers for nothing, and keeps the slot from being taken for one
+        // the slice's runs never wrote.
         statements.deleteDecides.run({ branch, slice: slice.key, piece });
+        for (const { id, scopeKey } of slice.superseded ?? []) {
+          statements.insertDecide.run({
+            branch,
+            slice: slice.key,
+            piece,
+            id,
+            instance_key: scopeKey,
+            seq: SUPERSEDED_SEQ,
+          });
+        }
         for (const { id, scopeKey } of slice.decides ?? []) {
           const at = standingOf(id, scopeKey);
           unseen ||= at.unseen;
@@ -2471,6 +2545,12 @@ export type CurrencyJudgment = {
    * asked about, stale only through what is upstream of it.
    */
   upstream: CurrencyUpstreamRead[];
+
+  /**
+   * The pieces each servable root rests on that record a source origin: its
+   * own piece and those beneath it. A root that rests on none has no entry.
+   */
+  origins: Array<{ root: string; pieces: string[] }>;
 };
 
 /**
@@ -2525,6 +2605,7 @@ export const judgeCurrencyRoots = (
     refused: [],
     held: [],
     upstream: [],
+    origins: [],
   };
 
   /** Whether each slice asked about is stale only upstream, by slice. */
@@ -2730,6 +2811,15 @@ export const judgeCurrencyRoots = (
     if (reason !== undefined) judgment.refused.push({ root, reason });
     else if (readers !== undefined) judgment.held.push({ root, readers });
     else judgment.servable.push(root);
+  }
+  for (const root of judgment.servable) {
+    const beneath = statements.selectBeneath.all({ branch, root }) as Array<
+      { piece: string }
+    >;
+    const pieces = [root, ...beneath.map(({ piece }) => piece)].filter((
+      piece,
+    ) => statements.selectOrigin.get({ branch, piece }) !== undefined);
+    if (pieces.length > 0) judgment.origins.push({ root, pieces });
   }
   return judgment;
 };

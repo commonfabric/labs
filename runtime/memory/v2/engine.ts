@@ -539,6 +539,10 @@ CREATE TABLE IF NOT EXISTS currency_under (
   root   TEXT NOT NULL,
   PRIMARY KEY (branch, piece, root)
 );
+-- The pieces a root encloses, which a judgment asks of each root it would
+-- leave unstarted.
+CREATE INDEX IF NOT EXISTS idx_currency_under_root
+  ON currency_under (branch, root, piece);
 -- What a slice read: the document instance, with the seq the slice saw it
 -- at. entity_scope_key = '*' is a read whose instance the recording loop
 -- could not name, which a change to any instance of the document is ahead
@@ -591,9 +595,10 @@ CREATE INDEX IF NOT EXISTS idx_currency_vouch_id
 -- key. What such a slot holds was decided by the run, so its row is filed
 -- under the run's slice, with the key the slot is at and the seq it stood at
 -- when the slice was recorded. A slot several slices' runs wrote has a row
--- for each, and a row behind the slot's head answers for nothing. A store
--- whose index was recorded without this table loses those records when it is
--- opened (dropCurrencyRecordsBeforeDecides).
+-- for each, and a row behind the slot's head answers for nothing. seq = -1
+-- is a slot the slice was recorded as holding a later write than its own. A
+-- store whose index was recorded without this table loses those records when
+-- it is opened (dropCurrencyRecordsBeforeDecides).
 CREATE TABLE IF NOT EXISTS currency_decide (
   branch       TEXT    NOT NULL,
   slice        TEXT    NOT NULL,
@@ -605,6 +610,14 @@ CREATE TABLE IF NOT EXISTS currency_decide (
 );
 CREATE INDEX IF NOT EXISTS idx_currency_decide_instance
   ON currency_decide (branch, instance_key, id);
+-- The recorded pieces that record a source origin (serving-loop.md §3e). A
+-- serving loop follows the origin of each before it leaves a demanded root
+-- that rests on the piece unstarted.
+CREATE TABLE IF NOT EXISTS currency_origin (
+  branch TEXT NOT NULL,
+  piece  TEXT NOT NULL,
+  PRIMARY KEY (branch, piece)
+);
 -- The seq the marks are complete through.
 CREATE TABLE IF NOT EXISTS currency_cursor (
   branch TEXT    NOT NULL PRIMARY KEY,

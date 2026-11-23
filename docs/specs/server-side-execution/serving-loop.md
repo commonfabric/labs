@@ -406,7 +406,11 @@ for it. It stays among the roots awaiting a first load and is judged again
 when demand changes, when it is found running, and when a commit marks its
 piece or one beneath it. That last case re-arms the root at the marking
 seq, as a commit re-arms a parked root, so W stays below that input until
-the piece has started and derived. A warm request's root, a root with no
+the piece has started and derived. A root that rests on a piece recording
+a source origin, its own or one beneath it, is left unstarted on the same
+terms, and the loop follows that origin where the tenure has not (§3e): a
+piece that adopted new source has the root loaded at the next pass. A warm
+request's root, a root with no
 record, and a root narrower than the space that is no `computed:` document
 are loaded as before. A `computed:` root narrower than the space is judged
 as a space-scoped one is: its instance is one of the demand rows the piece
@@ -1385,9 +1389,18 @@ executing:
   of the space is carried as a pair without the access list being asked. A
   slice that read what a live, clean writer
   that names no piece wrote, such as a wish's shared hashtag resolver, takes
-  over that writer's reads as its own. Every slice of a record is stored marked when the piece's root is
-  narrower than the space, and when it records a source origin (§3e), since
-  a start is where that origin is followed. A clean computation vouches for
+  over that writer's reads as its own. A piece whose result document is
+  declared narrower than the space is recorded as any other: each viewer
+  holds an instance of the document, the piece's computations run for each
+  at that viewer's key, and what the record says of the piece itself is
+  taken over the programs those instances point at. A record says
+  whether its piece records a source origin (§3e), and a judgment names,
+  with each root the store can serve, the pieces it rests on that record
+  one: the loop follows their origins before it leaves the root unstarted.
+  A piece that holds an instance of its result document for each viewer,
+  one of which records an origin, is stored marked instead: an origin is
+  followed through one result document.
+  A clean computation vouches for
   the instances its runs wrote: for a run at a fan-out instance, the
   narrower of that instance and the write's declared scope as the run's
   identity resolves it, and each broader slot up to the declared scope,
@@ -1395,11 +1408,21 @@ executing:
   instance at the run's own key as one the slice vouches for, and each
   instance at another key as a slot the slice decides, with the key it is
   at. What such a slot holds was decided by the run's reads, which are in
-  that slice. Another run's write of the slot leaves the row behind, and a
-  row behind the slot's head answers for nothing and marks no slice. A slice
-  of another piece that read the slot at a viewer's key is stale through the
-  slices of that viewer's chain that hold it, and one that read it at the
-  slot's own key through whichever slice holds it.
+  that slice. A record names such a slot only while it holds what the
+  slice's run left there. The scheduler keeps, for each node that runs once
+  for each viewer, the latest change to each instance of a document the node
+  writes, with the run that made it, as its replica reports changes. A slot
+  holds a run's write where that run made the latest change to it, or where
+  nothing has changed it since that run handed its writes over, as when the
+  run wrote what the slot already held. A slot another viewer's run changed
+  since is that run's: the earlier slice's records name it as one that holds
+  a later write, and its row is stored behind the slot's head until the
+  slice's computation runs again. Another run's write of the slot leaves the
+  row behind as well, and a row behind the slot's head answers for nothing,
+  marks no slice, and refuses a root to a viewer of its slice who demands
+  the slot. A slice of another piece that read the slot at a viewer's key is
+  stale through the slices of that viewer's chain that hold it, and one that
+  read it at the slot's own key through whichever slice holds it.
   The records of one quiescent point reach the memory server in requests of
   bounded size, and the last names the pieces the earlier ones stored, so
   pieces that read each other's writes are judged clean together. Each row
@@ -1426,6 +1449,7 @@ executing:
   because a start is what re-fires an effect whose result never landed (§6
   step 3). The tables are `currency_slice`, `currency_under`,
   `currency_read`, `currency_write`, `currency_vouch`, `currency_decide`,
+  `currency_origin`,
   `currency_expiry` and `currency_cursor`, and for reads across spaces
   `currency_slice_source`,
   `currency_import` and `currency_source` on the reading side and
@@ -2383,7 +2407,12 @@ two halves have different owners. FOLLOWING a piece's source origin
 belongs to whoever STARTS the piece (piece-source-lifecycle.md): a client
 that runs the piece follows the origin when it opens it, and the serving
 runtime follows it before its first start of the piece in a tenure — the
-demand pass's structure load and a served event's auto-start alike. Both
+demand pass's structure load and a served event's auto-start alike — and
+before it first leaves unstarted a demanded root the store can serve that
+rests on the piece (§1, "A root the store can serve"). Such a root stays
+unstarted while the follow runs and after it where the origin has not
+moved; where the piece adopted new source (`updated`) the root is loaded,
+and the piece starts on that source. Both
 start through `ensurePieceRunning`, whose `originFollowed` option the loop
 answers: a piece that records an origin the tenure has not followed is not
 started, its demand key stays pending and its served event defers, and the
