@@ -19,7 +19,7 @@ interface Row {
 // keyed join: a `map` over a second array of references whose body looks
 // up the group of its own key. The number of tags stands beside the rows,
 // so that the result holds a plain value as well as the array of rows.
-export const Joined = pattern<
+export default pattern<
   { items: Writable<Item[]>; tags: Writable<Tag[]> },
   { count: number; rows: Row[] }
 >(({ items, tags }) => {

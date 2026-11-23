@@ -4,14 +4,14 @@ import { describe, it } from "@std/testing/bdd";
 import { type Artifact, Instance } from "../executor.ts";
 import { Ref } from "../store.ts";
 
-/** The pattern `Joined` of `compare/fixtures/keyed-join.tsx`. */
+/** The pattern of `compare/fixtures/keyed-join.tsx`. */
 const artifact = async (): Promise<Artifact> => {
   const [{ patterns }] = JSON.parse(
     await Deno.readTextFile(
       new URL("../../compare/fixtures/keyed-join.emit.json", import.meta.url),
     ),
   ) as { patterns: Artifact[] }[];
-  return patterns.find(({ name }) => name === "Joined")!;
+  return patterns.find(({ name }) => name === "default")!;
 };
 
 const link = (doc: string) => ({ $link: { doc, path: [] } });

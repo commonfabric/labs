@@ -1839,11 +1839,22 @@ export class Host {
    * change of another bucket evaluates nothing here. A key that no element
    * has gives the empty bucket, and the evaluation depends on it as well.
    */
-  lookup(index: unknown, key: unknown): unknown {
+  lookup(index: unknown, key: unknown, pick?: number): unknown {
+    const { instance } = this;
+    const stored = index instanceof Handle ? index.target : index;
+    if (stored instanceof Ref) {
+      // An index that another instance keeps: the bucket is the member of
+      // its `buckets` under the encoded key, given as a reference, so that
+      // what reads it reads that position of the stored index and no
+      // other bucket. A key that has no bucket names a position that
+      // holds nothing.
+      const encoded = encodeIndexKey(instance, key);
+      if (pick !== undefined) this.pick(pick, encoded);
+      return encoded === undefined ? [] : stored.key("buckets").key(encoded);
+    }
     if (!(index instanceof IndexHandle)) {
       throw new Unsupported("a `lookup` on what is no collection index");
     }
-    const { instance } = this;
     const assembled = instance.assembled(index.collection);
     const lazy: Lazy = () => assembled(instance.freshContext(index.context));
     const entry = lazy(this.context);

@@ -15,7 +15,7 @@ import {
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 
-/** The pattern `Joined` of `compare/fixtures/keyed-join.tsx`. */
+/** The pattern of `compare/fixtures/keyed-join.tsx`. */
 const artifact = async (): Promise<Artifact> => {
   const [{ patterns }] = JSON.parse(
     await Deno.readTextFile(
@@ -25,7 +25,7 @@ const artifact = async (): Promise<Artifact> => {
       ),
     ),
   ) as { patterns: Artifact[] }[];
-  return patterns.find(({ name }) => name === "Joined")!;
+  return patterns.find(({ name }) => name === "default")!;
 };
 
 type Rows = { name: string; titles: string[] }[];

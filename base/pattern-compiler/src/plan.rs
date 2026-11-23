@@ -3422,6 +3422,15 @@ impl<'a> Emitter<'_, '_, 'a> {
             // `index.lookup(k)`: the bucket of `k`, whose label is the
             // template of `k` joined with the membership of a bucket,
             // which is the template of the index (PL §3.17).
+            // `index.lookup(k)` on an index that the instance is handed: a
+            // read of the bucket the stored index holds under the key, a
+            // chosen child of its `buckets` (PL §3.18). Its label is what
+            // the store holds there, which is the index's one entry.
+            "lookup" if arguments.len() == 1 && matches!(receiver, Place::Slot(..)) => {
+                let key = self.eval(arguments[0], hint);
+                let buckets = Self::extend(receiver, "buckets");
+                self.reported_pick(call.span, |emitter| emitter.pick(&buckets, &key, hint, at))
+            }
             "lookup" if arguments.len() == 1 && self.index_of_place(receiver).is_some() => {
                 let receiver = receiver.clone();
                 let key = self.eval(arguments[0], hint);

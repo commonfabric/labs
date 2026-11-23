@@ -31,6 +31,18 @@ const WRITTEN: Record<string, Written[]> = {
       items: [{ title: "a", done: false }, { title: "b", done: true }],
     },
   })),
+  // A keyed join over plain values in place: two items share a tag, one
+  // has a tag of its own, and one tag no item has.
+  "keyed-join": [{
+    argument: {
+      items: [
+        { title: "a", tag: "x" },
+        { title: "b", tag: "y" },
+        { title: "c", tag: "x" },
+      ],
+      tags: [{ name: "x" }, { name: "y" }, { name: "z" }],
+    },
+  }],
   "is-edited": [true, false].map((edited) => ({
     argument: {
       message: { body: "hello", sentAt: 1, ...(edited ? { editedAt: 2 } : {}) },

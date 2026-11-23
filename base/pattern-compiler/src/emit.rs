@@ -1652,7 +1652,19 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                         self.place_of(&member.object)?;
                         let index = self.render(&member.object, Want::Pass);
                         let key = self.render(arguments[0], Want::Use);
-                        Some(format!("$h.lookup({index}, {key})"))
+                        // For an index the instance is handed, the pick
+                        // whose child the lookup chooses.
+                        let pick = self.context.and_then(|context| {
+                            self.generator.finished.facts.picks.get(&(
+                                context,
+                                call.span.start,
+                                call.span.end,
+                            ))
+                        });
+                        Some(match pick {
+                            Some(pick) => format!("$h.lookup({index}, {key}, {pick})"),
+                            None => format!("$h.lookup({index}, {key})"),
+                        })
                     }
                     // `h.equals(x)` is the comparison that `equals(h, x)`
                     // is (LS §6.1): each operand is passed as the
