@@ -166,6 +166,14 @@ restored document). Open from that round:
 - `compare/values-corpus.ts run` gives 7,314 of 7,463 values equal on the
   trunk's code where note 571 has 7,325; the comparator fix does not change
   the count, and which change lowered it by 11 is not found.
+- The agreement figures of note 534 (6,013 of 6,107 and 1,484 of 1,584) were
+  taken on the prototype branch and are not rechecked there:
+  `pattern-compiler emit --corpus` panics on that branch. On the trunk's
+  code every comparison that `firstDifference` decides was run with the
+  comparator before and after its fix and gave the same counts and the same
+  lists of differences, so the fix lowers no figure there; whether note
+  534's own figures hold at their commit stays open until the panic is
+  fixed or the figures are replaced by the trunk's.
 - The fix for the left operand of `??`, `||` and `&&` on the prototype
   branch (#9942, `Host.selected`) tests the operand through an `identity`
   slot; the same form failed the stored-labels soundness check on the

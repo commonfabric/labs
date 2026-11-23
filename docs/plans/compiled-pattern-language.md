@@ -6591,9 +6591,10 @@ is relitigated.
   lot! in fact ideally it's relatively cheap to tear down a worker and bring
   it back up. this should be no worse than today." Before that the owner had
   asked that memory be watched in this step, so that a process does not run
-  out of it; both stand. As measured on 2026-11-23, the first edit of a
-  Topics board of 2,000 topics after such a start takes 8.5 s on the
-  compiled path and 2.3 s on today's.
+  out of it; both stand. The requirement is not met: as measured on
+  2026-11-23, the first edit of a Topics board of 2,000 topics after such a
+  start takes 8.5 s on the compiled path and 2.3 s on today's. Question 430
+  carries the plan for a basis by unit that it needs.
 
 ## Provisional decisions awaiting the owner's ratification
 
