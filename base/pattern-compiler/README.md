@@ -850,11 +850,14 @@ deno run -A --no-check base/pattern-compiler/compare/growth.ts 100 1000 10000
 
 `alone` runs the modules that need `wish` or request an effect on the executor,
 with the answers of `compare/stubs.ts`, and `stubbed` runs them on today's
-runtime as well, with `fetch` replaced by a function that answers the same.
-`sizes.ts` prints the size of each plan of the corpus with its largest members,
-and `growth.ts` what one change of a list costs the executor at several lengths.
-Notes 479 on of `SPEC-NOTES.md` have what was tested, what the documents do not
-decide, and the figures.
+runtime as well, with `fetch` replaced by a function that answers the same. A
+line of a run whose executor had stubs holds whether they had the table of
+`compare/stubs.ts` and what their clock held, and `again` runs such a line with
+the same stubs and that clock, and compares a number within a day of that clock
+as a time. `sizes.ts` prints the size of each plan of the corpus with its
+largest members, and `growth.ts` what one change of a list costs the executor at
+several lengths. Notes 479 on of `SPEC-NOTES.md` have what was tested, what the
+documents do not decide, and the figures.
 
 A pattern that calls `wish` is compared in a seeded home
 (`compare/wish-home.ts`), by `corpus.ts run`, `values-corpus.ts run`,
