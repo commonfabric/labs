@@ -229,7 +229,7 @@ describe("home-favorites-cfc", () => {
       expect(refusals).toEqual([]);
     });
 
-    it("is refused when it reads the owner-confidential piece into the entry", async () => {
+    it("commits no entry and reports a writer-fit refusal when it reads the owner-confidential piece into it", async () => {
       // The control: what the owner may read still does not reach a document
       // of the space whose policy does not admit it.
 
